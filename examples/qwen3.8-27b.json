@@ -7285,129 +7285,55 @@
     ]
    }
   },
-  "conv_update": {
+  "gdn_decode": {
    "params": [
-    "in buffer<bf16>",
+    "inout buffer<bf16>",
     "in buffer<bf16>",
     "inout ptr",
+    "inout ptr",
     "in buffer<i32>",
-    "out buffer<bf16>",
-    "i32",
-    "i32",
-    "i64",
-    "i64",
-    "i64",
-    "i64"
-   ],
-   "impl": {
-    "steps": [
-     {
-      "symbol": "_causal_conv1d_update_kernel",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "inout ptr",
-       "in buffer<i32>",
-       "out buffer<bf16>",
-       "i32",
-       "i32",
-       "i64",
-       "i64",
-       "i64",
-       "i64"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       1,
-       40,
-       1
-      ],
-      "args": [
-       {
-        "arg": 0
-       },
-       {
-        "arg": 1
-       },
-       {
-        "arg": 2
-       },
-       {
-        "arg": 3
-       },
-       {
-        "arg": 4
-       },
-       {
-        "arg": 5
-       },
-       {
-        "arg": 6
-       },
-       {
-        "arg": 7
-       },
-       {
-        "arg": 8
-       },
-       {
-        "arg": 9
-       },
-       {
-        "arg": 10
-       }
-      ],
-      "cubin": "module_139.cubin",
-      "sha256": "c2504833f4aa2997dc27f621fa8168695ba8773c41e0ced1c8ffb7d189cf8ae4"
-     }
-    ]
-   }
-  },
-  "recurrent": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
     "in buffer<bf16>",
     "in buffer<f32>",
     "in buffer<bf16>",
     "out buffer<bf16>",
-    "inout ptr",
-    "inout ptr",
-    "in buffer<i32>",
+    "in buffer<bf16>",
     "f32",
-    "i64",
-    "i64"
+    "f32",
+    "i32",
+    "i32",
+    "i32",
+    "i32"
    ],
    "impl": {
     "steps": [
      {
-      "symbol": "fused_recurrent_gated_delta_rule_packed_decode_kernel",
+      "symbol": "kern_gdn_decode_bf16",
       "params": [
+       "inout buffer<bf16>",
        "in buffer<bf16>",
-       "in buffer<bf16>",
+       "inout ptr",
+       "inout ptr",
+       "in buffer<i32>",
        "in buffer<bf16>",
        "in buffer<f32>",
        "in buffer<bf16>",
        "out buffer<bf16>",
-       "inout ptr",
-       "inout ptr",
-       "in buffer<i32>",
+       "in buffer<bf16>",
        "f32",
-       "i64",
-       "i64"
+       "f32",
+       "i32",
+       "i32",
+       "i32",
+       "i32"
       ],
       "block": [
-       32,
+       256,
        1,
        1
       ],
       "grid": [
-       4,
-       48,
+       96,
+       1,
        1
       ],
       "args": [
@@ -7446,106 +7372,21 @@
        },
        {
         "arg": 11
+       },
+       {
+        "arg": 12
+       },
+       {
+        "arg": 13
+       },
+       {
+        "arg": 14
+       },
+       {
+        "arg": 15
        }
       ],
-      "shared_mem": 64,
-      "cubin": "module_141.cubin",
-      "sha256": "ecc0dc457582a5d0ca3348d366168eb51a68deaaf59de409fb800b2665c903de"
-     }
-    ]
-   }
-  },
-  "gated_norm_decode": {
-   "params": [
-    "inout buffer<bf16>",
-    "out buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "i32",
-    "i32",
-    "i32",
-    "i32",
-    "f32",
-    "i64",
-    "i64"
-   ],
-   "impl": {
-    "scratch": {
-     "rstd": {
-      "dtype": "f32",
-      "shape": [
-       1,
-       48
-      ]
-     }
-    },
-    "steps": [
-     {
-      "symbol": "layer_norm_fwd_kernel",
-      "params": [
-       "inout buffer<bf16>",
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<f32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "f32",
-       "i64",
-       "i64"
-      ],
-      "block": [
-       32,
-       1,
-       1
-      ],
-      "grid": [
-       48,
-       1,
-       1
-      ],
-      "args": [
-       {
-        "arg": 0
-       },
-       {
-        "arg": 1
-       },
-       {
-        "arg": 2
-       },
-       {
-        "arg": 3
-       },
-       {
-        "scratch": "rstd"
-       },
-       {
-        "arg": 4
-       },
-       {
-        "arg": 5
-       },
-       {
-        "arg": 6
-       },
-       {
-        "arg": 7
-       },
-       {
-        "arg": 8
-       },
-       {
-        "arg": 9
-       },
-       {
-        "arg": 10
-       }
-      ],
-      "cubin": "module_143.cubin",
-      "sha256": "ab8921a843b50459d97332df3d691f9b442ef9c4f56e4bdca6fb3689746582e1"
+      "cubin": "gdn_decode.cubin"
      }
     ]
    }
@@ -43616,8 +43457,8 @@
      ]
     },
     {
-     "label": "l0.conv_update",
-     "kernel": "conv_update",
+     "label": "l0.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -43629,42 +43470,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 4
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l0.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -43679,65 +43490,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 4
+       "buf": "model.layers.0.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l0.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.0.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -43865,8 +43636,8 @@
      ]
     },
     {
-     "label": "l1.conv_update",
-     "kernel": "conv_update",
+     "label": "l1.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -43878,42 +43649,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 8
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l1.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -43928,65 +43669,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 8
+       "buf": "model.layers.1.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l1.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.1.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -44114,8 +43815,8 @@
      ]
     },
     {
-     "label": "l2.conv_update",
-     "kernel": "conv_update",
+     "label": "l2.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -44127,42 +43828,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 12
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l2.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -44177,65 +43848,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 12
+       "buf": "model.layers.2.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l2.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.2.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -44654,8 +44285,8 @@
      ]
     },
     {
-     "label": "l4.conv_update",
-     "kernel": "conv_update",
+     "label": "l4.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -44667,42 +44298,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 16
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l4.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -44717,65 +44318,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 16
+       "buf": "model.layers.4.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l4.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.4.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -44903,8 +44464,8 @@
      ]
     },
     {
-     "label": "l5.conv_update",
-     "kernel": "conv_update",
+     "label": "l5.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -44916,42 +44477,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 20
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l5.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -44966,65 +44497,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 20
+       "buf": "model.layers.5.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l5.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.5.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -45152,8 +44643,8 @@
      ]
     },
     {
-     "label": "l6.conv_update",
-     "kernel": "conv_update",
+     "label": "l6.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -45165,42 +44656,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 24
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l6.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -45215,65 +44676,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 24
+       "buf": "model.layers.6.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l6.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.6.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -45694,8 +45115,8 @@
      ]
     },
     {
-     "label": "l8.conv_update",
-     "kernel": "conv_update",
+     "label": "l8.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -45707,42 +45128,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 28
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l8.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -45757,65 +45148,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 28
+       "buf": "model.layers.8.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l8.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.8.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -45943,8 +45294,8 @@
      ]
     },
     {
-     "label": "l9.conv_update",
-     "kernel": "conv_update",
+     "label": "l9.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -45956,42 +45307,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 32
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l9.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -46006,65 +45327,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 32
+       "buf": "model.layers.9.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l9.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.9.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -46192,8 +45473,8 @@
      ]
     },
     {
-     "label": "l10.conv_update",
-     "kernel": "conv_update",
+     "label": "l10.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -46205,42 +45486,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 36
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l10.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -46255,65 +45506,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 36
+       "buf": "model.layers.10.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l10.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.10.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -46734,8 +45945,8 @@
      ]
     },
     {
-     "label": "l12.conv_update",
-     "kernel": "conv_update",
+     "label": "l12.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -46747,42 +45958,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 40
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l12.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -46797,65 +45978,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 40
+       "buf": "model.layers.12.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l12.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.12.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -46983,8 +46124,8 @@
      ]
     },
     {
-     "label": "l13.conv_update",
-     "kernel": "conv_update",
+     "label": "l13.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -46996,42 +46137,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 44
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l13.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -47046,65 +46157,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 44
+       "buf": "model.layers.13.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l13.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.13.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -47232,8 +46303,8 @@
      ]
     },
     {
-     "label": "l14.conv_update",
-     "kernel": "conv_update",
+     "label": "l14.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -47245,42 +46316,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 48
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l14.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -47295,65 +46336,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 48
+       "buf": "model.layers.14.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l14.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.14.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -47774,8 +46775,8 @@
      ]
     },
     {
-     "label": "l16.conv_update",
-     "kernel": "conv_update",
+     "label": "l16.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -47787,42 +46788,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 52
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l16.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -47837,65 +46808,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 52
+       "buf": "model.layers.16.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l16.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.16.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -48023,8 +46954,8 @@
      ]
     },
     {
-     "label": "l17.conv_update",
-     "kernel": "conv_update",
+     "label": "l17.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -48036,42 +46967,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 56
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l17.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -48086,65 +46987,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 56
+       "buf": "model.layers.17.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l17.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.17.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -48272,8 +47133,8 @@
      ]
     },
     {
-     "label": "l18.conv_update",
-     "kernel": "conv_update",
+     "label": "l18.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -48285,42 +47146,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 60
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l18.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -48335,65 +47166,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 60
+       "buf": "model.layers.18.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l18.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.18.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -48814,8 +47605,8 @@
      ]
     },
     {
-     "label": "l20.conv_update",
-     "kernel": "conv_update",
+     "label": "l20.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -48827,42 +47618,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 64
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l20.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -48877,65 +47638,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 64
+       "buf": "model.layers.20.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l20.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.20.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -49063,8 +47784,8 @@
      ]
     },
     {
-     "label": "l21.conv_update",
-     "kernel": "conv_update",
+     "label": "l21.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -49076,42 +47797,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 68
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l21.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -49126,65 +47817,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 68
+       "buf": "model.layers.21.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l21.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.21.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -49312,8 +47963,8 @@
      ]
     },
     {
-     "label": "l22.conv_update",
-     "kernel": "conv_update",
+     "label": "l22.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -49325,42 +47976,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 72
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l22.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -49375,65 +47996,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 72
+       "buf": "model.layers.22.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l22.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.22.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -49854,8 +48435,8 @@
      ]
     },
     {
-     "label": "l24.conv_update",
-     "kernel": "conv_update",
+     "label": "l24.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -49867,42 +48448,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 76
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l24.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -49917,65 +48468,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 76
+       "buf": "model.layers.24.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l24.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.24.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -50103,8 +48614,8 @@
      ]
     },
     {
-     "label": "l25.conv_update",
-     "kernel": "conv_update",
+     "label": "l25.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -50116,42 +48627,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 80
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l25.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -50166,65 +48647,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 80
+       "buf": "model.layers.25.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l25.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.25.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -50352,8 +48793,8 @@
      ]
     },
     {
-     "label": "l26.conv_update",
-     "kernel": "conv_update",
+     "label": "l26.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -50365,42 +48806,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 84
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l26.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -50415,65 +48826,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 84
+       "buf": "model.layers.26.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l26.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.26.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -50894,8 +49265,8 @@
      ]
     },
     {
-     "label": "l28.conv_update",
-     "kernel": "conv_update",
+     "label": "l28.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -50907,42 +49278,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 88
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l28.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -50957,65 +49298,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 88
+       "buf": "model.layers.28.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l28.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.28.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -51143,8 +49444,8 @@
      ]
     },
     {
-     "label": "l29.conv_update",
-     "kernel": "conv_update",
+     "label": "l29.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -51156,42 +49457,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 92
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l29.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -51206,65 +49477,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 92
+       "buf": "model.layers.29.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l29.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.29.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -51392,8 +49623,8 @@
      ]
     },
     {
-     "label": "l30.conv_update",
-     "kernel": "conv_update",
+     "label": "l30.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -51405,41 +49636,11 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
-       "offset": 96
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l30.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
        "offset": 96
       },
       {
@@ -51455,65 +49656,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 96
+       "buf": "model.layers.30.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l30.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.30.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -51934,8 +50095,8 @@
      ]
     },
     {
-     "label": "l32.conv_update",
-     "kernel": "conv_update",
+     "label": "l32.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -51947,42 +50108,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 100
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l32.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -51997,65 +50128,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 100
+       "buf": "model.layers.32.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l32.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.32.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -52183,8 +50274,8 @@
      ]
     },
     {
-     "label": "l33.conv_update",
-     "kernel": "conv_update",
+     "label": "l33.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -52196,42 +50287,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 104
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l33.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -52246,65 +50307,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 104
+       "buf": "model.layers.33.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l33.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.33.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -52432,8 +50453,8 @@
      ]
     },
     {
-     "label": "l34.conv_update",
-     "kernel": "conv_update",
+     "label": "l34.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -52445,42 +50466,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 108
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l34.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -52495,65 +50486,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 108
+       "buf": "model.layers.34.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l34.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.34.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -52974,8 +50925,8 @@
      ]
     },
     {
-     "label": "l36.conv_update",
-     "kernel": "conv_update",
+     "label": "l36.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -52987,42 +50938,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 112
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l36.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -53037,65 +50958,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 112
+       "buf": "model.layers.36.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l36.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.36.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -53223,8 +51104,8 @@
      ]
     },
     {
-     "label": "l37.conv_update",
-     "kernel": "conv_update",
+     "label": "l37.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -53236,42 +51117,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 116
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l37.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -53286,65 +51137,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 116
+       "buf": "model.layers.37.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l37.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.37.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -53472,8 +51283,8 @@
      ]
     },
     {
-     "label": "l38.conv_update",
-     "kernel": "conv_update",
+     "label": "l38.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -53485,42 +51296,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 120
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l38.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -53535,65 +51316,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 120
+       "buf": "model.layers.38.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l38.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.38.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -54014,8 +51755,8 @@
      ]
     },
     {
-     "label": "l40.conv_update",
-     "kernel": "conv_update",
+     "label": "l40.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -54027,42 +51768,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 124
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l40.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -54077,65 +51788,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 124
+       "buf": "model.layers.40.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l40.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.40.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -54263,8 +51934,8 @@
      ]
     },
     {
-     "label": "l41.conv_update",
-     "kernel": "conv_update",
+     "label": "l41.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -54276,42 +51947,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 128
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l41.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -54326,65 +51967,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 128
+       "buf": "model.layers.41.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l41.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.41.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -54512,8 +52113,8 @@
      ]
     },
     {
-     "label": "l42.conv_update",
-     "kernel": "conv_update",
+     "label": "l42.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -54525,42 +52126,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 132
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l42.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -54575,65 +52146,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 132
+       "buf": "model.layers.42.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l42.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.42.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -55054,8 +52585,8 @@
      ]
     },
     {
-     "label": "l44.conv_update",
-     "kernel": "conv_update",
+     "label": "l44.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -55067,42 +52598,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 136
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l44.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -55117,65 +52618,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 136
+       "buf": "model.layers.44.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l44.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.44.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -55303,8 +52764,8 @@
      ]
     },
     {
-     "label": "l45.conv_update",
-     "kernel": "conv_update",
+     "label": "l45.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -55316,42 +52777,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 140
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l45.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -55366,65 +52797,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 140
+       "buf": "model.layers.45.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l45.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.45.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -55552,8 +52943,8 @@
      ]
     },
     {
-     "label": "l46.conv_update",
-     "kernel": "conv_update",
+     "label": "l46.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -55565,42 +52956,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 144
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l46.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -55615,65 +52976,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 144
+       "buf": "model.layers.46.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l46.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.46.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -56094,8 +53415,8 @@
      ]
     },
     {
-     "label": "l48.conv_update",
-     "kernel": "conv_update",
+     "label": "l48.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -56107,42 +53428,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 148
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l48.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -56157,65 +53448,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 148
+       "buf": "model.layers.48.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l48.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.48.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -56343,8 +53594,8 @@
      ]
     },
     {
-     "label": "l49.conv_update",
-     "kernel": "conv_update",
+     "label": "l49.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -56356,42 +53607,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 152
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l49.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -56406,65 +53627,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 152
+       "buf": "model.layers.49.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l49.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.49.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -56592,8 +53773,8 @@
      ]
     },
     {
-     "label": "l50.conv_update",
-     "kernel": "conv_update",
+     "label": "l50.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -56605,42 +53786,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 156
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l50.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -56655,65 +53806,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 156
+       "buf": "model.layers.50.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l50.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.50.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -57134,8 +54245,8 @@
      ]
     },
     {
-     "label": "l52.conv_update",
-     "kernel": "conv_update",
+     "label": "l52.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -57147,42 +54258,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 160
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l52.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -57197,65 +54278,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 160
+       "buf": "model.layers.52.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l52.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.52.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -57383,8 +54424,8 @@
      ]
     },
     {
-     "label": "l53.conv_update",
-     "kernel": "conv_update",
+     "label": "l53.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -57396,42 +54437,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 164
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l53.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -57446,65 +54457,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 164
+       "buf": "model.layers.53.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l53.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.53.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -57632,8 +54603,8 @@
      ]
     },
     {
-     "label": "l54.conv_update",
-     "kernel": "conv_update",
+     "label": "l54.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -57645,42 +54616,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 168
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l54.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -57695,65 +54636,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 168
+       "buf": "model.layers.54.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l54.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.54.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -58174,8 +55075,8 @@
      ]
     },
     {
-     "label": "l56.conv_update",
-     "kernel": "conv_update",
+     "label": "l56.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -58187,42 +55088,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 172
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l56.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -58237,65 +55108,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 172
+       "buf": "model.layers.56.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l56.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.56.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -58423,8 +55254,8 @@
      ]
     },
     {
-     "label": "l57.conv_update",
-     "kernel": "conv_update",
+     "label": "l57.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -58436,42 +55267,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 176
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l57.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -58486,65 +55287,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 176
+       "buf": "model.layers.57.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l57.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.57.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -58672,8 +55433,8 @@
      ]
     },
     {
-     "label": "l58.conv_update",
-     "kernel": "conv_update",
+     "label": "l58.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -58685,42 +55446,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 180
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l58.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -58735,65 +55466,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 180
+       "buf": "model.layers.58.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l58.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.58.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -59214,8 +55905,8 @@
      ]
     },
     {
-     "label": "l60.conv_update",
-     "kernel": "conv_update",
+     "label": "l60.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -59227,42 +55918,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 184
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l60.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -59277,65 +55938,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 184
+       "buf": "model.layers.60.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l60.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.60.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -59463,8 +56084,8 @@
      ]
     },
     {
-     "label": "l61.conv_update",
-     "kernel": "conv_update",
+     "label": "l61.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -59476,42 +56097,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 188
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l61.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -59526,65 +56117,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 188
+       "buf": "model.layers.61.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l61.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.61.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },
@@ -59712,8 +56263,8 @@
      ]
     },
     {
-     "label": "l62.conv_update",
-     "kernel": "conv_update",
+     "label": "l62.gdn",
+     "kernel": "gdn_decode",
      "args": [
       {
        "buf": "qkvz"
@@ -59725,42 +56276,12 @@
        "state": "gdn"
       },
       {
+       "state": "gdn",
+       "offset": 61440
+      },
+      {
        "buf": "gdn.line_index",
        "offset": 192
-      },
-      {
-       "buf": "qkvz"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "i32": 49
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 1
-      },
-      {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l62.recurrent",
-     "kernel": "recurrent",
-     "args": [
-      {
-       "buf": "qkvz"
-      },
-      {
-       "buf": "ba",
-       "offset": 96
       },
       {
        "buf": "ba"
@@ -59775,65 +56296,25 @@
        "buf": "core_attn_out"
       },
       {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "state": "gdn",
-       "offset": 61440
-      },
-      {
-       "buf": "gdn.line_index",
-       "offset": 192
+       "buf": "model.layers.62.linear_attn.norm.weight"
       },
       {
        "f32": 0.0883883461356163
       },
       {
-       "i64": 0
-      },
-      {
-       "i64": 0
-      }
-     ]
-    },
-    {
-     "label": "l62.gated_norm",
-     "kernel": "gated_norm_decode",
-     "args": [
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "core_attn_out"
-      },
-      {
-       "buf": "model.layers.62.linear_attn.norm.weight"
-      },
-      {
-       "buf": "qkvz",
-       "offset": 20480
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 128
-      },
-      {
-       "i32": 48
-      },
-      {
        "f32": 9.999999974752427e-07
       },
       {
-       "i64": 0
+       "i32": 49
       },
       {
-       "i64": 0
+       "i32": 1605632
+      },
+      {
+       "i32": 10240
+      },
+      {
+       "i32": 802816
       }
      ]
     },

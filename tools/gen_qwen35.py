@@ -885,17 +885,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                        [GDN_D // 64, cdiv(T, FLA_CHUNK), GDN_V_HEADS]),
         "gated_norm": layer_norm_kernel(pre, [mul(T, GDN_V_HEADS // LN_ROWS_PER_BLOCK), 1, 1],
                                         ["tokens", GDN_V_HEADS]),
-        # --- GDN decode
-        "conv_update": tri("conv_update",
-                           ["in buffer<bf16>", "in buffer<bf16>", "inout ptr", "in buffer<i32>",
-                            "out buffer<bf16>", "i32", "i32", "i64", "i64"] + I2,
-                           [1, CONV_DIM // 256, 1], src=dec),
-        "recurrent": tri("recurrent",
-                         ["in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<f32>",
-                          "in buffer<bf16>", "out buffer<bf16>", "inout ptr", "inout ptr",
-                          "in buffer<i32>", "f32"] + I2,
-                         [GDN_D // 32, GDN_V_HEADS, 1], src=dec),
-        "gated_norm_decode": layer_norm_kernel(dec, [GDN_V_HEADS, 1, 1], [1, GDN_V_HEADS]),
+        # --- GDN decode: the whole chain in one launch, one thread-block
+        # cluster per q/k head (tools/kernels-src/gdn_decode.cu)
+        "gdn_decode": single("kern_gdn_decode_bf16",
+                             ["inout buffer<bf16>", "in buffer<bf16>", "inout ptr", "inout ptr",
+                              "in buffer<i32>", "in buffer<bf16>", "in buffer<f32>",
+                              "in buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
+                              "f32", "f32", "i32", "i32", "i32", "i32"],
+                             [256, 1, 1], [2 * GDN_V_HEADS, 1, 1], cubin="gdn_decode.cubin"),
         # --- attention
         "attn_prefill": tri("unified", ATTN_IFACE, [cdiv(T, BLOCK_Q), KV_HEADS, 1]),
         "attn": {
@@ -1093,18 +1090,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                    i32(GDN_D), i32(GDN_D), i32(GDN_D), expr(mul(T, GDN_V_HEADS)), f32(eps)] + Z2),
             ]
         elif nacc is None:
+            # the decode chain (conv update + delta rule step + gated norm),
+            # fused into one launch -- see tools/kernels-src/gdn_decode.cu
             ds += [
-                d(l + "conv_update", "conv_update",
-                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), idx, buf("qkvz"),
-                   i32(1), i32(n_pages), i64(1), i64(1)] + Z2),
-                d(l + "recurrent", "recurrent",
-                  [buf("qkvz"), a_, b_, buf(p + "A_log"), buf(p + "dt_bias"), buf("core_attn_out"),
-                   state("gdn", ssm_off), state("gdn", ssm_off), idx,
-                   f32(gdn_scale)] + Z2),
-                d(l + "gated_norm", "gated_norm_decode",
-                  [buf("core_attn_out"), buf("core_attn_out"), buf(p + "norm.weight"),
-                   buf("qkvz", Z_OFF * BF16), i32(GDN_D), i32(GDN_D), i32(GDN_D), i32(GDN_V_HEADS),
-                   f32(eps)] + Z2),
+                d(l + "gdn", "gdn_decode",
+                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), state("gdn", ssm_off),
+                   idx, buf("ba"), buf(p + "A_log"), buf(p + "dt_bias"), buf("core_attn_out"),
+                   buf(p + "norm.weight"), f32(gdn_scale), f32(eps), i32(n_pages),
+                   i32(page_bytes // BF16), i32(CONV_DIM), i32(page_bytes // 4)]),
             ]
         else:
             # vLLM's spec-decode GDN path, fused into one launch (the chain
