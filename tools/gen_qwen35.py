@@ -703,6 +703,12 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         return single(TRITON[tag], params, blk(tag, src), grid,
                       shared_mem=smem(tag, src) or None, cubin=cubin, sha256=sha, **kw)
 
+    # gcnt is declared `out`: the kernel does read it (atomic task counter),
+    # but its contents are zero at rest -- alloc_zeros at load, and the tail
+    # resets it before the dispatch ends
+    GEMM8_AN_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>",
+                       "in buffer<f32>", "out buffer<bf16>", "out buffer<f32>", "out buffer<i32>",
+                       "i32", "i32", "i32", "f32"]
     GEMMA_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<f32>",
                     "i32", "i32", "i32", "i32", "i32", "i32", "i32", "f32"]
     GEMMA_FUSED_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>",
@@ -767,6 +773,22 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                                      "i32", "i32", "i32"],
                                     [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
                                     shared_mem=GEMM8_SMEM, cubin="gemm8.cubin"),
+        # down GEMM + residual add + Gemma fused_add_rms_norm of the next
+        # layer input (gemm8's split-K partials, y and the task counters are
+        # impl scratch; the norm tail reproduces kern_gemma_rms_norm.cu)
+        "gemm8_add_norm": {
+            "params": GEMM8_AN_PARAMS[:5] + GEMM8_AN_PARAMS[8:],
+            "impl": {
+                "scratch": {"y": {"dtype": "bf16", "shape": [8, HIDDEN]},
+                            "partial": {"dtype": "f32", "shape": [8, 8, HIDDEN]},
+                            "gcnt": {"dtype": "i32", "shape": [2]}},
+                "steps": [step("kern_gemm8_add_norm_bf16", GEMM8_AN_PARAMS,
+                               [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                               [a(0), a(1), a(2), a(3), a(4), scr("y"), scr("partial"), scr("gcnt"),
+                                a(5), a(6), a(7), a(8)],
+                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin")],
+            },
+        },
         "copy_rows": single("kern_copy_rows_bf16",
                             ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
                             [256, 1, 1], [T, 1, 1], cubin="copy_rows.cubin"),
@@ -1140,14 +1162,19 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                 mlp = [gemm(l + "gate_up", "x", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
                        d(l + "silu_mul", "silu_mul",
                          [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)])]
-            ds += [
-                fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"),
-                *mlp,
-                gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "y", T, HIDDEN, FFN),
-            ]
             last = i + 1 == LAYERS
-            ds.append(fused(l + ("final_norm" if last else "next_input_norm"), "y",
-                            "model.norm.weight_p1" if last else f"model.layers.{i + 1}.input_layernorm.weight_p1"))
+            wnorm = "model.norm.weight_p1" if last else f"model.layers.{i + 1}.input_layernorm.weight_p1"
+            nlabel = l + ("final_norm" if last else "next_input_norm")
+            ds.append(fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"))
+            ds += mlp
+            if small:
+                # down GEMM + residual add + next input norm in one dispatch
+                ds.append(d(l + "down_norm", "gemm8_add_norm",
+                            [buf("x"), buf("act"), buf(p + "mlp.down_proj.weight"), buf("residual"),
+                             buf(wnorm), T, i32(HIDDEN), i32(FFN), f32(eps)]))
+            else:
+                ds.append(gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "y", T, HIDDEN, FFN))
+                ds.append(fused(nlabel, "y", wnorm))
             if taps and i in TAPS:
                 # residual now holds hidden + residual = the input of layer
                 # i+1, vLLM's aux hidden state; fc's column block j, β=1
