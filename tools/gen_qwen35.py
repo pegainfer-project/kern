@@ -932,6 +932,23 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     Z2 = [i64(0), i64(0)]
 
     if spec:
+        # the whole spec-path GDN chain of a layer in one launch
+        # (tools/kernels-src/gdn_spec.cu): conv update + post_conv split/
+        # l2norm/gating + a/b/z copies + T-row delta rule with per-token
+        # SSM checkpoints + gated RMSNorm.  Counter scratch is zero at
+        # rest (the last CTA resets); hpart holds data, write-before-read.
+        GDN_SPEC_PARAMS = [
+            "inout buffer<bf16>",                                    # qkvz (conv writeback)
+            "in buffer<bf16>", "inout ptr", "inout ptr",             # conv weight, conv state, ssm state
+            "in buffer<i32>", "in buffer<i32>", "in buffer<i32>",    # line, num_accepted, cu_seqlens_q
+            "in buffer<i32>",                                        # spec_slots row
+            "in buffer<bf16>", "in buffer<f32>", "in buffer<bf16>",  # ba, A_log, dt_bias
+            "out buffer<bf16>", "in buffer<bf16>",                   # core_attn_out, norm.weight
+            "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",  # gdn_q/k/v
+            "out buffer<f32>", "out buffer<f32>",                    # g, beta
+            "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",  # a_c, b_c, z_c
+            "out buffer<i32>", "out buffer<f32>", "out buffer<i32>", "out buffer<i32>",  # scratch
+            "f32", "f32", "i32", "i32", "i32", "i32", "i32"]         # scale, eps, tokens, n_pages, cls, cds, sls
         RMS_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "i64", "i64", "i64", "i64", "i64",
                       "in buffer<bf16>", "i64", "f32", "i32", "i32"]
         ad = spec["attn_draft"]
@@ -939,24 +956,25 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
             "gemm_acc": single("extern:cublaslt_bf16_tn_acc",
                                ["in buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>", "i32", "i32", "i32"],
                                [1, 1, 1], [1, 1, 1]),
-            # --- target GDN under speculation (vLLM's spec-decode kernels)
-            # conv update: seqlen 8 / state_len 10 are constexprs; reads the
-            # history taps at conv-line offset num_accepted-1, writes the
-            # new 10-wide window (in place on the qkvz rows)
-            "conv_update_spec": spec_kernel("conv_update_spec",
-                                            ["in buffer<bf16>", "in buffer<bf16>", "inout ptr", "in buffer<i32>",
-                                             "in buffer<i32>", "in buffer<i32>", "out buffer<bf16>",
-                                             "i32", "i32", "i64", "i64"] + I2,
-                                            [1, CONV_DIM // 256, 1]),
+            # --- target GDN under speculation: the whole chain is fused
+            # into gdn_spec below (kern_gdn_spec_bf16)
+            "gdn_spec": {
+                "params": GDN_SPEC_PARAMS[:21] + GDN_SPEC_PARAMS[25:],
+                "impl": {
+                    "scratch": {"xcnt": {"dtype": "i32", "shape": [GDN_Q // GDN_D]},
+                                "hpart": {"dtype": "f32", "shape": [SPEC_BLOCK, GDN_V_HEADS, 4]},
+                                "hcnt": {"dtype": "i32", "shape": [GDN_V_HEADS]},
+                                "gcnt": {"dtype": "i32", "shape": [1]}},
+                    "steps": [step("kern_gdn_spec_bf16", GDN_SPEC_PARAMS, [256, 1, 1], [192, 1, 1],
+                                   [a(i) for i in range(21)]
+                                   + [scr("xcnt"), scr("hpart"), scr("hcnt"), scr("gcnt")]
+                                   + [a(i) for i in range(21, 28)],
+                                   cubin="gdn_spec.cubin")],
+                },
+            },
             # recurrent delta rule over T rows with the sigmoid gating fused:
             # initial state from SSM slot num_accepted-1, every row's state
             # checkpointed to its own slot (ssm_state_indices)
-            "recurrent_spec": spec_kernel("recurrent_spec",
-                                          ["in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
-                                           "f32", "f32", "in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
-                                           "out buffer<bf16>", "inout ptr", "inout ptr", "in buffer<i32>",
-                                           "in buffer<i32>", "in buffer<i32>", "f32", "i64", "i64"] + I2,
-                                          [1, GDN_D // 32, GDN_V_HEADS]),
             "argmax": {
                 "params": ["in buffer<bf16>", "out buffer<i64>", "i32"],
                 "impl": {
@@ -1094,30 +1112,22 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                    f32(eps)] + Z2),
             ]
         else:
-            # vLLM's spec-decode GDN path: conv update with the accepted-token
-            # offset (seqlen 8 baked: it reads/writes 8 qkvz rows, rows past
-            # `tokens` are scratch), post_conv split, contiguous a/b, the
-            # recurrent kernel over T rows checkpointing every row's state.
+            # vLLM's spec-decode GDN path, fused into one launch (the chain
+            # was: conv update with the accepted-token offset, post_conv
+            # split + l2norm + gating, contiguous a/b copies, the recurrent
+            # kernel over T rows checkpointing every row's state, z copy,
+            # gated RMSNorm).  The fused kernel reproduces every buffer
+            # write of that chain, including the qkvz conv writeback and
+            # the per-token SSM checkpoints.
             ds += [
-                d(l + "conv_update", "conv_update_spec",
-                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), idx, nacc, buf("cu_seqlens_q"),
-                   buf("qkvz"), i32(1), i32(n_pages), i64(QKVZ_DIM), i64(QKVZ_DIM)] + Z2),
-                d(l + "post_conv", "post_conv",
-                  [buf("qkvz"), a_, b_, buf(p + "A_log"), buf(p + "dt_bias"),
-                   buf("gdn_q"), buf("gdn_k"), buf("gdn_v"), buf("g"), buf("beta"),
-                   i32(QKVZ_DIM), i32(BA_DIM), i32(BA_DIM), i32(GDN_Q), i32(GDN_Q), i32(GDN_V), T] + Z2),
-                d(l + "a_copy", "copy_rows", [buf("a_c"), a_, i32(GDN_V_HEADS), i32(BA_DIM), i32(GDN_V_HEADS)]),
-                d(l + "b_copy", "copy_rows", [buf("b_c"), b_, i32(GDN_V_HEADS), i32(BA_DIM), i32(GDN_V_HEADS)]),
-                d(l + "recurrent", "recurrent_spec",
-                  [buf(p + "A_log"), buf("a_c"), buf("b_c"), buf(p + "dt_bias"), f32(1.0), f32(20.0),
-                   buf("gdn_q"), buf("gdn_k"), buf("gdn_v"), buf("core_attn_out"),
-                   state("gdn", ssm_off), state("gdn", ssm_off), buf("cu_seqlens_q"),
-                   buf("gdn.spec_slots", 4 * SPEC_BLOCK * g), nacc, f32(gdn_scale), i64(1), T] + Z2),
-                d(l + "z_copy", "copy_rows",
-                  [buf("z_c"), buf("qkvz", Z_OFF * BF16), i32(GDN_V), i32(QKVZ_DIM), i32(GDN_V)]),
-                d(l + "gated_norm", "gated_norm",
-                  [buf("core_attn_out"), buf("core_attn_out"), buf(p + "norm.weight"), buf("z_c"),
-                   i32(GDN_D), i32(GDN_D), i32(GDN_D), expr(mul(T, GDN_V_HEADS)), f32(eps)] + Z2),
+                d(l + "gdn", "gdn_spec",
+                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), state("gdn", ssm_off),
+                   idx, nacc, buf("cu_seqlens_q"), buf("gdn.spec_slots", 4 * SPEC_BLOCK * g),
+                   buf("ba"), buf(p + "A_log"), buf(p + "dt_bias"), buf("core_attn_out"),
+                   buf(p + "norm.weight"), buf("gdn_q"), buf("gdn_k"), buf("gdn_v"),
+                   buf("g"), buf("beta"), buf("a_c"), buf("b_c"), buf("z_c"),
+                   f32(gdn_scale), f32(eps), T, i32(n_pages),
+                   i32(page_bytes // BF16), i32(ssm_off // (CONV_DIM * BF16)), i32(page_bytes // 4)]),
             ]
         ds.append(gemm(l + "out_proj", "core_attn_out", p + "out_proj.weight", "y", T, HIDDEN, GDN_V))
         return ds
