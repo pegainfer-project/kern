@@ -776,6 +776,12 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         # down GEMM + residual add + Gemma fused_add_rms_norm of the next
         # layer input (gemm8's split-K partials, y and the task counters are
         # impl scratch; the norm tail reproduces kern_gemma_rms_norm.cu)
+        # two weights sharing one x: in_proj_qkvz + in_proj_ba per GDN layer
+        "gemm8_dual": single("kern_gemm8_dual_bf16",
+                             ["out buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
+                              "in buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32", "i32"],
+                             [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                             shared_mem=GEMM8_SMEM, cubin="gemm8.cubin"),
         "gemm8_add_norm": {
             "params": GEMM8_AN_PARAMS[:5] + GEMM8_AN_PARAMS[8:],
             "impl": {
@@ -995,7 +1001,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                  [buf("x"), buf(x_in), buf("residual"), buf(w), i32(HIDDEN), T,
                   i32(HIDDEN), i32(HIDDEN), f32(eps)])
 
-    def gdn_layer(i, decode, nacc=None):
+    def gdn_layer(i, decode, nacc=None, small=False):
         """decode=False: the chunked FLA prefill chain.  decode=True: the
         recurrent chain — Stage 1's packed kernels, or, when `nacc` names
         the num_accepted_tokens buffer, vLLM's speculative kernels over the
@@ -1006,10 +1012,16 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         line = g + 1
         idx = buf(line_table, 4 * line)
         page = gdn_page(i)
-        ds = [
-            gemm(l + "in_proj_qkvz", "x", p + "in_proj_qkvz.weight", "qkvz", T, QKVZ_DIM, HIDDEN),
-            gemm(l + "in_proj_ba", "x", p + "in_proj_ba.weight", "ba", T, BA_DIM, HIDDEN),
-        ]
+        if small:
+            # one weight stream for both input projections
+            ds = [d(l + "in_proj", "gemm8_dual",
+                    [buf("qkvz"), buf("ba"), buf("x"), buf(p + "in_proj_qkvz.weight"),
+                     buf(p + "in_proj_ba.weight"), T, i32(QKVZ_DIM), i32(BA_DIM), i32(HIDDEN)])]
+        else:
+            ds = [
+                gemm(l + "in_proj_qkvz", "x", p + "in_proj_qkvz.weight", "qkvz", T, QKVZ_DIM, HIDDEN),
+                gemm(l + "in_proj_ba", "x", p + "in_proj_ba.weight", "ba", T, BA_DIM, HIDDEN),
+            ]
         a_ = buf("ba", GDN_V_HEADS * BF16)   # ba row = [b | a]
         b_ = buf("ba")
         if not decode and nacc is None:
@@ -1153,7 +1165,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         for i in range(LAYERS):
             p = f"model.layers.{i}."
             l = f"l{i}."
-            lay = attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc)
+            lay = attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc, small)
             if small:
                 # o_proj / out_proj GEMM + residual add + post-attention norm
                 attn = i in ATTN_LAYERS

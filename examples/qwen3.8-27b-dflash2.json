@@ -6701,6 +6701,78 @@
     ]
    }
   },
+  "gemm8_dual": {
+   "params": [
+    "out buffer<bf16>",
+    "out buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "i32",
+    "i32",
+    "i32",
+    "i32"
+   ],
+   "impl": {
+    "steps": [
+     {
+      "symbol": "kern_gemm8_dual_bf16",
+      "params": [
+       "out buffer<bf16>",
+       "out buffer<bf16>",
+       "in buffer<bf16>",
+       "in buffer<bf16>",
+       "in buffer<bf16>",
+       "i32",
+       "i32",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       288,
+       1,
+       1
+      ],
+      "grid": [
+       152,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "arg": 0
+       },
+       {
+        "arg": 1
+       },
+       {
+        "arg": 2
+       },
+       {
+        "arg": 3
+       },
+       {
+        "arg": 4
+       },
+       {
+        "arg": 5
+       },
+       {
+        "arg": 6
+       },
+       {
+        "arg": 7
+       },
+       {
+        "arg": 8
+       }
+      ],
+      "shared_mem": 224128,
+      "cubin": "gemm8.cubin"
+     }
+    ]
+   }
+  },
   "gemm8_add_norm": {
    "params": [
     "out buffer<bf16>",
@@ -47307,9 +47379,15 @@
      ]
     },
     {
-     "label": "l0.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l0.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -47317,34 +47395,13 @@
        "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l0.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -47734,9 +47791,15 @@
      ]
     },
     {
-     "label": "l1.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l1.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -47744,34 +47807,13 @@
        "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l1.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -48162,9 +48204,15 @@
      ]
     },
     {
-     "label": "l2.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l2.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -48172,34 +48220,13 @@
        "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l2.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -49001,9 +49028,15 @@
      ]
     },
     {
-     "label": "l4.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l4.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -49011,34 +49044,13 @@
        "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l4.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -49429,9 +49441,15 @@
      ]
     },
     {
-     "label": "l5.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l5.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -49439,34 +49457,13 @@
        "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l5.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -49857,9 +49854,15 @@
      ]
     },
     {
-     "label": "l6.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l6.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -49867,34 +49870,13 @@
        "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l6.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -50698,9 +50680,15 @@
      ]
     },
     {
-     "label": "l8.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l8.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -50708,34 +50696,13 @@
        "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l8.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -51126,9 +51093,15 @@
      ]
     },
     {
-     "label": "l9.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l9.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -51136,34 +51109,13 @@
        "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l9.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -51554,9 +51506,15 @@
      ]
     },
     {
-     "label": "l10.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l10.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -51564,34 +51522,13 @@
        "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l10.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -52395,9 +52332,15 @@
      ]
     },
     {
-     "label": "l12.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l12.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -52405,34 +52348,13 @@
        "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l12.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -52823,9 +52745,15 @@
      ]
     },
     {
-     "label": "l13.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l13.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -52833,34 +52761,13 @@
        "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l13.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -53251,9 +53158,15 @@
      ]
     },
     {
-     "label": "l14.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l14.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -53261,34 +53174,13 @@
        "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l14.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -54092,9 +53984,15 @@
      ]
     },
     {
-     "label": "l16.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l16.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -54102,34 +54000,13 @@
        "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l16.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -54520,9 +54397,15 @@
      ]
     },
     {
-     "label": "l17.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l17.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -54530,34 +54413,13 @@
        "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l17.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -54948,9 +54810,15 @@
      ]
     },
     {
-     "label": "l18.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l18.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -54958,34 +54826,13 @@
        "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l18.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -55789,9 +55636,15 @@
      ]
     },
     {
-     "label": "l20.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l20.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -55799,34 +55652,13 @@
        "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l20.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -56217,9 +56049,15 @@
      ]
     },
     {
-     "label": "l21.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l21.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -56227,34 +56065,13 @@
        "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l21.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -56645,9 +56462,15 @@
      ]
     },
     {
-     "label": "l22.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l22.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -56655,34 +56478,13 @@
        "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l22.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -57486,9 +57288,15 @@
      ]
     },
     {
-     "label": "l24.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l24.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -57496,34 +57304,13 @@
        "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l24.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -57914,9 +57701,15 @@
      ]
     },
     {
-     "label": "l25.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l25.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -57924,34 +57717,13 @@
        "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l25.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -58342,9 +58114,15 @@
      ]
     },
     {
-     "label": "l26.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l26.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -58352,34 +58130,13 @@
        "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l26.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -59183,9 +58940,15 @@
      ]
     },
     {
-     "label": "l28.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l28.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -59193,34 +58956,13 @@
        "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l28.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -59611,9 +59353,15 @@
      ]
     },
     {
-     "label": "l29.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l29.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -59621,34 +59369,13 @@
        "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l29.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -60039,9 +59766,15 @@
      ]
     },
     {
-     "label": "l30.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l30.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -60049,34 +59782,13 @@
        "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l30.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -60880,9 +60592,15 @@
      ]
     },
     {
-     "label": "l32.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l32.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -60890,34 +60608,13 @@
        "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l32.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -61308,9 +61005,15 @@
      ]
     },
     {
-     "label": "l33.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l33.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -61318,34 +61021,13 @@
        "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l33.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -61736,9 +61418,15 @@
      ]
     },
     {
-     "label": "l34.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l34.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -61746,34 +61434,13 @@
        "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l34.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -62577,9 +62244,15 @@
      ]
     },
     {
-     "label": "l36.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l36.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -62587,34 +62260,13 @@
        "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l36.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -63005,9 +62657,15 @@
      ]
     },
     {
-     "label": "l37.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l37.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -63015,34 +62673,13 @@
        "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l37.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -63433,9 +63070,15 @@
      ]
     },
     {
-     "label": "l38.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l38.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -63443,34 +63086,13 @@
        "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l38.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -64274,9 +63896,15 @@
      ]
     },
     {
-     "label": "l40.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l40.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -64284,34 +63912,13 @@
        "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l40.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -64702,9 +64309,15 @@
      ]
     },
     {
-     "label": "l41.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l41.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -64712,34 +64325,13 @@
        "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l41.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -65130,9 +64722,15 @@
      ]
     },
     {
-     "label": "l42.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l42.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -65140,34 +64738,13 @@
        "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l42.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -65971,9 +65548,15 @@
      ]
     },
     {
-     "label": "l44.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l44.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -65981,34 +65564,13 @@
        "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l44.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -66399,9 +65961,15 @@
      ]
     },
     {
-     "label": "l45.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l45.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -66409,34 +65977,13 @@
        "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l45.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -66827,9 +66374,15 @@
      ]
     },
     {
-     "label": "l46.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l46.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -66837,34 +66390,13 @@
        "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l46.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -67668,9 +67200,15 @@
      ]
     },
     {
-     "label": "l48.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l48.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -67678,34 +67216,13 @@
        "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l48.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -68096,9 +67613,15 @@
      ]
     },
     {
-     "label": "l49.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l49.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -68106,34 +67629,13 @@
        "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l49.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -68524,9 +68026,15 @@
      ]
     },
     {
-     "label": "l50.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l50.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -68534,34 +68042,13 @@
        "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l50.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -69365,9 +68852,15 @@
      ]
     },
     {
-     "label": "l52.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l52.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -69375,34 +68868,13 @@
        "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l52.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -69793,9 +69265,15 @@
      ]
     },
     {
-     "label": "l53.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l53.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -69803,34 +69281,13 @@
        "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l53.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -70221,9 +69678,15 @@
      ]
     },
     {
-     "label": "l54.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l54.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -70231,34 +69694,13 @@
        "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l54.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -71062,9 +70504,15 @@
      ]
     },
     {
-     "label": "l56.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l56.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -71072,34 +70520,13 @@
        "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l56.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -71490,9 +70917,15 @@
      ]
     },
     {
-     "label": "l57.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l57.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -71500,34 +70933,13 @@
        "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l57.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -71918,9 +71330,15 @@
      ]
     },
     {
-     "label": "l58.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l58.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -71928,34 +71346,13 @@
        "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l58.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -72759,9 +72156,15 @@
      ]
     },
     {
-     "label": "l60.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l60.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -72769,34 +72172,13 @@
        "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l60.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -73187,9 +72569,15 @@
      ]
     },
     {
-     "label": "l61.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l61.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -73197,34 +72585,13 @@
        "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l61.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -73615,9 +72982,15 @@
      ]
     },
     {
-     "label": "l62.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l62.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -73625,34 +72998,13 @@
        "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l62.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -74601,9 +73953,15 @@
      ]
     },
     {
-     "label": "l0.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l0.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -74611,34 +73969,13 @@
        "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l0.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -75028,9 +74365,15 @@
      ]
     },
     {
-     "label": "l1.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l1.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -75038,34 +74381,13 @@
        "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l1.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -75456,9 +74778,15 @@
      ]
     },
     {
-     "label": "l2.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l2.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -75466,34 +74794,13 @@
        "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l2.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -76295,9 +75602,15 @@
      ]
     },
     {
-     "label": "l4.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l4.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -76305,34 +75618,13 @@
        "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l4.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -76723,9 +76015,15 @@
      ]
     },
     {
-     "label": "l5.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l5.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -76733,34 +76031,13 @@
        "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l5.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -77175,9 +76452,15 @@
      ]
     },
     {
-     "label": "l6.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l6.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -77185,34 +76468,13 @@
        "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l6.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -78016,9 +77278,15 @@
      ]
     },
     {
-     "label": "l8.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l8.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -78026,34 +77294,13 @@
        "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l8.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -78444,9 +77691,15 @@
      ]
     },
     {
-     "label": "l9.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l9.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -78454,34 +77707,13 @@
        "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l9.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -78872,9 +78104,15 @@
      ]
     },
     {
-     "label": "l10.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l10.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -78882,34 +78120,13 @@
        "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l10.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -79713,9 +78930,15 @@
      ]
     },
     {
-     "label": "l12.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l12.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -79723,34 +78946,13 @@
        "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l12.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -80141,9 +79343,15 @@
      ]
     },
     {
-     "label": "l13.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l13.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -80151,34 +79359,13 @@
        "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l13.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -80569,9 +79756,15 @@
      ]
     },
     {
-     "label": "l14.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l14.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -80579,34 +79772,13 @@
        "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l14.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -81410,9 +80582,15 @@
      ]
     },
     {
-     "label": "l16.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l16.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -81420,34 +80598,13 @@
        "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l16.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -81838,9 +80995,15 @@
      ]
     },
     {
-     "label": "l17.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l17.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -81848,34 +81011,13 @@
        "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l17.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -82266,9 +81408,15 @@
      ]
     },
     {
-     "label": "l18.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l18.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -82276,34 +81424,13 @@
        "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l18.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -83131,9 +82258,15 @@
      ]
     },
     {
-     "label": "l20.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l20.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -83141,34 +82274,13 @@
        "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l20.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -83559,9 +82671,15 @@
      ]
     },
     {
-     "label": "l21.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l21.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -83569,34 +82687,13 @@
        "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l21.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -83987,9 +83084,15 @@
      ]
     },
     {
-     "label": "l22.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l22.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -83997,34 +83100,13 @@
        "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l22.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -84828,9 +83910,15 @@
      ]
     },
     {
-     "label": "l24.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l24.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -84838,34 +83926,13 @@
        "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l24.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -85256,9 +84323,15 @@
      ]
     },
     {
-     "label": "l25.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l25.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -85266,34 +84339,13 @@
        "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l25.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -85684,9 +84736,15 @@
      ]
     },
     {
-     "label": "l26.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l26.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -85694,34 +84752,13 @@
        "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l26.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -86525,9 +85562,15 @@
      ]
     },
     {
-     "label": "l28.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l28.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -86535,34 +85578,13 @@
        "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l28.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -86953,9 +85975,15 @@
      ]
     },
     {
-     "label": "l29.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l29.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -86963,34 +85991,13 @@
        "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l29.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -87381,9 +86388,15 @@
      ]
     },
     {
-     "label": "l30.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l30.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -87391,34 +86404,13 @@
        "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l30.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -88222,9 +87214,15 @@
      ]
     },
     {
-     "label": "l32.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l32.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -88232,34 +87230,13 @@
        "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l32.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -88650,9 +87627,15 @@
      ]
     },
     {
-     "label": "l33.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l33.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -88660,34 +87643,13 @@
        "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l33.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -89102,9 +88064,15 @@
      ]
     },
     {
-     "label": "l34.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l34.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -89112,34 +88080,13 @@
        "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l34.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -89943,9 +88890,15 @@
      ]
     },
     {
-     "label": "l36.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l36.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -89953,34 +88906,13 @@
        "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l36.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -90371,9 +89303,15 @@
      ]
     },
     {
-     "label": "l37.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l37.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -90381,34 +89319,13 @@
        "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l37.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -90799,9 +89716,15 @@
      ]
     },
     {
-     "label": "l38.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l38.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -90809,34 +89732,13 @@
        "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l38.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -91640,9 +90542,15 @@
      ]
     },
     {
-     "label": "l40.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l40.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -91650,34 +90558,13 @@
        "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l40.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -92068,9 +90955,15 @@
      ]
     },
     {
-     "label": "l41.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l41.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -92078,34 +90971,13 @@
        "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l41.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -92496,9 +91368,15 @@
      ]
     },
     {
-     "label": "l42.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l42.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -92506,34 +91384,13 @@
        "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l42.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -93337,9 +92194,15 @@
      ]
     },
     {
-     "label": "l44.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l44.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -93347,34 +92210,13 @@
        "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l44.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -93765,9 +92607,15 @@
      ]
     },
     {
-     "label": "l45.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l45.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -93775,34 +92623,13 @@
        "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l45.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -94193,9 +93020,15 @@
      ]
     },
     {
-     "label": "l46.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l46.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -94203,34 +93036,13 @@
        "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l46.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -95058,9 +93870,15 @@
      ]
     },
     {
-     "label": "l48.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l48.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -95068,34 +93886,13 @@
        "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l48.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -95486,9 +94283,15 @@
      ]
     },
     {
-     "label": "l49.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l49.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -95496,34 +94299,13 @@
        "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l49.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -95914,9 +94696,15 @@
      ]
     },
     {
-     "label": "l50.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l50.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -95924,34 +94712,13 @@
        "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l50.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -96755,9 +95522,15 @@
      ]
     },
     {
-     "label": "l52.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l52.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -96765,34 +95538,13 @@
        "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l52.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -97183,9 +95935,15 @@
      ]
     },
     {
-     "label": "l53.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l53.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -97193,34 +95951,13 @@
        "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l53.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -97611,9 +96348,15 @@
      ]
     },
     {
-     "label": "l54.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l54.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -97621,34 +96364,13 @@
        "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l54.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -98452,9 +97174,15 @@
      ]
     },
     {
-     "label": "l56.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l56.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -98462,34 +97190,13 @@
        "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l56.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -98880,9 +97587,15 @@
      ]
     },
     {
-     "label": "l57.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l57.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -98890,34 +97603,13 @@
        "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l57.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -99308,9 +98000,15 @@
      ]
     },
     {
-     "label": "l58.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l58.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -99318,34 +98016,13 @@
        "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l58.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -100149,9 +98826,15 @@
      ]
     },
     {
-     "label": "l60.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l60.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -100159,34 +98842,13 @@
        "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l60.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -100577,9 +99239,15 @@
      ]
     },
     {
-     "label": "l61.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l61.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -100587,34 +99255,13 @@
        "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l61.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -101029,9 +99676,15 @@
      ]
     },
     {
-     "label": "l62.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l62.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -101039,34 +99692,13 @@
        "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l62.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -102015,9 +100647,15 @@
      ]
     },
     {
-     "label": "l0.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l0.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -102025,34 +100663,13 @@
        "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l0.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -102442,9 +101059,15 @@
      ]
     },
     {
-     "label": "l1.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l1.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -102452,34 +101075,13 @@
        "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l1.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -102870,9 +101472,15 @@
      ]
     },
     {
-     "label": "l2.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l2.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -102880,34 +101488,13 @@
        "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l2.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -103709,9 +102296,15 @@
      ]
     },
     {
-     "label": "l4.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l4.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -103719,34 +102312,13 @@
        "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l4.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -104137,9 +102709,15 @@
      ]
     },
     {
-     "label": "l5.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l5.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -104147,34 +102725,13 @@
        "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l5.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -104589,9 +103146,15 @@
      ]
     },
     {
-     "label": "l6.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l6.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -104599,34 +103162,13 @@
        "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l6.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -105430,9 +103972,15 @@
      ]
     },
     {
-     "label": "l8.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l8.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -105440,34 +103988,13 @@
        "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l8.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -105858,9 +104385,15 @@
      ]
     },
     {
-     "label": "l9.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l9.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -105868,34 +104401,13 @@
        "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l9.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -106286,9 +104798,15 @@
      ]
     },
     {
-     "label": "l10.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l10.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -106296,34 +104814,13 @@
        "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l10.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -107127,9 +105624,15 @@
      ]
     },
     {
-     "label": "l12.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l12.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -107137,34 +105640,13 @@
        "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l12.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -107555,9 +106037,15 @@
      ]
     },
     {
-     "label": "l13.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l13.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -107565,34 +106053,13 @@
        "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l13.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -107983,9 +106450,15 @@
      ]
     },
     {
-     "label": "l14.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l14.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -107993,34 +106466,13 @@
        "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l14.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -108824,9 +107276,15 @@
      ]
     },
     {
-     "label": "l16.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l16.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -108834,34 +107292,13 @@
        "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l16.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -109252,9 +107689,15 @@
      ]
     },
     {
-     "label": "l17.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l17.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -109262,34 +107705,13 @@
        "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l17.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -109680,9 +108102,15 @@
      ]
     },
     {
-     "label": "l18.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l18.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -109690,34 +108118,13 @@
        "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l18.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -110545,9 +108952,15 @@
      ]
     },
     {
-     "label": "l20.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l20.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -110555,34 +108968,13 @@
        "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l20.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -110973,9 +109365,15 @@
      ]
     },
     {
-     "label": "l21.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l21.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -110983,34 +109381,13 @@
        "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l21.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -111401,9 +109778,15 @@
      ]
     },
     {
-     "label": "l22.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l22.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -111411,34 +109794,13 @@
        "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l22.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -112242,9 +110604,15 @@
      ]
     },
     {
-     "label": "l24.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l24.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -112252,34 +110620,13 @@
        "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l24.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -112670,9 +111017,15 @@
      ]
     },
     {
-     "label": "l25.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l25.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -112680,34 +111033,13 @@
        "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l25.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -113098,9 +111430,15 @@
      ]
     },
     {
-     "label": "l26.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l26.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -113108,34 +111446,13 @@
        "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l26.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -113939,9 +112256,15 @@
      ]
     },
     {
-     "label": "l28.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l28.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -113949,34 +112272,13 @@
        "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l28.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -114367,9 +112669,15 @@
      ]
     },
     {
-     "label": "l29.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l29.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -114377,34 +112685,13 @@
        "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l29.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -114795,9 +113082,15 @@
      ]
     },
     {
-     "label": "l30.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l30.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -114805,34 +113098,13 @@
        "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l30.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -115636,9 +113908,15 @@
      ]
     },
     {
-     "label": "l32.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l32.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -115646,34 +113924,13 @@
        "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l32.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -116064,9 +114321,15 @@
      ]
     },
     {
-     "label": "l33.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l33.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -116074,34 +114337,13 @@
        "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l33.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -116516,9 +114758,15 @@
      ]
     },
     {
-     "label": "l34.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l34.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -116526,34 +114774,13 @@
        "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l34.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -117357,9 +115584,15 @@
      ]
     },
     {
-     "label": "l36.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l36.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -117367,34 +115600,13 @@
        "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l36.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -117785,9 +115997,15 @@
      ]
     },
     {
-     "label": "l37.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l37.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -117795,34 +116013,13 @@
        "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l37.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -118213,9 +116410,15 @@
      ]
     },
     {
-     "label": "l38.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l38.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -118223,34 +116426,13 @@
        "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l38.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -119054,9 +117236,15 @@
      ]
     },
     {
-     "label": "l40.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l40.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -119064,34 +117252,13 @@
        "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l40.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -119482,9 +117649,15 @@
      ]
     },
     {
-     "label": "l41.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l41.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -119492,34 +117665,13 @@
        "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l41.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -119910,9 +118062,15 @@
      ]
     },
     {
-     "label": "l42.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l42.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -119920,34 +118078,13 @@
        "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l42.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -120751,9 +118888,15 @@
      ]
     },
     {
-     "label": "l44.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l44.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -120761,34 +118904,13 @@
        "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l44.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -121179,9 +119301,15 @@
      ]
     },
     {
-     "label": "l45.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l45.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -121189,34 +119317,13 @@
        "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l45.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -121607,9 +119714,15 @@
      ]
     },
     {
-     "label": "l46.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l46.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -121617,34 +119730,13 @@
        "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l46.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -122472,9 +120564,15 @@
      ]
     },
     {
-     "label": "l48.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l48.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -122482,34 +120580,13 @@
        "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l48.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -122900,9 +120977,15 @@
      ]
     },
     {
-     "label": "l49.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l49.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -122910,34 +120993,13 @@
        "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l49.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -123328,9 +121390,15 @@
      ]
     },
     {
-     "label": "l50.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l50.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -123338,34 +121406,13 @@
        "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l50.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -124169,9 +122216,15 @@
      ]
     },
     {
-     "label": "l52.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l52.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -124179,34 +122232,13 @@
        "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l52.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -124597,9 +122629,15 @@
      ]
     },
     {
-     "label": "l53.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l53.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -124607,34 +122645,13 @@
        "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l53.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -125025,9 +123042,15 @@
      ]
     },
     {
-     "label": "l54.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l54.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -125035,34 +123058,13 @@
        "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l54.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -125866,9 +123868,15 @@
      ]
     },
     {
-     "label": "l56.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l56.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -125876,34 +123884,13 @@
        "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l56.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -126294,9 +124281,15 @@
      ]
     },
     {
-     "label": "l57.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l57.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -126304,34 +124297,13 @@
        "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l57.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -126722,9 +124694,15 @@
      ]
     },
     {
-     "label": "l58.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l58.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -126732,34 +124710,13 @@
        "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l58.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -127563,9 +125520,15 @@
      ]
     },
     {
-     "label": "l60.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l60.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -127573,34 +125536,13 @@
        "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l60.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -127991,9 +125933,15 @@
      ]
     },
     {
-     "label": "l61.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l61.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -128001,34 +125949,13 @@
        "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l61.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
@@ -128443,9 +126370,15 @@
      ]
     },
     {
-     "label": "l62.in_proj_qkvz",
-     "kernel": "gemm",
+     "label": "l62.in_proj",
+     "kernel": "gemm8_dual",
      "args": [
+      {
+       "buf": "qkvz"
+      },
+      {
+       "buf": "ba"
+      },
       {
        "buf": "x"
       },
@@ -128453,34 +126386,13 @@
        "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "qkvz"
+       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
       },
       {
        "sym": "tokens"
       },
       {
        "i32": 16384
-      },
-      {
-       "i32": 5120
-      }
-     ]
-    },
-    {
-     "label": "l62.in_proj_ba",
-     "kernel": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
-      },
-      {
-       "buf": "ba"
-      },
-      {
-       "sym": "tokens"
       },
       {
        "i32": 96
