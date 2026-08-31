@@ -757,12 +757,15 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         # reduction width depends on the row count, so `rows` is an arg).
         "gemma_norm": single("kern_gemma_rms_norm_bf16", GEMMA_PARAMS, [512, 1, 1], [T, 1, 1],
                              shared_mem=GEMMA_SMEM, cubin="gemma_rms_norm.cubin"),
-        "gemma_norm_qhead": single("kern_gemma_rms_norm_bf16", GEMMA_PARAMS, [512, 1, 1],
-                                   [mul(T, HEADS), 1, 1], shared_mem=GEMMA_HEAD_SMEM,
-                                   cubin="gemma_rms_norm.cubin"),
-        "gemma_norm_khead": single("kern_gemma_rms_norm_bf16", GEMMA_PARAMS, [512, 1, 1],
-                                   [mul(T, KV_HEADS), 1, 1], shared_mem=GEMMA_HEAD_SMEM,
-                                   cubin="gemma_rms_norm.cubin"),
+        # per-head q/k gemma norm + partial rope + kv cache write of one
+        # attention layer (tools/kernels-src/attn_prep.cu): CTA = (token, head)
+        "attn_prep": single("kern_attn_prep_bf16",
+                            ["out buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
+                             "in buffer<f32>", "in buffer<f32>", "in buffer<bf16>",
+                             "in buffer<bf16>", "inout ptr", "inout ptr", "in buffer<i64>",
+                             "i32", "i32", "i64", "i64", "i64", "i32", "f32"],
+                            [512, 1, 1], [mul(T, HEADS + KV_HEADS), 1, 1],
+                            cubin="attn_prep.cubin"),
         "gemma_fused_norm": single("kern_gemma_fused_add_rms_norm_bf16", GEMMA_FUSED_PARAMS,
                                    [512, 1, 1], [T, 1, 1], shared_mem=GEMMA_SMEM,
                                    cubin="gemma_rms_norm.cubin"),
@@ -894,14 +897,6 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                          [GDN_D // 32, GDN_V_HEADS, 1], src=dec),
         "gated_norm_decode": layer_norm_kernel(dec, [GDN_V_HEADS, 1, 1], [1, GDN_V_HEADS]),
         # --- attention
-        # one generic instance for both programs (decode's launch in vLLM is
-        # the num_tokens==1 specialization: same arithmetic, one arg fewer)
-        "mrope": tri("mrope", ["inout buffer<bf16>", "inout buffer<bf16>", "in buffer<bf16>",
-                               "in buffer<bf16>", "i32"] + I2, [T, 1, 1]),
-        "reshape_and_cache": tri("cache",
-                                 ["in buffer<bf16>", "in buffer<bf16>", "inout ptr", "inout ptr",
-                                  "in buffer<i64>", "in buffer<f32>", "in buffer<f32>"] + ["i64"] * 9,
-                                 [T, 1, 1]),
         "attn_prefill": tri("unified", ATTN_IFACE, [cdiv(T, BLOCK_Q), KV_HEADS, 1]),
         "attn": {
             "params": ATTN_IFACE,
@@ -1140,20 +1135,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         kv_k, kv_v = state("kv", koff), state("kv", koff + V_BYTE_OFF)
         ds = [
             gemm(l + "qkv_proj", "x", p + "qkv_proj.weight", "qkv", T, QKV_DIM, HIDDEN),
-            d(l + "q_norm", "gemma_norm_qhead",
-              [buf("q_n"), buf("qkv"), buf(p + "q_norm.weight_p1"), i32(HEAD_DIM),
-               expr(mul(T, HEADS)), i32(HEADS), i32(QKV_DIM), i32(2 * HEAD_DIM), i32(Q_DIM),
-               i32(HEAD_DIM), f32(eps)]),
-            d(l + "k_norm", "gemma_norm_khead",
-              [buf("k_n"), buf("qkv", HEADS * 2 * HEAD_DIM * BF16), buf(p + "k_norm.weight_p1"),
-               i32(HEAD_DIM), expr(mul(T, KV_HEADS)), i32(KV_HEADS), i32(QKV_DIM), i32(HEAD_DIM),
-               i32(KV_DIM), i32(HEAD_DIM), f32(eps)]),
-            d(l + "rope", "mrope", [buf("q_n"), buf("k_n"), buf("cos_g"), buf("sin_g"), i32(0)] + Z2),
-            d(l + "kv_write", "reshape_and_cache",
-              [buf("k_n"), buf("qkv", (HEADS * 2 * HEAD_DIM + KV_DIM) * BF16), kv_k, kv_v,
-               buf("slot_mapping"), ks, vs,
-               i64(KV_DIM), i64(QKV_DIM), i64(BLOCK_STRIDE), i64(2 * HEAD_DIM), i64(0), i64(0),
-               i64(KV_HEADS * 2 * HEAD_DIM), i64(0), i64(0)]),
+            # q/k gemma norm + partial rope + kv cache write, one CTA per
+            # (token, head) -- see tools/kernels-src/attn_prep.cu
+            d(l + "prep", "attn_prep",
+              [buf("q_n"), buf("k_n"), buf("qkv"), buf(p + "q_norm.weight_p1"),
+               buf(p + "k_norm.weight_p1"), buf("cos_g"), buf("sin_g"), kv_k, kv_v,
+               buf("slot_mapping"), expr(mul(T, HEADS)), expr(mul(T, KV_HEADS)),
+               i64(BLOCK_STRIDE), i64(KV_HEADS * 2 * HEAD_DIM), i64(2 * HEAD_DIM),
+               i32(BLOCK_SIZE), f32(eps)]),
             d(l + "attn", "attn" if decode else "attn_prefill",
               [buf("attn_out"), buf("q_n"), kv_k, kv_v, buf("block_table"), buf("seq_lens"),
                f32(attn_scale), ks, vs, f32(1.0), f32(0.0),
