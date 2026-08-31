@@ -103,6 +103,9 @@ CHUNK_MAX = 2048
 NT_MAX = CHUNK_MAX // FLA_CHUNK          # 32 chunks
 # attention
 BLOCK_SIZE = 784                         # vLLM block_size (constexpr in the kernels)
+GEMM8_GRID = 152                         # one persistent CTA per GB300 SM
+GEMM8_THREADS = 288                      # 1 producer + 8 compute warps
+GEMM8_SMEM = 224128                      # sizeof(Smem) + alignment (gemm8.cu)
 BLOCK_Q = 5                              # unified 2D: query rows per block
 NUM_SEGMENTS = 16                        # unified 3D: grid.z
 BLOCK_TABLE_LEN = 8                      # vLLM block_table_stride
@@ -756,6 +759,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                                    cubin="gemma_rms_norm.cubin"),
         "silu_mul": single(silu_sym, ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "f32", "i32"],
                            blk("silu"), [T, 1, 1]),
+        # streaming M<=8 GEMM (tools/kernels-src/gemm8.cu): one persistent CTA
+        # per GB300 SM, weight rows via TMA ring + mma; grid/block/smem are
+        # compile-time constants of that kernel
+        "gemm8_gateup_silu": single("kern_gemm8_gateup_silu_bf16",
+                                    ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
+                                     "i32", "i32", "i32"],
+                                    [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                                    shared_mem=GEMM8_SMEM, cubin="gemm8.cubin"),
         "copy_rows": single("kern_copy_rows_bf16",
                             ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
                             [256, 1, 1], [T, 1, 1], cubin="copy_rows.cubin"),
@@ -1103,6 +1114,9 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         next_token), "decode" (row 0 -> next_token), "verify" (all rows ->
         verify_tokens)."""
         tail = tail or ("decode" if decode else "prefill")
+        # bs<=8 forwards (decode / decode_spec / verify) take the streaming
+        # gemm8 kernels; chunked prefill keeps cuBLAS
+        small = decode or tail == "verify"
         ds = [
             d("embed", "embedding",
               [buf("token_ids"), buf("model.embed_tokens.weight"), buf("residual"), T, i32(HIDDEN)]),
@@ -1118,11 +1132,17 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
             p = f"model.layers.{i}."
             l = f"l{i}."
             ds += attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc)
+            if small:
+                mlp = [d(l + "gate_up_silu", "gemm8_gateup_silu",
+                         [buf("act"), buf("x"), buf(p + "mlp.gate_up_proj.weight"),
+                          T, i32(FFN), i32(HIDDEN)])]
+            else:
+                mlp = [gemm(l + "gate_up", "x", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
+                       d(l + "silu_mul", "silu_mul",
+                         [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)])]
             ds += [
                 fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"),
-                gemm(l + "gate_up", "x", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
-                d(l + "silu_mul", "silu_mul",
-                  [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)]),
+                *mlp,
                 gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "y", T, HIDDEN, FFN),
             ]
             last = i + 1 == LAYERS
@@ -1215,8 +1235,8 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                 gemm(l + "mlp_conv_proj", "y", p + "mlp_conv.kernel_projection.weight", "d_coef",
                      T, D_CONV_PROJ, HIDDEN),
                 d_conv(l + "mlp_conv_pre", "y", p + "mlp_conv", 0),
-                gemm(l + "gate_up", "y", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
-                d(l + "silu_mul", "silu_mul", [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)]),
+                d(l + "gate_up_silu", "gemm8_gateup_silu",
+                  [buf("act"), buf("y"), buf(p + "mlp.gate_up_proj.weight"), T, i32(FFN), i32(HIDDEN)]),
                 gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "x", T, HIDDEN, FFN),
                 d_conv(l + "mlp_conv_post", "x", p + "mlp_conv", 1),
                 d_fused(l + ("final_norm" if last else "next_input_norm"), "x",
