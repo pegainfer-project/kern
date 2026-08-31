@@ -1153,7 +1153,16 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         for i in range(LAYERS):
             p = f"model.layers.{i}."
             l = f"l{i}."
-            ds += attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc)
+            lay = attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc)
+            if small:
+                # o_proj / out_proj GEMM + residual add + post-attention norm
+                attn = i in ATTN_LAYERS
+                lay[-1] = d(l + ("o_norm" if attn else "out_norm"), "gemm8_add_norm",
+                            [buf("x"), buf("gated" if attn else "core_attn_out"),
+                             buf(p + ("self_attn.o_proj.weight" if attn else "linear_attn.out_proj.weight")),
+                             buf("residual"), buf(p + "post_attention_layernorm.weight_p1"),
+                             T, i32(HIDDEN), i32(Q_DIM if attn else GDN_V), f32(eps)])
+            ds += lay
             if small:
                 mlp = [d(l + "gate_up_silu", "gemm8_gateup_silu",
                          [buf("act"), buf("x"), buf(p + "mlp.gate_up_proj.weight"),
@@ -1165,7 +1174,8 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
             last = i + 1 == LAYERS
             wnorm = "model.norm.weight_p1" if last else f"model.layers.{i + 1}.input_layernorm.weight_p1"
             nlabel = l + ("final_norm" if last else "next_input_norm")
-            ds.append(fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"))
+            if not small:
+                ds.append(fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"))
             ds += mlp
             if small:
                 # down GEMM + residual add + next input norm in one dispatch

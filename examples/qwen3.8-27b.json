@@ -45471,9 +45471,12 @@
      ]
     },
     {
-     "label": "l0.out_proj",
-     "kernel": "gemm",
+     "label": "l0.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -45481,7 +45484,10 @@
        "buf": "model.layers.0.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.0.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -45491,36 +45497,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l0.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.0.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -45759,9 +45735,12 @@
      ]
     },
     {
-     "label": "l1.out_proj",
-     "kernel": "gemm",
+     "label": "l1.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -45769,7 +45748,10 @@
        "buf": "model.layers.1.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.1.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -45779,36 +45761,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l1.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.1.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -46047,9 +45999,12 @@
      ]
     },
     {
-     "label": "l2.out_proj",
-     "kernel": "gemm",
+     "label": "l2.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -46057,7 +46012,10 @@
        "buf": "model.layers.2.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.2.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -46067,36 +46025,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l2.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.2.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -46482,9 +46410,12 @@
      ]
     },
     {
-     "label": "l3.o_proj",
-     "kernel": "gemm",
+     "label": "l3.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -46492,7 +46423,10 @@
        "buf": "model.layers.3.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.3.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -46502,36 +46436,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l3.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.3.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -46770,9 +46674,12 @@
      ]
     },
     {
-     "label": "l4.out_proj",
-     "kernel": "gemm",
+     "label": "l4.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -46780,7 +46687,10 @@
        "buf": "model.layers.4.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.4.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -46790,36 +46700,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l4.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.4.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -47058,9 +46938,12 @@
      ]
     },
     {
-     "label": "l5.out_proj",
-     "kernel": "gemm",
+     "label": "l5.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -47068,7 +46951,10 @@
        "buf": "model.layers.5.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.5.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -47078,36 +46964,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l5.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.5.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -47346,9 +47202,12 @@
      ]
     },
     {
-     "label": "l6.out_proj",
-     "kernel": "gemm",
+     "label": "l6.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -47356,7 +47215,10 @@
        "buf": "model.layers.6.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.6.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -47366,36 +47228,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l6.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.6.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -47783,9 +47615,12 @@
      ]
     },
     {
-     "label": "l7.o_proj",
-     "kernel": "gemm",
+     "label": "l7.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -47793,7 +47628,10 @@
        "buf": "model.layers.7.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.7.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -47803,36 +47641,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l7.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.7.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -48071,9 +47879,12 @@
      ]
     },
     {
-     "label": "l8.out_proj",
-     "kernel": "gemm",
+     "label": "l8.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -48081,7 +47892,10 @@
        "buf": "model.layers.8.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.8.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -48091,36 +47905,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l8.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.8.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -48359,9 +48143,12 @@
      ]
     },
     {
-     "label": "l9.out_proj",
-     "kernel": "gemm",
+     "label": "l9.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -48369,7 +48156,10 @@
        "buf": "model.layers.9.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.9.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -48379,36 +48169,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l9.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.9.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -48647,9 +48407,12 @@
      ]
     },
     {
-     "label": "l10.out_proj",
-     "kernel": "gemm",
+     "label": "l10.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -48657,7 +48420,10 @@
        "buf": "model.layers.10.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.10.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -48667,36 +48433,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l10.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.10.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -49084,9 +48820,12 @@
      ]
     },
     {
-     "label": "l11.o_proj",
-     "kernel": "gemm",
+     "label": "l11.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -49094,7 +48833,10 @@
        "buf": "model.layers.11.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.11.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -49104,36 +48846,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l11.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.11.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -49372,9 +49084,12 @@
      ]
     },
     {
-     "label": "l12.out_proj",
-     "kernel": "gemm",
+     "label": "l12.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -49382,7 +49097,10 @@
        "buf": "model.layers.12.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.12.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -49392,36 +49110,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l12.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.12.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -49660,9 +49348,12 @@
      ]
     },
     {
-     "label": "l13.out_proj",
-     "kernel": "gemm",
+     "label": "l13.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -49670,7 +49361,10 @@
        "buf": "model.layers.13.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.13.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -49680,36 +49374,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l13.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.13.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -49948,9 +49612,12 @@
      ]
     },
     {
-     "label": "l14.out_proj",
-     "kernel": "gemm",
+     "label": "l14.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -49958,7 +49625,10 @@
        "buf": "model.layers.14.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.14.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -49968,36 +49638,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l14.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.14.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -50385,9 +50025,12 @@
      ]
     },
     {
-     "label": "l15.o_proj",
-     "kernel": "gemm",
+     "label": "l15.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -50395,7 +50038,10 @@
        "buf": "model.layers.15.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.15.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -50405,36 +50051,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l15.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.15.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -50673,9 +50289,12 @@
      ]
     },
     {
-     "label": "l16.out_proj",
-     "kernel": "gemm",
+     "label": "l16.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -50683,7 +50302,10 @@
        "buf": "model.layers.16.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.16.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -50693,36 +50315,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l16.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.16.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -50961,9 +50553,12 @@
      ]
     },
     {
-     "label": "l17.out_proj",
-     "kernel": "gemm",
+     "label": "l17.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -50971,7 +50566,10 @@
        "buf": "model.layers.17.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.17.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -50981,36 +50579,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l17.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.17.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -51249,9 +50817,12 @@
      ]
     },
     {
-     "label": "l18.out_proj",
-     "kernel": "gemm",
+     "label": "l18.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -51259,7 +50830,10 @@
        "buf": "model.layers.18.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.18.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -51269,36 +50843,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l18.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.18.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -51686,9 +51230,12 @@
      ]
     },
     {
-     "label": "l19.o_proj",
-     "kernel": "gemm",
+     "label": "l19.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -51696,7 +51243,10 @@
        "buf": "model.layers.19.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.19.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -51706,36 +51256,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l19.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.19.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -51974,9 +51494,12 @@
      ]
     },
     {
-     "label": "l20.out_proj",
-     "kernel": "gemm",
+     "label": "l20.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -51984,7 +51507,10 @@
        "buf": "model.layers.20.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.20.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -51994,36 +51520,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l20.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.20.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -52262,9 +51758,12 @@
      ]
     },
     {
-     "label": "l21.out_proj",
-     "kernel": "gemm",
+     "label": "l21.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -52272,7 +51771,10 @@
        "buf": "model.layers.21.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.21.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -52282,36 +51784,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l21.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.21.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -52550,9 +52022,12 @@
      ]
     },
     {
-     "label": "l22.out_proj",
-     "kernel": "gemm",
+     "label": "l22.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -52560,7 +52035,10 @@
        "buf": "model.layers.22.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.22.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -52570,36 +52048,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l22.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.22.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -52987,9 +52435,12 @@
      ]
     },
     {
-     "label": "l23.o_proj",
-     "kernel": "gemm",
+     "label": "l23.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -52997,7 +52448,10 @@
        "buf": "model.layers.23.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.23.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -53007,36 +52461,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l23.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.23.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -53275,9 +52699,12 @@
      ]
     },
     {
-     "label": "l24.out_proj",
-     "kernel": "gemm",
+     "label": "l24.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -53285,7 +52712,10 @@
        "buf": "model.layers.24.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.24.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -53295,36 +52725,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l24.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.24.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -53563,9 +52963,12 @@
      ]
     },
     {
-     "label": "l25.out_proj",
-     "kernel": "gemm",
+     "label": "l25.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -53573,7 +52976,10 @@
        "buf": "model.layers.25.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.25.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -53583,36 +52989,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l25.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.25.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -53851,9 +53227,12 @@
      ]
     },
     {
-     "label": "l26.out_proj",
-     "kernel": "gemm",
+     "label": "l26.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -53861,7 +53240,10 @@
        "buf": "model.layers.26.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.26.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -53871,36 +53253,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l26.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.26.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -54288,9 +53640,12 @@
      ]
     },
     {
-     "label": "l27.o_proj",
-     "kernel": "gemm",
+     "label": "l27.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -54298,7 +53653,10 @@
        "buf": "model.layers.27.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.27.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -54308,36 +53666,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l27.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.27.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -54576,9 +53904,12 @@
      ]
     },
     {
-     "label": "l28.out_proj",
-     "kernel": "gemm",
+     "label": "l28.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -54586,7 +53917,10 @@
        "buf": "model.layers.28.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.28.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -54596,36 +53930,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l28.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.28.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -54864,9 +54168,12 @@
      ]
     },
     {
-     "label": "l29.out_proj",
-     "kernel": "gemm",
+     "label": "l29.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -54874,7 +54181,10 @@
        "buf": "model.layers.29.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.29.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -54884,36 +54194,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l29.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.29.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -55152,9 +54432,12 @@
      ]
     },
     {
-     "label": "l30.out_proj",
-     "kernel": "gemm",
+     "label": "l30.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -55162,7 +54445,10 @@
        "buf": "model.layers.30.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.30.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -55172,36 +54458,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l30.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.30.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -55589,9 +54845,12 @@
      ]
     },
     {
-     "label": "l31.o_proj",
-     "kernel": "gemm",
+     "label": "l31.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -55599,7 +54858,10 @@
        "buf": "model.layers.31.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.31.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -55609,36 +54871,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l31.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.31.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -55877,9 +55109,12 @@
      ]
     },
     {
-     "label": "l32.out_proj",
-     "kernel": "gemm",
+     "label": "l32.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -55887,7 +55122,10 @@
        "buf": "model.layers.32.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.32.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -55897,36 +55135,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l32.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.32.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -56165,9 +55373,12 @@
      ]
     },
     {
-     "label": "l33.out_proj",
-     "kernel": "gemm",
+     "label": "l33.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -56175,7 +55386,10 @@
        "buf": "model.layers.33.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.33.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -56185,36 +55399,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l33.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.33.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -56453,9 +55637,12 @@
      ]
     },
     {
-     "label": "l34.out_proj",
-     "kernel": "gemm",
+     "label": "l34.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -56463,7 +55650,10 @@
        "buf": "model.layers.34.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.34.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -56473,36 +55663,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l34.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.34.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -56890,9 +56050,12 @@
      ]
     },
     {
-     "label": "l35.o_proj",
-     "kernel": "gemm",
+     "label": "l35.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -56900,7 +56063,10 @@
        "buf": "model.layers.35.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.35.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -56910,36 +56076,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l35.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.35.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -57178,9 +56314,12 @@
      ]
     },
     {
-     "label": "l36.out_proj",
-     "kernel": "gemm",
+     "label": "l36.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -57188,7 +56327,10 @@
        "buf": "model.layers.36.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.36.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -57198,36 +56340,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l36.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.36.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -57466,9 +56578,12 @@
      ]
     },
     {
-     "label": "l37.out_proj",
-     "kernel": "gemm",
+     "label": "l37.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -57476,7 +56591,10 @@
        "buf": "model.layers.37.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.37.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -57486,36 +56604,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l37.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.37.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -57754,9 +56842,12 @@
      ]
     },
     {
-     "label": "l38.out_proj",
-     "kernel": "gemm",
+     "label": "l38.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -57764,7 +56855,10 @@
        "buf": "model.layers.38.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.38.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -57774,36 +56868,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l38.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.38.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -58191,9 +57255,12 @@
      ]
     },
     {
-     "label": "l39.o_proj",
-     "kernel": "gemm",
+     "label": "l39.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -58201,7 +57268,10 @@
        "buf": "model.layers.39.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.39.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -58211,36 +57281,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l39.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.39.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -58479,9 +57519,12 @@
      ]
     },
     {
-     "label": "l40.out_proj",
-     "kernel": "gemm",
+     "label": "l40.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -58489,7 +57532,10 @@
        "buf": "model.layers.40.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.40.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -58499,36 +57545,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l40.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.40.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -58767,9 +57783,12 @@
      ]
     },
     {
-     "label": "l41.out_proj",
-     "kernel": "gemm",
+     "label": "l41.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -58777,7 +57796,10 @@
        "buf": "model.layers.41.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.41.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -58787,36 +57809,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l41.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.41.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -59055,9 +58047,12 @@
      ]
     },
     {
-     "label": "l42.out_proj",
-     "kernel": "gemm",
+     "label": "l42.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -59065,7 +58060,10 @@
        "buf": "model.layers.42.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.42.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -59075,36 +58073,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l42.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.42.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -59492,9 +58460,12 @@
      ]
     },
     {
-     "label": "l43.o_proj",
-     "kernel": "gemm",
+     "label": "l43.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -59502,7 +58473,10 @@
        "buf": "model.layers.43.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.43.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -59512,36 +58486,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l43.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.43.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -59780,9 +58724,12 @@
      ]
     },
     {
-     "label": "l44.out_proj",
-     "kernel": "gemm",
+     "label": "l44.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -59790,7 +58737,10 @@
        "buf": "model.layers.44.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.44.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -59800,36 +58750,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l44.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.44.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -60068,9 +58988,12 @@
      ]
     },
     {
-     "label": "l45.out_proj",
-     "kernel": "gemm",
+     "label": "l45.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -60078,7 +59001,10 @@
        "buf": "model.layers.45.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.45.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -60088,36 +59014,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l45.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.45.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -60356,9 +59252,12 @@
      ]
     },
     {
-     "label": "l46.out_proj",
-     "kernel": "gemm",
+     "label": "l46.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -60366,7 +59265,10 @@
        "buf": "model.layers.46.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.46.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -60376,36 +59278,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l46.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.46.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -60793,9 +59665,12 @@
      ]
     },
     {
-     "label": "l47.o_proj",
-     "kernel": "gemm",
+     "label": "l47.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -60803,7 +59678,10 @@
        "buf": "model.layers.47.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.47.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -60813,36 +59691,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l47.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.47.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -61081,9 +59929,12 @@
      ]
     },
     {
-     "label": "l48.out_proj",
-     "kernel": "gemm",
+     "label": "l48.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -61091,7 +59942,10 @@
        "buf": "model.layers.48.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.48.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -61101,36 +59955,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l48.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.48.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -61369,9 +60193,12 @@
      ]
     },
     {
-     "label": "l49.out_proj",
-     "kernel": "gemm",
+     "label": "l49.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -61379,7 +60206,10 @@
        "buf": "model.layers.49.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.49.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -61389,36 +60219,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l49.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.49.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -61657,9 +60457,12 @@
      ]
     },
     {
-     "label": "l50.out_proj",
-     "kernel": "gemm",
+     "label": "l50.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -61667,7 +60470,10 @@
        "buf": "model.layers.50.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.50.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -61677,36 +60483,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l50.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.50.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -62094,9 +60870,12 @@
      ]
     },
     {
-     "label": "l51.o_proj",
-     "kernel": "gemm",
+     "label": "l51.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -62104,7 +60883,10 @@
        "buf": "model.layers.51.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.51.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -62114,36 +60896,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l51.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.51.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -62382,9 +61134,12 @@
      ]
     },
     {
-     "label": "l52.out_proj",
-     "kernel": "gemm",
+     "label": "l52.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -62392,7 +61147,10 @@
        "buf": "model.layers.52.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.52.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -62402,36 +61160,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l52.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.52.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -62670,9 +61398,12 @@
      ]
     },
     {
-     "label": "l53.out_proj",
-     "kernel": "gemm",
+     "label": "l53.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -62680,7 +61411,10 @@
        "buf": "model.layers.53.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.53.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -62690,36 +61424,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l53.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.53.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -62958,9 +61662,12 @@
      ]
     },
     {
-     "label": "l54.out_proj",
-     "kernel": "gemm",
+     "label": "l54.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -62968,7 +61675,10 @@
        "buf": "model.layers.54.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.54.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -62978,36 +61688,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l54.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.54.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -63395,9 +62075,12 @@
      ]
     },
     {
-     "label": "l55.o_proj",
-     "kernel": "gemm",
+     "label": "l55.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -63405,7 +62088,10 @@
        "buf": "model.layers.55.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.55.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -63415,36 +62101,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l55.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.55.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -63683,9 +62339,12 @@
      ]
     },
     {
-     "label": "l56.out_proj",
-     "kernel": "gemm",
+     "label": "l56.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -63693,7 +62352,10 @@
        "buf": "model.layers.56.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.56.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -63703,36 +62365,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l56.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.56.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -63971,9 +62603,12 @@
      ]
     },
     {
-     "label": "l57.out_proj",
-     "kernel": "gemm",
+     "label": "l57.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -63981,7 +62616,10 @@
        "buf": "model.layers.57.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.57.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -63991,36 +62629,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l57.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.57.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -64259,9 +62867,12 @@
      ]
     },
     {
-     "label": "l58.out_proj",
-     "kernel": "gemm",
+     "label": "l58.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -64269,7 +62880,10 @@
        "buf": "model.layers.58.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.58.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -64279,36 +62893,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l58.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.58.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -64696,9 +63280,12 @@
      ]
     },
     {
-     "label": "l59.o_proj",
-     "kernel": "gemm",
+     "label": "l59.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -64706,7 +63293,10 @@
        "buf": "model.layers.59.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.59.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -64716,36 +63306,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l59.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.59.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -64984,9 +63544,12 @@
      ]
     },
     {
-     "label": "l60.out_proj",
-     "kernel": "gemm",
+     "label": "l60.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -64994,7 +63557,10 @@
        "buf": "model.layers.60.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.60.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -65004,36 +63570,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l60.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.60.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -65272,9 +63808,12 @@
      ]
     },
     {
-     "label": "l61.out_proj",
-     "kernel": "gemm",
+     "label": "l61.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -65282,7 +63821,10 @@
        "buf": "model.layers.61.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.61.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -65292,36 +63834,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l61.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.61.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -65560,9 +64072,12 @@
      ]
     },
     {
-     "label": "l62.out_proj",
-     "kernel": "gemm",
+     "label": "l62.out_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "core_attn_out"
       },
@@ -65570,7 +64085,10 @@
        "buf": "model.layers.62.linear_attn.out_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.62.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -65580,36 +64098,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l62.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.62.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
@@ -65997,9 +64485,12 @@
      ]
     },
     {
-     "label": "l63.o_proj",
-     "kernel": "gemm",
+     "label": "l63.o_norm",
+     "kernel": "gemm8_add_norm",
      "args": [
+      {
+       "buf": "x"
+      },
       {
        "buf": "gated"
       },
@@ -66007,7 +64498,10 @@
        "buf": "model.layers.63.self_attn.o_proj.weight"
       },
       {
-       "buf": "y"
+       "buf": "residual"
+      },
+      {
+       "buf": "model.layers.63.post_attention_layernorm.weight_p1"
       },
       {
        "sym": "tokens"
@@ -66017,36 +64511,6 @@
       },
       {
        "i32": 6144
-      }
-     ]
-    },
-    {
-     "label": "l63.post_attn_norm",
-     "kernel": "gemma_fused_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "y"
-      },
-      {
-       "buf": "residual"
-      },
-      {
-       "buf": "model.layers.63.post_attention_layernorm.weight_p1"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "sym": "tokens"
-      },
-      {
-       "i32": 5120
-      },
-      {
-       "i32": 5120
       },
       {
        "f32": 9.999999974752427e-07
