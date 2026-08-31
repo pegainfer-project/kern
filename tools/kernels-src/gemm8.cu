@@ -31,6 +31,11 @@
 //                                 arithmetic: z = f32(bf16(y)) + f32(res),
 //                                 res = bf16(z), ATen-order mean of z^2,
 //                                 out = bf16((z * rsqrt(var + eps)) * w1))
+//   kern_gemm8_sgate_add_norm_bf16  the add_norm chain with x computed on
+//                                 the fly as attn * sigmoid(gate) (the
+//                                 sigmoid_mul.cu chain: g = bf16(sigmoid
+//                                 f32), x = bf16(f32(attn) * g)) -- o_proj
+//                                 of the gated-attention layers
 //
 //   nvcc -cubin -arch=sm_103a -o kernels-qwen38/gemm8.cubin tools/kernels-src/gemm8.cu
 #include <cuda_bf16.h>
@@ -102,7 +107,7 @@ struct Smem {
 };
 constexpr int SMEM_BYTES = sizeof(Smem) + 128;
 
-enum Mode { PLAIN = 0, GATEUP = 1, DUAL = 2, NORM = 3 };
+enum Mode { PLAIN = 0, GATEUP = 1, DUAL = 2, NORM = 3, SGATE = 4 };
 
 struct Args {
   const __nv_bfloat16* x;     // [M, ldx]
@@ -113,6 +118,8 @@ struct Args {
   float* partial;             // [nranges, MMAX, N] f32 scratch, or nullptr (GATEUP / DUAL: never split)
   int* gcnt;                  // [2] i32 scratch: finished tasks / finished rows, zero at rest
   int M, N, N1, K, ldx;
+  const __nv_bfloat16* gate;  // SGATE: strided gate view; x is then attn [M, ldx]
+  int head_dim, gate_ts, gate_hs;
 };
 
 // K ranges: as many as x capacity demands, and at least enough tasks to
@@ -194,7 +201,7 @@ __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
         const int split = t / nblk, blk = t - split * nblk;      // range-major
         const int r0 = blk * R, rows = min(R, nrows - r0);
         const int k0 = split * kseg, klen = min(kseg, a.K - k0);
-        if (split != cur_split) {  // stage this range of x (consumers have released the old one)
+        if (MODE != SGATE && split != cur_split) {  // stage this range of x (consumers have released the old one)
           mbar_wait(smem_u32(&s.xempty), xphase);
           mbar_expect_tx(smem_u32(&s.xfull), a.M * klen * 2);
           for (int m = 0; m < a.M; m++)
@@ -225,9 +232,35 @@ __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
     const int r0 = blk * R, rows = min(R, nrows - r0);
     const int klen = min(kseg, a.K - split * kseg);
     if (split != cur_split) {  // release the old x range, wait for the new one
-      if (lane == 0) mbar_arrive(smem_u32(&s.xempty));
-      mbar_wait(smem_u32(&s.xfull), xphase);
-      xphase ^= 1;
+      if (MODE == SGATE) {  // the compute warps make this range of x themselves
+        const int k0 = split * kseg, total = a.M * klen;
+        named_bar_sync(BAR_C, CTHREADS);  // everyone is done reading the old range
+        // 8 consecutive elements per thread: klen, head_dim and the batch
+        // stride are all multiples of 8, so a batch never crosses a token row
+        // or a head boundary and both loads and the smem store are one 16 B
+        // vector each (elementwise scalar code here is latency-bound)
+        for (int i0 = ct * 8; i0 < total; i0 += CTHREADS * 8) {
+          const int m = i0 / klen, kk = i0 - m * klen, k = k0 + kk;
+          const int h = k / a.head_dim, hd = k - h * a.head_dim;
+          const uint4 gq = *reinterpret_cast<const uint4*>(a.gate + (size_t)m * a.gate_ts + (size_t)h * a.gate_hs + hd);
+          const uint4 aq = *reinterpret_cast<const uint4*>(a.x + (size_t)m * a.ldx + k);
+          const __nv_bfloat16* gv = reinterpret_cast<const __nv_bfloat16*>(&gq);
+          const __nv_bfloat16* av = reinterpret_cast<const __nv_bfloat16*>(&aq);
+          uint4 oq;
+          __nv_bfloat16* ov = reinterpret_cast<__nv_bfloat16*>(&oq);
+#pragma unroll
+          for (int j = 0; j < 8; j++) {
+            const float g = bf16r(1.0f / (1.0f + expf(-__bfloat162float(gv[j]))));
+            ov[j] = __float2bfloat16_rn(__bfloat162float(av[j]) * g);
+          }
+          *reinterpret_cast<uint4*>(&s.x[m * xrow + kk]) = oq;
+        }
+        named_bar_sync(BAR_C, CTHREADS);
+      } else {
+        if (lane == 0) mbar_arrive(smem_u32(&s.xempty));
+        mbar_wait(smem_u32(&s.xfull), xphase);
+        xphase ^= 1;
+      }
       cur_split = split;
     }
     // ldmatrix.x4 row addresses: lane l supplies row l%8 of the 8x8 matrix
@@ -377,7 +410,7 @@ __device__ void tail_rows(const Args& a, int nranges, int m0, int m1, const floa
   for (int m = m0; m < m1; m++) {
     for (int j = threadIdx.x * 4; j < N; j += NTHREADS * 4) {
       float4 v = ysum4(a, nranges, m, j);
-      if (MODE == NORM) {
+      if (MODE >= NORM) {
         __nv_bfloat16* rr = res + (size_t)m * N + j;
         v.x = bf16r(v.x); v.y = bf16r(v.y); v.z = bf16r(v.z); v.w = bf16r(v.w);   // the bf16 y rounding
         const float2 r0 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(rr));
@@ -393,7 +426,7 @@ __device__ void tail_rows(const Args& a, int nranges, int m0, int m1, const floa
         *reinterpret_cast<__nv_bfloat162*>(yy + 2) = __floats2bfloat162_rn(v.z, v.w);
       }
     }
-    if (MODE != NORM) continue;
+    if (MODE < NORM) continue;
     __syncthreads();
     const int W = aten_block_width(N / 4, a.M);
     const float sum = aten_row_sumsq(z, N, W, s);
@@ -420,7 +453,7 @@ __device__ __forceinline__ void run_tail(const Args& a, Smem& s, bool last, __nv
   const int nrows = MODE == GATEUP ? 2 * a.N : a.N;
   const int nblk = (nrows + R - 1) / R;
   const int nranges = pick_nranges(a, nblk);
-  if (MODE != NORM && nranges == 1) return;   // nothing left to do
+  if (MODE == PLAIN && nranges == 1) return;  // nothing left to do
   static_assert(sizeof(s.ring) >= 6144 * 4, "z row: N <= 6144");
   float* z = reinterpret_cast<float*>(&s.ring[0]);
   if (gridDim.x <= nsmid()) {
@@ -471,6 +504,18 @@ kern_gemm8_dual_bf16(__nv_bfloat16* __restrict__ y1, __nv_bfloat16* __restrict__
   GEMM8_SMEM;
   Args a{x, W1, W2, y1, y2, nullptr, nullptr, M, N1 + N2, N1, K, K};      // M*K <= X_ELEMS: never splits
   gemm8_core<DUAL>(a, s);
+}
+
+extern "C" __global__ void __launch_bounds__(NTHREADS, 1)
+kern_gemm8_sgate_add_norm_bf16(__nv_bfloat16* __restrict__ out, const __nv_bfloat16* __restrict__ attn,
+                               const __nv_bfloat16* __restrict__ gate, const __nv_bfloat16* __restrict__ W,
+                               __nv_bfloat16* __restrict__ res, const float* __restrict__ w1, __nv_bfloat16* __restrict__ y,
+                               float* __restrict__ partial, int* __restrict__ gcnt, int M, int N, int K, int head_dim,
+                               int gate_tstride, int gate_hstride, float eps) {
+  GEMM8_SMEM;
+  Args a{attn, W, nullptr, y, nullptr, partial, gcnt, M, N, 0, K, K, gate, head_dim, gate_tstride, gate_hstride};
+  const bool last = gemm8_core<SGATE>(a, s);
+  run_tail<SGATE>(a, s, last, res, w1, out, eps);
 }
 
 extern "C" __global__ void __launch_bounds__(NTHREADS, 1)

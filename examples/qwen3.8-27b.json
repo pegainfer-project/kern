@@ -6012,6 +6012,133 @@
     ]
    }
   },
+  "gemm8_sgate_add_norm": {
+   "params": [
+    "out buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "inout buffer<bf16>",
+    "in buffer<f32>",
+    "i32",
+    "i32",
+    "i32",
+    "i32",
+    "i32",
+    "i32",
+    "f32"
+   ],
+   "impl": {
+    "scratch": {
+     "y": {
+      "dtype": "bf16",
+      "shape": [
+       8,
+       5120
+      ]
+     },
+     "partial": {
+      "dtype": "f32",
+      "shape": [
+       8,
+       8,
+       5120
+      ]
+     },
+     "gcnt": {
+      "dtype": "i32",
+      "shape": [
+       2
+      ]
+     }
+    },
+    "steps": [
+     {
+      "symbol": "kern_gemm8_sgate_add_norm_bf16",
+      "params": [
+       "out buffer<bf16>",
+       "in buffer<bf16>",
+       "in buffer<bf16>",
+       "in buffer<bf16>",
+       "inout buffer<bf16>",
+       "in buffer<f32>",
+       "out buffer<bf16>",
+       "out buffer<f32>",
+       "out buffer<i32>",
+       "i32",
+       "i32",
+       "i32",
+       "i32",
+       "i32",
+       "i32",
+       "f32"
+      ],
+      "block": [
+       288,
+       1,
+       1
+      ],
+      "grid": [
+       152,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "arg": 0
+       },
+       {
+        "arg": 1
+       },
+       {
+        "arg": 2
+       },
+       {
+        "arg": 3
+       },
+       {
+        "arg": 4
+       },
+       {
+        "arg": 5
+       },
+       {
+        "scratch": "y"
+       },
+       {
+        "scratch": "partial"
+       },
+       {
+        "scratch": "gcnt"
+       },
+       {
+        "arg": 6
+       },
+       {
+        "arg": 7
+       },
+       {
+        "arg": 8
+       },
+       {
+        "arg": 9
+       },
+       {
+        "arg": 10
+       },
+       {
+        "arg": 11
+       },
+       {
+        "arg": 12
+       }
+      ],
+      "shared_mem": 224128,
+      "cubin": "gemm8.cubin"
+     }
+    ]
+   }
+  },
   "gemm8_add_norm": {
    "params": [
     "out buffer<bf16>",
@@ -46409,11 +46536,11 @@
      ]
     },
     {
-     "label": "l3.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l3.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -46421,30 +46548,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l3.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.3.self_attn.o_proj.weight"
@@ -46463,6 +46566,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -47569,11 +47681,11 @@
      ]
     },
     {
-     "label": "l7.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l7.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -47581,30 +47693,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l7.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.7.self_attn.o_proj.weight"
@@ -47623,6 +47711,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -48729,11 +48826,11 @@
      ]
     },
     {
-     "label": "l11.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l11.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -48741,30 +48838,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l11.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.11.self_attn.o_proj.weight"
@@ -48783,6 +48856,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -49889,11 +49971,11 @@
      ]
     },
     {
-     "label": "l15.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l15.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -49901,30 +49983,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l15.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.15.self_attn.o_proj.weight"
@@ -49943,6 +50001,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -51049,11 +51116,11 @@
      ]
     },
     {
-     "label": "l19.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l19.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -51061,30 +51128,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l19.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.19.self_attn.o_proj.weight"
@@ -51103,6 +51146,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -52209,11 +52261,11 @@
      ]
     },
     {
-     "label": "l23.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l23.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -52221,30 +52273,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l23.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.23.self_attn.o_proj.weight"
@@ -52263,6 +52291,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -53369,11 +53406,11 @@
      ]
     },
     {
-     "label": "l27.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l27.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -53381,30 +53418,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l27.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.27.self_attn.o_proj.weight"
@@ -53423,6 +53436,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -54529,11 +54551,11 @@
      ]
     },
     {
-     "label": "l31.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l31.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -54541,30 +54563,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l31.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.31.self_attn.o_proj.weight"
@@ -54583,6 +54581,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -55689,11 +55696,11 @@
      ]
     },
     {
-     "label": "l35.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l35.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -55701,30 +55708,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l35.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.35.self_attn.o_proj.weight"
@@ -55743,6 +55726,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -56849,11 +56841,11 @@
      ]
     },
     {
-     "label": "l39.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l39.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -56861,30 +56853,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l39.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.39.self_attn.o_proj.weight"
@@ -56903,6 +56871,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -58009,11 +57986,11 @@
      ]
     },
     {
-     "label": "l43.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l43.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -58021,30 +57998,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l43.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.43.self_attn.o_proj.weight"
@@ -58063,6 +58016,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -59169,11 +59131,11 @@
      ]
     },
     {
-     "label": "l47.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l47.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -59181,30 +59143,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l47.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.47.self_attn.o_proj.weight"
@@ -59223,6 +59161,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -60329,11 +60276,11 @@
      ]
     },
     {
-     "label": "l51.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l51.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -60341,30 +60288,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l51.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.51.self_attn.o_proj.weight"
@@ -60383,6 +60306,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -61489,11 +61421,11 @@
      ]
     },
     {
-     "label": "l55.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l55.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -61501,30 +61433,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l55.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.55.self_attn.o_proj.weight"
@@ -61543,6 +61451,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -62649,11 +62566,11 @@
      ]
     },
     {
-     "label": "l59.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l59.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -62661,30 +62578,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l59.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.59.self_attn.o_proj.weight"
@@ -62703,6 +62596,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07
@@ -63809,11 +63711,11 @@
      ]
     },
     {
-     "label": "l63.gate",
-     "kernel": "sigmoid_mul",
+     "label": "l63.o_norm",
+     "kernel": "gemm8_sgate_add_norm",
      "args": [
       {
-       "buf": "gated"
+       "buf": "x"
       },
       {
        "buf": "attn_out"
@@ -63821,30 +63723,6 @@
       {
        "buf": "qkv",
        "offset": 512
-      },
-      {
-       "i32": 24
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 14336
-      },
-      {
-       "i32": 512
-      }
-     ]
-    },
-    {
-     "label": "l63.o_norm",
-     "kernel": "gemm8_add_norm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "gated"
       },
       {
        "buf": "model.layers.63.self_attn.o_proj.weight"
@@ -63863,6 +63741,15 @@
       },
       {
        "i32": 6144
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 14336
+      },
+      {
+       "i32": 512
       },
       {
        "f32": 9.999999974752427e-07

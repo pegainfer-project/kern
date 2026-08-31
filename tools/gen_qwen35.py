@@ -709,6 +709,9 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     GEMM8_AN_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>",
                        "in buffer<f32>", "out buffer<bf16>", "out buffer<f32>", "out buffer<i32>",
                        "i32", "i32", "i32", "f32"]
+    GEMM8_SG_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
+                       "inout buffer<bf16>", "in buffer<f32>", "out buffer<bf16>", "out buffer<f32>",
+                       "out buffer<i32>", "i32", "i32", "i32", "i32", "i32", "i32", "f32"]
     GEMMA_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<f32>",
                     "i32", "i32", "i32", "i32", "i32", "i32", "i32", "f32"]
     GEMMA_FUSED_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>",
@@ -782,6 +785,21 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                               "in buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32", "i32"],
                              [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
                              shared_mem=GEMM8_SMEM, cubin="gemm8.cubin"),
+        # o_proj + the sigmoid gate on its input + residual add + post-attention
+        # norm: x = attn * sigmoid(gate) is built inside the GEMM
+        "gemm8_sgate_add_norm": {
+            "params": GEMM8_SG_PARAMS[:6] + GEMM8_SG_PARAMS[9:],
+            "impl": {
+                "scratch": {"y": {"dtype": "bf16", "shape": [8, HIDDEN]},
+                            "partial": {"dtype": "f32", "shape": [8, 8, HIDDEN]},
+                            "gcnt": {"dtype": "i32", "shape": [2]}},
+                "steps": [step("kern_gemm8_sgate_add_norm_bf16", GEMM8_SG_PARAMS,
+                               [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                               [a(0), a(1), a(2), a(3), a(4), a(5), scr("y"), scr("partial"), scr("gcnt"),
+                                a(6), a(7), a(8), a(9), a(10), a(11), a(12)],
+                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin")],
+            },
+        },
         "gemm8_add_norm": {
             "params": GEMM8_AN_PARAMS[:5] + GEMM8_AN_PARAMS[8:],
             "impl": {
@@ -1104,13 +1122,13 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         ds.append(gemm(l + "out_proj", "core_attn_out", p + "out_proj.weight", "y", T, HIDDEN, GDN_V))
         return ds
 
-    def attn_layer(i, decode):
+    def attn_layer(i, decode, small=False):
         p = f"model.layers.{i}.self_attn."
         l = f"l{i}."
         koff = ATTN_LAYERS.index(i) * LAYER_KV_BYTES
         ks, vs = buf("kv_scales"), buf("kv_scales", 4)
         kv_k, kv_v = state("kv", koff), state("kv", koff + V_BYTE_OFF)
-        return [
+        ds = [
             gemm(l + "qkv_proj", "x", p + "qkv_proj.weight", "qkv", T, QKV_DIM, HIDDEN),
             d(l + "q_norm", "gemma_norm_qhead",
               [buf("q_n"), buf("qkv"), buf(p + "q_norm.weight_p1"), i32(HEAD_DIM),
@@ -1139,6 +1157,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                i32(QKV_DIM), i32(2 * HEAD_DIM)]),
             gemm(l + "o_proj", "gated", p + "o_proj.weight", "y", T, HIDDEN, Q_DIM),
         ]
+        if small:
+            # sigmoid gate + o_proj + residual add + post-attention norm
+            ds[-2:] = [d(l + "o_norm", "gemm8_sgate_add_norm",
+                         [buf("x"), buf("attn_out"), buf("qkv", GATE_OFF * BF16), buf(p + "o_proj.weight"),
+                          buf("residual"), buf(f"model.layers.{i}.post_attention_layernorm.weight_p1"),
+                          T, i32(HIDDEN), i32(Q_DIM), i32(HEAD_DIM), i32(QKV_DIM), i32(2 * HEAD_DIM),
+                          f32(eps)])]
+        return ds
 
     def forward(decode, taps=False, nacc=None, tail=None):
         """Target forward.  decode: recurrent GDN + split-KV attention (else
@@ -1165,15 +1191,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         for i in range(LAYERS):
             p = f"model.layers.{i}."
             l = f"l{i}."
-            lay = attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc, small)
-            if small:
-                # o_proj / out_proj GEMM + residual add + post-attention norm
-                attn = i in ATTN_LAYERS
-                lay[-1] = d(l + ("o_norm" if attn else "out_norm"), "gemm8_add_norm",
-                            [buf("x"), buf("gated" if attn else "core_attn_out"),
-                             buf(p + ("self_attn.o_proj.weight" if attn else "linear_attn.out_proj.weight")),
+            lay = attn_layer(i, decode, small) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc, small)
+            if small and i not in ATTN_LAYERS:
+                # out_proj GEMM + residual add + post-attention norm (the
+                # attention layers fold their sigmoid gate in too: attn_layer)
+                lay[-1] = d(l + "out_norm", "gemm8_add_norm",
+                            [buf("x"), buf("core_attn_out"), buf(p + "linear_attn.out_proj.weight"),
                              buf("residual"), buf(p + "post_attention_layernorm.weight_p1"),
-                             T, i32(HIDDEN), i32(Q_DIM if attn else GDN_V), f32(eps)])
+                             T, i32(HIDDEN), i32(GDN_V), f32(eps)])
             ds += lay
             if small:
                 mlp = [d(l + "gate_up_silu", "gemm8_gateup_silu",
