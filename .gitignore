@@ -10,3 +10,7 @@ tools/kernel-capture/libkernelcapture.so
 /.wrangler/
 /attestation.json
 /kernels-qwen38-dflash2
+kernels-c9/
+kernels-gdnT/
+kernels-varA/
+kernels-varB/

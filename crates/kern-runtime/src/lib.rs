@@ -626,7 +626,7 @@ impl Runtime {
         }
         match &l.kind {
             LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
-            LaunchKind::Cubin { func, block, grid, shared_mem } => {
+            LaunchKind::Cubin { func, block, grid, shared_mem, pdl } => {
                 let grid =
                     (grid[0].eval(env)? as u32, grid[1].eval(env)? as u32, grid[2].eval(env)? as u32);
                 let smem = match shared_mem {
@@ -638,6 +638,34 @@ impl Runtime {
                 let raw: Vec<u64> = vals.iter().map(|r| r.val).collect();
                 let mut params: Vec<*mut c_void> =
                     raw.iter().map(|s| s as *const u64 as *mut c_void).collect();
+                if *pdl {
+                    // Programmatic dependent launch: inside stream capture
+                    // this becomes a programmatic graph edge, so the kernel
+                    // may begin (and stream its own inputs) while the
+                    // previous launch drains; its griddepcontrol.wait keeps
+                    // the data dependency.
+                    let mut attr = sys::CUlaunchAttribute {
+                        id: sys::CUlaunchAttributeID::CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION,
+                        pad: [0; 4],
+                        value: sys::CUlaunchAttributeValue { programmaticStreamSerializationAllowed: 1 },
+                    };
+                    let cfg = sys::CUlaunchConfig {
+                        gridDimX: grid.0,
+                        gridDimY: grid.1,
+                        gridDimZ: grid.2,
+                        blockDimX: block[0],
+                        blockDimY: block[1],
+                        blockDimZ: block[2],
+                        sharedMemBytes: smem,
+                        hStream: self.stream.cu_stream(),
+                        attrs: &mut attr,
+                        numAttrs: 1,
+                    };
+                    let r = unsafe {
+                        sys::cuLaunchKernelEx(&cfg, *func, params.as_mut_ptr(), std::ptr::null_mut())
+                    };
+                    return cuda_check(r, "cuLaunchKernelEx");
+                }
                 unsafe {
                     cu::launch_kernel(
                         *func,

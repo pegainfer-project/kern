@@ -586,6 +586,14 @@ pub struct Step {
     /// Dynamic shared memory in bytes, if the step needs any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_mem: Option<Expr>,
+    /// Programmatic dependent launch: the runtime launches this step with
+    /// `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`, so it may
+    /// start while the preceding launch is still draining. Only for kernels
+    /// that put every read of an upstream product and every global write
+    /// behind `griddepcontrol.wait` (their own inputs — weights, state —
+    /// may stream ahead of it).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pdl: bool,
     /// Wiring: where each step param comes from — a forwarded interface
     /// arg, a scratch buffer, or an implementation-private literal.
     pub args: Vec<StepArg>,

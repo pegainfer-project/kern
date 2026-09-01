@@ -68,6 +68,8 @@ pub(crate) enum LaunchKind {
         block: [u32; 3],
         grid: [CExpr; 3],
         shared_mem: Option<CExpr>,
+        /// Launch with programmatic stream serialization (see `Step::pdl`).
+        pdl: bool,
     },
     /// `extern:cublaslt_bf16_tn` / `..._acc` (beta 0.0 / 1.0).
     Gemm { beta: f32 },
@@ -350,6 +352,7 @@ fn compile_dispatch(
                     compile_expr(&st.grid[2], syms)?,
                 ],
                 shared_mem: st.shared_mem.as_ref().map(|e| compile_expr(e, syms)).transpose()?,
+                pdl: st.pdl,
             },
         };
         launches.push(Launch {

@@ -103,6 +103,9 @@ CHUNK_MAX = 2048
 NT_MAX = CHUNK_MAX // FLA_CHUNK          # 32 chunks
 # attention
 BLOCK_SIZE = 784                         # vLLM block_size (constexpr in the kernels)
+GEMM8_GRID = 152                         # one persistent CTA per GB300 SM
+GEMM8_THREADS = 288                      # 1 producer + 8 compute warps
+GEMM8_SMEM = 224128                      # sizeof(Smem) + alignment (gemm8.cu)
 BLOCK_Q = 5                              # unified 2D: query rows per block
 NUM_SEGMENTS = 16                        # unified 3D: grid.z
 BLOCK_TABLE_LEN = 8                      # vLLM block_table_stride
@@ -511,7 +514,7 @@ def scr(name, off=0):
     return {"scratch": name, "offset": off} if off else {"scratch": name}
 
 
-def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=None):
+def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=None, pdl=False):
     s = {"symbol": symbol, "params": params, "block": block, "grid": grid, "args": args}
     if shared_mem is not None:
         s["shared_mem"] = shared_mem
@@ -519,13 +522,15 @@ def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=
         s["cubin"] = cubin
     if sha256 is not None:
         s["sha256"] = sha256
+    if pdl:  # the kernel puts its dependent reads / all writes behind griddepcontrol.wait
+        s["pdl"] = True
     return s
 
 
-def single(symbol, params, block, grid, shared_mem=None, cubin=None, sha256=None):
+def single(symbol, params, block, grid, shared_mem=None, cubin=None, sha256=None, pdl=False):
     return {"params": params,
             "impl": {"steps": [step(symbol, params, block, grid, [a(i) for i in range(len(params))],
-                                    shared_mem, cubin, sha256)]}}
+                                    shared_mem, cubin, sha256, pdl)]}}
 
 
 TOKEN_DOMAIN = {"index_into": "model.embed_tokens.weight"}
@@ -700,6 +705,15 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         return single(TRITON[tag], params, blk(tag, src), grid,
                       shared_mem=smem(tag, src) or None, cubin=cubin, sha256=sha, **kw)
 
+    # gcnt is declared `out`: the kernel does read it (atomic task counter),
+    # but its contents are zero at rest -- alloc_zeros at load, and the tail
+    # resets it before the dispatch ends
+    GEMM8_AN_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>",
+                       "in buffer<f32>", "out buffer<bf16>", "out buffer<f32>", "out buffer<i32>",
+                       "i32", "i32", "i32", "f32"]
+    GEMM8_SG_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
+                       "inout buffer<bf16>", "in buffer<f32>", "out buffer<bf16>", "out buffer<f32>",
+                       "out buffer<i32>", "i32", "i32", "i32", "i32", "i32", "i32", "f32"]
     GEMMA_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "in buffer<f32>",
                     "i32", "i32", "i32", "i32", "i32", "i32", "i32", "f32"]
     GEMMA_FUSED_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>",
@@ -745,17 +759,65 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         # reduction width depends on the row count, so `rows` is an arg).
         "gemma_norm": single("kern_gemma_rms_norm_bf16", GEMMA_PARAMS, [512, 1, 1], [T, 1, 1],
                              shared_mem=GEMMA_SMEM, cubin="gemma_rms_norm.cubin"),
-        "gemma_norm_qhead": single("kern_gemma_rms_norm_bf16", GEMMA_PARAMS, [512, 1, 1],
-                                   [mul(T, HEADS), 1, 1], shared_mem=GEMMA_HEAD_SMEM,
-                                   cubin="gemma_rms_norm.cubin"),
-        "gemma_norm_khead": single("kern_gemma_rms_norm_bf16", GEMMA_PARAMS, [512, 1, 1],
-                                   [mul(T, KV_HEADS), 1, 1], shared_mem=GEMMA_HEAD_SMEM,
-                                   cubin="gemma_rms_norm.cubin"),
+        # per-head q/k gemma norm + partial rope + kv cache write of one
+        # attention layer (tools/kernels-src/attn_prep.cu): CTA = (token, head)
+        "attn_prep": single("kern_attn_prep_bf16",
+                            ["out buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
+                             "in buffer<f32>", "in buffer<f32>", "in buffer<bf16>",
+                             "in buffer<bf16>", "inout ptr", "inout ptr", "in buffer<i64>",
+                             "i32", "i32", "i64", "i64", "i64", "i32", "f32"],
+                            [512, 1, 1], [mul(T, HEADS + KV_HEADS), 1, 1],
+                            cubin="attn_prep.cubin"),
         "gemma_fused_norm": single("kern_gemma_fused_add_rms_norm_bf16", GEMMA_FUSED_PARAMS,
                                    [512, 1, 1], [T, 1, 1], shared_mem=GEMMA_SMEM,
                                    cubin="gemma_rms_norm.cubin"),
         "silu_mul": single(silu_sym, ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "f32", "i32"],
                            blk("silu"), [T, 1, 1]),
+        # streaming M<=8 GEMM (tools/kernels-src/gemm8.cu): one persistent CTA
+        # per GB300 SM, weight rows via TMA ring + mma; grid/block/smem are
+        # compile-time constants of that kernel
+        "gemm8_gateup_silu": single("kern_gemm8_gateup_silu_bf16",
+                                    ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
+                                     "i32", "i32", "i32"],
+                                    [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                                    shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True),
+        # down GEMM + residual add + Gemma fused_add_rms_norm of the next
+        # layer input (gemm8's split-K partials, y and the task counters are
+        # impl scratch; the norm tail reproduces kern_gemma_rms_norm.cu)
+        # two weights sharing one x: in_proj_qkvz + in_proj_ba per GDN layer
+        "gemm8_dual": single("kern_gemm8_dual_bf16",
+                             ["out buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
+                              "in buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32", "i32"],
+                             [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                             shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True),
+        # o_proj + the sigmoid gate on its input + residual add + post-attention
+        # norm: x = attn * sigmoid(gate) is built inside the GEMM
+        "gemm8_sgate_add_norm": {
+            "params": GEMM8_SG_PARAMS[:6] + GEMM8_SG_PARAMS[9:],
+            "impl": {
+                "scratch": {"y": {"dtype": "bf16", "shape": [8, HIDDEN]},
+                            "partial": {"dtype": "f32", "shape": [8, 8, HIDDEN]},
+                            "gcnt": {"dtype": "i32", "shape": [2]}},
+                "steps": [step("kern_gemm8_sgate_add_norm_bf16", GEMM8_SG_PARAMS,
+                               [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                               [a(0), a(1), a(2), a(3), a(4), a(5), scr("y"), scr("partial"), scr("gcnt"),
+                                a(6), a(7), a(8), a(9), a(10), a(11), a(12)],
+                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True)],
+            },
+        },
+        "gemm8_add_norm": {
+            "params": GEMM8_AN_PARAMS[:5] + GEMM8_AN_PARAMS[8:],
+            "impl": {
+                "scratch": {"y": {"dtype": "bf16", "shape": [8, HIDDEN]},
+                            "partial": {"dtype": "f32", "shape": [8, 8, HIDDEN]},
+                            "gcnt": {"dtype": "i32", "shape": [2]}},
+                "steps": [step("kern_gemm8_add_norm_bf16", GEMM8_AN_PARAMS,
+                               [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
+                               [a(0), a(1), a(2), a(3), a(4), scr("y"), scr("partial"), scr("gcnt"),
+                                a(5), a(6), a(7), a(8)],
+                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True)],
+            },
+        },
         "copy_rows": single("kern_copy_rows_bf16",
                             ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
                             [256, 1, 1], [T, 1, 1], cubin="copy_rows.cubin"),
@@ -825,26 +887,15 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                        [GDN_D // 64, cdiv(T, FLA_CHUNK), GDN_V_HEADS]),
         "gated_norm": layer_norm_kernel(pre, [mul(T, GDN_V_HEADS // LN_ROWS_PER_BLOCK), 1, 1],
                                         ["tokens", GDN_V_HEADS]),
-        # --- GDN decode
-        "conv_update": tri("conv_update",
-                           ["in buffer<bf16>", "in buffer<bf16>", "inout ptr", "in buffer<i32>",
-                            "out buffer<bf16>", "i32", "i32", "i64", "i64"] + I2,
-                           [1, CONV_DIM // 256, 1], src=dec),
-        "recurrent": tri("recurrent",
-                         ["in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<f32>",
-                          "in buffer<bf16>", "out buffer<bf16>", "inout ptr", "inout ptr",
-                          "in buffer<i32>", "f32"] + I2,
-                         [GDN_D // 32, GDN_V_HEADS, 1], src=dec),
-        "gated_norm_decode": layer_norm_kernel(dec, [GDN_V_HEADS, 1, 1], [1, GDN_V_HEADS]),
+        # --- GDN decode: the whole chain in one launch, one thread-block
+        # cluster per q/k head (tools/kernels-src/gdn_decode.cu)
+        "gdn_decode": single("kern_gdn_decode_bf16",
+                             ["inout buffer<bf16>", "in buffer<bf16>", "inout ptr", "inout ptr",
+                              "in buffer<i32>", "in buffer<bf16>", "in buffer<f32>",
+                              "in buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
+                              "f32", "f32", "i32", "i32", "i32", "i32"],
+                             [256, 1, 1], [2 * GDN_V_HEADS, 1, 1], cubin="gdn_decode.cubin"),
         # --- attention
-        # one generic instance for both programs (decode's launch in vLLM is
-        # the num_tokens==1 specialization: same arithmetic, one arg fewer)
-        "mrope": tri("mrope", ["inout buffer<bf16>", "inout buffer<bf16>", "in buffer<bf16>",
-                               "in buffer<bf16>", "i32"] + I2, [T, 1, 1]),
-        "reshape_and_cache": tri("cache",
-                                 ["in buffer<bf16>", "in buffer<bf16>", "inout ptr", "inout ptr",
-                                  "in buffer<i64>", "in buffer<f32>", "in buffer<f32>"] + ["i64"] * 9,
-                                 [T, 1, 1]),
         "attn_prefill": tri("unified", ATTN_IFACE, [cdiv(T, BLOCK_Q), KV_HEADS, 1]),
         "attn": {
             "params": ATTN_IFACE,
@@ -875,6 +926,23 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     Z2 = [i64(0), i64(0)]
 
     if spec:
+        # the whole spec-path GDN chain of a layer in one launch
+        # (tools/kernels-src/gdn_spec.cu): conv update + post_conv split/
+        # l2norm/gating + a/b/z copies + T-row delta rule with per-token
+        # SSM checkpoints + gated RMSNorm.  Counter scratch is zero at
+        # rest (the last CTA resets); hpart holds data, write-before-read.
+        GDN_SPEC_PARAMS = [
+            "inout buffer<bf16>",                                    # qkvz (conv writeback)
+            "in buffer<bf16>", "inout ptr", "inout ptr",             # conv weight, conv state, ssm state
+            "in buffer<i32>", "in buffer<i32>", "in buffer<i32>",    # line, num_accepted, cu_seqlens_q
+            "in buffer<i32>",                                        # spec_slots row
+            "in buffer<bf16>", "in buffer<f32>", "in buffer<bf16>",  # ba, A_log, dt_bias
+            "out buffer<bf16>", "in buffer<bf16>",                   # core_attn_out, norm.weight
+            "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",  # gdn_q/k/v
+            "out buffer<f32>", "out buffer<f32>",                    # g, beta
+            "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",  # a_c, b_c, z_c
+            "out buffer<i32>", "out buffer<f32>", "out buffer<i32>", "out buffer<i32>",  # scratch
+            "f32", "f32", "i32", "i32", "i32", "i32", "i32"]         # scale, eps, tokens, n_pages, cls, cds, sls
         RMS_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "i64", "i64", "i64", "i64", "i64",
                       "in buffer<bf16>", "i64", "f32", "i32", "i32"]
         ad = spec["attn_draft"]
@@ -882,24 +950,25 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
             "gemm_acc": single("extern:cublaslt_bf16_tn_acc",
                                ["in buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>", "i32", "i32", "i32"],
                                [1, 1, 1], [1, 1, 1]),
-            # --- target GDN under speculation (vLLM's spec-decode kernels)
-            # conv update: seqlen 8 / state_len 10 are constexprs; reads the
-            # history taps at conv-line offset num_accepted-1, writes the
-            # new 10-wide window (in place on the qkvz rows)
-            "conv_update_spec": spec_kernel("conv_update_spec",
-                                            ["in buffer<bf16>", "in buffer<bf16>", "inout ptr", "in buffer<i32>",
-                                             "in buffer<i32>", "in buffer<i32>", "out buffer<bf16>",
-                                             "i32", "i32", "i64", "i64"] + I2,
-                                            [1, CONV_DIM // 256, 1]),
+            # --- target GDN under speculation: the whole chain is fused
+            # into gdn_spec below (kern_gdn_spec_bf16)
+            "gdn_spec": {
+                "params": GDN_SPEC_PARAMS[:21] + GDN_SPEC_PARAMS[25:],
+                "impl": {
+                    "scratch": {"xcnt": {"dtype": "i32", "shape": [GDN_Q // GDN_D]},
+                                "hpart": {"dtype": "f32", "shape": [SPEC_BLOCK, GDN_V_HEADS, 4]},
+                                "hcnt": {"dtype": "i32", "shape": [GDN_V_HEADS]},
+                                "gcnt": {"dtype": "i32", "shape": [1]}},
+                    "steps": [step("kern_gdn_spec_bf16", GDN_SPEC_PARAMS, [256, 1, 1], [192, 1, 1],
+                                   [a(i) for i in range(21)]
+                                   + [scr("xcnt"), scr("hpart"), scr("hcnt"), scr("gcnt")]
+                                   + [a(i) for i in range(21, 28)],
+                                   cubin="gdn_spec.cubin")],
+                },
+            },
             # recurrent delta rule over T rows with the sigmoid gating fused:
             # initial state from SSM slot num_accepted-1, every row's state
             # checkpointed to its own slot (ssm_state_indices)
-            "recurrent_spec": spec_kernel("recurrent_spec",
-                                          ["in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
-                                           "f32", "f32", "in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
-                                           "out buffer<bf16>", "inout ptr", "inout ptr", "in buffer<i32>",
-                                           "in buffer<i32>", "in buffer<i32>", "f32", "i64", "i64"] + I2,
-                                          [1, GDN_D // 32, GDN_V_HEADS]),
             "argmax": {
                 "params": ["in buffer<bf16>", "out buffer<i64>", "i32"],
                 "impl": {
@@ -962,7 +1031,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                  [buf("x"), buf(x_in), buf("residual"), buf(w), i32(HIDDEN), T,
                   i32(HIDDEN), i32(HIDDEN), f32(eps)])
 
-    def gdn_layer(i, decode, nacc=None):
+    def gdn_layer(i, decode, nacc=None, small=False):
         """decode=False: the chunked FLA prefill chain.  decode=True: the
         recurrent chain — Stage 1's packed kernels, or, when `nacc` names
         the num_accepted_tokens buffer, vLLM's speculative kernels over the
@@ -973,10 +1042,16 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         line = g + 1
         idx = buf(line_table, 4 * line)
         page = gdn_page(i)
-        ds = [
-            gemm(l + "in_proj_qkvz", "x", p + "in_proj_qkvz.weight", "qkvz", T, QKVZ_DIM, HIDDEN),
-            gemm(l + "in_proj_ba", "x", p + "in_proj_ba.weight", "ba", T, BA_DIM, HIDDEN),
-        ]
+        if small:
+            # one weight stream for both input projections
+            ds = [d(l + "in_proj", "gemm8_dual",
+                    [buf("qkvz"), buf("ba"), buf("x"), buf(p + "in_proj_qkvz.weight"),
+                     buf(p + "in_proj_ba.weight"), T, i32(QKVZ_DIM), i32(BA_DIM), i32(HIDDEN)])]
+        else:
+            ds = [
+                gemm(l + "in_proj_qkvz", "x", p + "in_proj_qkvz.weight", "qkvz", T, QKVZ_DIM, HIDDEN),
+                gemm(l + "in_proj_ba", "x", p + "in_proj_ba.weight", "ba", T, BA_DIM, HIDDEN),
+            ]
         a_ = buf("ba", GDN_V_HEADS * BF16)   # ba row = [b | a]
         b_ = buf("ba")
         if not decode and nacc is None:
@@ -1017,70 +1092,52 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                    i32(GDN_D), i32(GDN_D), i32(GDN_D), expr(mul(T, GDN_V_HEADS)), f32(eps)] + Z2),
             ]
         elif nacc is None:
+            # the decode chain (conv update + delta rule step + gated norm),
+            # fused into one launch -- see tools/kernels-src/gdn_decode.cu
             ds += [
-                d(l + "conv_update", "conv_update",
-                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), idx, buf("qkvz"),
-                   i32(1), i32(n_pages), i64(1), i64(1)] + Z2),
-                d(l + "recurrent", "recurrent",
-                  [buf("qkvz"), a_, b_, buf(p + "A_log"), buf(p + "dt_bias"), buf("core_attn_out"),
-                   state("gdn", ssm_off), state("gdn", ssm_off), idx,
-                   f32(gdn_scale)] + Z2),
-                d(l + "gated_norm", "gated_norm_decode",
-                  [buf("core_attn_out"), buf("core_attn_out"), buf(p + "norm.weight"),
-                   buf("qkvz", Z_OFF * BF16), i32(GDN_D), i32(GDN_D), i32(GDN_D), i32(GDN_V_HEADS),
-                   f32(eps)] + Z2),
+                d(l + "gdn", "gdn_decode",
+                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), state("gdn", ssm_off),
+                   idx, buf("ba"), buf(p + "A_log"), buf(p + "dt_bias"), buf("core_attn_out"),
+                   buf(p + "norm.weight"), f32(gdn_scale), f32(eps), i32(n_pages),
+                   i32(page_bytes // BF16), i32(CONV_DIM), i32(page_bytes // 4)]),
             ]
         else:
-            # vLLM's spec-decode GDN path: conv update with the accepted-token
-            # offset (seqlen 8 baked: it reads/writes 8 qkvz rows, rows past
-            # `tokens` are scratch), post_conv split, contiguous a/b, the
-            # recurrent kernel over T rows checkpointing every row's state.
+            # vLLM's spec-decode GDN path, fused into one launch (the chain
+            # was: conv update with the accepted-token offset, post_conv
+            # split + l2norm + gating, contiguous a/b copies, the recurrent
+            # kernel over T rows checkpointing every row's state, z copy,
+            # gated RMSNorm).  The fused kernel reproduces every buffer
+            # write of that chain, including the qkvz conv writeback and
+            # the per-token SSM checkpoints.
             ds += [
-                d(l + "conv_update", "conv_update_spec",
-                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), idx, nacc, buf("cu_seqlens_q"),
-                   buf("qkvz"), i32(1), i32(n_pages), i64(QKVZ_DIM), i64(QKVZ_DIM)] + Z2),
-                d(l + "post_conv", "post_conv",
-                  [buf("qkvz"), a_, b_, buf(p + "A_log"), buf(p + "dt_bias"),
-                   buf("gdn_q"), buf("gdn_k"), buf("gdn_v"), buf("g"), buf("beta"),
-                   i32(QKVZ_DIM), i32(BA_DIM), i32(BA_DIM), i32(GDN_Q), i32(GDN_Q), i32(GDN_V), T] + Z2),
-                d(l + "a_copy", "copy_rows", [buf("a_c"), a_, i32(GDN_V_HEADS), i32(BA_DIM), i32(GDN_V_HEADS)]),
-                d(l + "b_copy", "copy_rows", [buf("b_c"), b_, i32(GDN_V_HEADS), i32(BA_DIM), i32(GDN_V_HEADS)]),
-                d(l + "recurrent", "recurrent_spec",
-                  [buf(p + "A_log"), buf("a_c"), buf("b_c"), buf(p + "dt_bias"), f32(1.0), f32(20.0),
-                   buf("gdn_q"), buf("gdn_k"), buf("gdn_v"), buf("core_attn_out"),
-                   state("gdn", ssm_off), state("gdn", ssm_off), buf("cu_seqlens_q"),
-                   buf("gdn.spec_slots", 4 * SPEC_BLOCK * g), nacc, f32(gdn_scale), i64(1), T] + Z2),
-                d(l + "z_copy", "copy_rows",
-                  [buf("z_c"), buf("qkvz", Z_OFF * BF16), i32(GDN_V), i32(QKVZ_DIM), i32(GDN_V)]),
-                d(l + "gated_norm", "gated_norm",
-                  [buf("core_attn_out"), buf("core_attn_out"), buf(p + "norm.weight"), buf("z_c"),
-                   i32(GDN_D), i32(GDN_D), i32(GDN_D), expr(mul(T, GDN_V_HEADS)), f32(eps)] + Z2),
+                d(l + "gdn", "gdn_spec",
+                  [buf("qkvz"), buf(p + "conv1d.weight"), state("gdn"), state("gdn", ssm_off),
+                   idx, nacc, buf("cu_seqlens_q"), buf("gdn.spec_slots", 4 * SPEC_BLOCK * g),
+                   buf("ba"), buf(p + "A_log"), buf(p + "dt_bias"), buf("core_attn_out"),
+                   buf(p + "norm.weight"), buf("gdn_q"), buf("gdn_k"), buf("gdn_v"),
+                   buf("g"), buf("beta"), buf("a_c"), buf("b_c"), buf("z_c"),
+                   f32(gdn_scale), f32(eps), T, i32(n_pages),
+                   i32(page_bytes // BF16), i32(ssm_off // (CONV_DIM * BF16)), i32(page_bytes // 4)]),
             ]
         ds.append(gemm(l + "out_proj", "core_attn_out", p + "out_proj.weight", "y", T, HIDDEN, GDN_V))
         return ds
 
-    def attn_layer(i, decode):
+    def attn_layer(i, decode, small=False):
         p = f"model.layers.{i}.self_attn."
         l = f"l{i}."
         koff = ATTN_LAYERS.index(i) * LAYER_KV_BYTES
         ks, vs = buf("kv_scales"), buf("kv_scales", 4)
         kv_k, kv_v = state("kv", koff), state("kv", koff + V_BYTE_OFF)
-        return [
+        ds = [
             gemm(l + "qkv_proj", "x", p + "qkv_proj.weight", "qkv", T, QKV_DIM, HIDDEN),
-            d(l + "q_norm", "gemma_norm_qhead",
-              [buf("q_n"), buf("qkv"), buf(p + "q_norm.weight_p1"), i32(HEAD_DIM),
-               expr(mul(T, HEADS)), i32(HEADS), i32(QKV_DIM), i32(2 * HEAD_DIM), i32(Q_DIM),
-               i32(HEAD_DIM), f32(eps)]),
-            d(l + "k_norm", "gemma_norm_khead",
-              [buf("k_n"), buf("qkv", HEADS * 2 * HEAD_DIM * BF16), buf(p + "k_norm.weight_p1"),
-               i32(HEAD_DIM), expr(mul(T, KV_HEADS)), i32(KV_HEADS), i32(QKV_DIM), i32(HEAD_DIM),
-               i32(KV_DIM), i32(HEAD_DIM), f32(eps)]),
-            d(l + "rope", "mrope", [buf("q_n"), buf("k_n"), buf("cos_g"), buf("sin_g"), i32(0)] + Z2),
-            d(l + "kv_write", "reshape_and_cache",
-              [buf("k_n"), buf("qkv", (HEADS * 2 * HEAD_DIM + KV_DIM) * BF16), kv_k, kv_v,
-               buf("slot_mapping"), ks, vs,
-               i64(KV_DIM), i64(QKV_DIM), i64(BLOCK_STRIDE), i64(2 * HEAD_DIM), i64(0), i64(0),
-               i64(KV_HEADS * 2 * HEAD_DIM), i64(0), i64(0)]),
+            # q/k gemma norm + partial rope + kv cache write, one CTA per
+            # (token, head) -- see tools/kernels-src/attn_prep.cu
+            d(l + "prep", "attn_prep",
+              [buf("q_n"), buf("k_n"), buf("qkv"), buf(p + "q_norm.weight_p1"),
+               buf(p + "k_norm.weight_p1"), buf("cos_g"), buf("sin_g"), kv_k, kv_v,
+               buf("slot_mapping"), expr(mul(T, HEADS)), expr(mul(T, KV_HEADS)),
+               i64(BLOCK_STRIDE), i64(KV_HEADS * 2 * HEAD_DIM), i64(2 * HEAD_DIM),
+               i32(BLOCK_SIZE), f32(eps)]),
             d(l + "attn", "attn" if decode else "attn_prefill",
               [buf("attn_out"), buf("q_n"), kv_k, kv_v, buf("block_table"), buf("seq_lens"),
                f32(attn_scale), ks, vs, f32(1.0), f32(0.0),
@@ -1094,6 +1151,14 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                i32(QKV_DIM), i32(2 * HEAD_DIM)]),
             gemm(l + "o_proj", "gated", p + "o_proj.weight", "y", T, HIDDEN, Q_DIM),
         ]
+        if small:
+            # sigmoid gate + o_proj + residual add + post-attention norm
+            ds[-2:] = [d(l + "o_norm", "gemm8_sgate_add_norm",
+                         [buf("x"), buf("attn_out"), buf("qkv", GATE_OFF * BF16), buf(p + "o_proj.weight"),
+                          buf("residual"), buf(f"model.layers.{i}.post_attention_layernorm.weight_p1"),
+                          T, i32(HIDDEN), i32(Q_DIM), i32(HEAD_DIM), i32(QKV_DIM), i32(2 * HEAD_DIM),
+                          f32(eps)])]
+        return ds
 
     def forward(decode, taps=False, nacc=None, tail=None):
         """Target forward.  decode: recurrent GDN + split-KV attention (else
@@ -1103,6 +1168,9 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         next_token), "decode" (row 0 -> next_token), "verify" (all rows ->
         verify_tokens)."""
         tail = tail or ("decode" if decode else "prefill")
+        # bs<=8 forwards (decode / decode_spec / verify) take the streaming
+        # gemm8 kernels; chunked prefill keeps cuBLAS
+        small = decode or tail == "verify"
         ds = [
             d("embed", "embedding",
               [buf("token_ids"), buf("model.embed_tokens.weight"), buf("residual"), T, i32(HIDDEN)]),
@@ -1117,17 +1185,37 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         for i in range(LAYERS):
             p = f"model.layers.{i}."
             l = f"l{i}."
-            ds += attn_layer(i, decode) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc)
-            ds += [
-                fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"),
-                gemm(l + "gate_up", "x", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
-                d(l + "silu_mul", "silu_mul",
-                  [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)]),
-                gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "y", T, HIDDEN, FFN),
-            ]
+            lay = attn_layer(i, decode, small) if i in ATTN_LAYERS else gdn_layer(i, decode, nacc, small)
+            if small and i not in ATTN_LAYERS:
+                # out_proj GEMM + residual add + post-attention norm (the
+                # attention layers fold their sigmoid gate in too: attn_layer)
+                lay[-1] = d(l + "out_norm", "gemm8_add_norm",
+                            [buf("x"), buf("core_attn_out"), buf(p + "linear_attn.out_proj.weight"),
+                             buf("residual"), buf(p + "post_attention_layernorm.weight_p1"),
+                             T, i32(HIDDEN), i32(GDN_V), f32(eps)])
+            ds += lay
+            if small:
+                mlp = [d(l + "gate_up_silu", "gemm8_gateup_silu",
+                         [buf("act"), buf("x"), buf(p + "mlp.gate_up_proj.weight"),
+                          T, i32(FFN), i32(HIDDEN)])]
+            else:
+                mlp = [gemm(l + "gate_up", "x", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
+                       d(l + "silu_mul", "silu_mul",
+                         [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)])]
             last = i + 1 == LAYERS
-            ds.append(fused(l + ("final_norm" if last else "next_input_norm"), "y",
-                            "model.norm.weight_p1" if last else f"model.layers.{i + 1}.input_layernorm.weight_p1"))
+            wnorm = "model.norm.weight_p1" if last else f"model.layers.{i + 1}.input_layernorm.weight_p1"
+            nlabel = l + ("final_norm" if last else "next_input_norm")
+            if not small:
+                ds.append(fused(l + "post_attn_norm", "y", p + "post_attention_layernorm.weight_p1"))
+            ds += mlp
+            if small:
+                # down GEMM + residual add + next input norm in one dispatch
+                ds.append(d(l + "down_norm", "gemm8_add_norm",
+                            [buf("x"), buf("act"), buf(p + "mlp.down_proj.weight"), buf("residual"),
+                             buf(wnorm), T, i32(HIDDEN), i32(FFN), f32(eps)]))
+            else:
+                ds.append(gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "y", T, HIDDEN, FFN))
+                ds.append(fused(nlabel, "y", wnorm))
             if taps and i in TAPS:
                 # residual now holds hidden + residual = the input of layer
                 # i+1, vLLM's aux hidden state; fc's column block j, β=1
@@ -1215,8 +1303,8 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                 gemm(l + "mlp_conv_proj", "y", p + "mlp_conv.kernel_projection.weight", "d_coef",
                      T, D_CONV_PROJ, HIDDEN),
                 d_conv(l + "mlp_conv_pre", "y", p + "mlp_conv", 0),
-                gemm(l + "gate_up", "y", p + "mlp.gate_up_proj.weight", "gate_up", T, 2 * FFN, HIDDEN),
-                d(l + "silu_mul", "silu_mul", [buf("act"), buf("gate_up"), i32(FFN), i32(0), f32(1.0), i32(0)]),
+                d(l + "gate_up_silu", "gemm8_gateup_silu",
+                  [buf("act"), buf("y"), buf(p + "mlp.gate_up_proj.weight"), T, i32(FFN), i32(HIDDEN)]),
                 gemm(l + "down_proj", "act", p + "mlp.down_proj.weight", "x", T, HIDDEN, FFN),
                 d_conv(l + "mlp_conv_post", "x", p + "mlp_conv", 1),
                 d_fused(l + ("final_norm" if last else "next_input_norm"), "x",
