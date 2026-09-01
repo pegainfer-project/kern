@@ -514,7 +514,7 @@ def scr(name, off=0):
     return {"scratch": name, "offset": off} if off else {"scratch": name}
 
 
-def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=None):
+def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=None, pdl=False):
     s = {"symbol": symbol, "params": params, "block": block, "grid": grid, "args": args}
     if shared_mem is not None:
         s["shared_mem"] = shared_mem
@@ -522,13 +522,15 @@ def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=
         s["cubin"] = cubin
     if sha256 is not None:
         s["sha256"] = sha256
+    if pdl:  # the kernel puts its dependent reads / all writes behind griddepcontrol.wait
+        s["pdl"] = True
     return s
 
 
-def single(symbol, params, block, grid, shared_mem=None, cubin=None, sha256=None):
+def single(symbol, params, block, grid, shared_mem=None, cubin=None, sha256=None, pdl=False):
     return {"params": params,
             "impl": {"steps": [step(symbol, params, block, grid, [a(i) for i in range(len(params))],
-                                    shared_mem, cubin, sha256)]}}
+                                    shared_mem, cubin, sha256, pdl)]}}
 
 
 TOKEN_DOMAIN = {"index_into": "model.embed_tokens.weight"}
@@ -778,7 +780,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                                     ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>",
                                      "i32", "i32", "i32"],
                                     [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
-                                    shared_mem=GEMM8_SMEM, cubin="gemm8.cubin"),
+                                    shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True),
         # down GEMM + residual add + Gemma fused_add_rms_norm of the next
         # layer input (gemm8's split-K partials, y and the task counters are
         # impl scratch; the norm tail reproduces kern_gemma_rms_norm.cu)
@@ -787,7 +789,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                              ["out buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>",
                               "in buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32", "i32"],
                              [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
-                             shared_mem=GEMM8_SMEM, cubin="gemm8.cubin"),
+                             shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True),
         # o_proj + the sigmoid gate on its input + residual add + post-attention
         # norm: x = attn * sigmoid(gate) is built inside the GEMM
         "gemm8_sgate_add_norm": {
@@ -800,7 +802,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                                [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
                                [a(0), a(1), a(2), a(3), a(4), a(5), scr("y"), scr("partial"), scr("gcnt"),
                                 a(6), a(7), a(8), a(9), a(10), a(11), a(12)],
-                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin")],
+                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True)],
             },
         },
         "gemm8_add_norm": {
@@ -813,7 +815,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                                [GEMM8_THREADS, 1, 1], [GEMM8_GRID, 1, 1],
                                [a(0), a(1), a(2), a(3), a(4), scr("y"), scr("partial"), scr("gcnt"),
                                 a(5), a(6), a(7), a(8)],
-                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin")],
+                               shared_mem=GEMM8_SMEM, cubin="gemm8.cubin", pdl=True)],
             },
         },
         "copy_rows": single("kern_copy_rows_bf16",

@@ -564,6 +564,10 @@
           },
           "type": "array"
         },
+        "pdl": {
+          "description": "Programmatic dependent launch: the runtime launches this step with\n`CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`, so it may\nstart while the preceding launch is still draining. Only for kernels\nthat put every read of an upstream product and every global write\nbehind `griddepcontrol.wait` (their own inputs — weights, state —\nmay stream ahead of it).",
+          "type": "boolean"
+        },
         "sha256": {
           "description": "sha256 of that cubin file, checked by the runtime when both are set.",
           "type": [

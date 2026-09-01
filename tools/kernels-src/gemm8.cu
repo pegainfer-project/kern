@@ -12,11 +12,26 @@
 // every output element sums them there.  Smem rows are padded by 16 B so the
 // ldmatrix reads are bank-conflict-free (measured 3.5x slower without).
 //
+// Tasks: whole 8-row blocks, a multiple of the grid so every CTA streams the
+// same number, plus the leftover rows spread over the grid in tasks one
+// granule apart -- scheduled first, where their latency-bound stages hide
+// under the blocks behind them.  Every task walks the same K stages, so the
+// per-row accumulation order does not depend on the geometry.  The ring/x
+// split of the shared area is per launch, so bs=1 gets 5-6 stages in flight.
+//
 // The tail runs after a single end-of-CTA fence + task-count atomic.  With
 // grid <= %nsmid (one ~200 KB-smem CTA per SM, the launch geometry of every
 // call site) all CTAs are co-resident, so CTAs 0..M-1 spin on the counter and
 // each finishes one token row in parallel; on any other geometry the CTA that
 // finished last does all rows.  Counters are back to zero at kernel end.
+// The tail is pure latency: the norm weight is fetched under the spin and
+// each global round trip of a row is one batch of loads.
+//
+// Programmatic dependent launch (manifest step `pdl`): the ring is filled
+// with the first task's weights before griddepcontrol.wait, everything that
+// reads an upstream product or writes comes after it, and the CTA signals
+// launch_dependents once its stream is issued, so the next launch's ramp
+// overlaps this launch's drain and tail.
 //
 // Entry points differ in what is fused around the GEMM (rounding chains
 // reproduce the vLLM / ATen kernels they replace):
@@ -48,7 +63,8 @@ constexpr int SEG_MAX = 2560;            // K elements per weight row per stage
 constexpr int PAD = 8;                   // 16 B row padding: bank shift 4
 constexpr int X_ELEMS = 40960;           // x area capacity (M * kseg elements)
 constexpr int X_SLOT = X_ELEMS + MMAX * PAD;
-constexpr int RING_ELEMS = 69888;        // 3 stages of 8 rows at SEG_MAX; 4-5 for split shapes
+constexpr int RING_ELEMS = 69888;        // ring minimum: 3 stages of 8 rows at SEG_MAX (x at capacity)
+constexpr int BUF_ELEMS = RING_ELEMS + X_SLOT;  // ring + x share one area, split per launch by M * kseg
 constexpr int STAGES_MAX = 6;
 constexpr int NCW = 8, CTHREADS = NCW * 32, NTHREADS = CTHREADS + 32;
 constexpr int BAR_C = 1;                 // named barrier of the compute warps
@@ -97,15 +113,21 @@ __device__ __forceinline__ uint32_t nsmid() {
   return n;
 }
 __device__ __forceinline__ float bf16r(float v) { return __bfloat162float(__float2bfloat16_rn(v)); }
+// Programmatic dependent launch: the caller may launch this kernel with
+// CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION.  Every global read of
+// an upstream product and every global write sit behind pdl_wait(); only the
+// weight stream (this launch's own inputs) runs ahead of it.  Without the
+// attribute both instructions are no-ops.
+__device__ __forceinline__ void pdl_wait() { asm volatile("griddepcontrol.wait;" ::: "memory"); }
+__device__ __forceinline__ void pdl_trigger() { asm volatile("griddepcontrol.launch_dependents;" ::: "memory"); }
 
 struct Smem {
-  alignas(128) __nv_bfloat16 ring[RING_ELEMS];              // stage s: rows [s*8*(seg+PAD), ...)
-  alignas(128) __nv_bfloat16 x[X_SLOT];                     // current K range of x: M rows, stride kseg+PAD
+  alignas(128) __nv_bfloat16 buf[BUF_ELEMS];  // [ring: stage s at s*8*(seg+PAD)] ... [x: M rows, stride kseg+PAD]
   alignas(8) uint64_t full[STAGES_MAX], empty[STAGES_MAX], xfull, xempty;
   float red[NCW][MMAX][R];
   int flag;
 };
-constexpr int SMEM_BYTES = sizeof(Smem) + 128;
+static_assert(sizeof(Smem) + 128 <= 224128, "manifest shared_mem (GEMM8_SMEM) covers Smem");
 
 enum Mode { PLAIN = 0, GATEUP = 1, DUAL = 2, NORM = 3, SGATE = 4 };
 
@@ -121,6 +143,42 @@ struct Args {
   const __nv_bfloat16* gate;  // SGATE: strided gate view; x is then attn [M, ldx]
   int head_dim, gate_ts, gate_hs;
 };
+
+// Tasks of one K range: nfull whole 8-row blocks, a multiple of the grid so
+// every CTA streams the same number, plus the leftover rows spread over the
+// grid in tasks of `rem_g` rows (GATEUP: whole gate/up pairs).  The small
+// tasks come first: their stages are latency-bound, and at the head of a
+// CTA's queue that latency hides under the full blocks streaming behind
+// them instead of being the launch's last few microseconds.  The per-row
+// accumulation order is the same either way.
+struct Geom {
+  int nrows, nfull, nsmall, na, hi, lo, nps;  // rows; full blocks; small tasks: na of hi rows then hi-gran rows; tasks per range
+};
+template <int MODE>
+__device__ __forceinline__ Geom task_geom(const Args& a) {
+  Geom g;
+  g.nrows = MODE == GATEUP ? 2 * a.N : a.N;
+  const int nblk = (g.nrows + R - 1) / R, grid = gridDim.x;
+  g.nfull = nblk / grid * grid;
+  // leftover rows over the whole grid in two task widths differing by one
+  // granule, so no CTA streams more than a granule beyond another
+  const int rem = g.nrows - g.nfull * R, gran = MODE == GATEUP ? 2 : 1;
+  g.hi = min(R, ((rem + grid - 1) / grid + gran - 1) / gran * gran);
+  g.lo = g.hi - gran;
+  if (rem == 0) { g.na = g.nsmall = 0; }
+  else if (a.M > 1) { g.hi = R; g.lo = 0; g.na = g.nsmall = (rem + R - 1) / R; }  // whole blocks: a narrow task costs full MMA rounds
+  else if (g.lo == 0) { g.na = g.nsmall = (rem + g.hi - 1) / g.hi; }
+  else { g.na = (rem - g.lo * grid + gran - 1) / gran; g.nsmall = grid; }
+  g.nps = g.nfull + g.nsmall;
+  return g;
+}
+__device__ __forceinline__ void task_rows(const Geom& g, int u, int& r0, int& rows) {
+  if (u < g.nsmall) {
+    r0 = g.nfull * R + (u < g.na ? u * g.hi : g.na * g.hi + (u - g.na) * g.lo);
+    rows = min(u < g.na ? g.hi : g.lo, g.nrows - r0);
+  } else { r0 = (u - g.nsmall) * R; rows = R; }
+}
+
 
 // K ranges: as many as x capacity demands, and at least enough tasks to
 // balance the grid when the mode can split (partial != nullptr).
@@ -172,15 +230,21 @@ __device__ __forceinline__ void emit(const Args& a, int split, int nranges, int 
 template <int MODE>
 __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
   const int warp = threadIdx.x / 32, lane = threadIdx.x % 32;
-  const int nrows = MODE == GATEUP ? 2 * a.N : a.N;
+  const Geom g = task_geom<MODE>(a);
+  const int nrows = g.nrows, nps = g.nps;
   const int nblk = (nrows + R - 1) / R;
   const int nranges = pick_nranges(a, nblk);
   const int kseg = (a.K + nranges - 1) / nranges + 31 & ~31;
   const int nst0 = (kseg + SEG_MAX - 1) / SEG_MAX;
   const int seg = (kseg + nst0 - 1) / nst0 + 31 & ~31;          // stage slot width, whole ldmatrix pairs
   const int srow = seg + PAD, xrow = kseg + PAD;                // smem row strides
-  const int nstages = min(STAGES_MAX, RING_ELEMS / (R * srow));
-  const int ntasks = nblk * nranges;
+  // x sits at the top of the shared area; whatever it leaves (never less
+  // than RING_ELEMS) is ring depth -- at M = 1 that is 5-6 stages
+  const int xbeg = (BUF_ELEMS - a.M * xrow) & ~63;
+  __nv_bfloat16* const ring = s.buf;
+  __nv_bfloat16* const xs = s.buf + xbeg;
+  const int nstages = min(STAGES_MAX, xbeg / (R * srow));
+  const int ntasks = nps * nranges;
   if (threadIdx.x == 0) {
     for (int i = 0; i < nstages; i++) {
       mbar_init(smem_u32(&s.full[i]), 1);
@@ -197,39 +261,64 @@ __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
       int stage = 0;
       uint32_t phase = 0, xphase = 0;
       int cur_split = -1;
-      for (int t = blockIdx.x; t < ntasks; t += gridDim.x) {
-        const int split = t / nblk, blk = t - split * nblk;      // range-major
-        const int r0 = blk * R, rows = min(R, nrows - r0);
+      // Weight stages of this CTA's first task fill the ring before the
+      // upstream dependency resolves; the main loop skips those `pre` stages.
+      int pre = 0;
+      if ((int)blockIdx.x < ntasks) {
+        const int t = blockIdx.x;
+        const int split = t / nps;
+        int r0, rows;
+        task_rows(g, t - split * nps, r0, rows);
         const int k0 = split * kseg, klen = min(kseg, a.K - k0);
-        if (MODE != SGATE && split != cur_split) {  // stage this range of x (consumers have released the old one)
-          mbar_wait(smem_u32(&s.xempty), xphase);
-          mbar_expect_tx(smem_u32(&s.xfull), a.M * klen * 2);
-          for (int m = 0; m < a.M; m++)
-            bulk_copy_1d(smem_u32(&s.x[m * xrow]), a.x + (size_t)m * a.ldx + k0, klen * 2, smem_u32(&s.xfull));
-          xphase ^= 1;
-          cur_split = split;
-        }
-        for (int st = 0, off = 0; off < klen; st++, off += seg) {
+        for (int off = 0; off < klen && pre < nstages; off += seg, pre++) {
           const int len = min(seg, klen - off);
           mbar_wait(smem_u32(&s.empty[stage]), phase ^ 1);
           mbar_expect_tx(smem_u32(&s.full[stage]), rows * len * 2);
-          __nv_bfloat16* dst = &s.ring[stage * R * srow];
+          __nv_bfloat16* dst = &ring[stage * R * srow];
           for (int r = 0; r < rows; r++)
             bulk_copy_1d(smem_u32(dst + r * srow), row_ptr<MODE>(a, r0 + r) + k0 + off, len * 2, smem_u32(&s.full[stage]));
           if (++stage == nstages) { stage = 0; phase ^= 1; }
         }
       }
+      pdl_wait();
+      for (int t = blockIdx.x; t < ntasks; t += gridDim.x) {
+        const int split = t / nps;                                // range-major
+        int r0, rows;
+        task_rows(g, t - split * nps, r0, rows);
+        const int k0 = split * kseg, klen = min(kseg, a.K - k0);
+        if (MODE != SGATE && split != cur_split) {  // stage this range of x (consumers have released the old one)
+          mbar_wait(smem_u32(&s.xempty), xphase);
+          mbar_expect_tx(smem_u32(&s.xfull), a.M * klen * 2);
+          for (int m = 0; m < a.M; m++)
+            bulk_copy_1d(smem_u32(&xs[m * xrow]), a.x + (size_t)m * a.ldx + k0, klen * 2, smem_u32(&s.xfull));
+          xphase ^= 1;
+          cur_split = split;
+        }
+        for (int off = 0; off < klen; off += seg) {
+          if (pre > 0) { pre--; continue; }  // already in flight (first task only)
+          const int len = min(seg, klen - off);
+          mbar_wait(smem_u32(&s.empty[stage]), phase ^ 1);
+          mbar_expect_tx(smem_u32(&s.full[stage]), rows * len * 2);
+          __nv_bfloat16* dst = &ring[stage * R * srow];
+          for (int r = 0; r < rows; r++)
+            bulk_copy_1d(smem_u32(dst + r * srow), row_ptr<MODE>(a, r0 + r) + k0 + off, len * 2, smem_u32(&s.full[stage]));
+          if (++stage == nstages) { stage = 0; phase ^= 1; }
+        }
+      }
+      pdl_trigger();  // our weight stream is issued: the dependent launch may take the SMs we vacate
     }
     __syncthreads();  // matches the compute warps' final barrier
     return s.flag != 0;
   }
   const int ct = threadIdx.x - 32, cw = warp - 1;
+  pdl_wait();  // everything from here on touches upstream products or writes
   int stage = 0;
   uint32_t phase = 0, xphase = 0;
   int cur_split = -1;
   for (int t = blockIdx.x; t < ntasks; t += gridDim.x) {
-    const int split = t / nblk, blk = t - split * nblk;
-    const int r0 = blk * R, rows = min(R, nrows - r0);
+    const int split = t / nps;
+    int r0, rows;
+    task_rows(g, t - split * nps, r0, rows);
     const int klen = min(kseg, a.K - split * kseg);
     if (split != cur_split) {  // release the old x range, wait for the new one
       if (MODE == SGATE) {  // the compute warps make this range of x themselves
@@ -253,7 +342,7 @@ __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
             const float g = bf16r(1.0f / (1.0f + expf(-__bfloat162float(gv[j]))));
             ov[j] = __float2bfloat16_rn(__bfloat162float(av[j]) * g);
           }
-          *reinterpret_cast<uint4*>(&s.x[m * xrow + kk]) = oq;
+          *reinterpret_cast<uint4*>(&xs[m * xrow + kk]) = oq;
         }
         named_bar_sync(BAR_C, CTHREADS);
       } else {
@@ -267,14 +356,15 @@ __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
     // (l/8) = k tile-half; matrices (k 0-7, 8-15, 16-23, 24-31) of a 32-k
     // pair of tiles come back as (b0, b1, b0', b1') / (a0, a2, a0', a2').
     // x rows beyond M are never emitted: clamp them onto row M-1 (broadcast).
-    const uint32_t xbase = smem_u32(&s.x[min(lane & 7, a.M - 1) * xrow + (lane >> 3) * 8]);
+    const uint32_t xbase = smem_u32(&xs[min(lane & 7, a.M - 1) * xrow + (lane >> 3) * 8]);
     float c[4][4];
 #pragma unroll
     for (int j = 0; j < 4; j++) c[j][0] = c[j][1] = c[j][2] = c[j][3] = 0.f;
-    for (int st = 0, off = 0; off < klen; st++, off += seg) {
+    const int wrow = min(lane & 7, rows - 1);  // rows beyond the task: clamp (never emitted)
+    for (int off = 0; off < klen; off += seg) {
       const int npairs = min(seg, klen - off) / 32;              // len % 32 == 0 (every K is)
       mbar_wait(smem_u32(&s.full[stage]), phase);
-      const uint32_t wbase = smem_u32(&s.ring[stage * R * srow + (lane & 7) * srow + (lane >> 3) * 8]);
+      const uint32_t wbase = smem_u32(&ring[stage * R * srow + wrow * srow + (lane >> 3) * 8]);
       const uint32_t xoff = xbase + off * 2;
       int pr = cw;
       for (; pr + NCW < npairs; pr += 2 * NCW) {
@@ -312,6 +402,7 @@ __device__ __forceinline__ bool gemm8_core(const Args& a, Smem& s) {
     }
     named_bar_sync(BAR_C, CTHREADS);
   }
+  pdl_trigger();
   if (ct == 0) {  // one thread of the compute warps
     const int my = (ntasks - (int)blockIdx.x + (int)gridDim.x - 1) / (int)gridDim.x;
     if (my > 0 && a.gcnt) {
@@ -341,8 +432,10 @@ __device__ __forceinline__ int aten_block_width(int dim0, int dim1) {
 }
 // Sum of z[j]^2 over j in [0, N) in ATen's order (sq[j] = fmul_rn(z, z), then
 // the vectorized-by-4 reduction of kern_gemma_rms_norm.cu) for W virtual
-// lanes emulated by NTHREADS threads (lane l = t + v*NTHREADS); the result is
-// returned in every thread.
+// lanes; the result is returned in every thread.  (Folding the W lanes in
+// the registers of one warp instead costs 40 registers and a local-memory
+// tree in every add_norm variant, and the M = 8 verify pass pays 3 us per
+// launch for it; the smem tree is the same additions in the same order.)
 __device__ float aten_row_sumsq(const float* __restrict__ z, int N, int W, float* __restrict__ s) {
   const int t = threadIdx.x;
   constexpr int VL = (NT_ATEN + NTHREADS - 1) / NTHREADS;
@@ -403,27 +496,71 @@ __device__ __forceinline__ float4 ysum4(const Args& a, int nranges, int m, int j
 // Rows [m0, m1) of the tail.  NORM: vLLM's Gemma fused_add_rms_norm with
 // ATen's reduction width for the launch's M rows; z lives in smem (ring).
 // PLAIN: just fold the partials to bf16 y.
+// The tail is latency, not bandwidth: every global round trip of a row is
+// issued for all of the thread's groups at once (TG = 6 float4 per thread
+// covers N <= 6144), and w1 is already in smem (loaded during the wait).
+constexpr int TG = (6144 / 4 + NTHREADS - 1) / NTHREADS;
 template <int MODE>
-__device__ void tail_rows(const Args& a, int nranges, int m0, int m1, const float* w1, __nv_bfloat16* res, __nv_bfloat16* out,
-                          float eps, float* __restrict__ z, float* __restrict__ s) {
+__device__ void tail_rows(const Args& a, int nranges, int m0, int m1, const float* __restrict__ w1s, __nv_bfloat16* res,
+                          __nv_bfloat16* out, float eps, float* __restrict__ z, float* __restrict__ s) {
   const int N = a.N;
   for (int m = m0; m < m1; m++) {
-    for (int j = threadIdx.x * 4; j < N; j += NTHREADS * 4) {
-      float4 v = ysum4(a, nranges, m, j);
+    float4 v[TG];
+    float2 r0[TG], r1[TG];
+    if (MODE >= NORM) {  // the residual pair of every group, issued as one batch
+      uint32_t rw[TG][2];
+#pragma unroll
+      for (int gi = 0; gi < TG; gi++) {
+        const int j = (threadIdx.x + gi * NTHREADS) * 4;
+        const uint32_t* rr = reinterpret_cast<const uint32_t*>(res + (size_t)m * N + j);
+        rw[gi][0] = j < N ? rr[0] : 0u;
+        rw[gi][1] = j < N ? rr[1] : 0u;
+      }
+#pragma unroll
+      for (int gi = 0; gi < TG; gi++) {
+        r0[gi] = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&rw[gi][0]));
+        r1[gi] = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&rw[gi][1]));
+      }
+    }
+    if (nranges == 1) {  // y scratch, bf16: one batch of plain loads
+      uint32_t yw[TG][2];
+#pragma unroll
+      for (int gi = 0; gi < TG; gi++) {
+        const int j = (threadIdx.x + gi * NTHREADS) * 4;
+        const uint32_t* yy = reinterpret_cast<const uint32_t*>(a.y + (size_t)m * N + j);
+        yw[gi][0] = j < N ? __ldcg(yy) : 0u;
+        yw[gi][1] = j < N ? __ldcg(yy + 1) : 0u;
+      }
+#pragma unroll
+      for (int gi = 0; gi < TG; gi++) {
+        const float2 l = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&yw[gi][0]));
+        const float2 h = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&yw[gi][1]));
+        v[gi] = make_float4(l.x, l.y, h.x, h.y);
+      }
+    } else {
+#pragma unroll
+      for (int gi = 0; gi < TG; gi++) {
+        const int j = (threadIdx.x + gi * NTHREADS) * 4;
+        if (j < N) v[gi] = ysum4(a, nranges, m, j);
+      }
+    }
+#pragma unroll
+    for (int gi = 0; gi < TG; gi++) {
+      const int j = (threadIdx.x + gi * NTHREADS) * 4;
+      if (j >= N) continue;
+      float4 y = v[gi];
       if (MODE >= NORM) {
         __nv_bfloat16* rr = res + (size_t)m * N + j;
-        v.x = bf16r(v.x); v.y = bf16r(v.y); v.z = bf16r(v.z); v.w = bf16r(v.w);   // the bf16 y rounding
-        const float2 r0 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(rr));
-        const float2 r1 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(rr + 2));
-        v.x = __fadd_rn(v.x, r0.x); v.y = __fadd_rn(v.y, r0.y);
-        v.z = __fadd_rn(v.z, r1.x); v.w = __fadd_rn(v.w, r1.y);
-        *reinterpret_cast<__nv_bfloat162*>(rr) = __floats2bfloat162_rn(v.x, v.y);
-        *reinterpret_cast<__nv_bfloat162*>(rr + 2) = __floats2bfloat162_rn(v.z, v.w);
-        *reinterpret_cast<float4*>(z + j) = v;
+        y.x = bf16r(y.x); y.y = bf16r(y.y); y.z = bf16r(y.z); y.w = bf16r(y.w);   // the bf16 y rounding
+        y.x = __fadd_rn(y.x, r0[gi].x); y.y = __fadd_rn(y.y, r0[gi].y);
+        y.z = __fadd_rn(y.z, r1[gi].x); y.w = __fadd_rn(y.w, r1[gi].y);
+        *reinterpret_cast<__nv_bfloat162*>(rr) = __floats2bfloat162_rn(y.x, y.y);
+        *reinterpret_cast<__nv_bfloat162*>(rr + 2) = __floats2bfloat162_rn(y.z, y.w);
+        *reinterpret_cast<float4*>(z + j) = y;
       } else {
         __nv_bfloat16* yy = a.y + (size_t)m * N + j;
-        *reinterpret_cast<__nv_bfloat162*>(yy) = __floats2bfloat162_rn(v.x, v.y);
-        *reinterpret_cast<__nv_bfloat162*>(yy + 2) = __floats2bfloat162_rn(v.z, v.w);
+        *reinterpret_cast<__nv_bfloat162*>(yy) = __floats2bfloat162_rn(y.x, y.y);
+        *reinterpret_cast<__nv_bfloat162*>(yy + 2) = __floats2bfloat162_rn(y.z, y.w);
       }
     }
     if (MODE < NORM) continue;
@@ -433,9 +570,12 @@ __device__ void tail_rows(const Args& a, int nranges, int m0, int m1, const floa
     const float factor = (float)a.M / (float)((long long)a.M * (long long)N);
     const float var = __fmul_rn(sum, factor);
     const float r = rsqrtf(__fadd_rn(var, eps));
-    for (int j = threadIdx.x * 4; j < N; j += NTHREADS * 4) {
+#pragma unroll
+    for (int gi = 0; gi < TG; gi++) {
+      const int j = (threadIdx.x + gi * NTHREADS) * 4;
+      if (j >= N) continue;
       const float4 zv = *reinterpret_cast<const float4*>(z + j);
-      const float4 w0 = *reinterpret_cast<const float4*>(w1 + j);
+      const float4 w0 = *reinterpret_cast<const float4*>(w1s + j);
       __nv_bfloat162 o0 = __floats2bfloat162_rn(__fmul_rn(__fmul_rn(zv.x, r), w0.x), __fmul_rn(__fmul_rn(zv.y, r), w0.y));
       __nv_bfloat162 o1 = __floats2bfloat162_rn(__fmul_rn(__fmul_rn(zv.z, r), w0.z), __fmul_rn(__fmul_rn(zv.w, r), w0.w));
       *reinterpret_cast<__nv_bfloat162*>(out + (size_t)m * N + j) = o0;
@@ -450,18 +590,22 @@ __device__ void tail_rows(const Args& a, int nranges, int m0, int m1, const floa
 template <int MODE>
 __device__ __forceinline__ void run_tail(const Args& a, Smem& s, bool last, __nv_bfloat16* res, const float* w1,
                                          __nv_bfloat16* out, float eps) {
-  const int nrows = MODE == GATEUP ? 2 * a.N : a.N;
-  const int nblk = (nrows + R - 1) / R;
+  const Geom g = task_geom<MODE>(a);
+  const int nblk = (g.nrows + R - 1) / R;
   const int nranges = pick_nranges(a, nblk);
+  const int ntasks = g.nps * nranges;
   if (MODE == PLAIN && nranges == 1) return;  // nothing left to do
-  static_assert(sizeof(s.ring) >= 6144 * 4, "z row: N <= 6144");
-  float* z = reinterpret_cast<float*>(&s.ring[0]);
+  static_assert(RING_ELEMS * 2 >= 2 * 6144 * 4, "z row + w1 copy: N <= 6144");
+  float* z = reinterpret_cast<float*>(&s.buf[0]);
+  float* w1s = z + 6144;
   if (gridDim.x <= nsmid()) {
     if ((int)blockIdx.x >= a.M) return;
+    if (MODE >= NORM)  // the norm weight is not waiting on anyone: fetch it under the spin
+      for (int j = threadIdx.x * 4; j < a.N; j += NTHREADS * 4) *reinterpret_cast<float4*>(w1s + j) = *reinterpret_cast<const float4*>(w1 + j);
     if (threadIdx.x == 0)
-      while (ld_acquire(a.gcnt) < nblk * nranges) __nanosleep(64);
+      while (ld_acquire(a.gcnt) < ntasks) __nanosleep(64);
     __syncthreads();
-    tail_rows<MODE>(a, nranges, blockIdx.x, blockIdx.x + 1, w1, res, out, eps, z, &s.red[0][0][0]);
+    tail_rows<MODE>(a, nranges, blockIdx.x, blockIdx.x + 1, w1s, res, out, eps, z, &s.red[0][0][0]);
     __syncthreads();
     if (threadIdx.x == 0 && atomicAdd(a.gcnt + 1, 1) == a.M - 1) {
       a.gcnt[1] = 0;
@@ -470,7 +614,10 @@ __device__ __forceinline__ void run_tail(const Args& a, Smem& s, bool last, __nv
     }
   } else if (last) {
     __threadfence();
-    tail_rows<MODE>(a, nranges, 0, a.M, w1, res, out, eps, z, &s.red[0][0][0]);
+    if (MODE >= NORM)
+      for (int j = threadIdx.x * 4; j < a.N; j += NTHREADS * 4) *reinterpret_cast<float4*>(w1s + j) = *reinterpret_cast<const float4*>(w1 + j);
+    __syncthreads();
+    tail_rows<MODE>(a, nranges, 0, a.M, w1s, res, out, eps, z, &s.red[0][0][0]);
     __syncthreads();
     if (threadIdx.x == 0) { *a.gcnt = 0; __threadfence(); }
   }

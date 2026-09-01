@@ -5875,7 +5875,8 @@
        }
       ],
       "shared_mem": 224128,
-      "cubin": "gemm8.cubin"
+      "cubin": "gemm8.cubin",
+      "pdl": true
      }
     ]
    }
@@ -5947,7 +5948,8 @@
        }
       ],
       "shared_mem": 224128,
-      "cubin": "gemm8.cubin"
+      "cubin": "gemm8.cubin",
+      "pdl": true
      }
     ]
    }
@@ -6074,7 +6076,8 @@
        }
       ],
       "shared_mem": 224128,
-      "cubin": "gemm8.cubin"
+      "cubin": "gemm8.cubin",
+      "pdl": true
      }
     ]
    }
@@ -6181,7 +6184,8 @@
        }
       ],
       "shared_mem": 224128,
-      "cubin": "gemm8.cubin"
+      "cubin": "gemm8.cubin",
+      "pdl": true
      }
     ]
    }
