@@ -64,44 +64,51 @@ Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡�
   2/8 在 ~25 token 处的近平局分叉，两边都连贯——batch 大小改变 GEMM 选核
   和 attention 归约顺序，和 vLLM 一样不 batch-invariant。
 
-## 投机解码（`--spec`，2026-09-01）
+## 投机解码（`--rows`，2026-09-03）
 
 ```bash
-target/release/kern-serve qwen3-4b-dspark --model-path /mnt/shared/weights/Qwen3-4B --spec
+target/release/kern-serve qwen3-4b-dspark --model-path /mnt/shared/weights/Qwen3-4B            # 缺省取最宽：7 行的 round
+target/release/kern-serve qwen3.8-27b-dflash2 --model-path <Qwen3.8-27B 的 HF 目录> --rows 8   # 显式给；--rows 1 是 plain
 ```
 
-manifest 得带 `draft` / `verify` / `draft_precompute` / `decode_spec`
-（`examples/qwen3-4b-dspark.json`）。开了之后**每一步都是一轮**：
+投机不是模式开关，是 manifest 声明的一个形状：`round` program 的
+`batch: {groups, rows}`（dspark 7 行、dflash2 8 行）。scheduler 装权重前
+先算 `Plan`：`--rows`（缺省 manifest 声明的最宽）选出 `step` forward，
+`rows − 1 ≤ MAX_SPEC_TOKENS`（前端计数器）、rows ≤ 页（pad 页要装下一组）、
+rows > 1 时必须有 chunk program（prompt 逐 token 走 step 的模型只能 1 行），
+`max_seqs` 按 `tokens.max / rows` 与 `groups` 上界收紧。之后 plain decode
+与投机轮是同一段 `step()`：
 
-- admission：prefill 每个 chunk 后跑一次 `draft_precompute`（prompt 的 tap
-  进 draft KV）；最后一个 prompt token 走 bs=1 `decode_spec` + precompute，
-  它的输出是第一个 token，当轮的 anchor。租约是 `prompt + max_tokens +
-  n_drafts`：最后一轮被拒的行也要有 slot（整页取整，通常就是多一页）。
-- 一轮：`draft`（每序列 `[anchor, mask×6]` 一段，非因果，7·b 行）→ 读
-  `draft_tokens [seqs, 7]` → `verify`（每序列 `[anchor, d0..d6]`，8·b 行）
-  → 读 `verify_tokens [seqs, 8]` → `draft_precompute` 在 verify 的全部 8·b
-  行上跑（被拒行落在各序列新 pos 之后，下一轮覆写，和 target KV 的免费
-  回滚是一回事，所以不用按接受数 compact）→ host 逐序列前缀匹配，emit
-  `a+1` 个 token。三段各按 bucket 捕成图；pad 序列的行写 pad 页。
-- manifest 带 `round` 时（`qwen3.8-27b-dflash2`），整轮是**一个 program、
-  一张图、一次 sync**：draft → `splice_verify`（device 上把 anchor +
-  `draft_tokens` 拼成 verify 的 ids，`verify_ids` carry）→ verify →
-  precompute → `spec_accept`（device 上前缀匹配，写 advance 自己的
-  `nacc_adv` / `line_adv` carry——kernel 不能写 Input，所以是替身）→
-  advance。host 只 stage 一次 8 行组（draft/verify 每序列行数相同，
-  positions/slot_mapping 共用），轮末读 `draft_tokens` / `verify_tokens`
-  照旧前缀匹配，emit 与分段路径一字不差。分段的 `draft`/`verify`/`advance`
-  仍在 manifest 里，`kern run --spec --probe-dir` 逐轮 dump 靠它们。
-- greedy only；`--spec` 是能力开关，不按 bs 自动切换——每轮 verify 是
-  8·b 行的 target 前向，bs 大到算力瓶颈后一轮比一步贵得多，划不划算由
-  用户按模型和负载定。
+- 每序列 stage `rows` 行（行轴的 token fill 里 `[next; rows]`，组轴的
+  token fill 装 anchor），跑 `forward(b, rows)` 选中的 program，读
+  `tokens [seqs, rows]` 与 `count [seqs]`（没 count 视为恒 1），每序列取
+  `count` 个、`pos += count`。租约 = `prompt + max_tokens + rows − 1`：被
+  拒的行落在新 pos 之后，下一轮覆写，target KV 与 draft KV 一样免费回滚。
+- round 内的活全在设备上：`splice_draft`（anchor + mask 拼 draft 的
+  ids）→ draft → `splice_verify`（anchor + draft 拼 verify 的 ids）→
+  verify → precompute（verify 全部行的 tap 进 draft KV）→ `spec_count`
+  （前缀匹配写 `count` 输出）→ GDN 模型再加 `spec_lines` + advance。一张
+  图一次 sync；host 不再读 draft 再拼 verify，`nacc` 直接信。
+- admission：chunk program 自己出第一个 token（`Forward.emits`：dspark
+  的 prefill 尾部带 head + precompute，dflash2 本来如此）。
+- greedy only；每轮 verify 是 `rows·b` 行的 target 前向，b 大到算力瓶颈
+  后一轮比一步贵，`--rows 1` 关掉。分段的 draft / verify program 不再存
+  在，逐轮 dump 用 `kern run --probe-dir`（按 label 后缀取 call 的输出）。
 
-**验证**（GB300，Qwen3-4B + DSpark，docs 段落做 prompt，128 token）：
-conc=1 与 `kern run --spec` 逐字节一致；接受率 conc=1 20.8%、conc=32
-19.2%（2.4 / 2.3 tok/round）；不同 bs 之间的输出分叉率与普通模式的
-`decode` vs `decode_batch` 对照组同量级（都是 bucket 变化 + bf16
-near-tie）。吞吐：conc 1 / 8 / 32 ≈ 600 / 2560 / 5850 tok/s，普通模式
-353 / 2048 / 6800——这组 prompt 上交叉点在 bs 16–32。
+**验证**（tray03 GB300，2026-09-03，docs 段落做 prompt、512 token、
+`ignore_eos`；stats 是 5 s 窗口的均值，取 running 最多的一条）：
+
+| | conc1 == `kern run` | conc32 吞吐 | conc32 接受率 | 2026-09-01 基线 |
+|---|---|---|---|---|
+| qwen3-4b-dspark（rows 7，`--capacity 65536`） | 逐字同（683 tok/s，2.29 tok/step） | 5930 tok/s（32×512，含 prefill） | 3.02 tok/step、34%（running=22 的窗口） | conc32 5850 tok/s、19.2%（128 token） |
+| qwen3.8-27b-dflash2（rows 8） | 逐字同（114 tok/s，1.75 tok/step） | 1709 tok/s | 2.65 tok/step、24%（running=32） | conc32 1236 tok/s |
+
+512 token 的中文散文有几条掉进重复循环（一条 dspark conc1 接受 71%），
+接受率偏高是它们抬的；不塌就是门禁。conc1 与 `kern run` 的对照 prompt
+是英文 96 token（"In the summer of 1848…"），tok/s 是 `kern run` 的。
+v3 的分相路径（host 轮流调 draft / verify / precompute，dspark 8 行
+verify）：conc1 20.8% / conc32 19.2%，conc 1 / 8 / 32 ≈ 600 / 2560 / 5850
+tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有重测。
 
 ## 前缀缓存（K1，2026-09-02）
 
@@ -207,17 +214,16 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   终身不变，后代（checkpoint、parked、wake 回来的）都跟着它——页在那张卡上，pinned
   块绑在那张卡的 NUMA 节点上。
 - **`Prefix` 按 tray 键**：`Prefix<Snapshot, Sleeping>`，键还是 token 哈希链、与卡无关。
-- **staging 按 manifest 的形状**：`rows` var 存在即 tray 批；`token_ids [rows]` /
-  `kda.line_index [lines, rows]` / `next_token [rows]` 跨组（本卡的行先、再按组序轮到
-  其它成员的块，collective 假定的布局），`slot_mapping [tokens]` / `seq_lens [seqs]` /
-  `block_table [seqs, n]` 是本卡自己的行；qwen 的契约（全部 `tokens` / `seqs`）是 t=1
-  的特例，同一条代码。bucket 对整个 tray 取一次（行最多的 rank 决定），每卡各自 pad
+- **staging 按 fill 的轴**：fill 或 line 表跨过的第三个 var 就是 tray 轴（k3 的
+  `rows`）；tray 轴上的 token fill / line 表 / tokens 输出跨组（本卡的行先、再按组序轮到
+  其它成员的块，collective 假定的布局），行轴 / 组轴上的 slot / seq_len / 页表是本卡自己
+  的行；qwen 的契约（没有 tray 轴）是 t=1 的特例，同一条代码。bucket 对整个 tray 取一次（行最多的 rank 决定），每卡各自 pad
   到 b，pad 页每卡一页。`Staged` 借住 `&mut Tray` 直到输出读完，中间不能 lease / fork /
-  再 stage。manifest 有 `tp_err` 输出时每步读一次，非零即该步失败。
+  再 stage。manifest 有 `error` fill 的输出时每步读一次，非零即该步失败。
 - **K3 没有 prefill program**：`prefill` 可选；没有时 prompt 在 prefix 命中之外的部分
   逐 token 走 decode 步（该行的输出在最后一个 prompt token 进去之前丢掉），正确但 12.9k
-  的 prompt 要 12.9k 步——真正的 prefill 是 K5 的事。`decode_batch` 也可选，没有时 b>1
-  也走 `decode`。`--spec` 限一个 rank。
+  的 prompt 要 12.9k 步——真正的 prefill 是 K5 的事。b>1 走形状包含 `(b, 1)` 的 program 里
+  `groups` 上界最紧的那个；没有 chunk program 时 `--rows` 只能是 1。
 - 权重按 rank：kern.toml 的 `weights` 里 `{ep}` / `{tp}` 换成该 rank 在组里的下标，文件
   名里的 `*` 按名字序展开（`dense-tp4/r{tp}/l*.safetensors`），mmap 不读入。
   `--capacity` / `--host-gib` / `--max-seqs` 都是 per rank。

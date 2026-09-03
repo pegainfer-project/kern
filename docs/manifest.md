@@ -1,4 +1,4 @@
-# Manifest 格式（schema_version 3）与 Verifier
+# Manifest 格式（schema_version 4）与 Verifier
 
 Model provider 交付 `manifest.json + kernels/ + weights`，runtime 负责：
 加载时像 rustc 一样苛刻地校验 manifest，运行时按声明闭眼执行。runtime
@@ -27,14 +27,13 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
 顶层平铺，全部名字唯一、引用必须解析、不允许未知字段：
 
 ```json
-{ "schema_version": 3, "model": "qwen3.8-27b", "spec": {"block": 8, "mask_token": 248070},
+{ "schema_version": 4, "model": "qwen3.8-27b",
   "topology": {"groups": {"ep": 4}},
   "vars": …, "states": …, "buffers": …, "modules": …, "ops": …, "programs": … }
 ```
 
-- `schema_version`：wire format 版本，只认 3。`model`：标签，runtime
-  不赋予含义。`spec`（可选）：投机解码的 caller 契约（draft 行数、mask
-  token），runtime 不解释，driver 读。
+- `schema_version`：wire format 版本，只认 4。`model`：标签，runtime
+  不赋予含义（kern-serve 用它做对外的模型名）。
 - `vars`：caller 每次调用时提供的标量（如 `tokens`），声明 `max`，下界
   恒为 1；所有静态校验在界上进行，运行时拒绝越界值。**会改变内存尺寸或
   launch 几何的标量才是 var**；别的标量（temperature 之类）是数据，走
@@ -47,7 +46,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
   传给 provider 自己的 kernel。state 一律走 VMM 分配（`cuMemCreate` +
   reserve + map），设备支持时带 fabric handle，所以 `peer` buffer 可以
   `of` 一个 state（P/D push、跨 rank 读 KV 的入口）。
-- `buffers`：`dtype + shape + kind`。shape 维度是常量或 var 名；kind 说
+- `buffers`：`dtype + shape + kind`，可选 `domain`（内容的先验，见下）与
+  `fill`（在 serving 循环里的角色，见「Serving 协议」）。shape 维度是常量或 var 名；kind 说
   的是"谁供应、活多久"：`input`（runtime 写入）/ `output`（runtime 读回）
   / `weight`（按名从权重文件绑定）/ `workspace`（runtime 规划，跨次执行
   不保留）/ `carry`（一个 program 写、另一个 program 读的交接棒，跨次
@@ -114,7 +114,9 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     需要 `module`、`entry`、`block`、`grid` 四个字段；两段式 argmax、
     vLLM attention（unified + reduce_segments）这类"一个逻辑算子 = 多次
     launch + 私有中间缓冲"整体折叠成一个 impl，不向调用方泄漏。
-- `programs`：每个 program（如 `prefill`/`decode`）是一段顺序 call 列表：
+- `programs`：每个 program（如 `prefill`/`decode`）是
+  `{"batch"?, "once"?, "calls": [...]}`——`batch` / `once` 说它怎么被
+  serving 循环调（见「Serving 协议」），`calls` 是一段顺序 call 列表：
   `op` 名 + 接口实参（buffer/state 实参可带字节 `offset`，默认 0：kernel
   收到 base+offset——provider 用它寻址融合 buffer 里的视图如 qkv 的
   q/k/v 切片、state 里的逐层区域，offset 是 provider 布局算术的字面量，
@@ -146,10 +148,10 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
                                 "args": [{"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 1}, {"i32": 64}] } ] } }
 },
 "programs": {
-  "decode": [
+  "decode": { "batch": {"groups": 1, "rows": 1}, "calls": [
     { "label": "embed", "op": "embedding", "args": [{"buf": "token_ids"}, {"buf": "model.embed_tokens.weight"}, {"buf": "residual"}, {"var": "tokens"}, {"i32": 5120}] },
     …
-    { "label": "sample", "op": "argmax_row", "args": [{"buf": "logits"}, {"buf": "next_token"}] } ] }
+    { "label": "sample", "op": "argmax_row", "args": [{"buf": "logits"}, {"buf": "next_token"}] } ] } }
 ```
 
 **ABI 常量属于 impl，不属于接口。** 挖矿来的 kernel 带着一堆
@@ -227,7 +229,7 @@ torch 扩展 .so）：runtime 剖开 ELF 取 `.nv_fatbin` 里的设备代码逐�
 挖矿基线逐字节一致。
 
 **Wire format 的 ground truth 是 `kern-manifest` 的 Rust 类型**（parser
-即法律）；`schema/manifest-v3.schema.json` 是它生成的可发布投影
+即法律）；`schema/manifest-v4.schema.json` 是它生成的可发布投影
 （`cargo run -p kern-manifest --example gen_schema`，CI golden 检查防
 漂移），给生成器/agent 当形状契约用。
 
@@ -240,7 +242,7 @@ schema 页开头就是它，测试保证它永远过 verifier）；真实样例�
 `tools/gen_qwen3_decode.py` → `examples/qwen3-4b.json`
 （Qwen3-4B，两个 program：`prefill` 433 call / `decode` 436 call，真实
 挖矿 ABI）与 `examples/qwen3-4b-dspark.json`（同上 + DSpark 投机解码：
-六个 program，target+draft 权重同处一份 manifest，见
+target+draft 权重同处一份 manifest，多一个 7 行的 `round` program，见
 [spec-decode.md](spec-decode.md)）。
 
 **故意留下的重复**：64 层展开成 64×26 个 call（decode 742 个 call 里
@@ -249,6 +251,50 @@ verifier 按 call 查都靠展开；weight buffer 的 dtype/shape 与 safetensor
 header 重复——没有权重文件也要能 verify。冗余在 manifest 不在 schema，
 "源码"是生成器。
 
+## Serving 协议：`fill`、`batch`、`once`
+
+runtime 之上还有一层契约：一个 serving 循环（`kern run`、kern-serve 的
+scheduler）怎么调这份 manifest——哪个 buffer 装 token、哪个装 slot、哪个
+program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller 的代码里
+（按 `token_ids` / `prefill` 这些名字找），v4 把它搬进 manifest，三个声明，
+闭集、填空模板、不是语言：
+
+- **buffer 上的 `fill`**：这个 buffer 在循环里的角色。input：`token`
+  （每行一个；形如 `[seqs]` 时每组一个，即投机轮的 anchor）、`position`、
+  `slot`、`seq_len`、`cu_seqlens`；output：`tokens`（`[seqs]` 每组一个，
+  `[seqs, r]` 每行一个）、`count`（每组取几个，缺省恒 1）、`error`
+  （非零即该步失败，tray 的 allreduce 用）。fill 只许落在 input / output
+  的 i32 / i64 buffer 上，与 `domain` 平级可共存；caller 按 buffer 的
+  dtype 编码，不写死 i64 / i32。页表和 line 表不加 fill：`index_into`
+  一个 state 本来就是它。没有 buffer 要 `position`，caller 就不写。
+- **program 上的 `batch`**：`{"groups": 上界, "rows": 精确行数 | 一个 var
+  名}`——这个 program 接受"几组、每组几行"的调用。`rows` 是精确值（round
+  的 7 行是 mask 布局，喂 3 行就是错的）；是 var 名（`"tokens"`）时只能
+  一组，行数就是这次调用的 var 值（prefill 的 chunk 随末块变短）。没有
+  `batch` 的 program 不被循环驱动（attest 按段切的材料、k3 的单层 MoE
+  测试）。
+- **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
+  allreduce 的 poison 值）。与 `batch` 互斥。
+
+轴全部从 fill 派生：行轴的 var 是 `slot` fill 的维（`tokens`），组轴的
+var 是 `seq_len` fill 的维（`seqs`），fill 或 line 表跨过的第三个 var 是
+tray 轴（k3 的 `rows`）；manifest 里没有一个名字是 caller 认得的。派生
+这层的是 `kern_manifest::Protocol::check(&Manifest)`（纯函数，不碰 GPU，
+verify 之后的第二遍）：每个 fill 至多一个 buffer、形状与角色相符、
+`[seqs, r]` 的 `tokens` 的 r 是某个 `batch` 的 `rows`、`count` 只在有它时
+合法、两个 program 不得同形状、`groups × rows ≤ tokens.max`、至少一个
+`batch` program。得到的 `Protocol` 是只读投影：`forward(groups, rows)`
+选形状包含 `(b, r)` 的 program 里 `groups` 上界最紧的那个，`chunk()` 是
+接受 `(1, var)` 的那个，`env(b, per, t)` 是一次调用的 var 表，每个
+`Filled` 带 dtype 与轴，每个 `Forward` 知道自己 emit 不 emit token、按哪
+个 `count` 取。`kern verify <manifest>` 打印这层事实；kern-run 与
+kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证它们
+的代码里没有 fill / program / var / buffer 的名字面量）。
+
+一步的形状因此统一：prefill 是"1 组 c 行"，decode 是"b 组 1 行"，投机轮
+是"b 组 r 行、每组取 `count` 个"——同一段代码，`--rows` 选每组行数（缺省
+取 manifest 声明的最宽）。设计与取舍见 [v4-design.md](v4-design.md)。
+
 ## Verifier（`kern-manifest`）
 
 `verify()` 收集全部错误一次报告（`VerifyErrors`）：
@@ -256,7 +302,9 @@ header 重复——没有权重文件也要能 verify。冗余在 manifest 不�
 1. `schema_version`；
 2. var `max ≥ 1`；
 3. state 恰有 `bytes_per_token` / `bytes_per_seq` / `bytes` 之一非零；
-4. buffer shape 解析、字节数在 var 上界下不溢出；domain（若有）自洽：
+4. buffer shape 解析、字节数在 var 上界下不溢出；`fill`（若有）落在
+   input / output 的 i32 / i64 buffer 上，input 角色对 input、output 角色
+   对 output；domain（若有）自洽：
    界的类型对得上 dtype、`index_into` 指向存在的 buffer/state、
    `index_into` 与 min/max 互斥、`monotone` 只许一维、min ≤ max 在
    var 两端成立；
@@ -274,7 +322,9 @@ header 重复——没有权重文件也要能 verify。冗余在 manifest 不�
 9. 逐 program 数据流：禁止读未写（read-before-write）、禁止写 input/
    weight；output / carry 必须被**某个** program 写到（prefill 这类只落
    state 的 program 合法地不写任何 output；carry 在每个 program 内视为
-   已写——它的生产者是另一个 program）；
+   已写——它的生产者是另一个 program）；program 的 `once` 与 `batch`
+   互斥，`batch.groups ≥ 1`、`rows` 是 ≥ 1 的常量或已声明的 var（fill 之间
+   是否凑成一份 serving 契约是 `Protocol::check` 的事，不在这里）；
 10. 拒绝一切未使用的声明（buffer / op / module / state / var / topology
     group）；
 11. 多卡：组大小 > 0；`peer` buffer 必须 `dtype: u64`、shape 恰为
@@ -309,6 +359,20 @@ runtime crate 的 phase-2 校验。唯一一条 runtime 替 verifier 查的 kern
 地址会把发起的 GPU 卡死到整机重启（GB300 实测），而 verifier 看不见
 SASS。簇内 barrier 的 `UTCBAR.2CTA.MULTICAST` 不碰全局内存，放行
 （MegaMoE 用它）。没有 cuobjdump 就拒绝装载。
+
+## 从 v3 到 v4
+
+serving 协议进 manifest：buffer 加 `fill`（闭集，见上），program 从
+`[call…]` 变成 `{"batch"?, "once"?, "calls": [...]}`，顶层 `spec` 块删除
+（`block` 就是 round 的 `rows`，`mask_token` 是 `splice_draft` 的字面量
+实参）。caller 侧不再认 `token_ids` / `prefill` / `decode_batch` /
+`seqs` / `tokens` 这些名字：`Verified`（verify 过的 manifest 的 newtype，
+`Runtime::load` 只收它）与 `Protocol`（fill / batch 派生的投影）取代了
+kern-run 的 `Contract`、kern-serve 的 `SpecPlan`、`first_token` /
+`prefill_emits` 嗅探和三处重复的 JSON 解析。投机解码从"host 轮流调
+draft / verify / precompute"变成一个 `round` program（dspark 也补了：
+splice、接受计数、line 表推进都在设备上），`--spec` → `--rows`。golden
+重生成，无兼容层。落地记录见 [v4-design.md](v4-design.md) §9。
 
 ## 从 v2 到 v3
 

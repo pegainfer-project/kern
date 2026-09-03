@@ -1,13 +1,16 @@
-# DSpark 投机解码（`kern run --spec`）
+# DSpark 投机解码（`kern run qwen3-4b-dspark`，7 行的 `round`）
 
 draft 也是个 model，但**不是新的 schema 概念**：`examples/qwen3-4b-dspark.json`
 是一份 manifest，target+draft 权重（`draft.` 前缀）、第二个 KV state、
-六个 program（prefill/decode/decode_spec/verify/draft/draft_precompute）。
+四个 program：prefill / decode / decode_batch（plain 的形状，也是无损
+oracle 的夹具）与 `round`（`batch: {groups: 256, rows: 7}`，整轮一张图）。
 draft = deepseek-ai/dspark_qwen3_4b_block7（5 层 DFlash 并行 block draft +
-Markov 顺序头，块长 7）。**新增手写核零个**（repo 手写核总数仍是 2：
-embedding / argmax，都是 decode 路径原有的）——draft 与 target 几何完全
-同构，grid 是 tokens 的表达式，5 层 forward 以 env tokens=7、verify 以
-tokens=8 复用同一批 op；新增 op 全是布线/常量差异。
+Markov 顺序头，块长 7）。**模型算子零新增手写核**（embedding / argmax 是
+decode 路径原有的；v4 把 host 的拼接与前缀匹配搬进设备，多了
+`tools/kernels-src/spec_round.cu` 的五个几十行的小核：splice_draft /
+splice_verify / spec_count / spec_lines / ones_i32，与模型无关）——draft
+与 target 几何完全同构，grid 是 tokens 的表达式，5 层 forward 与 verify
+都以 env tokens=7 复用同一批 op；新增 op 全是布线/常量差异。
 
 Markov 头怎么落到既有核上（`membed=markov_w1[prev]`、
 `logits_i = base_logits[i] + markov_w2 @ membed`、`argmax`，
@@ -45,10 +48,16 @@ elementwise add 由 β=1 一次做完**（`C[1,V] += membed@markov_w2^T`，C 直
   embedding_row 取 `markov_w1[prev]` → gemm_acc 把 markov_w2 偏置累进该行
   base logits → argmax_row 出 draft token 喂下一步。argmax 核天然多行
   （grid.x=行号），verify 的 8 行 argmax 就是既有 kernel 换 env。
-- caller 侧一轮（`kern run --spec`）：draft（graph）→ 读 7 token → verify
-  （graph，[anchor,d0..d6]）→ 读 8 预测 → 前缀匹配接受 → precompute
-  接受行（eager，17 call）→ 滚动。回滚免费：paged KV 槽位=position，
-  被拒绝的槽下一轮直接覆写。
+- 一轮 = `round` program（v4）：`splice_draft`（anchor + mask×6 →
+  `draft_ids`）→ draft（7 行非因果）→ `splice_verify`（anchor + d0..d5 →
+  `verify_ids`）→ verify（7 行因果）→ precompute 在 verify 的 7 行上 →
+  `spec_count`（前缀匹配，`nacc` 输出 = 这轮取几个）；一张图一次 sync，
+  caller 只 stage 7 行、读 `verify_tokens[..nacc]`。第一个 token 由
+  prefill 自己出（尾部 `last_row` → lm_head m=1 → argmax，再 precompute
+  整个 chunk）。回滚免费：paged KV 槽位=position，被拒绝的槽下一轮直接
+  覆写。v3 的分相路径（draft → 读 7 token → verify 8 行 → 读 8 预测 →
+  host 前缀匹配 → precompute 接受行）是 7 个 draft；round 同宽 7 行、6 个
+  draft，每轮最多取 7 个。
 
 **实测（GB300）**："The capital of France is" 32 token：**逐字节等于普通
 decode**（无损 oracle：greedy 投机不改变输出，接错任何 tap/头只会掉接受
@@ -58,7 +67,12 @@ token，3 块 chunked prefill + spec）1.68 token/轮 vs vLLM 本尊同 prompt
 1.78——draft 布线质量与 vLLM 持平。观测到一次输出分叉（" actions" vs
 " trespass"）：HF 参考实现 top-2 logit 29.125/28.625，bf16 下 2–4 ulp 的
 真平局，verify（m=8）与 decode（m=1）归约顺序不同翻了个 near-tie——vLLM
-的批量 verify 有同样性质，无损保证 modulo bf16 平局。
+的批量 verify 有同样性质，无损保证 modulo bf16 平局。v4 的 7 行 round
+（2026-09-03）：同 prompt 32 token 与 plain 逐字同，3.56 token/轮、44%
+接受、3.27 ms/轮 ≈ **1087 tok/s**（plain 390）；96 token 的散文 prompt
+在第 19 个 token 处与 v3 的 8 行 verify 分叉，plain 在该位 top-1/top-2
+差 0.125（bf16 一个 ulp），m=7 与 m=8 的 GEMM 各翻一边，见
+v4-design.md §9。
 
 ```bash
 # capture 投机路径（draft 非因果实例 + precompute + verify）
@@ -69,5 +83,6 @@ CUDA_VISIBLE_DEVICES=0 tools/capture_qwen3_spec.sh   # -> dumped-kernels/pid<M>/
 # 合并权重（target + draft.*，fc 按列切块、markov 头原样）
 .venv/bin/python tools/export_weights.py             # -> weights/qwen3-4b-dspark.safetensors
 ./target/release/kern run --manifest examples/qwen3-4b-dspark.json \
-  --weights weights/qwen3-4b-dspark.safetensors --spec --steps 320
+  --weights weights/qwen3-4b-dspark.safetensors --steps 320   # 缺省 7 行 round；--rows 1 是 plain
+./target/release/kern verify examples/qwen3-4b-dspark.json    # 打印协议：fill、forward 形状、emits / count
 ```

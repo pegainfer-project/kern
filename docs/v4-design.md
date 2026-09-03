@@ -292,3 +292,59 @@ round 两个 program。
 - CI：`crates/kern-serve` 和 `crates/kern-run` 里 grep 不到
   `"token_ids"` / `"prefill"` / `"decode_batch"` 等任何 fill 或 program
   名字面量。这条是机器能查的，进 CI 不进 CLAUDE.md。
+
+## 9. 落地记录（2026-09-03，tray03）
+
+按 §8 的顺序落地。与设计稿不同的决定：
+
+- **`once`**：k3 的 `tp_init`（allreduce 的 poison 预填）不是 forward
+  也不是 attest 材料，装载后跑一次即可。program 多一个 `once: true`，
+  与 `batch` 互斥；runtime 不解释它，`Protocol.once` 列出来由 caller
+  在 peers 导入之后跑。
+- **`error` fill**：tray 的 `tp_err` 输出以前靠名字认，现在是
+  `fill: "error"`，非零即该步失败。
+- **`Protocol::check(&Manifest)`**：`Verified` 只是 `Deref` 到
+  `Manifest` 的 newtype，Protocol 在类型上不要求它——verify 与 Protocol
+  各证各的，单元测试用小夹具直接构造 Protocol。`Runtime::load` 仍只收
+  `&Verified`。
+- **轴从 fill 派生**：不认 `seqs` / `tokens` 名字。行轴 = `slot` fill
+  的 var，组轴 = `seq_len` fill 的 var，fill 或 line 表跨过的第三个 var
+  是 tray 轴（k3 的 `rows`）。§4 写的"`seqs` / `tokens` 界"就是这两个。
+- **dspark 的 round 是 7 行**（`[anchor, d0..d5]`，6 个 draft），不是
+  设计稿说的"draft 补一行"：draft 与 verify 同宽最省事，头一行是
+  anchor，verify 少看一个 draft，每轮最多取 7 个而非 8 个 token。
+- **prefill 收编 precompute 与 head**：dspark 的 prefill 尾部加
+  `last_row`（把末行 hidden 拷成 `[1, H]`）→ lm_head GEMM（m=1）→
+  `argmax_row`，再跑 precompute 把整个 chunk 的 tap 写进 draft KV；第一
+  个 token 从 prefill 来（`Forward.emits`），`decode_spec` 与
+  `first_token()` 一起消失。
+- **GDN 的常量 nacc**：qwen3.8 的 `decode` 与 round 里的 draft 用同一批
+  "按接受数推进"的核，1 行时推进数恒为 1——`nacc_one` carry 由
+  `ones_i32` 核在 program 开头写 1，不要 host 写常量的 input。
+- **`kern verify <manifest>`** 子命令：打印 Protocol 的全部事实（行 /
+  组 / tray 界、每个 fill 的 buffer 与轴、页表、line 表、每个 forward
+  的形状与 emit / count、once 列表），协议不成立退出 1。
+- **`--spec` → `--rows`**（kern run、kern-serve 同名）：每组行数，缺省
+  取 manifest 声明的最宽，`--rows 1` 就是 plain decode。kern-serve 的
+  `Plan::check`（rows ≤ 页、rows − 1 ≤ 前端计数器上限、rows > 1 要有
+  chunk program、`max_seqs` 按 `tokens.max / rows` 与 `groups` 上界收
+  紧）在装权重之前算好；`step()` 一段代码，headroom = rows − 1。
+
+门禁（tray03 GB300，2026-09-03）：
+
+- `kern test qwen3-4b` PASS，logits 位一致；`kern run` qwen3-4b /
+  qwen3.8-27b 输出与 v3 binary 逐字节同（2.6 / 11.7 ms/step）。
+- kern-serve conc1 与 `kern run` 逐字同：qwen3-4b、qwen3-4b-dspark
+  （rows 7）、qwen3.8-27b-dflash2（rows 8）。
+- dflash2 rows 8 的输出与 v3 `--spec` 逐字节同（1.75 tok/step，接受
+  10.4%，114 tok/s vs 110）。
+- dspark rows 7 与 v3 `--spec`（8 行 verify）在第 19 个 token 分叉
+  （"who had" / "who was"）：plain decode 在该位 top-1/top-2 的 bf16
+  logit 差 0.125，verify 的 GEMM 从 m=8 变 m=7 翻了个近平局；`--rows 1`
+  与 plain 逐字同，"The capital of France is" 32 token 与 plain 逐字同
+  （3.56 tok/step、44% 接受、1087 tok/s；v3 分相 3.44 / 38% / 948）。
+  按 CLAUDE.md 的门禁判为核噪声。
+- 接受率不塌：serve.md 投机一节的表（conc32 34% / 24%）。
+- `kern verify examples/k3-ep4.json` 报的是协议事实，不是"缺 prefill"。
+- CI：kern-run / kern-serve 非测试代码 grep 不到任何 fill / program /
+  var / buffer 名字面量。

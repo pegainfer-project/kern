@@ -3,6 +3,19 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-03，v4 投机轮
+
+**"旧路径与 plain 逐字同、新路径不同"不等于新路径有 bug。** dspark 的 verify 从 8 行改
+7 行后，96 token 的散文在第 19 个 token 处分叉；先用 `kern run --probe-dir` dump plain 在
+该位的 logits：top-1/top-2 差 0.125（bf16 一个 ulp）。cuBLAS 按 m 选核，m=8 与 m=7 各翻
+一边，旧路径与 plain 的"逐字同"本来就是运气。规则：**分叉先读 margin 再定性**
+（CLAUDE.md 门禁那句），margin ≤ 几个 ulp 就记进 docs 当核噪声，不追。
+
+**压测 prompt 的散文要够长、够多样，报接受率要看窗口。** 512 token 的中文 docs 段落有
+几条掉进重复循环（"用 `--show-raw` 显示原始数据。"×N），那条的接受率 71%；wall-clock 的
+tok/s 按 `usage.completion_tokens` 算，不按 `max_tokens` 算。规则：
+**报数字注明 prompt 集与窗口（running 多少）**，接受率异常高先看输出是不是循环。
+
 ## 2026-09-03，M1 MLA decode 核换成 CuTe DSL 预编译核
 
 **LD_PRELOAD 钩 `cuLaunchKernelEx` / `cuTensorMapEncodeTiled` 抓不到 CuTe DSL 的启动。**

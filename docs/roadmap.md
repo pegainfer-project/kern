@@ -36,6 +36,12 @@ E1–E2 与 K1–K2 并行；E3、K3；然后 **E5**（每步省 12 ms，先于 
 K4 改成按新 token 分段的 extend（待定稿）；E4 最后，其门禁按它实际买到的东西重写
 （agent 负载下成员不变的步很少）。E4 依赖下面的 step 边界 GPU 化。
 
+## 协议线
+
+| 级 | 内容 | 门禁 |
+|---|---|---|
+| V4 ✅ | serving 协议进 manifest（schema v4，设计 v4-design.md）：buffer 的 `fill`、program 的 `batch` / `once`，`spec` 块删除；`Verified` newtype + `Protocol::check` 投影，kern-run / kern-serve 不读 JSON、不认名字（CI grep）；投机轮统一成 `round` program（dspark 也补了：splice / 计数 / prefill 收编 head 与 precompute 全在设备上），`--spec` → `--rows`；`kern verify` 打印协议事实 | **2026-09-03 tray03 通过**：`kern test` 位一致；qwen3-4b / qwen3.8-27b / dspark / dflash2 四份 conc1 与 `kern run` 逐字同；dflash2 与 v3 `--spec` 逐字节同；dspark 7 行 round 在一个 0.125 的 bf16 平局上与 v3 的 8 行 verify 分叉（核噪声）；conc32 接受率 34% / 24% 不塌，5930 / 1709 tok/s。记录 v4-design.md §9、serve.md |
+
 ## 单卡遗留（未做）
 
 - capture 补 launch→module id 映射（unified 双实例现靠 num_regs+cuobjdump
