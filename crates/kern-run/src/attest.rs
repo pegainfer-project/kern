@@ -35,11 +35,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::config::{Config, Target};
-use crate::{env, Caller, DECODE_LIKE, DRIVEN, TOKENS};
+use crate::{Caller, Env};
 use anyhow::{bail, Context, Result};
 use clap::Args;
+use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, BufferKind, Call, DType, Dim, Dir, Manifest, ParamType, Provision};
-use kern_manifest::verify;
+use kern_manifest::{Protocol, Verified};
 use kern_runtime::{values, Runtime};
 use serde_json::{json, Value};
 
@@ -214,19 +215,26 @@ struct Workload {
     how: &'static str,
 }
 
-fn sample_workload(o: &Opts, m: &Manifest, p: Provision, page: u64, prompt: Option<Vec<i64>>) -> Result<Workload> {
+fn sample_workload(
+    o: &Opts,
+    m: &Manifest,
+    pr: &Protocol,
+    p: Provision,
+    page: u64,
+    prompt: Option<Vec<i64>>,
+) -> Result<Workload> {
     let capacity = p.tokens;
     let mut rng = Rng(o.seed ^ 0x776f_726b_6c6f_6164);
-    let tmax = m.vars[TOKENS].max.max(1);
-    let vocab = m
-        .buffers
-        .get("token_ids")
-        .and_then(|b| b.domain.as_ref())
-        .map(|d| d.resolve(m, &env(1), &p))
+    let tmax = pr.rows.max.max(1);
+    let tokens = &pr.token_rows().name;
+    let vocab = m.buffers[tokens]
+        .domain
+        .as_ref()
+        .map(|d| d.resolve(m, &pr.env(1, 1, 1), &p))
         .transpose()?
         .and_then(|r| r.hi)
         .map(|hi| hi as u64 + 1)
-        .ok_or_else(|| anyhow::anyhow!("`token_ids` has no domain to take the vocabulary from"))?;
+        .ok_or_else(|| anyhow::anyhow!("`{tokens}` has no domain to take the vocabulary from"))?;
     let steps =
         if o.decode_steps <= 1 { 1 } else { o.decode_steps / 2 + rng.below(o.decode_steps - o.decode_steps / 2 + 1) };
     let hi = capacity.saturating_sub(steps).max(1);
@@ -237,6 +245,7 @@ fn sample_workload(o: &Opts, m: &Manifest, p: Provision, page: u64, prompt: Opti
     }
     .clamp(1, tmax);
     let (n_pre, how) = match &prompt {
+        _ if pr.chunk().is_none() => (0, "no chunk program"),
         Some(p) => {
             anyhow::ensure!(
                 p.len() as u64 <= hi,
@@ -458,7 +467,7 @@ struct Access {
 
 fn access(m: &Manifest, prog: &str, lo: usize, hi: usize) -> Access {
     let mut acc = Access::default();
-    for c in &m.programs[prog][lo..hi] {
+    for c in &m.programs[prog].calls[lo..hi] {
         let op = &m.ops[&c.op];
         for (arg, p) in c.args.iter().zip(&op.params) {
             match (arg, p) {
@@ -490,7 +499,7 @@ fn access(m: &Manifest, prog: &str, lo: usize, hi: usize) -> Access {
 fn frontier_inputs(m: &Manifest, prog: &str, lo: usize, hi: usize) -> BTreeSet<String> {
     let mut written = BTreeSet::new();
     let mut inputs = BTreeSet::new();
-    for c in &m.programs[prog][lo..hi] {
+    for c in &m.programs[prog].calls[lo..hi] {
         let op = &m.ops[&c.op];
         for (arg, p) in c.args.iter().zip(&op.params) {
             if let (Arg::Buf { buf, .. }, ParamType::Buf { dir, .. }) = (arg, p) {
@@ -789,8 +798,8 @@ fn restore_state(
     Ok(())
 }
 
-fn load_side(json: &str, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
-    let mut rt = Runtime::load(json, &o.kernels, o.gpu, Some(o.capacity), None)?;
+fn load_side(m: &Verified, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
+    let mut rt = Runtime::load(m, &o.kernels, o.gpu, Some(o.capacity), None)?;
     rt.load_weights(blobs)?;
     Caller::new(rt)
 }
@@ -1175,10 +1184,22 @@ fn execute(o: Opts) -> Result<i32> {
     let t_start = Instant::now();
     let ja = std::fs::read_to_string(&o.a).with_context(|| format!("reading {}", o.a.display()))?;
     let jb = std::fs::read_to_string(&o.b).with_context(|| format!("reading {}", o.b.display()))?;
-    let ma = Manifest::from_json(&ja)?;
-    let mb = Manifest::from_json(&jb)?;
-    verify(&ma).with_context(|| format!("A ({}) failed verification", o.a.display()))?;
-    verify(&mb).with_context(|| format!("B ({}) failed verification", o.b.display()))?;
+    let ma = Verified::from_json(&ja).with_context(|| format!("A ({}) failed verification", o.a.display()))?;
+    let mb = Verified::from_json(&jb).with_context(|| format!("B ({}) failed verification", o.b.display()))?;
+    let pa =
+        Protocol::check(&ma).with_context(|| format!("A ({}) does not fit the serving protocol", o.a.display()))?;
+    Protocol::check(&mb).with_context(|| format!("B ({}) does not fit the serving protocol", o.b.display()))?;
+    // What the workload drives: the chunk program over the prompt, then
+    // every fixed-rows forward in rotation (a caller may switch between
+    // them at any step: same state contract).
+    let chunk_f = pa.chunk().cloned();
+    let step_fs: Vec<Forward> = pa.forwards.iter().filter(|f| matches!(f.rows, Rows::Const(_))).cloned().collect();
+    let driven: Vec<&str> = chunk_f.iter().chain(&step_fs).map(|f| f.name.as_str()).collect();
+    let rows_of = |f: &Forward| match f.rows {
+        Rows::Const(r) => r,
+        Rows::Var => 1,
+    };
+    let env_of = |f: &Forward| pa.env(1, rows_of(f), 1);
     let mut report = json!({
         "a": o.a.display().to_string(), "b": o.b.display().to_string(),
     });
@@ -1234,17 +1255,17 @@ fn execute(o: Opts) -> Result<i32> {
             rows.push(row![pname.clone(), Cell::warn("only in A"), "skipped"]);
             continue;
         };
-        let segs = align(pa, pb, &changed);
+        let segs = align(&pa.calls, &pb.calls, &changed);
         let cuts: Vec<&Segment> = segs.iter().filter(|s| s.kind == Kind::Changed).collect();
         if cuts.is_empty() {
-            rows.push(row![pname.clone(), Cell::dim("identical"), format!("{} calls", pa.len())]);
+            rows.push(row![pname.clone(), Cell::dim("identical"), format!("{} calls", pa.calls.len())]);
             continue;
         }
         // Group cuts by shape: (A ops, B ops, reads, writes).
         let mut groups: BTreeMap<(String, String, String, String), usize> = BTreeMap::new();
         for s in &cuts {
-            let ka = pa[s.a.0..s.a.1].iter().map(|c| c.op.as_str()).collect::<Vec<_>>().join("+");
-            let kb = pb[s.b.0..s.b.1].iter().map(|c| c.op.as_str()).collect::<Vec<_>>().join("+");
+            let ka = pa.calls[s.a.0..s.a.1].iter().map(|c| c.op.as_str()).collect::<Vec<_>>().join("+");
+            let kb = pb.calls[s.b.0..s.b.1].iter().map(|c| c.op.as_str()).collect::<Vec<_>>().join("+");
             let ia = frontier_inputs(&ma, pname, s.a.0, s.a.1);
             let ib = frontier_inputs(&mb, pname, s.b.0, s.b.1);
             let wa = access(&ma, pname, s.a.0, s.a.1).writes;
@@ -1256,7 +1277,7 @@ fn execute(o: Opts) -> Result<i32> {
             let writes = wa.iter().cloned().collect::<Vec<_>>().join(", ");
             *groups.entry((ka, kb, reads, writes)).or_default() += 1;
         }
-        let shared = pa.len() - cuts.iter().map(|s| s.a.1 - s.a.0).sum::<usize>();
+        let shared = pa.calls.len() - cuts.iter().map(|s| s.a.1 - s.a.0).sum::<usize>();
         for (gi, ((ka, kb, reads, writes), n)) in groups.iter().enumerate() {
             let what = if ka == kb {
                 ka.clone()
@@ -1271,7 +1292,7 @@ fn execute(o: Opts) -> Result<i32> {
                 if gi == 0 { pname.clone() } else { String::new() },
                 Cell::bold(format!("{n} cut{}", if *n == 1 { "" } else { "s" })),
                 format!("{what}   {reads} → {writes}"),
-                Cell::dim(if gi == 0 { format!("{} calls, {shared} shared", pa.len()) } else { String::new() }),
+                Cell::dim(if gi == 0 { format!("{} calls, {shared} shared", pa.calls.len()) } else { String::new() }),
             ]);
         }
         segments.insert(pname.clone(), segs);
@@ -1311,7 +1332,7 @@ fn execute(o: Opts) -> Result<i32> {
         .collect::<Result<Vec<_>>>()?;
     let refs: Vec<&[u8]> = blobs.iter().map(Vec::as_slice).collect();
     let t = Instant::now();
-    let mut s = Sides { a: load_side(&ja, &o, &refs)?, b: load_side(&jb, &o, &refs)? };
+    let mut s = Sides { a: load_side(&ma, &o, &refs)?, b: load_side(&mb, &o, &refs)? };
     drop(blobs);
     let load_t = t.elapsed();
     let prompt_ids = match &o.prompt {
@@ -1324,8 +1345,7 @@ fn execute(o: Opts) -> Result<i32> {
         }
         None => None,
     };
-    let wl = sample_workload(&o, &ma, s.a.rt.provision(), s.a.rt.page(), prompt_ids)?;
-    let e1 = env(1);
+    let wl = sample_workload(&o, &ma, &pa, s.a.rt.provision(), s.a.rt.page(), prompt_ids)?;
     let cuts_of = |p: &str| -> Vec<Segment> {
         segments.get(p).map(|sg| sg.iter().filter(|s| s.kind == Kind::Changed).cloned().collect()).unwrap_or_default()
     };
@@ -1492,18 +1512,14 @@ fn execute(o: Opts) -> Result<i32> {
     };
     // `logits*` buffers a program writes: the end-to-end oracle.
     let logits_of = |prog: &str| -> Vec<String> {
-        access(&ma, prog, 0, ma.programs[prog].len())
+        access(&ma, prog, 0, ma.programs[prog].calls.len())
             .writes
             .into_iter()
             .filter(|n| n.starts_with("logits") && mb.buffers.contains_key(n))
             .collect()
     };
     // (run label, buffer, env, bytes)
-    let read_logits = |c: &Caller,
-                       prog: &str,
-                       e: &BTreeMap<String, u64>,
-                       label: &str|
-     -> Result<Vec<(String, String, BTreeMap<String, u64>, Vec<u8>)>> {
+    let read_logits = |c: &Caller, prog: &str, e: &Env, label: &str| -> Result<Vec<(String, String, Env, Vec<u8>)>> {
         logits_of(prog)
             .into_iter()
             .map(|n| {
@@ -1515,34 +1531,36 @@ fn execute(o: Opts) -> Result<i32> {
     let chunk = wl.chunk;
     let mut a_logits = Vec::new();
     let mut i = 0;
+    let chunk_name = chunk_f.as_ref().map_or("", |f| f.name.as_str());
     while i < pre.len() {
         let c = (pre.len() - i).min(chunk);
-        let e = s.a.stage_prefill(&pre[i..i + c])?;
-        s.b.stage_prefill(&pre[i..i + c])?;
+        let e = s.a.stage(&pre[i..i + c])?;
+        s.b.stage(&pre[i..i + c])?;
         sync_b(&mut s)?;
-        lockstep(&mut s, "prefill", &e, &format!("chunk {n_chunks} "), n_chunks == 0, 0)?;
-        a_logits.extend(read_logits(&s.a, "prefill", &e, &format!("prefill chunk {n_chunks}"))?);
+        lockstep(&mut s, chunk_name, &e, &format!("chunk {n_chunks} "), n_chunks == 0, 0)?;
+        a_logits.extend(read_logits(&s.a, chunk_name, &e, &format!("prefill chunk {n_chunks}"))?);
         s.a.advance(c as u64);
         s.b.advance(c as u64);
         i += c;
         n_chunks += 1;
     }
     let n_steps = wl.decode.len();
-    // Decode-step programs this manifest declares; the workload rotates
-    // through them step by step (a caller may switch between them at any
-    // step: same inputs at seqs=1, same state contract).
-    let decode_progs: Vec<&str> = DECODE_LIKE.into_iter().filter(|p| ma.programs.contains_key(*p)).collect();
-    let prog_of = |k: usize| decode_progs[k % decode_progs.len()];
+    // Every step stages the drawn token in a forward's rows at the cursor
+    // and advances one position: a wide forward's extra rows are
+    // overwritten by the next step, on both sides alike.
+    let prog_of = |k: usize| &step_fs[k % step_fs.len()];
+    let stage_step = |c: &mut Caller, f: &Forward, tok: i64| c.stage_rows(tok, rows_of(f));
     // A's state after prefill: the image every decode-step-0 replay starts from.
     let s0: BTreeMap<String, Vec<u8>> =
         shared_states.iter().map(|n| Ok((n.clone(), s.a.rt.read_state(n)?))).collect::<Result<_>>()?;
     for (k, &tok) in wl.decode.iter().enumerate() {
-        let p = prog_of(k);
-        s.a.stage_decode(tok)?;
-        s.b.stage_decode(tok)?;
+        let f = prog_of(k);
+        let e = env_of(f);
+        stage_step(&mut s.a, f, tok)?;
+        stage_step(&mut s.b, f, tok)?;
         sync_b(&mut s)?;
-        lockstep(&mut s, p, &e1, &format!("step {k} "), k < decode_progs.len(), 1)?;
-        a_logits.extend(read_logits(&s.a, p, &e1, &format!("step {k}"))?);
+        lockstep(&mut s, &f.name, &e, &format!("step {k} "), k < step_fs.len(), 1)?;
+        a_logits.extend(read_logits(&s.a, &f.name, &e, &format!("step {k}"))?);
         s.a.advance(1);
         s.b.advance(1);
     }
@@ -1557,18 +1575,19 @@ fn execute(o: Opts) -> Result<i32> {
     let mut nc = 0;
     while i < pre.len() {
         let c = (pre.len() - i).min(chunk);
-        let e = s.b.stage_prefill(&pre[i..i + c])?;
-        s.b.rt.run("prefill", &e)?;
-        b_logits.extend(read_logits(&s.b, "prefill", &e, &format!("prefill chunk {nc}"))?);
+        let e = s.b.stage(&pre[i..i + c])?;
+        s.b.rt.run(chunk_name, &e)?;
+        b_logits.extend(read_logits(&s.b, chunk_name, &e, &format!("prefill chunk {nc}"))?);
         s.b.advance(c as u64);
         i += c;
         nc += 1;
     }
     for (k, &tok) in wl.decode.iter().enumerate() {
-        let p = prog_of(k);
-        s.b.stage_decode(tok)?;
-        s.b.rt.run(p, &e1)?;
-        b_logits.extend(read_logits(&s.b, p, &e1, &format!("step {k}"))?);
+        let f = prog_of(k);
+        let e = env_of(f);
+        stage_step(&mut s.b, f, tok)?;
+        s.b.rt.run(&f.name, &e)?;
+        b_logits.extend(read_logits(&s.b, &f.name, &e, &format!("step {k}"))?);
         s.b.advance(1);
     }
     let free_t = t_free.elapsed();
@@ -1591,16 +1610,16 @@ fn execute(o: Opts) -> Result<i32> {
     let mut local_identical = true;
     let mut local_bit = true;
     let mut rows = Vec::new();
-    let undriven: Vec<String> = segments.keys().filter(|p| !DRIVEN.contains(&p.as_str())).cloned().collect();
+    let undriven: Vec<String> = segments.keys().filter(|p| !driven.contains(&p.as_str())).cloned().collect();
     for pname in ma.programs.keys().map(String::as_str) {
         let n_cuts = cuts_of(pname).len();
         if n_cuts == 0 || undriven.iter().any(|u| u == pname) {
             continue;
         }
-        let count = if pname == "prefill" && n_chunks > 1 {
+        let count = if pname == chunk_name && n_chunks > 1 {
             format!("{n_cuts} cuts × {n_chunks} chunks")
-        } else if decode_progs.contains(&pname) && n_steps > 1 {
-            let n = (0..n_steps).filter(|&k| prog_of(k) == pname).count();
+        } else if step_fs.iter().any(|f| f.name == pname) && n_steps > 1 {
+            let n = (0..n_steps).filter(|&k| prog_of(k).name == pname).count();
             format!("{n_cuts} cuts × {n} steps")
         } else {
             format!("{n_cuts} cuts")
@@ -1657,7 +1676,9 @@ fn execute(o: Opts) -> Result<i32> {
     let mut first = true;
     for (name, b) in &ma.buffers {
         if b.kind == BufferKind::Output && mb.buffers.contains_key(name) {
-            let bytes = live_bytes(&ma, name, &e1);
+            // The last step's env: what its outputs are live over.
+            let e_last = env_of(prog_of(n_steps.saturating_sub(1)));
+            let bytes = live_bytes(&ma, name, &e_last);
             let c =
                 compare(b.dtype, &s.a.rt.read_buffer_prefix(name, bytes)?, &s.b.rt.read_buffer_prefix(name, bytes)?);
             if !c.value_identical() {
@@ -1705,7 +1726,9 @@ fn execute(o: Opts) -> Result<i32> {
         )));
     }
     for p in &undriven {
-        sec.note(Cell::bad(format!("{p}: changed but not tapped — the workload driver only stages {DRIVEN:?}")));
+        sec.note(Cell::bad(format!(
+            "{p}: changed but not tapped — the workload drives only the programs with a `batch` ({driven:?})"
+        )));
     }
     r.section(&sec);
     report["local"] = json!({"value_identical": local_identical, "bit_identical": local_bit, "cuts": local_json,
@@ -2099,7 +2122,7 @@ fn execute(o: Opts) -> Result<i32> {
                         let bytes: usize = acc.reads.iter().map(|n| live_bytes(m, n, e)).sum::<usize>()
                             + acc.writes.iter().map(|n| live_bytes(m, n, e)).sum::<usize>();
                         state_traffic |= !(acc.state_reads.is_empty() && acc.state_writes.is_empty());
-                        let ent = per_kernel.entry(format!("{pname} · {}", m.programs[pname][i].op)).or_default();
+                        let ent = per_kernel.entry(format!("{pname} · {}", m.programs[pname].calls[i].op)).or_default();
                         ent[si].0 += bytes;
                         ent[si].1 += t[i];
                         ent[si].2 += 1;
@@ -2145,13 +2168,15 @@ fn execute(o: Opts) -> Result<i32> {
                 ]);
             };
         let n_cuts = |p: &str| cuts_of(p).len();
-        // each decode-step program at the position after the workload
-        for &p in &decode_progs {
+        // each fixed-rows forward at the position after the workload
+        for f in &step_fs {
+            let p = f.name.as_str();
             if n_cuts(p) == 0 || undriven.iter().any(|u| u == p) {
                 continue;
             }
-            s.a.stage_decode(*wl.decode.last().unwrap())?;
-            s.b.stage_decode(*wl.decode.last().unwrap())?;
+            let e1 = env_of(f);
+            stage_step(&mut s.a, f, *wl.decode.last().unwrap())?;
+            stage_step(&mut s.b, f, *wl.decode.last().unwrap())?;
             let st = step(&mut s, p, &e1, o.iters, true)?;
             let mut graph = None;
             if !o.no_graph_step {
@@ -2159,16 +2184,16 @@ fn execute(o: Opts) -> Result<i32> {
                 s.b.rt.capture(p, &e1)?;
                 graph = Some((s.a.rt.time_captured(p, &e1, 100)?, s.b.rt.time_captured(p, &e1, 100)?));
             }
-            push_step(&mut rows, &format!("{p}  {TOKENS}=1"), n_cuts(p), st, graph);
-            let mut j = json!({"tokens": 1, "eager_ms": {"a": st[0].0, "b": st[1].0, "b_derived": derived(st[0].0, st)}, "cut_ms": {"a": st[0].1, "b": st[1].1}});
+            push_step(&mut rows, &format!("{p}  rows={}", rows_of(f)), n_cuts(p), st, graph);
+            let mut j = json!({"rows": rows_of(f), "eager_ms": {"a": st[0].0, "b": st[1].0, "b_derived": derived(st[0].0, st)}, "cut_ms": {"a": st[0].1, "b": st[1].1}});
             if let Some((ga, gb)) = graph {
                 j["graph_ms"] = json!({"a": ga, "b": gb, "b_derived": derived(ga, st)});
             }
             perf_json.insert(p.into(), j);
         }
         // prefill: the tapped chunk length plus a sweep over the var range
-        if n_cuts("prefill") > 0 && !undriven.iter().any(|u| u == "prefill") {
-            let max = ma.vars[TOKENS].max;
+        if chunk_f.is_some() && n_cuts(chunk_name) > 0 && !undriven.iter().any(|u| u == chunk_name) {
+            let max = pa.rows.max;
             let tap_len = pre.len().min(chunk) as u64;
             let mut points: BTreeSet<u64> = [tap_len].into();
             if !o.no_sweep {
@@ -2190,11 +2215,11 @@ fn execute(o: Opts) -> Result<i32> {
                 let tid: Vec<i64> = (0..t).map(|_| rng.below(vocab) as i64).collect();
                 s.a.reset();
                 s.b.reset();
-                let e = s.a.stage_prefill(&tid)?;
-                s.b.stage_prefill(&tid)?;
-                let st = step(&mut s, "prefill", &e, if t == tap_len { o.iters } else { sweep_iters }, t == tap_len)?;
+                let e = s.a.stage(&tid)?;
+                s.b.stage(&tid)?;
+                let st = step(&mut s, chunk_name, &e, if t == tap_len { o.iters } else { sweep_iters }, t == tap_len)?;
                 if t == tap_len {
-                    push_step(&mut rows, &format!("prefill  {TOKENS}={t}"), n_cuts("prefill"), st, None);
+                    push_step(&mut rows, &format!("{chunk_name}  rows={t}"), n_cuts(chunk_name), st, None);
                 }
                 sw[0].push(Cell::from(us(st[0].0)));
                 sw[1].push(Cell::from(us(st[1].0)));
@@ -2207,12 +2232,12 @@ fn execute(o: Opts) -> Result<i32> {
             }
             sec.table_h(std::mem::take(&mut rows));
             if points.len() > 1 {
-                let mut hdr = row![format!("prefill · {TOKENS} =")];
+                let mut hdr = row![format!("{chunk_name} · rows =")];
                 hdr.extend(points.iter().map(|t| Cell::from(t.to_string())));
                 sw.insert(0, hdr);
                 sec.table_h(sw);
             }
-            perf_json.insert("prefill".into(), json!(sweep));
+            perf_json.insert(chunk_name.into(), json!(sweep));
         }
         if !rows.is_empty() {
             sec.table_h(rows);

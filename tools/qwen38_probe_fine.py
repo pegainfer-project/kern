@@ -36,7 +36,7 @@ def bf16(path):
     return torch.from_numpy(raw.view(np.int16)).view(torch.bfloat16)
 
 
-for step, tag in {0: "prefill", 1: "decode0", 2: "decode1"}.items():
+for step, tag in {0: "chunk", 1: "decode0", 2: "decode1"}.items():
     fine = vl["steps"][step].get("fine", {})
     print(f"== {tag}")
     for suffix, key in PAIRS:

@@ -1,4 +1,5 @@
-//! `kern`: run a manifest, test a kernel swap, gather cubins.
+//! `kern`: run a manifest, test a kernel swap, gather cubins, or say
+//! what a manifest declares without a GPU.
 //!
 //! Inputs come from flags, else from the nearest `kern.toml` (see
 //! `kern_run::config`). Targets are names the user picks there.
@@ -18,7 +19,7 @@ use kern_run::run::RunOpts;
 #[command(
     name = "kern",
     version,
-    about = "model-agnostic GPU runtime: run a manifest, test a kernel swap, gather cubins"
+    about = "model-agnostic GPU runtime: run a manifest, test a kernel swap, gather cubins, verify a manifest"
 )]
 struct Cli {
     /// kern.toml to use (default: the nearest one at or above the cwd)
@@ -49,6 +50,13 @@ enum Cmd {
     /// cubin pinned by each target's manifest and reference into its
     /// kernels dir, from `[kernels].dumps` and the builds
     Kernels { targets: Vec<String> },
+    /// Verify a manifest and print its serving protocol: the axes, every
+    /// fill, the tables, and the call shape each program accepts. No GPU.
+    /// Exit 1 when verification or the protocol fails
+    Verify {
+        /// Manifest JSON, or a target's when none is given
+        manifest: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -108,7 +116,80 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Kernels { targets } => kernels(cfg.as_ref(), &targets),
+        Cmd::Verify { manifest } => {
+            let path = match (manifest, &cfg) {
+                (Some(p), _) => p,
+                (None, Some(c)) if !c.targets.is_empty() => c.one(None)?.1.manifest.clone(),
+                _ => bail!("kern verify needs a manifest path or a kern.toml target"),
+            };
+            if !verify(&path)? {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
+}
+
+/// `kern verify`: verification, then the protocol, both reported in full.
+fn verify(path: &Path) -> Result<bool> {
+    use kern_manifest::protocol::{Axis, Rows};
+    let json = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let m = match kern_manifest::Verified::from_json(&json) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("{}: {e}", path.display());
+            return Ok(false);
+        }
+    };
+    println!("{}: `{}` schema v{}, verified", path.display(), m.model, m.schema_version);
+    let p = match kern_manifest::Protocol::check(&m) {
+        Ok(p) => p,
+        Err(e) => {
+            println!("{e}");
+            return Ok(false);
+        }
+    };
+    let axis = |a: Axis| match a {
+        Axis::Rows => format!("[{}]", p.rows.var),
+        Axis::Groups => format!("[{}]", p.groups.var),
+        Axis::Tray => format!("[{}]", p.tray.as_ref().map_or("tray", |t| t.var.as_str())),
+        Axis::Fixed(n) => format!("[{n}]"),
+    };
+    println!("  rows      `{}` <= {}", p.rows.var, p.rows.max);
+    println!("  groups    `{}` <= {}", p.groups.var, p.groups.max);
+    if let Some(t) = &p.tray {
+        println!("  tray      `{}` <= {}", t.var, t.max);
+    }
+    for f in &p.fills {
+        let w = if f.width > 1 { format!(" x {}", f.width) } else { String::new() };
+        println!("  fill      {:<11} `{}` {} {}{w}", f.fill.to_string(), f.name, f.dtype, axis(f.axis));
+    }
+    for t in &p.page_tables {
+        println!("  pages     `{}` [{}, {}]", t.name, p.groups.var, t.width);
+    }
+    for t in &p.line_tables {
+        let w = if t.width > 1 { format!(", {}", t.width) } else { String::new() };
+        println!("  lines     `{}` [{}, {}{w}]", t.name, t.lines, axis(t.axis).trim_matches(['[', ']']));
+    }
+    for f in &p.forwards {
+        let rows = match f.rows {
+            Rows::Const(r) => format!("{r} rows"),
+            Rows::Var => "rows as fed".into(),
+        };
+        let emits = match f.emits {
+            Some(i) => format!(", hands back `{}`", p.fills[i].name),
+            None => ", state only".into(),
+        };
+        let count = match f.count {
+            Some(i) => format!(" counted by `{}`", p.fills[i].name),
+            None => String::new(),
+        };
+        println!("  forward   `{}`: <= {} sequences of {rows}{emits}{count}", f.name, f.groups);
+    }
+    for o in &p.once {
+        println!("  once      `{o}`");
+    }
+    Ok(true)
 }
 
 /// `kern kernels`: the two tools scripts, driven from kern.toml.

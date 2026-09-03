@@ -453,7 +453,7 @@ fn run_rank(
     fork: Option<usize>,
     rendezvous: &dyn Fn(&mut Runtime) -> kern_runtime::Result<()>,
 ) -> anyhow::Result<Outcome> {
-    let manifest = kern_manifest::types::Manifest::from_json(json)?;
+    let manifest = kern_manifest::Verified::from_json(json)?;
     let table = &manifest.buffers["block_table"];
     let per_row = match table.shape.as_slice() {
         [_, Dim::Const(pages)] => pages * table.domain.as_ref().map(|d| d.stride).unwrap_or(1),
@@ -465,7 +465,7 @@ fn run_rank(
     // batch's rows.
     let (me, tp) = topo.groups.get("tp").map(|g| (g.index as usize, g.size as usize)).unwrap_or((0, 1));
     let capacity = (per_row * (seqs.max(1) + 2 * fork.is_some() as usize) * tp) as u64;
-    let mut rt = Runtime::load(json, kernels, gpu, Some(capacity), Some(topo))?;
+    let mut rt = Runtime::load(&manifest, kernels, gpu, Some(capacity), Some(topo))?;
     let maps: Vec<memmap2::Mmap> = files
         .iter()
         .map(|f| {
@@ -478,10 +478,12 @@ fn run_rank(
     rendezvous(&mut rt)?;
     // A tray manifest's one-time setup after the peers are mapped (the
     // allreduce's Lamport stages are poisoned, not zeroed).
-    if manifest.programs.contains_key("tp_init") {
-        let env =
-            BTreeMap::from([("tokens".to_string(), 1u64), ("seqs".to_string(), 1u64), ("rows".to_string(), tp as u64)]);
-        rt.run("tp_init", &env)?;
+    let env =
+        BTreeMap::from([("tokens".to_string(), 1u64), ("seqs".to_string(), 1u64), ("rows".to_string(), tp as u64)]);
+    for (name, p) in &manifest.programs {
+        if p.once {
+            rt.run(name, &env)?;
+        }
     }
 
     let steps = golden.feed.len();

@@ -143,7 +143,7 @@ fn manifest(unit: usize, kv_bytes: u64, state: u64, slots: usize, row: usize) ->
     };
     Manifest::from_json(&format!(
         r#"{{
-        "schema_version": 3, "model": "replay", "vars": {{"tokens": {{"max": 1}}, "seqs": {{"max": {seqs}}}}},
+        "schema_version": 4, "model": "replay", "vars": {{"tokens": {{"max": 1}}, "seqs": {{"max": {seqs}}}}},
         "states": {{"kv": {{"bytes_per_token": {kv_bytes}}}{state_json}}},
         "buffers": {{
             "block_table": {{"kind": "input", "dtype": "i32", "shape": ["seqs", {row}], "domain": {{"index_into": "kv", "stride": {unit}}}}}{line_json}

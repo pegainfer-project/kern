@@ -27,7 +27,7 @@ def cmp(a, b):
     return n, (a - b).abs().max().item(), a.numel()
 
 
-tags = {0: "prefill", 1: "decode0", 2: "decode1"}
+tags = {0: "chunk", 1: "decode0", 2: "decode1"}
 for step, tag in tags.items():
     s = vl["steps"][step]
     rows = s["embed"].shape[0]

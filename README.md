@@ -85,7 +85,7 @@ cargo build --release
 # kernels dir, weights); every flag can still override it.
 ./target/release/kern run --steps 320
 ./target/release/kern run --manifest examples/qwen3-4b-dspark.json \
-  --weights weights/qwen3-4b-dspark.safetensors --spec --steps 320   # speculative decoding, same runtime
+  --weights weights/qwen3-4b-dspark.safetensors --steps 320   # speculative decoding: the manifest's 7-row round, same runtime
 
 # the loop: evidence for a kernel swap — diff, tap a seeded workload once
 # (random tokens, multi-chunk prefill, N decode steps), then per cut: noise
@@ -107,7 +107,7 @@ it from `kern.toml`); what `kern test` measures and how it decides is in
 
 The wire format is one JSON Schema, generated from the code and
 golden-checked in CI:
-[`schema/manifest-v3.schema.json`](schema/manifest-v3.schema.json)
+[`schema/manifest-v4.schema.json`](schema/manifest-v4.schema.json)
 · [rendered](https://kern-baa.pages.dev/schema/).
 
 | Path | What it is |

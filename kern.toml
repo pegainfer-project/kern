@@ -25,7 +25,8 @@ logit_ulp = 4
 prompt = "The capital of France is"
 steps = 32
 
-# The same target with its DSpark draft: `kern run --spec`, `kern-serve --spec`.
+# The same target with its DSpark draft: `kern run qwen3-4b-dspark` takes the
+# manifest's widest step (7 rows, a speculative round); `--rows 1` is plain decode.
 [targets.qwen3-4b-dspark]
 manifest  = "examples/qwen3-4b-dspark.json"
 kernels   = "kernels"
@@ -39,7 +40,7 @@ kernels   = "kernels-qwen38"
 weights   = ["/mnt/shared/weights/kern/qwen3.8-27b/qwen3.8-27b.safetensors"]
 tokenizer = "/mnt/shared/weights/kern/qwen3.8-27b/tokenizer.json"
 
-# With its DFlash2 draft: `kern run qwen3.8-27b-dflash2 --spec`.
+# With its DFlash2 draft: `kern run qwen3.8-27b-dflash2` (8-row rounds by default).
 [targets."qwen3.8-27b-dflash2"]
 manifest  = "examples/qwen3.8-27b-dflash2.json"
 kernels   = "kernels-qwen38-dflash2"
