@@ -56,6 +56,7 @@ use std::thread::JoinHandle;
 use cudarc::cublaslt::CudaBlasLT;
 use cudarc::driver::{sys, CudaContext, CudaStream, PinnedHostSlice};
 use kern_manifest::types::{BufferKind, Manifest, Provision, State};
+use kern_manifest::Verified;
 
 pub use chunks::{Kind, Remap};
 use compile::{CompiledProgram, Launch, LaunchKind, RVal, Slot};
@@ -100,7 +101,8 @@ struct PeerSlot {
 }
 
 pub struct Runtime {
-    pub manifest: Manifest,
+    /// The manifest as loaded; verified, so nothing here checks it again.
+    pub manifest: Verified,
     ctx: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     /// The host tier's copies run here, off the compute stream.
@@ -326,7 +328,7 @@ impl Drop for Waking {
 }
 
 impl Runtime {
-    /// Verify the manifest, load every `*.cubin` under `kernels_dir`, resolve
+    /// Load every `*.cubin` under `kernels_dir`, resolve
     /// ops, allocate all buffers and states, and lower every program.
     /// `state_capacity_tokens` scales each declared state by its
     /// `bytes_per_token` (a fixed-`bytes` state is allocated as declared);
@@ -337,14 +339,13 @@ impl Runtime {
     /// entry per declared group, sizes matching; without one the argument
     /// is ignored.
     pub fn load(
-        manifest_json: &str,
+        manifest: &Verified,
         kernels_dir: &std::path::Path,
         gpu: usize,
         state_capacity_tokens: Option<u64>,
         topology: Option<&Topology>,
     ) -> Result<Runtime> {
-        let manifest = Manifest::from_json(manifest_json)?;
-        kern_manifest::verify(&manifest)?;
+        let manifest = manifest.clone();
         let mut ranks = BTreeMap::new();
         if let Some(t) = &manifest.topology {
             let Some(mine) = topology else {

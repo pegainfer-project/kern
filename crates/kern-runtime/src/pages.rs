@@ -1012,7 +1012,7 @@ mod tests {
     fn manifest() -> Manifest {
         Manifest::from_json(
             r#"{
-            "schema_version": 3, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
             "states": {"kv": {"bytes_per_token": 1}, "draft_kv": {"bytes_per_token": 1}},
             "buffers": {
                 "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "domain": {"index_into": "kv"}},
@@ -1030,7 +1030,7 @@ mod tests {
     fn hybrid() -> Manifest {
         Manifest::from_json(
             r#"{
-            "schema_version": 3, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
             "states": {"kv": {"bytes_per_token": 1}, "gdn": {"bytes_per_seq": 24}},
             "buffers": {
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
@@ -1496,7 +1496,7 @@ mod tests {
     fn a_long_chain_drops_without_recursion() {
         let m = Manifest::from_json(
             r#"{
-            "schema_version": 3, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
             "states": {"kv": {"bytes_per_token": 1}},
             "buffers": {
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 200000], "domain": {"index_into": "kv", "stride": 1}}

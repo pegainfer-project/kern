@@ -50,7 +50,7 @@ fn main() {
         ]
     });
     let manifest = serde_json::json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "model": "peer-barrier",
         "topology": { "groups": { "ep": n } },
         "buffers": {
@@ -69,11 +69,12 @@ fn main() {
             }
         },
         "programs": {
-            "barrier": [call.clone()],
-            "burst": std::iter::repeat_n(call, burst).collect::<Vec<_>>()
+            "barrier": {"calls": [call.clone()]},
+            "burst": {"calls": std::iter::repeat_n(call, burst).collect::<Vec<_>>()}
         }
     });
     let json = serde_json::to_string_pretty(&manifest).unwrap();
+    let verified = kern_manifest::Verified::from_json(&json).unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(kernels.join("peer-barrier.json"), &json).unwrap();
     eprintln!("manifest + cubin in {}", kernels.display());
 
@@ -83,12 +84,12 @@ fn main() {
     let results = Arc::new(Mutex::new(vec![None; n]));
     let mut threads = Vec::new();
     for (rank, &gpu) in gpus.iter().enumerate() {
-        let (json, kernels, posted, gate, results) =
-            (json.clone(), kernels.clone(), posted.clone(), gate.clone(), results.clone());
+        let (verified, kernels, posted, gate, results) =
+            (verified.clone(), kernels.clone(), posted.clone(), gate.clone(), results.clone());
         threads.push(std::thread::spawn(move || {
             let run = || -> kern_runtime::Result<(f64, f64, i32)> {
                 let topo = Topology::one("ep", rank as u64, n as u64);
-                let mut rt = Runtime::load(&json, &kernels, gpu, Some(1), Some(&topo))?;
+                let mut rt = Runtime::load(&verified, &kernels, gpu, Some(1), Some(&topo))?;
                 let mine = rt.export_handles()?;
                 posted.lock().unwrap()[rank] = Some(mine);
                 gate.wait();

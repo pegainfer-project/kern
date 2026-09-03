@@ -99,7 +99,7 @@ fn main() {
         "i64",
     ];
     let manifest = serde_json::json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "model": "peer-collective",
         "vars": { "tokens": { "max": B_MAX }, "rows": { "max": n * B_MAX }, "rb": { "max": RB_MAX } },
         "topology": { "groups": { "tp": n } },
@@ -147,13 +147,14 @@ fn main() {
             "allgather": [ag.clone()],
             "ag_burst": std::iter::repeat_n(ag, burst).collect::<Vec<_>>(),
             "tr_init": [tr_init],
-            "tr1": [tr(1)],
-            "tr2": [tr(2)],
-            "tr1_burst": std::iter::repeat_n(tr(1), burst).collect::<Vec<_>>(),
-            "tr2_burst": std::iter::repeat_n(tr(2), burst).collect::<Vec<_>>()
+            "tr1": {"calls": [tr(1)]},
+            "tr2": {"calls": [tr(2)]},
+            "tr1_burst": {"calls": std::iter::repeat_n(tr(1), burst).collect::<Vec<_>>()},
+            "tr2_burst": {"calls": std::iter::repeat_n(tr(2), burst).collect::<Vec<_>>()}
         }
     });
     let json = serde_json::to_string_pretty(&manifest).unwrap();
+    let verified = kern_manifest::Verified::from_json(&json).unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(kernels.join("peer-collective.json"), &json).unwrap();
     eprintln!("manifest + cubin in {}", kernels.display());
 
@@ -175,13 +176,13 @@ fn main() {
     let results: Arc<Mutex<Vec<Option<Result<Vec<String>, String>>>>> = Arc::new(Mutex::new(vec![None; n]));
     let mut threads = Vec::new();
     for (rank, &gpu) in gpus.iter().enumerate() {
-        let (json, kernels, posted, gate, results, configs) =
-            (json.clone(), kernels.clone(), posted.clone(), gate.clone(), results.clone(), configs.clone());
+        let (verified, kernels, posted, gate, results, configs) =
+            (verified.clone(), kernels.clone(), posted.clone(), gate.clone(), results.clone(), configs.clone());
         threads.push(std::thread::spawn(move || {
             let run = || -> Result<Vec<String>, String> {
                 let topo = Topology::one("tp", rank as u64, n as u64);
                 let e = |e: kern_runtime::Error| e.to_string();
-                let mut rt = Runtime::load(&json, &kernels, gpu, Some(1), Some(&topo)).map_err(e)?;
+                let mut rt = Runtime::load(&verified, &kernels, gpu, Some(1), Some(&topo)).map_err(e)?;
                 let mine = rt.export_handles().map_err(e)?;
                 posted.lock().unwrap()[rank] = Some(mine);
                 gate.wait();

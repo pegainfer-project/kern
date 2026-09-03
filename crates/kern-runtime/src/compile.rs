@@ -306,7 +306,8 @@ pub(crate) fn compile_programs(
     let vars: BTreeMap<&str, usize> = manifest.vars.keys().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
     let mut scan = MulticastScan::new();
     let mut programs = BTreeMap::new();
-    for (pname, calls) in &manifest.programs {
+    for (pname, p) in &manifest.programs {
+        let calls = &p.calls;
         let mut launches = Vec::new();
         let mut call_ranges = Vec::with_capacity(calls.len());
         for (ci, c) in calls.iter().enumerate() {

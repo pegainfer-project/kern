@@ -4,16 +4,6 @@ use cudarc::driver::sys;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The manifest JSON does not parse. Provider-side: fix the generator
-    /// output.
-    #[error("manifest parse: {0}")]
-    ManifestParse(#[from] serde_json::Error),
-
-    /// The manifest parsed but failed static verification (all diagnostics
-    /// collected). Provider-side: fix the generator.
-    #[error(transparent)]
-    ManifestVerify(#[from] kern_manifest::VerifyErrors),
-
     /// A manifest inconsistency only detectable past static verification
     /// (size overflow at var bounds, unsupported extern op, expression
     /// evaluation, wiring arity). Provider-side bug the verifier missed.

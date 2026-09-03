@@ -67,7 +67,7 @@ fn bf16_to_f32(b: &[u8]) -> Vec<f32> {
 /// and the captured per-run time.
 #[allow(clippy::too_many_arguments)]
 fn run_world(
-    json: &str,
+    manifest: &kern_manifest::Verified,
     kernels: &Path,
     gpu: usize,
     topo: &Topology,
@@ -79,7 +79,7 @@ fn run_world(
     rendezvous: &dyn Fn(&mut Runtime) -> kern_runtime::Result<()>,
     sync: &dyn Fn(),
 ) -> kern_runtime::Result<(Vec<u8>, f64)> {
-    let mut rt = Runtime::load(json, kernels, gpu, Some(1), Some(topo))?;
+    let mut rt = Runtime::load(manifest, kernels, gpu, Some(1), Some(topo))?;
     rt.load_weights(&[weights])?;
     rendezvous(&mut rt)?;
     let env: BTreeMap<String, u64> = [("tokens".to_string(), rows as u64)].into();
@@ -121,8 +121,12 @@ fn main() {
     assert_eq!(gpus.len(), n, "--gpus must name one GPU per rank ({n})");
     let kernels = std::env::temp_dir().join(format!("kern-k3-moe-{}", std::process::id()));
     stage_cubins(&cubins, &kernels);
-    let json1 = std::fs::read_to_string("examples/k3-moe-l1-ep1.json").expect("examples/k3-moe-l1-ep1.json");
-    let json_n = std::fs::read_to_string(format!("examples/k3-moe-l1-ep{n}.json")).expect("EP manifest");
+    let load = |path: String| {
+        let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        kern_manifest::Verified::from_json(&json).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let json1 = load("examples/k3-moe-l1-ep1.json".into());
+    let json_n = load(format!("examples/k3-moe-l1-ep{n}.json"));
     let inp = Arc::new(inp);
 
     // ---- EP1 oracle: all n*t tokens on the first GPU.
