@@ -81,8 +81,8 @@ impl Filled {
     /// The buffer's bytes as values.
     pub fn decode(&self, b: &[u8]) -> Vec<i64> {
         match self.dtype {
-            DType::I32 => b.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap()) as i64).collect(),
-            _ => b.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect(),
+            DType::I32 => b.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c) as i64).collect(),
+            _ => b.as_chunks::<8>().0.iter().map(|c| i64::from_le_bytes(*c)).collect(),
         }
     }
 }
