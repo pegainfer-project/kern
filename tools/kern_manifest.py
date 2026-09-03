@@ -1,5 +1,5 @@
 """Manifest post-pass shared by the generators: turn an explicit, verbose
-manifest into the normalized wire form (schema_version 3).
+manifest into the normalized wire form (schema_version 4).
 
 A generator writes everything out longhand — every launch with its full
 ABI and wiring, every call with every ABI scalar the mined kernel takes,
@@ -29,13 +29,27 @@ import pathlib
 import re
 import subprocess
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCALARS = ("i32", "i64", "f32", "u8")
 
-_TOP = ["schema_version", "model", "spec", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
-_BUFFER = ["dtype", "shape", "kind", "domain"]
+_TOP = ["schema_version", "model", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
+_BUFFER = ["dtype", "shape", "kind", "fill", "domain"]
+_PROGRAM = ["batch", "once", "calls"]
 _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster", "args"]
 _CALL = ["label", "op", "args"]
+
+
+def program(calls, groups=None, rows=None, once=False):
+    """A program object of the wire form: a forward of `groups` sequences of
+    `rows` rows each (rows a constant or the name of the var fed per call),
+    a once-after-load program, or a plain one."""
+    p = {}
+    if groups is not None:
+        p["batch"] = {"groups": groups, "rows": rows}
+    if once:
+        p["once"] = True
+    p["calls"] = calls
+    return p
 
 
 def _order(d, keys):
@@ -86,8 +100,8 @@ def _materialize(op):
 
 def fold_constants(m):
     calls_by_op = {}
-    for calls in m["programs"].values():
-        for c in calls:
+    for p in m["programs"].values():
+        for c in p["calls"]:
             calls_by_op.setdefault(c["op"], []).append(c)
     for oname, op in m["ops"].items():
         calls = calls_by_op.get(oname)
@@ -161,7 +175,9 @@ def normalize(m):
             launches.append(_order(launch, _LAUNCH))
         op["impl"]["launches"] = launches
     m["buffers"] = {k: _order(v, _BUFFER) for k, v in m["buffers"].items()}
-    m["programs"] = {k: [_order(c, _CALL) for c in v] for k, v in m["programs"].items()}
+    m["programs"] = {
+        k: _order({**v, "calls": [_order(c, _CALL) for c in v["calls"]]}, _PROGRAM) for k, v in m["programs"].items()
+    }
     return _order(m, _TOP)
 
 

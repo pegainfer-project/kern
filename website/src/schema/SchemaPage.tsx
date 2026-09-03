@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import schemaRaw from "../../../schema/manifest-v3.schema.json?raw";
+import schemaRaw from "../../../schema/manifest-v4.schema.json?raw";
 import minimalRaw from "../../../examples/minimal.json?raw";
 
 const schema: any = JSON.parse(schemaRaw);
@@ -431,7 +431,7 @@ function MinimalExample() {
 
 /* ------------------------------------------------------------------ page */
 
-const RAW_URL = "/schema/manifest-v3.schema.json";
+const RAW_URL = "/schema/manifest-v4.schema.json";
 const TYPES_URL =
   "https://github.com/pegainfer-project/kern/blob/master/crates/kern-manifest/src/types.rs";
 
@@ -461,7 +461,7 @@ export default function SchemaPage() {
         <section className="schema-hero">
           <p className="kicker">WIRE FORMAT · JSON SCHEMA 2020-12</p>
           <h1>
-            manifest <span className="v-chip">v3</span>
+            manifest <span className="v-chip">v4</span>
           </h1>
           <p className="hero-line">
             One JSON file is the entire contract between a model provider and the

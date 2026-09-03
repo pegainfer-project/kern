@@ -3,22 +3,27 @@
 //! captured decode forward. Regenerate with
 //! `python3 tools/gen_qwen3_decode.py` (needs the capture dump).
 
-use kern_manifest::{verify, Manifest};
+use kern_manifest::protocol::Rows;
+use kern_manifest::{verify, Manifest, Protocol};
 
 const QWEN3: &str = include_str!("../../../examples/qwen3-4b.json");
 
 #[test]
 fn qwen3_decode_mined_verifies() {
-    let m = Manifest::from_json(QWEN3).expect("parse");
-    if let Err(errs) = verify(&m) {
-        panic!("mined manifest failed verification:\n{}", errs.join("\n"));
-    }
+    let m = verify(Manifest::from_json(QWEN3).expect("parse"))
+        .unwrap_or_else(|errs| panic!("mined manifest failed verification:\n{}", errs.join("\n")));
+    // The serving protocol is in the manifest: a prefill chunk, a bs=1
+    // decode and a batched one, every fill on its buffer.
+    let p = Protocol::check(&m).unwrap_or_else(|e| panic!("{e}"));
+    let shapes: Vec<(&str, u64)> = p.forwards.iter().map(|f| (f.name.as_str(), f.groups)).collect();
+    assert_eq!(shapes, [("decode", 1), ("decode_batch", 256), ("prefill", 1)]);
+    assert_eq!(p.fills.len(), 6);
     // decode: embed + l0 norm + 36 layers x 12 + lm_head + sample; attention's
     // reduce launch and argmax's two stages live inside their op impls.
-    assert_eq!(m.programs["decode"].len(), 2 + 36 * 12 + 2);
+    assert_eq!(m.programs["decode"].calls.len(), 2 + 36 * 12 + 2);
     // prefill: same forward minus the final_norm/lm_head/sample tail — the
     // last prompt token goes through `decode` instead.
-    assert_eq!(m.programs["prefill"].len(), 2 + 36 * 12 - 1);
+    assert_eq!(m.programs["prefill"].calls.len(), 2 + 36 * 12 - 1);
     // The runtime's entire knowledge of the KV cache: a byte count.
     assert_eq!(m.states["kv"].bytes_per_token, 36 * 2 * 1024 * 2);
 
@@ -42,10 +47,8 @@ const QWEN3_SILU_MINED: &str = include_str!("../../../examples/qwen3-4b-silu-min
 
 #[test]
 fn qwen3_silu_mined_fixture_verifies() {
-    let m = Manifest::from_json(QWEN3_SILU_MINED).expect("parse");
-    if let Err(errs) = verify(&m) {
-        panic!("silu-mined fixture failed verification:\n{}", errs.join("\n"));
-    }
+    let m = verify(Manifest::from_json(QWEN3_SILU_MINED).expect("parse"))
+        .unwrap_or_else(|errs| panic!("silu-mined fixture failed verification:\n{}", errs.join("\n")));
     let a = Manifest::from_json(QWEN3).unwrap();
     let (oa, ob) = (&a.ops["silu_mul"], &m.ops["silu_mul"]);
     assert_eq!(oa.params, ob.params, "interface must be unchanged");
@@ -68,20 +71,29 @@ const QWEN3_DSPARK: &str = include_str!("../../../examples/qwen3-4b-dspark.json"
 
 #[test]
 fn qwen3_dspark_mined_verifies() {
-    let m = Manifest::from_json(QWEN3_DSPARK).expect("parse");
-    if let Err(errs) = verify(&m) {
-        panic!("dspark manifest failed verification:\n{}", errs.join("\n"));
-    }
-    // draft: embed + l0 norm + 5 layers x 12 (incl. final norm) + lm_head +
-    // 7 unrolled markov steps x (embed, bias-accumulate, argmax).
-    assert_eq!(m.programs["draft"].len(), 2 + 5 * 12 + 1 + 7 * 3);
-    // verify: prefill body + final norm + 5 fc taps + 8-row lm_head + argmax.
-    assert_eq!(m.programs["verify"].len(), 2 + 36 * 12 + 5 + 2);
-    // precompute: hidden_norm + fused KV GEMM + 5 x (k_norm, rope, cache).
-    assert_eq!(m.programs["draft_precompute"].len(), 2 + 5 * 3);
-    // spec-ready prefill carries the 5 fc taps; decode stays clean.
-    assert_eq!(m.programs["prefill"].len(), 2 + 36 * 12 - 1 + 5);
-    assert_eq!(m.programs["decode"].len(), 2 + 36 * 12 + 2);
+    let m = verify(Manifest::from_json(QWEN3_DSPARK).expect("parse"))
+        .unwrap_or_else(|errs| panic!("dspark manifest failed verification:\n{}", errs.join("\n")));
+    // A round is one program: splice_draft, the draft (embed + l0 norm +
+    // 5 layers x 12 incl. final norm + lm_head + 7 unrolled markov steps x
+    // (embed, bias-accumulate, argmax)), splice_verify, the verify pass
+    // (prefill body + 5 fc taps + 7-row lm_head + argmax), the precompute
+    // (hidden_norm + fused KV GEMM + 5 x (k_norm, rope, cache)) and the
+    // prefix-match count.
+    let draft = 2 + 5 * 12 + 1 + 7 * 3;
+    let verify_pass = 2 + 36 * 12 + 5 + 2;
+    let precompute = 2 + 5 * 3;
+    assert_eq!(m.programs["round"].calls.len(), 1 + draft + 1 + verify_pass + precompute + 1);
+    // The spec-ready prefill carries the 5 fc taps, then the last row's
+    // head (last_row, lm_head, argmax) and the chunk's precompute; decode
+    // stays clean.
+    assert_eq!(m.programs["prefill"].calls.len(), 2 + 36 * 12 + 5 + 3 + precompute);
+    assert_eq!(m.programs["decode"].calls.len(), 2 + 36 * 12 + 2);
+    // What the serving loop reads off it: a 7-row round counted by its
+    // accept count, a prefill that hands back the first token.
+    let p = Protocol::check(&m).unwrap_or_else(|e| panic!("{e}"));
+    let round = p.forward(256, Rows::Const(7)).expect("a 7-row forward");
+    assert_eq!((round.name.as_str(), round.count.is_some()), ("round", true));
+    assert!(p.chunk().expect("a chunk forward").emits.is_some());
     assert_eq!(m.states["draft_kv"].bytes_per_token, 5 * 2 * 1024 * 2);
     // Both unified instances are ABI-identical; the manifest must pin each
     // to its own module or resolution would be ambiguous.
@@ -98,10 +110,8 @@ const MINIMAL: &str = include_str!("../../../examples/minimal.json");
 
 #[test]
 fn minimal_example_verifies() {
-    let m = Manifest::from_json(MINIMAL).expect("parse");
-    if let Err(errs) = verify(&m) {
-        panic!("examples/minimal.json failed verification:\n{}", errs.join("\n"));
-    }
-    assert_eq!(m.programs["step"].len(), 1);
+    let m = verify(Manifest::from_json(MINIMAL).expect("parse"))
+        .unwrap_or_else(|errs| panic!("examples/minimal.json failed verification:\n{}", errs.join("\n")));
+    assert_eq!(m.programs["step"].calls.len(), 1);
     assert_eq!(m.ops["scale"].imp.launches[0].module(), Some("toy"));
 }

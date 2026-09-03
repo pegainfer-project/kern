@@ -389,14 +389,17 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32):
 
     # ---- buffers
     buffers = {
-        "token_ids": {"dtype": "i64", "shape": [R], "kind": "input", "domain": {"index_into": "embed"}},
-        "slot_mapping": {"dtype": "i64", "shape": [T], "kind": "input", "domain": {"index_into": "kv"}},
+        "token_ids": {"dtype": "i64", "shape": [R], "kind": "input", "fill": "token",
+                      "domain": {"index_into": "embed"}},
+        "slot_mapping": {"dtype": "i64", "shape": [T], "kind": "input", "fill": "slot",
+                         "domain": {"index_into": "kv"}},
         "block_table": {"dtype": "i32", "shape": ["seqs", max_pages], "kind": "input",
                         "domain": {"index_into": "kv", "stride": PAGE}},
-        "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input", "domain": {"min": 1}},
+        "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input", "fill": "seq_len", "domain": {"min": 1}},
         "kda.line_index": {"dtype": "i32", "shape": [n_kda, R], "kind": "input",
                            "domain": {"index_into": "kda", "stride": line_l}},
-        "next_token": {"dtype": "i64", "shape": [R], "kind": "output", "domain": {"index_into": "embed"}},
+        "next_token": {"dtype": "i64", "shape": [R], "kind": "output", "fill": "tokens",
+                       "domain": {"index_into": "embed"}},
         **mp["buffers"],
     }
     ag_region = seqs_max * H * 4 // 8  # packs: the widest gathered row is the f32 attention landing
@@ -415,7 +418,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32):
             "tp_ar_lamport": {"dtype": "u8", "shape": [3 * ar_stage], "kind": "carry", "export": True},
             "tp_ar_lamport_peers": {"dtype": "u64", "shape": [tp], "kind": "peer", "of": "tp_ar_lamport", "group": "tp"},
             "tp_ar_state": {"dtype": "i32", "shape": [8], "kind": "carry"},
-            "tp_err": {"dtype": "i32", "shape": [1], "kind": "output"},
+            "tp_err": {"dtype": "i32", "shape": [1], "kind": "output", "fill": "error"},
         })
     states = {
         "kv": {"bytes_per_token": n_mla * LATENT_ROW * 2},
@@ -636,10 +639,11 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32):
     groups = {"ep": ranks, **({"tp": tp} if tp > 1 else {})}
     # Run once after the peers are imported: the Lamport stages must read
     # -0.0 before the first allreduce, and a carry starts at zero.
-    programs = {"decode": prog}
+    programs = {"decode": kern_manifest.program(prog, groups=seqs_max, rows=1)}
     if tp > 1:
-        programs["tp_init"] = [{"label": "tp_init", "op": "tp_lamport_init",
-                                "args": [b("tp_ar_lamport"), i64(3 * ar_stage)]}]
+        programs["tp_init"] = kern_manifest.program(
+            [{"label": "tp_init", "op": "tp_lamport_init", "args": [b("tp_ar_lamport"), i64(3 * ar_stage)]}],
+            once=True)
     m = {
         "schema_version": kern_manifest.SCHEMA_VERSION,
         "model": f"kimi-k3-pruned-75pct/{layers}l/ep{ranks}" + (f"-tp{tp}" if tp > 1 else ""),

@@ -1,5 +1,5 @@
 {
- "schema_version": 3,
+ "schema_version": 4,
  "model": "kimi-k3-pruned-75pct/moe-l1/ep4",
  "vars": {
   "tokens": {
@@ -636,104 +636,106 @@
   }
  },
  "programs": {
-  "moe": [
-   {
-    "label": "quant_x",
-    "op": "quant_x",
-    "args": [
-     {
-      "buf": "x"
-     },
-     {
-      "buf": "slab",
-      "offset": 74587712
-     },
-     {
-      "buf": "slab",
-      "offset": 135142976
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "routing",
-    "op": "write_routing",
-    "args": [
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "buf": "slab",
-      "offset": 137035328
-     },
-     {
-      "buf": "slab",
-      "offset": 139198016
-     },
-     {
-      "expr": {
-       "mul": [
-        "tokens",
-        16
-       ]
+  "moe": {
+   "calls": [
+    {
+     "label": "quant_x",
+     "op": "quant_x",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "slab",
+       "offset": 74587712
+      },
+      {
+       "buf": "slab",
+       "offset": 135142976
+      },
+      {
+       "var": "tokens"
       }
-     }
-    ]
-   },
-   {
-    "label": "mega_moe",
-    "op": "mega_moe",
-    "args": [
-     {
-      "buf": "y"
-     },
-     {
-      "buf": "stats"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "buf": "slab_peers"
-     },
-     {
-      "rank": "ep"
-     },
-     {
-      "buf": "slab",
-      "offset": 140279360
-     },
-     {
-      "buf": "slab",
-      "offset": 1779400256
-     },
-     {
-      "buf": "l1_weights"
-     },
-     {
-      "buf": "l1_weights_sf"
-     },
-     {
-      "buf": "slab",
-      "offset": 2600790080
-     },
-     {
-      "buf": "slab",
-      "offset": 4005750848
-     },
-     {
-      "buf": "l2_weights"
-     },
-     {
-      "buf": "l2_weights_sf"
-     }
-    ]
-   }
-  ]
+     ]
+    },
+    {
+     "label": "routing",
+     "op": "write_routing",
+     "args": [
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "buf": "slab",
+       "offset": 137035328
+      },
+      {
+       "buf": "slab",
+       "offset": 139198016
+      },
+      {
+       "expr": {
+        "mul": [
+         "tokens",
+         16
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "mega_moe",
+     "op": "mega_moe",
+     "args": [
+      {
+       "buf": "y"
+      },
+      {
+       "buf": "stats"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "buf": "slab_peers"
+      },
+      {
+       "rank": "ep"
+      },
+      {
+       "buf": "slab",
+       "offset": 140279360
+      },
+      {
+       "buf": "slab",
+       "offset": 1779400256
+      },
+      {
+       "buf": "l1_weights"
+      },
+      {
+       "buf": "l1_weights_sf"
+      },
+      {
+       "buf": "slab",
+       "offset": 2600790080
+      },
+      {
+       "buf": "slab",
+       "offset": 4005750848
+      },
+      {
+       "buf": "l2_weights"
+      },
+      {
+       "buf": "l2_weights_sf"
+      }
+     ]
+    }
+   ]
+  }
  }
 }

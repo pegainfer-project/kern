@@ -142,6 +142,27 @@
       ],
       "description": "A call argument, e.g. `{\"buf\": \"hidden\"}`, `{\"state\": \"kv\", \"offset\": 65536}`, `{\"var\": \"tokens\"}`, `{\"i32\": 2560}`, `{\"rank\": \"ep\"}`."
     },
+    "Batch": {
+      "additionalProperties": false,
+      "description": "The shape of one call of a program: up to `groups` sequences, each contributing `rows` rows, e.g. `{\"groups\": 256, \"rows\": 1}` (a decode step over a batch) or `{\"groups\": 1, \"rows\": \"tokens\"}` (a prefill chunk).",
+      "properties": {
+        "groups": {
+          "description": "Upper bound on the sequences one call covers; a caller with fewer pads up to a bucket, e.g. `256`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "$ref": "#/$defs/Dim",
+          "description": "Rows per sequence: a constant the program's kernels are laid out for (`1` for a decode step, `8` for a speculative round — exact, not a bound), or the var whose value is the row count of the call (`\"tokens\"`: one sequence, as many rows as the chunk)."
+        }
+      },
+      "required": [
+        "groups",
+        "rows"
+      ],
+      "type": "object"
+    },
     "Bound": {
       "anyOf": [
         {
@@ -180,6 +201,17 @@
         "export": {
           "description": "Allocate through the driver's virtual-memory API with a fabric-shareable handle so other ranks can map it; the address of every rank's copy lands in the `peer` buffers `of` it. e.g. `true`.",
           "type": "boolean"
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`input` / `output` buffers only: the role a serving loop fills or reads it for, e.g. `\"token\"`; absent for one a harness stages by name."
         },
         "group": {
           "description": "`peer` buffers only: the topology group the addresses are indexed by, e.g. `\"ep\"`.",
@@ -591,6 +623,51 @@
       ],
       "type": "object"
     },
+    "Fill": {
+      "description": "The role a caller-facing buffer plays in a call: what the serving loop writes into an input or reads from an output. A closed set; the runtime never reads it.",
+      "oneOf": [
+        {
+          "const": "token",
+          "description": "Input: the token ids fed, one per row (a buffer over the row axis) or each sequence's first (over the sequence axis: the anchor of a speculative round).",
+          "type": "string"
+        },
+        {
+          "const": "position",
+          "description": "Input: each row's position in its sequence.",
+          "type": "string"
+        },
+        {
+          "const": "slot",
+          "description": "Input: each row's token slot in the paged states, from the sequence's lease.",
+          "type": "string"
+        },
+        {
+          "const": "seq_len",
+          "description": "Input: each sequence's length after this call (rows already in the state plus this call's).",
+          "type": "string"
+        },
+        {
+          "const": "cu_seqlens",
+          "description": "Input: exclusive prefix sums of rows per sequence, `groups + 1` entries.",
+          "type": "string"
+        },
+        {
+          "const": "tokens",
+          "description": "Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "Output: how many of a sequence's `tokens` the caller takes, per sequence; without one it takes one.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.",
+          "type": "string"
+        }
+      ]
+    },
     "Impl": {
       "additionalProperties": false,
       "description": "An op implementation: private scratch buffers and one or more launches in order.",
@@ -912,6 +989,38 @@
       "pattern": "^(i32|i64|f32|u8|tensormap|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
       "type": "string"
     },
+    "Program": {
+      "additionalProperties": false,
+      "description": "A program: a straight-line call list plus, when a serving loop may drive it, the shape of one call.",
+      "properties": {
+        "batch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Batch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The shape of one call — `groups` sequences of `rows` rows each — for a program a serving loop drives; absent for one only a harness runs (a single layer under test, a barrier)."
+        },
+        "calls": {
+          "description": "The calls, in order, e.g. `[{\"op\": \"embedding\", \"args\": [...]}, ...]`.",
+          "items": {
+            "$ref": "#/$defs/Call"
+          },
+          "type": "array"
+        },
+        "once": {
+          "description": "Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "calls"
+      ],
+      "type": "object"
+    },
     "Scratch": {
       "additionalProperties": false,
       "description": "A private buffer of one implementation, sized like a workspace buffer.",
@@ -931,28 +1040,6 @@
       "required": [
         "dtype",
         "shape"
-      ],
-      "type": "object"
-    },
-    "Spec": {
-      "additionalProperties": false,
-      "description": "Speculative-decoding caller contract: `draft` runs over `block` rows per sequence — the anchor token followed by `block - 1` mask tokens; `verify` runs over the anchor and every drafted token. The runtime assigns no meaning to it.",
-      "properties": {
-        "block": {
-          "description": "Rows per `draft` call, e.g. `8`.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "mask_token": {
-          "description": "Token id filling the undrafted rows of `draft`, e.g. `248070`.",
-          "format": "int64",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "block",
-        "mask_token"
       ],
       "type": "object"
     },
@@ -1107,7 +1194,7 @@
       "type": "object"
     }
   },
-  "$id": "https://kern-baa.pages.dev/schema/manifest-v3.schema.json",
+  "$id": "https://kern-baa.pages.dev/schema/manifest-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The whole contract a model ships as: one JSON file naming its vars, states, buffers, modules, ops and programs.",
@@ -1139,30 +1226,16 @@
     },
     "programs": {
       "additionalProperties": {
-        "items": {
-          "$ref": "#/$defs/Call"
-        },
-        "type": "array"
+        "$ref": "#/$defs/Program"
       },
-      "description": "Named straight-line call lists, e.g. `\"decode\": [{\"op\": \"embedding\", \"args\": [...]}, ...]`.",
+      "description": "Named straight-line programs, e.g. `\"decode\": {\"batch\": {\"groups\": 256, \"rows\": 1}, \"calls\": [...]}`.",
       "type": "object"
     },
     "schema_version": {
-      "description": "Wire-format version; must be `3`.",
+      "description": "Wire-format version; must be `4`.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
-    },
-    "spec": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Spec"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Speculative-decoding caller contract; absent for plain prefill/decode manifests."
     },
     "states": {
       "additionalProperties": {
@@ -1198,6 +1271,6 @@
     "ops",
     "programs"
   ],
-  "title": "kern manifest v3",
+  "title": "kern manifest v4",
   "type": "object"
 }

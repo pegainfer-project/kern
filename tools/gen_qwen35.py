@@ -69,7 +69,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from kern_manifest import normalize  # noqa: E402
+from kern_manifest import normalize, program, SCHEMA_VERSION  # noqa: E402
 from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
 
 # --- model geometry (config.json; asserted against the capture below)
@@ -590,16 +590,16 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     line_w = SPEC_BLOCK if spec else 1
     DOMAINS["gdn.line_index"] = {"index_into": "gdn", "stride": page_bytes}
     buffers = {
-        "token_ids": {"dtype": "i64", "shape": ["tokens"], "kind": "input"},
-        "positions": {"dtype": "i64", "shape": ["tokens"], "kind": "input"},
-        "slot_mapping": {"dtype": "i64", "shape": ["tokens"], "kind": "input"},
+        "token_ids": {"dtype": "i64", "shape": ["tokens"], "kind": "input", "fill": "token"},
+        "positions": {"dtype": "i64", "shape": ["tokens"], "kind": "input", "fill": "position"},
+        "slot_mapping": {"dtype": "i64", "shape": ["tokens"], "kind": "input", "fill": "slot"},
         # one row per sequence of a decode_batch step (prefill / decode are
         # seqs=1: row 0 / the first two cu_seqlens entries)
         "block_table": {"dtype": "i32", "shape": ["seqs", BLOCK_TABLE_LEN], "kind": "input"},
-        "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input"},
-        "cu_seqlens_q": {"dtype": "i32", "shape": [MAX_SEQS + 1], "kind": "input"},
+        "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input", "fill": "seq_len"},
+        "cu_seqlens_q": {"dtype": "i32", "shape": [MAX_SEQS + 1], "kind": "input", "fill": "cu_seqlens"},
         "logits": {"dtype": "bf16", "shape": ["seqs", VOCAB], "kind": "workspace"},
-        "next_token": {"dtype": "i64", "shape": ["seqs"], "kind": "output"},
+        "next_token": {"dtype": "i64", "shape": ["seqs"], "kind": "output", "fill": "tokens"},
     }
     ws = {
         "residual": ["tokens", HIDDEN], "x": ["tokens", HIDDEN], "y": ["tokens", HIDDEN],
@@ -668,22 +668,25 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
 
     if spec:
         buffers.update({
-            # caller contract, one per sequence: 1 for verify (resume from
-            # the committed state), 1 + accepted drafts for advance
-            "num_accepted_tokens": {"dtype": "i32", "shape": ["seqs"], "kind": "input"},
             "draft_block_table": {"dtype": "i32", "shape": ["seqs", D_TABLE_LEN], "kind": "input"},
-            "anchor_token": {"dtype": "i64", "shape": ["seqs"], "kind": "input"},
+            # each sequence's first row: the caller stages it, the round
+            # splices its own draft and verify rows from it
+            "anchor_token": {"dtype": "i64", "shape": ["seqs"], "kind": "input", "fill": "token"},
             # target hidden states at the 5 taps, projected by fc: written by
-            # prefill / decode_spec / verify, read by draft_precompute
+            # prefill / verify, read by draft_precompute
             "fc_out": {"dtype": "bf16", "shape": ["tokens", HIDDEN], "kind": "carry"},
-            "verify_tokens": {"dtype": "i64", "shape": ["seqs", SPEC_BLOCK], "kind": "output"},
+            # what a round hands back: verify's greedy token after every row,
+            # and how many of them the sequence takes (accepted drafts + 1)
+            "verify_tokens": {"dtype": "i64", "shape": ["seqs", SPEC_BLOCK], "kind": "output", "fill": "tokens"},
+            "nacc_adv": {"dtype": "i32", "shape": ["seqs"], "kind": "output", "fill": "count"},
             "draft_tokens": {"dtype": "i64", "shape": ["seqs", DRAFT_TOKENS], "kind": "output"},
-            # the fused `round`'s device-written twins of what the host stages
-            # between the phased programs: verify's ids (spliced from draft's
-            # output), advance's num_accepted and its line table (the line in
-            # entry `accepted`) — kernels may not write inputs
+            # the round's device-written rows: draft's ids ([anchor, mask x7]),
+            # verify's ids (spliced from draft's output), the count a step's
+            # GDN resumes from (1: the committed state) and advance's line
+            # table (the line in entry `accepted`)
+            "draft_ids": {"dtype": "i64", "shape": ["tokens"], "kind": "carry"},
             "verify_ids": {"dtype": "i64", "shape": ["tokens"], "kind": "carry"},
-            "nacc_adv": {"dtype": "i32", "shape": ["seqs"], "kind": "carry"},
+            "nacc_one": {"dtype": "i32", "shape": ["seqs"], "kind": "carry"},
             "line_adv": {"dtype": "i32", "shape": [len(GDN_LAYERS), "seqs", SPEC_BLOCK], "kind": "carry"},
             "logits_blk": {"dtype": "bf16", "shape": [SPEC_ROWS_MAX, VOCAB], "kind": "workspace"},
             "cand_ids": {"dtype": "i64", "shape": [SPEC_ROWS_MAX, SEL_K], "kind": "workspace"},
@@ -995,16 +998,24 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
             "conv_shift": single("kern_conv_shift",
                                  ["in buffer<i32>", "i32", "inout state", "in buffer<i32>", "i64", "i64"],
                                  [256, 1, 1], [S, CONV_DIM * BF16 // 16 // 256, 1], **hw("gdn_advance")),
-            # the fused round's glue (tools/kernels-src/spec_round.cu): verify's
-            # ids from draft's output; accept -> num_accepted + the line table
-            # entry advance reads
+            # the round's glue (tools/kernels-src/spec_round.cu): draft's ids
+            # from the anchor and the mask, verify's from draft's output, the
+            # count of rows taken, the line table entry advance reads, and
+            # the constant 1 a step's GDN resumes from
+            "splice_draft": single("kern_splice_draft",
+                                   ["in buffer<i64>", "out buffer<i64>", "i32", "i64"],
+                                   [32, 1, 1], [S, 1, 1], **hw("spec_round")),
             "splice_verify": single("kern_splice_verify",
-                                    ["in buffer<i64>", "in buffer<i64>", "out buffer<i64>", "i32"],
+                                    ["in buffer<i64>", "in buffer<i64>", "out buffer<i64>", "i32", "i32"],
                                     [32, 1, 1], [S, 1, 1], **hw("spec_round")),
-            "spec_accept": single("kern_spec_accept",
-                                  ["in buffer<i64>", "in buffer<i64>", "in buffer<i32>", "out buffer<i32>",
-                                   "out buffer<i32>", "i32", "i32", "i32"],
-                                  [64, 1, 1], [S, 1, 1], **hw("spec_round")),
+            "spec_count": single("kern_spec_count",
+                                 ["in buffer<i64>", "in buffer<i64>", "out buffer<i32>", "i32", "i32"],
+                                 [32, 1, 1], [S, 1, 1], **hw("spec_round")),
+            "spec_lines": single("kern_spec_lines",
+                                 ["in buffer<i32>", "in buffer<i32>", "out buffer<i32>", "i32", "i32", "i32"],
+                                 [64, 1, 1], [S, 1, 1], **hw("spec_round")),
+            "ones_i32": single("kern_ones_i32", ["out buffer<i32>", "i32"], [128, 1, 1], [cdiv(S, 128), 1, 1],
+                               **hw("spec_round")),
             # verify's attention: the 2D causal instance over SPEC_BLOCK rows
             # per sequence; q-block index space tokens//BLOCK_Q + seqs
             "attn_verify": tri("unified", ATTN_IFACE,
@@ -1305,7 +1316,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                  [buf(x), buf("d_coef"), buf(c + ".base_kernel"), T, i32(HIDDEN), i32(D_GROUPS),
                   i32(D_CONV_PROJ), i32(side)])
 
-    def draft():
+    def draft(ids="draft_ids"):
         """One non-causal pass over the 8-row block [anchor, mask x7] at
         positions pos..pos+7 (env tokens=8), then top-16 + selector walk ->
         7 draft tokens.  Draft hidden size = target's, so the target's
@@ -1315,7 +1326,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         mp = "draft."
         ds = [
             d("embed", "embedding",
-              [buf("token_ids"), buf("model.embed_tokens.weight"), buf("residual"), T, i32(HIDDEN)]),
+              [buf(ids), buf("model.embed_tokens.weight"), buf("residual"), T, i32(HIDDEN)]),
             d("l0.input_norm", "d_rms_norm",
               [buf("x"), buf("residual"), i64(HIDDEN), i64(0), i64(0), i64(0), i64(0),
                buf(mp + "layers.0.input_layernorm.weight"), i64(0), f32(eps), T, i32(HIDDEN)]),
@@ -1423,76 +1434,73 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
 
     states = {"kv": {"bytes_per_token": KV_BYTES_PER_TOKEN},
               "gdn": {"bytes_per_seq": seq_bytes}}
-    head = {"schema_version": 3, "model": "qwen3.8-27b"}
+    head = {"schema_version": SCHEMA_VERSION, "model": "qwen3.8-27b"}
     if spec:
-        nacc = buf("num_accepted_tokens")
-        programs = {
-            "prefill": forward(False, taps=True),
-            # non-speculative decode on the speculative state layout: the
-            # spec kernels at tokens=1 (num_accepted_tokens = 1: resume from
-            # the line in entry 0 of the cell, store back there)
-            "decode": forward(True, nacc=nacc),
-            "decode_spec": forward(True, taps=True, nacc=nacc),
-            # verify = the target over [anchor, d0..d6] per sequence (tokens
-            # = 8·seqs): 2D attention, spec GDN at num_accepted_tokens = 1
-            "verify": forward(False, taps=True, nacc=nacc, tail="verify"),
-            # advance = commit the accepted rows into the GDN state (see
-            # SPEC_SEQ_BYTES); the caller's num_accepted_tokens = 1 + accepted
-            # and the line in entry `accepted` of its cell
-            "advance": [c for i in GDN_LAYERS for c in advance_layer(i)],
-            "draft": draft(),
-            "draft_precompute": draft_precompute(),
-        }
-        # round = the whole speculative round as one program (one CUDA graph,
-        # one host sync): draft, verify's ids spliced on device, verify,
-        # every row's tap into the draft KV, accept on device, advance from
-        # the accept's num_accepted / line table. The caller stages the draft
-        # rows ([anchor, mask x7] per sequence), num_accepted_tokens = 1 and
-        # the line table with the line in entry 0, then reads draft_tokens /
-        # verify_tokens. Rows per sequence are the same in draft and verify,
-        # so positions / slot_mapping / seq_lens / cu_seqlens_q are shared.
+        # A step's GDN resumes from the committed state: the count it reads
+        # is the constant 1 the step writes first.
+        nacc = buf("nacc_one")
+        ones = [d("ones", "ones_i32", [nacc, S])]
+
         def pre(prefix, calls):
             return [dict(c, label=f"{prefix}.{c['label']}") for c in calls]
-        programs["round"] = (
-            pre("draft", draft())
-            + [d("splice", "splice_verify",
-                 [buf("anchor_token"), buf("draft_tokens"), buf("verify_ids"), i32(SPEC_BLOCK)])]
-            + pre("verify", forward(False, taps=True, nacc=nacc, tail="verify", ids="verify_ids"))
-            + pre("precompute", draft_precompute())
-            + [d("accept", "spec_accept",
-                 [buf("draft_tokens"), buf("verify_tokens"), buf("gdn.line_index"), buf("nacc_adv"),
-                  buf("line_adv"), i32(SPEC_BLOCK), i32(len(GDN_LAYERS)), i32(MAX_SEQS)])]
-            + pre("advance", [c for i in GDN_LAYERS for c in advance_layer(i, "nacc_adv", "line_adv")])
-        )
+        programs = {
+            "prefill": program(forward(False, taps=True), groups=1, rows="tokens"),
+            # the one-row step on the speculative state layout (the spec
+            # kernels at tokens=1): the in-manifest oracle for the round
+            "decode": program(ones + forward(True, nacc=nacc), groups=1, rows=1),
+            # round = one speculative round per sequence as one program (one
+            # CUDA graph, one host sync): draft's rows spliced from the
+            # anchor the caller staged, draft, verify's ids spliced from
+            # draft's output, verify (2D attention, spec GDN resuming from
+            # the committed state), every row's tap into the draft KV, the
+            # count of rows taken and the line entry advance reads, advance
+            # (the accepted rows committed into the GDN state, see
+            # SPEC_SEQ_BYTES). Rows per sequence are the same in draft and
+            # verify, so positions / slot_mapping / seq_lens / cu_seqlens_q
+            # are staged once; the caller reads verify_tokens and nacc_adv.
+            "round": program(
+                ones
+                + [d("splice_draft", "splice_draft",
+                     [buf("anchor_token"), buf("draft_ids"), i32(SPEC_BLOCK), i64(MASK_TOKEN)])]
+                + pre("draft", draft())
+                + [d("splice_verify", "splice_verify",
+                     [buf("anchor_token"), buf("draft_tokens"), buf("verify_ids"), i32(SPEC_BLOCK),
+                      i32(DRAFT_TOKENS)])]
+                + pre("verify", forward(False, taps=True, nacc=nacc, tail="verify", ids="verify_ids"))
+                + pre("precompute", draft_precompute())
+                + [d("count", "spec_count",
+                     [buf("draft_tokens"), buf("verify_tokens"), buf("nacc_adv"), i32(SPEC_BLOCK),
+                      i32(DRAFT_TOKENS)]),
+                   d("lines", "spec_lines",
+                     [buf("gdn.line_index"), buf("nacc_adv"), buf("line_adv"), i32(SPEC_BLOCK),
+                      i32(len(GDN_LAYERS)), i32(MAX_SEQS)])]
+                + pre("advance", [c for i in GDN_LAYERS for c in advance_layer(i, "nacc_adv", "line_adv")]),
+                groups=MAX_SEQS, rows=SPEC_BLOCK),
+        }
         states["draft_kv"] = {"bytes_per_token": D_KV_BYTES_PER_TOKEN}
-        head = {"schema_version": 3, "model": "qwen3.8-27b-dflash2",
-                # caller contract: draft rows = [anchor] + [mask] * (block-1) at
-                # tokens=block; verify at tokens=block; num_accepted_tokens =
-                # 1 + accepted drafts of the previous round (1 after prefill)
-                "spec": {"block": SPEC_BLOCK, "mask_token": MASK_TOKEN}}
+        head = {"schema_version": SCHEMA_VERSION, "model": "qwen3.8-27b-dflash2"}
         DOMAINS.update({
-            "num_accepted_tokens": {"min": 1, "max": SPEC_BLOCK},
             "draft_block_table": {"index_into": "draft_kv", "stride": D_BLOCK},
             "anchor_token": TOKEN_DOMAIN, "verify_tokens": TOKEN_DOMAIN, "draft_tokens": TOKEN_DOMAIN,
-            "verify_ids": TOKEN_DOMAIN, "nacc_adv": {"min": 1, "max": SPEC_BLOCK},
+            "draft_ids": TOKEN_DOMAIN, "verify_ids": TOKEN_DOMAIN,
+            "nacc_adv": {"min": 1, "max": SPEC_BLOCK}, "nacc_one": {"min": 1, "max": 1},
             "line_adv": DOMAINS["gdn.line_index"],
             "cand_ids": {"index_into": "draft.selector.successor"},
             "draft.kv_scales": {"min": 0.0},
         })
     else:
         programs = {
-            "prefill": forward(False),
-            "decode": forward(True),
-            # `seqs` sequences, one row each (tokens = seqs)
-            "decode_batch": forward(True, batch=True),
+            "prefill": program(forward(False), groups=1, rows="tokens"),
+            "decode": program(forward(True), groups=1, rows=1),
+            "decode_batch": program(forward(True, batch=True), groups=MAX_SEQS, rows=1),
         }
     for name, dom in DOMAINS.items():
         if name in buffers:
             buffers[name]["domain"] = dom
     # the runtime rejects dead kernels / buffers (a manifest describes only
     # what runs): the spec layout leaves Stage 1's packed decode chain unused
-    used_k = {c["op"] for calls in programs.values() for c in calls}
-    used_b = {a["buf"] for calls in programs.values() for c in calls for a in c["args"] if "buf" in a}
+    used_k = {c["op"] for p in programs.values() for c in p["calls"]}
+    used_b = {a["buf"] for p in programs.values() for c in p["calls"] for a in c["args"] if "buf" in a}
     kernels = {k: v for k, v in kernels.items() if k in used_k}
     buffers = {k: v for k, v in buffers.items() if k in used_b}
     # normalize: hoist inline cubin/sha256 into `modules`, fold the ABI
@@ -1591,7 +1599,7 @@ def main():
 
     m = build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec)
     out.write_text(json.dumps(m, indent=1) + "\n")
-    n_calls = {k: len(v) for k, v in m["programs"].items()}
+    n_calls = {k: len(v["calls"]) for k, v in m["programs"].items()}
     print(f"wrote {out}: {len(m['buffers'])} buffers, {len(m['ops'])} ops, {len(m['modules'])} modules, "
           f"calls {n_calls}", file=sys.stderr)
 

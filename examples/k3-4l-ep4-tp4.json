@@ -1,5 +1,5 @@
 {
- "schema_version": 3,
+ "schema_version": 4,
  "model": "kimi-k3-pruned-75pct/4l/ep4-tp4",
  "vars": {
   "tokens": {
@@ -33,6 +33,7 @@
     "rows"
    ],
    "kind": "input",
+   "fill": "token",
    "domain": {
     "index_into": "embed"
    }
@@ -43,6 +44,7 @@
     "tokens"
    ],
    "kind": "input",
+   "fill": "slot",
    "domain": {
     "index_into": "kv"
    }
@@ -65,6 +67,7 @@
     "seqs"
    ],
    "kind": "input",
+   "fill": "seq_len",
    "domain": {
     "min": 1
    }
@@ -87,6 +90,7 @@
     "rows"
    ],
    "kind": "output",
+   "fill": "tokens",
    "domain": {
     "index_into": "embed"
    }
@@ -202,7 +206,8 @@
    "shape": [
     1
    ],
-   "kind": "output"
+   "kind": "output",
+   "fill": "error"
   },
   "embed": {
    "dtype": "bf16",
@@ -3777,2500 +3782,2509 @@
   }
  },
  "programs": {
-  "decode": [
-   {
-    "label": "embed",
-    "op": "embedding",
-    "args": [
-     {
-      "buf": "token_ids"
-     },
-     {
-      "buf": "embed"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "var": "rows"
-     }
-    ]
+  "decode": {
+   "batch": {
+    "groups": 8,
+    "rows": 1
    },
-   {
-    "label": "mla_plan",
-    "op": "mla_split_plan",
-    "args": [
-     {
-      "buf": "seq_lens"
-     },
-     {
-      "buf": "mla_bsk"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l0.res_in",
-    "op": "attnres_rms_first",
-    "args": [
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.0.sw_mlp"
-     },
-     {
-      "buf": "layers.0.gamma_in"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l0.qkvg",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.0.wbig"
-     },
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 12288
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 12288
-     }
-    ]
-   },
-   {
-    "label": "l0.wsm",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.0.wsm"
-     },
-     {
-      "buf": "wsm_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 256
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 256
-     }
-    ]
-   },
-   {
-    "label": "l0.conv",
-    "op": "conv_silu",
-    "args": [
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "buf": "layers.0.cw"
-     },
-     {
-      "state": "kda"
-     },
-     {
-      "buf": "kda.line_index"
-     },
-     {
-      "buf": "conv_q"
-     },
-     {
-      "buf": "conv_k"
-     },
-     {
-      "buf": "conv_v"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l0.kda_core",
-    "op": "kda_core",
-    "args": [
-     {
-      "buf": "conv_q"
-     },
-     {
-      "buf": "conv_k"
-     },
-     {
-      "buf": "conv_v"
-     },
-     {
-      "buf": "wsm_partial"
-     },
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "buf": "layers.0.w_f_b"
-     },
-     {
-      "buf": "layers.0.dt_bias"
-     },
-     {
-      "buf": "layers.0.a_log"
-     },
-     {
-      "buf": "layers.0.gamma_o"
-     },
-     {
-      "state": "kda"
-     },
-     {
-      "buf": "kda.line_index"
-     },
-     {
-      "buf": "gated_kda"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l0.o_proj",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "gated_kda"
-     },
-     {
-      "buf": "layers.0.w_o"
-     },
-     {
-      "buf": "o_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3072
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l0.reduce_attn",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "o_partial"
-     },
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l0.res_mlp",
-    "op": "land_add_attnres_rms",
-    "args": [
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.0.sw_mlp"
-     },
-     {
-      "buf": "layers.0.gamma_post"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "i32": 1
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l0.wgu",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.0.wgu"
-     },
-     {
-      "buf": "dense_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 16896
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 16896
-     }
-    ]
-   },
-   {
-    "label": "l0.situ",
-    "op": "land_situ_n8448",
-    "args": [
-     {
-      "buf": "dense_partial"
-     },
-     {
-      "buf": "dense_act"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l0.w_dn",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "dense_act"
-     },
-     {
-      "buf": "layers.0.w_dn"
-     },
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 8448
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l0.reduce_mlp",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l0.hidden",
-    "op": "land_add2",
-    "args": [
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "i32": 0
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.res_in",
-    "op": "attnres_rms",
-    "args": [
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.1.sw_attn"
-     },
-     {
-      "buf": "layers.1.gamma_in"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.qkvg",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.1.wbig"
-     },
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 12288
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 12288
-     }
-    ]
-   },
-   {
-    "label": "l1.wsm",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.1.wsm"
-     },
-     {
-      "buf": "wsm_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 256
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 256
-     }
-    ]
-   },
-   {
-    "label": "l1.conv",
-    "op": "conv_silu",
-    "args": [
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "buf": "layers.1.cw"
-     },
-     {
-      "state": "kda"
-     },
-     {
-      "buf": "kda.line_index",
-      "offset": 128
-     },
-     {
-      "buf": "conv_q"
-     },
-     {
-      "buf": "conv_k"
-     },
-     {
-      "buf": "conv_v"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.kda_core",
-    "op": "kda_core",
-    "args": [
-     {
-      "buf": "conv_q"
-     },
-     {
-      "buf": "conv_k"
-     },
-     {
-      "buf": "conv_v"
-     },
-     {
-      "buf": "wsm_partial"
-     },
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "buf": "layers.1.w_f_b"
-     },
-     {
-      "buf": "layers.1.dt_bias"
-     },
-     {
-      "buf": "layers.1.a_log"
-     },
-     {
-      "buf": "layers.1.gamma_o"
-     },
-     {
-      "state": "kda"
-     },
-     {
-      "buf": "kda.line_index",
-      "offset": 128
-     },
-     {
-      "buf": "gated_kda"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.o_proj",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "gated_kda"
-     },
-     {
-      "buf": "layers.1.w_o"
-     },
-     {
-      "buf": "o_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3072
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l1.reduce_attn",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "o_partial"
-     },
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l1.res_mlp",
-    "op": "land_add_attnres_rms",
-    "args": [
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.1.sw_mlp"
-     },
-     {
-      "buf": "layers.1.gamma_post"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "i32": 0
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.router",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.1.w_router"
-     },
-     {
-      "buf": "router_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 224
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 224
-     }
-    ]
-   },
-   {
-    "label": "l1.topk",
-    "op": "router_topk",
-    "args": [
-     {
-      "buf": "router_partial"
-     },
-     {
-      "buf": "layers.1.bias"
-     },
-     {
-      "buf": "layers.1.rs"
-     },
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l1.lat_down",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.1.w_lat_down"
-     },
-     {
-      "buf": "latent_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 3584
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3584
-     }
-    ]
-   },
-   {
-    "label": "l1.latent",
-    "op": "land_n3584",
-    "args": [
-     {
-      "buf": "latent_partial"
-     },
-     {
-      "buf": "latent"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l1.quant_x",
-    "op": "quant_x",
-    "args": [
-     {
-      "buf": "latent"
-     },
-     {
-      "buf": "slab",
-      "offset": 74587712
-     },
-     {
-      "buf": "slab",
-      "offset": 135142976
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l1.routing",
-    "op": "write_routing",
-    "args": [
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "buf": "slab",
-      "offset": 137035328
-     },
-     {
-      "buf": "slab",
-      "offset": 139198016
-     },
-     {
-      "expr": {
-       "mul": [
-        "tokens",
-        16
-       ]
+   "calls": [
+    {
+     "label": "embed",
+     "op": "embedding",
+     "args": [
+      {
+       "buf": "token_ids"
+      },
+      {
+       "buf": "embed"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "var": "rows"
       }
-     }
-    ]
-   },
-   {
-    "label": "l1.mega_moe",
-    "op": "mega_moe",
-    "args": [
-     {
-      "buf": "routed_latent"
-     },
-     {
-      "buf": "stats"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "buf": "slab_peers"
-     },
-     {
-      "rank": "ep"
-     },
-     {
-      "buf": "slab",
-      "offset": 140279360
-     },
-     {
-      "buf": "slab",
-      "offset": 1779400256
-     },
-     {
-      "buf": "layers.1.l1_weights"
-     },
-     {
-      "buf": "layers.1.l1_weights_sf"
-     },
-     {
-      "buf": "slab",
-      "offset": 2600790080
-     },
-     {
-      "buf": "slab",
-      "offset": 4005750848
-     },
-     {
-      "buf": "layers.1.l2_weights"
-     },
-     {
-      "buf": "layers.1.l2_weights_sf"
-     }
-    ]
-   },
-   {
-    "label": "l1.gather_moe",
-    "op": "tp_allgather_bf16",
-    "args": [
-     {
-      "buf": "routed_latent"
-     },
-     {
-      "buf": "routed_latent_all"
-     },
-     {
-      "buf": "tp_sym"
-     },
-     {
-      "buf": "tp_peers"
-     },
-     {
-      "buf": "tp_epochs"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l1.lat_norm",
-    "op": "rms",
-    "args": [
-     {
-      "buf": "routed_latent_all"
-     },
-     {
-      "buf": "layers.1.gamma_lat"
-     },
-     {
-      "buf": "routed_latent_norm"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.lat_up",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "routed_latent_norm"
-     },
-     {
-      "buf": "layers.1.w_lat_up"
-     },
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3584
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l1.wsh",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.1.wsh"
-     },
-     {
-      "buf": "shared_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 3072
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3072
-     }
-    ]
-   },
-   {
-    "label": "l1.shared_situ",
-    "op": "land_situ_n1536",
-    "args": [
-     {
-      "buf": "shared_partial"
-     },
-     {
-      "buf": "shared_act"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l1.sh_down",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "shared_act"
-     },
-     {
-      "buf": "layers.1.sh_down"
-     },
-     {
-      "buf": "shared_partial2"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 1536
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l1.reduce_mlp",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "shared_partial2"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l1.hidden",
-    "op": "land_add2",
-    "args": [
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "i32": 1
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.res_in",
-    "op": "attnres_rms",
-    "args": [
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.2.sw_attn"
-     },
-     {
-      "buf": "layers.2.gamma_in"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.qkvg",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.2.wbig"
-     },
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 12288
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 12288
-     }
-    ]
-   },
-   {
-    "label": "l2.wsm",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.2.wsm"
-     },
-     {
-      "buf": "wsm_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 256
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 256
-     }
-    ]
-   },
-   {
-    "label": "l2.conv",
-    "op": "conv_silu",
-    "args": [
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "buf": "layers.2.cw"
-     },
-     {
-      "state": "kda"
-     },
-     {
-      "buf": "kda.line_index",
-      "offset": 256
-     },
-     {
-      "buf": "conv_q"
-     },
-     {
-      "buf": "conv_k"
-     },
-     {
-      "buf": "conv_v"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.kda_core",
-    "op": "kda_core",
-    "args": [
-     {
-      "buf": "conv_q"
-     },
-     {
-      "buf": "conv_k"
-     },
-     {
-      "buf": "conv_v"
-     },
-     {
-      "buf": "wsm_partial"
-     },
-     {
-      "buf": "kda_partial"
-     },
-     {
-      "buf": "layers.2.w_f_b"
-     },
-     {
-      "buf": "layers.2.dt_bias"
-     },
-     {
-      "buf": "layers.2.a_log"
-     },
-     {
-      "buf": "layers.2.gamma_o"
-     },
-     {
-      "state": "kda"
-     },
-     {
-      "buf": "kda.line_index",
-      "offset": 256
-     },
-     {
-      "buf": "gated_kda"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.o_proj",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "gated_kda"
-     },
-     {
-      "buf": "layers.2.w_o"
-     },
-     {
-      "buf": "o_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3072
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l2.reduce_attn",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "o_partial"
-     },
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l2.res_mlp",
-    "op": "land_add_attnres_rms",
-    "args": [
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.2.sw_mlp"
-     },
-     {
-      "buf": "layers.2.gamma_post"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "i32": 0
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.router",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.2.w_router"
-     },
-     {
-      "buf": "router_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 224
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 224
-     }
-    ]
-   },
-   {
-    "label": "l2.topk",
-    "op": "router_topk",
-    "args": [
-     {
-      "buf": "router_partial"
-     },
-     {
-      "buf": "layers.2.bias"
-     },
-     {
-      "buf": "layers.2.rs"
-     },
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l2.lat_down",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.2.w_lat_down"
-     },
-     {
-      "buf": "latent_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 3584
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3584
-     }
-    ]
-   },
-   {
-    "label": "l2.latent",
-    "op": "land_n3584",
-    "args": [
-     {
-      "buf": "latent_partial"
-     },
-     {
-      "buf": "latent"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l2.quant_x",
-    "op": "quant_x",
-    "args": [
-     {
-      "buf": "latent"
-     },
-     {
-      "buf": "slab",
-      "offset": 74587712
-     },
-     {
-      "buf": "slab",
-      "offset": 135142976
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l2.routing",
-    "op": "write_routing",
-    "args": [
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "buf": "slab",
-      "offset": 137035328
-     },
-     {
-      "buf": "slab",
-      "offset": 139198016
-     },
-     {
-      "expr": {
-       "mul": [
-        "tokens",
-        16
-       ]
+     ]
+    },
+    {
+     "label": "mla_plan",
+     "op": "mla_split_plan",
+     "args": [
+      {
+       "buf": "seq_lens"
+      },
+      {
+       "buf": "mla_bsk"
+      },
+      {
+       "var": "tokens"
       }
-     }
-    ]
-   },
-   {
-    "label": "l2.mega_moe",
-    "op": "mega_moe",
-    "args": [
-     {
-      "buf": "routed_latent"
-     },
-     {
-      "buf": "stats"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "buf": "slab_peers"
-     },
-     {
-      "rank": "ep"
-     },
-     {
-      "buf": "slab",
-      "offset": 140279360
-     },
-     {
-      "buf": "slab",
-      "offset": 1779400256
-     },
-     {
-      "buf": "layers.2.l1_weights"
-     },
-     {
-      "buf": "layers.2.l1_weights_sf"
-     },
-     {
-      "buf": "slab",
-      "offset": 2600790080
-     },
-     {
-      "buf": "slab",
-      "offset": 4005750848
-     },
-     {
-      "buf": "layers.2.l2_weights"
-     },
-     {
-      "buf": "layers.2.l2_weights_sf"
-     }
-    ]
-   },
-   {
-    "label": "l2.gather_moe",
-    "op": "tp_allgather_bf16",
-    "args": [
-     {
-      "buf": "routed_latent"
-     },
-     {
-      "buf": "routed_latent_all"
-     },
-     {
-      "buf": "tp_sym"
-     },
-     {
-      "buf": "tp_peers"
-     },
-     {
-      "buf": "tp_epochs"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l2.lat_norm",
-    "op": "rms",
-    "args": [
-     {
-      "buf": "routed_latent_all"
-     },
-     {
-      "buf": "layers.2.gamma_lat"
-     },
-     {
-      "buf": "routed_latent_norm"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.lat_up",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "routed_latent_norm"
-     },
-     {
-      "buf": "layers.2.w_lat_up"
-     },
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3584
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l2.wsh",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.2.wsh"
-     },
-     {
-      "buf": "shared_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 3072
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3072
-     }
-    ]
-   },
-   {
-    "label": "l2.shared_situ",
-    "op": "land_situ_n1536",
-    "args": [
-     {
-      "buf": "shared_partial"
-     },
-     {
-      "buf": "shared_act"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l2.sh_down",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "shared_act"
-     },
-     {
-      "buf": "layers.2.sh_down"
-     },
-     {
-      "buf": "shared_partial2"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 1536
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l2.reduce_mlp",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "shared_partial2"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l2.hidden",
-    "op": "land_add2",
-    "args": [
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "i32": 1
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l3.res_in",
-    "op": "attnres_rms",
-    "args": [
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.3.sw_attn"
-     },
-     {
-      "buf": "layers.3.gamma_in"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l3.wfu",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.3.wfu"
-     },
-     {
-      "buf": "mla_fused_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 14400
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 14400
-     }
-    ]
-   },
-   {
-    "label": "l3.mla_prep",
-    "op": "mla_prep",
-    "args": [
-     {
-      "buf": "mla_fused_partial"
-     },
-     {
-      "buf": "layers.3.gamma_q_a"
-     },
-     {
-      "buf": "layers.3.gamma_kv_a"
-     },
-     {
-      "buf": "slot_mapping"
-     },
-     {
-      "state": "kv"
-     },
-     {
-      "buf": "q_norm"
-     },
-     {
-      "buf": "mla_gate"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.q_b",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "q_norm"
-     },
-     {
-      "buf": "layers.3.w_q_b"
-     },
-     {
-      "buf": "q_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 18432
-     },
-     {
-      "i32": 1536
-     },
-     {
-      "i32": 18432
-     }
-    ]
-   },
-   {
-    "label": "l3.absorb",
-    "op": "mla_absorb",
-    "args": [
-     {
-      "buf": "q_partial"
-     },
-     {
-      "buf": "layers.3.w_kv_b"
-     },
-     {
-      "buf": "q_abs"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.attn",
-    "op": "mla_attn",
-    "args": [
-     {
-      "buf": "q_abs"
-     },
-     {
-      "buf": "q_abs",
-      "offset": 1024
-     },
-     {
-      "state": "kv",
-      "offset": 0
-     },
-     {
-      "state": "kv",
-      "offset": 1024
-     },
-     {
-      "buf": "block_table"
-     },
-     {
-      "buf": "seq_lens"
-     },
-     {
-      "buf": "mla_bsk"
-     },
-     {
-      "buf": "o_lat"
-     },
-     {
-      "buf": "mla_lse"
-     },
-     {
-      "buf": "mla_acc_o"
-     },
-     {
-      "buf": "mla_acc_lse"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.vup",
-    "op": "mla_vup_gate",
-    "args": [
-     {
-      "buf": "o_lat"
-     },
-     {
-      "buf": "layers.3.w_kv_b"
-     },
-     {
-      "buf": "mla_gate"
-     },
-     {
-      "buf": "gated"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.o_proj",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "gated"
-     },
-     {
-      "buf": "layers.3.w_o"
-     },
-     {
-      "buf": "hidden_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 12288
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l3.gather_attn",
-    "op": "tp_allgather_f32",
-    "args": [
-     {
-      "buf": "hidden_partial"
-     },
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "tp_sym"
-     },
-     {
-      "buf": "tp_peers"
-     },
-     {
-      "buf": "tp_epochs"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.res_mlp",
-    "op": "land_add_attnres_rms",
-    "args": [
-     {
-      "buf": "hidden_partial_all"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "layers.3.sw_mlp"
-     },
-     {
-      "buf": "layers.3.gamma_post"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "i32": 0
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l3.router",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.3.w_router"
-     },
-     {
-      "buf": "router_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 224
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 224
-     }
-    ]
-   },
-   {
-    "label": "l3.topk",
-    "op": "router_topk",
-    "args": [
-     {
-      "buf": "router_partial"
-     },
-     {
-      "buf": "layers.3.bias"
-     },
-     {
-      "buf": "layers.3.rs"
-     },
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.lat_down",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.3.w_lat_down"
-     },
-     {
-      "buf": "latent_partial"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "i32": 3584
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3584
-     }
-    ]
-   },
-   {
-    "label": "l3.latent",
-    "op": "land_n3584",
-    "args": [
-     {
-      "buf": "latent_partial"
-     },
-     {
-      "buf": "latent"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.quant_x",
-    "op": "quant_x",
-    "args": [
-     {
-      "buf": "latent"
-     },
-     {
-      "buf": "slab",
-      "offset": 74587712
-     },
-     {
-      "buf": "slab",
-      "offset": 135142976
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.routing",
-    "op": "write_routing",
-    "args": [
-     {
-      "buf": "topk_idx"
-     },
-     {
-      "buf": "topk_weight"
-     },
-     {
-      "buf": "slab",
-      "offset": 137035328
-     },
-     {
-      "buf": "slab",
-      "offset": 139198016
-     },
-     {
-      "expr": {
-       "mul": [
-        "tokens",
-        16
-       ]
+     ]
+    },
+    {
+     "label": "l0.res_in",
+     "op": "attnres_rms_first",
+     "args": [
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.0.sw_mlp"
+      },
+      {
+       "buf": "layers.0.gamma_in"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "var": "rows"
       }
-     }
-    ]
-   },
-   {
-    "label": "l3.mega_moe",
-    "op": "mega_moe",
-    "args": [
-     {
-      "buf": "routed_latent"
-     },
-     {
-      "buf": "stats"
-     },
-     {
-      "var": "tokens"
-     },
-     {
-      "buf": "slab_peers"
-     },
-     {
-      "rank": "ep"
-     },
-     {
-      "buf": "slab",
-      "offset": 140279360
-     },
-     {
-      "buf": "slab",
-      "offset": 1779400256
-     },
-     {
-      "buf": "layers.3.l1_weights"
-     },
-     {
-      "buf": "layers.3.l1_weights_sf"
-     },
-     {
-      "buf": "slab",
-      "offset": 2600790080
-     },
-     {
-      "buf": "slab",
-      "offset": 4005750848
-     },
-     {
-      "buf": "layers.3.l2_weights"
-     },
-     {
-      "buf": "layers.3.l2_weights_sf"
-     }
-    ]
-   },
-   {
-    "label": "l3.gather_moe",
-    "op": "tp_allgather_bf16",
-    "args": [
-     {
-      "buf": "routed_latent"
-     },
-     {
-      "buf": "routed_latent_all"
-     },
-     {
-      "buf": "tp_sym"
-     },
-     {
-      "buf": "tp_peers"
-     },
-     {
-      "buf": "tp_epochs"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.lat_norm",
-    "op": "rms",
-    "args": [
-     {
-      "buf": "routed_latent_all"
-     },
-     {
-      "buf": "layers.3.gamma_lat"
-     },
-     {
-      "buf": "routed_latent_norm"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l3.lat_up",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "routed_latent_norm"
-     },
-     {
-      "buf": "layers.3.w_lat_up"
-     },
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3584
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l3.wsh",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "layers.3.wsh"
-     },
-     {
-      "buf": "shared_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 3072
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 3072
-     }
-    ]
-   },
-   {
-    "label": "l3.shared_situ",
-    "op": "land_situ_n1536",
-    "args": [
-     {
-      "buf": "shared_partial"
-     },
-     {
-      "buf": "shared_act"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "l3.sh_down",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "shared_act"
-     },
-     {
-      "buf": "layers.3.sh_down"
-     },
-     {
-      "buf": "shared_partial2"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 1536
-     },
-     {
-      "i32": 7168
-     }
-    ]
-   },
-   {
-    "label": "l3.reduce_mlp",
-    "op": "tp_allreduce_f32",
-    "args": [
-     {
-      "buf": "shared_partial2"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "tp_ar_comm"
-     },
-     {
-      "buf": "tp_ar_comm_peers"
-     },
-     {
-      "buf": "tp_ar_flags"
-     },
-     {
-      "buf": "tp_ar_flag_peers"
-     },
-     {
-      "buf": "tp_ar_lamport"
-     },
-     {
-      "buf": "tp_ar_lamport_peers"
-     },
-     {
-      "buf": "tp_ar_state"
-     },
-     {
-      "buf": "tp_err"
-     },
-     {
-      "rank": "tp"
-     },
-     {
-      "var": "tokens"
-     }
-    ]
-   },
-   {
-    "label": "l3.hidden",
-    "op": "land_add2",
-    "args": [
-     {
-      "buf": "routed_partial"
-     },
-     {
-      "buf": "mlp_all"
-     },
-     {
-      "buf": "prefix2"
-     },
-     {
-      "buf": "hidden"
-     },
-     {
-      "i32": 1
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "out.res",
-    "op": "attnres_rms",
-    "args": [
-     {
-      "buf": "hidden"
-     },
-     {
-      "buf": "blocks"
-     },
-     {
-      "buf": "sw_out"
-     },
-     {
-      "buf": "gamma_final"
-     },
-     {
-      "buf": "normed"
-     },
-     {
-      "var": "rows"
-     }
-    ]
-   },
-   {
-    "label": "out.lm_head",
-    "op": "gemm_f32",
-    "args": [
-     {
-      "buf": "normed"
-     },
-     {
-      "buf": "w_lm"
-     },
-     {
-      "buf": "logit_partial"
-     },
-     {
-      "var": "rows"
-     },
-     {
-      "i32": 163840
-     },
-     {
-      "i32": 7168
-     },
-     {
-      "i32": 163840
-     }
-    ]
-   },
-   {
-    "label": "out.argmax",
-    "op": "argmax_f32",
-    "args": [
-     {
-      "buf": "logit_partial"
-     },
-     {
-      "buf": "next_token"
-     }
-    ]
-   }
-  ],
-  "tp_init": [
-   {
-    "label": "tp_init",
-    "op": "tp_lamport_init",
-    "args": [
-     {
-      "buf": "tp_ar_lamport"
-     }
-    ]
-   }
-  ]
+     ]
+    },
+    {
+     "label": "l0.qkvg",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.0.wbig"
+      },
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 12288
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 12288
+      }
+     ]
+    },
+    {
+     "label": "l0.wsm",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.0.wsm"
+      },
+      {
+       "buf": "wsm_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 256
+      }
+     ]
+    },
+    {
+     "label": "l0.conv",
+     "op": "conv_silu",
+     "args": [
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "buf": "layers.0.cw"
+      },
+      {
+       "state": "kda"
+      },
+      {
+       "buf": "kda.line_index"
+      },
+      {
+       "buf": "conv_q"
+      },
+      {
+       "buf": "conv_k"
+      },
+      {
+       "buf": "conv_v"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l0.kda_core",
+     "op": "kda_core",
+     "args": [
+      {
+       "buf": "conv_q"
+      },
+      {
+       "buf": "conv_k"
+      },
+      {
+       "buf": "conv_v"
+      },
+      {
+       "buf": "wsm_partial"
+      },
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "buf": "layers.0.w_f_b"
+      },
+      {
+       "buf": "layers.0.dt_bias"
+      },
+      {
+       "buf": "layers.0.a_log"
+      },
+      {
+       "buf": "layers.0.gamma_o"
+      },
+      {
+       "state": "kda"
+      },
+      {
+       "buf": "kda.line_index"
+      },
+      {
+       "buf": "gated_kda"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l0.o_proj",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "gated_kda"
+      },
+      {
+       "buf": "layers.0.w_o"
+      },
+      {
+       "buf": "o_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l0.reduce_attn",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "o_partial"
+      },
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l0.res_mlp",
+     "op": "land_add_attnres_rms",
+     "args": [
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.0.sw_mlp"
+      },
+      {
+       "buf": "layers.0.gamma_post"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "i32": 1
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l0.wgu",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.0.wgu"
+      },
+      {
+       "buf": "dense_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 16896
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 16896
+      }
+     ]
+    },
+    {
+     "label": "l0.situ",
+     "op": "land_situ_n8448",
+     "args": [
+      {
+       "buf": "dense_partial"
+      },
+      {
+       "buf": "dense_act"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l0.w_dn",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "dense_act"
+      },
+      {
+       "buf": "layers.0.w_dn"
+      },
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 8448
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l0.reduce_mlp",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l0.hidden",
+     "op": "land_add2",
+     "args": [
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "i32": 0
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.res_in",
+     "op": "attnres_rms",
+     "args": [
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.1.sw_attn"
+      },
+      {
+       "buf": "layers.1.gamma_in"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.qkvg",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.1.wbig"
+      },
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 12288
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 12288
+      }
+     ]
+    },
+    {
+     "label": "l1.wsm",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.1.wsm"
+      },
+      {
+       "buf": "wsm_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 256
+      }
+     ]
+    },
+    {
+     "label": "l1.conv",
+     "op": "conv_silu",
+     "args": [
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "buf": "layers.1.cw"
+      },
+      {
+       "state": "kda"
+      },
+      {
+       "buf": "kda.line_index",
+       "offset": 128
+      },
+      {
+       "buf": "conv_q"
+      },
+      {
+       "buf": "conv_k"
+      },
+      {
+       "buf": "conv_v"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.kda_core",
+     "op": "kda_core",
+     "args": [
+      {
+       "buf": "conv_q"
+      },
+      {
+       "buf": "conv_k"
+      },
+      {
+       "buf": "conv_v"
+      },
+      {
+       "buf": "wsm_partial"
+      },
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "buf": "layers.1.w_f_b"
+      },
+      {
+       "buf": "layers.1.dt_bias"
+      },
+      {
+       "buf": "layers.1.a_log"
+      },
+      {
+       "buf": "layers.1.gamma_o"
+      },
+      {
+       "state": "kda"
+      },
+      {
+       "buf": "kda.line_index",
+       "offset": 128
+      },
+      {
+       "buf": "gated_kda"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.o_proj",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "gated_kda"
+      },
+      {
+       "buf": "layers.1.w_o"
+      },
+      {
+       "buf": "o_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l1.reduce_attn",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "o_partial"
+      },
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l1.res_mlp",
+     "op": "land_add_attnres_rms",
+     "args": [
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.1.sw_mlp"
+      },
+      {
+       "buf": "layers.1.gamma_post"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "i32": 0
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.router",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.1.w_router"
+      },
+      {
+       "buf": "router_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 224
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 224
+      }
+     ]
+    },
+    {
+     "label": "l1.topk",
+     "op": "router_topk",
+     "args": [
+      {
+       "buf": "router_partial"
+      },
+      {
+       "buf": "layers.1.bias"
+      },
+      {
+       "buf": "layers.1.rs"
+      },
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l1.lat_down",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.1.w_lat_down"
+      },
+      {
+       "buf": "latent_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3584
+      }
+     ]
+    },
+    {
+     "label": "l1.latent",
+     "op": "land_n3584",
+     "args": [
+      {
+       "buf": "latent_partial"
+      },
+      {
+       "buf": "latent"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l1.quant_x",
+     "op": "quant_x",
+     "args": [
+      {
+       "buf": "latent"
+      },
+      {
+       "buf": "slab",
+       "offset": 74587712
+      },
+      {
+       "buf": "slab",
+       "offset": 135142976
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l1.routing",
+     "op": "write_routing",
+     "args": [
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "buf": "slab",
+       "offset": 137035328
+      },
+      {
+       "buf": "slab",
+       "offset": 139198016
+      },
+      {
+       "expr": {
+        "mul": [
+         "tokens",
+         16
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l1.mega_moe",
+     "op": "mega_moe",
+     "args": [
+      {
+       "buf": "routed_latent"
+      },
+      {
+       "buf": "stats"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "buf": "slab_peers"
+      },
+      {
+       "rank": "ep"
+      },
+      {
+       "buf": "slab",
+       "offset": 140279360
+      },
+      {
+       "buf": "slab",
+       "offset": 1779400256
+      },
+      {
+       "buf": "layers.1.l1_weights"
+      },
+      {
+       "buf": "layers.1.l1_weights_sf"
+      },
+      {
+       "buf": "slab",
+       "offset": 2600790080
+      },
+      {
+       "buf": "slab",
+       "offset": 4005750848
+      },
+      {
+       "buf": "layers.1.l2_weights"
+      },
+      {
+       "buf": "layers.1.l2_weights_sf"
+      }
+     ]
+    },
+    {
+     "label": "l1.gather_moe",
+     "op": "tp_allgather_bf16",
+     "args": [
+      {
+       "buf": "routed_latent"
+      },
+      {
+       "buf": "routed_latent_all"
+      },
+      {
+       "buf": "tp_sym"
+      },
+      {
+       "buf": "tp_peers"
+      },
+      {
+       "buf": "tp_epochs"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l1.lat_norm",
+     "op": "rms",
+     "args": [
+      {
+       "buf": "routed_latent_all"
+      },
+      {
+       "buf": "layers.1.gamma_lat"
+      },
+      {
+       "buf": "routed_latent_norm"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.lat_up",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "routed_latent_norm"
+      },
+      {
+       "buf": "layers.1.w_lat_up"
+      },
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l1.wsh",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.1.wsh"
+      },
+      {
+       "buf": "shared_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3072
+      }
+     ]
+    },
+    {
+     "label": "l1.shared_situ",
+     "op": "land_situ_n1536",
+     "args": [
+      {
+       "buf": "shared_partial"
+      },
+      {
+       "buf": "shared_act"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l1.sh_down",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "shared_act"
+      },
+      {
+       "buf": "layers.1.sh_down"
+      },
+      {
+       "buf": "shared_partial2"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 1536
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l1.reduce_mlp",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "shared_partial2"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l1.hidden",
+     "op": "land_add2",
+     "args": [
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "i32": 1
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.res_in",
+     "op": "attnres_rms",
+     "args": [
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.2.sw_attn"
+      },
+      {
+       "buf": "layers.2.gamma_in"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.qkvg",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.2.wbig"
+      },
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 12288
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 12288
+      }
+     ]
+    },
+    {
+     "label": "l2.wsm",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.2.wsm"
+      },
+      {
+       "buf": "wsm_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 256
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 256
+      }
+     ]
+    },
+    {
+     "label": "l2.conv",
+     "op": "conv_silu",
+     "args": [
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "buf": "layers.2.cw"
+      },
+      {
+       "state": "kda"
+      },
+      {
+       "buf": "kda.line_index",
+       "offset": 256
+      },
+      {
+       "buf": "conv_q"
+      },
+      {
+       "buf": "conv_k"
+      },
+      {
+       "buf": "conv_v"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.kda_core",
+     "op": "kda_core",
+     "args": [
+      {
+       "buf": "conv_q"
+      },
+      {
+       "buf": "conv_k"
+      },
+      {
+       "buf": "conv_v"
+      },
+      {
+       "buf": "wsm_partial"
+      },
+      {
+       "buf": "kda_partial"
+      },
+      {
+       "buf": "layers.2.w_f_b"
+      },
+      {
+       "buf": "layers.2.dt_bias"
+      },
+      {
+       "buf": "layers.2.a_log"
+      },
+      {
+       "buf": "layers.2.gamma_o"
+      },
+      {
+       "state": "kda"
+      },
+      {
+       "buf": "kda.line_index",
+       "offset": 256
+      },
+      {
+       "buf": "gated_kda"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.o_proj",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "gated_kda"
+      },
+      {
+       "buf": "layers.2.w_o"
+      },
+      {
+       "buf": "o_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l2.reduce_attn",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "o_partial"
+      },
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l2.res_mlp",
+     "op": "land_add_attnres_rms",
+     "args": [
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.2.sw_mlp"
+      },
+      {
+       "buf": "layers.2.gamma_post"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "i32": 0
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.router",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.2.w_router"
+      },
+      {
+       "buf": "router_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 224
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 224
+      }
+     ]
+    },
+    {
+     "label": "l2.topk",
+     "op": "router_topk",
+     "args": [
+      {
+       "buf": "router_partial"
+      },
+      {
+       "buf": "layers.2.bias"
+      },
+      {
+       "buf": "layers.2.rs"
+      },
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l2.lat_down",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.2.w_lat_down"
+      },
+      {
+       "buf": "latent_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3584
+      }
+     ]
+    },
+    {
+     "label": "l2.latent",
+     "op": "land_n3584",
+     "args": [
+      {
+       "buf": "latent_partial"
+      },
+      {
+       "buf": "latent"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l2.quant_x",
+     "op": "quant_x",
+     "args": [
+      {
+       "buf": "latent"
+      },
+      {
+       "buf": "slab",
+       "offset": 74587712
+      },
+      {
+       "buf": "slab",
+       "offset": 135142976
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l2.routing",
+     "op": "write_routing",
+     "args": [
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "buf": "slab",
+       "offset": 137035328
+      },
+      {
+       "buf": "slab",
+       "offset": 139198016
+      },
+      {
+       "expr": {
+        "mul": [
+         "tokens",
+         16
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l2.mega_moe",
+     "op": "mega_moe",
+     "args": [
+      {
+       "buf": "routed_latent"
+      },
+      {
+       "buf": "stats"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "buf": "slab_peers"
+      },
+      {
+       "rank": "ep"
+      },
+      {
+       "buf": "slab",
+       "offset": 140279360
+      },
+      {
+       "buf": "slab",
+       "offset": 1779400256
+      },
+      {
+       "buf": "layers.2.l1_weights"
+      },
+      {
+       "buf": "layers.2.l1_weights_sf"
+      },
+      {
+       "buf": "slab",
+       "offset": 2600790080
+      },
+      {
+       "buf": "slab",
+       "offset": 4005750848
+      },
+      {
+       "buf": "layers.2.l2_weights"
+      },
+      {
+       "buf": "layers.2.l2_weights_sf"
+      }
+     ]
+    },
+    {
+     "label": "l2.gather_moe",
+     "op": "tp_allgather_bf16",
+     "args": [
+      {
+       "buf": "routed_latent"
+      },
+      {
+       "buf": "routed_latent_all"
+      },
+      {
+       "buf": "tp_sym"
+      },
+      {
+       "buf": "tp_peers"
+      },
+      {
+       "buf": "tp_epochs"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l2.lat_norm",
+     "op": "rms",
+     "args": [
+      {
+       "buf": "routed_latent_all"
+      },
+      {
+       "buf": "layers.2.gamma_lat"
+      },
+      {
+       "buf": "routed_latent_norm"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.lat_up",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "routed_latent_norm"
+      },
+      {
+       "buf": "layers.2.w_lat_up"
+      },
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l2.wsh",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.2.wsh"
+      },
+      {
+       "buf": "shared_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3072
+      }
+     ]
+    },
+    {
+     "label": "l2.shared_situ",
+     "op": "land_situ_n1536",
+     "args": [
+      {
+       "buf": "shared_partial"
+      },
+      {
+       "buf": "shared_act"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l2.sh_down",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "shared_act"
+      },
+      {
+       "buf": "layers.2.sh_down"
+      },
+      {
+       "buf": "shared_partial2"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 1536
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l2.reduce_mlp",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "shared_partial2"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l2.hidden",
+     "op": "land_add2",
+     "args": [
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "i32": 1
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l3.res_in",
+     "op": "attnres_rms",
+     "args": [
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.3.sw_attn"
+      },
+      {
+       "buf": "layers.3.gamma_in"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l3.wfu",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.3.wfu"
+      },
+      {
+       "buf": "mla_fused_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 14400
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 14400
+      }
+     ]
+    },
+    {
+     "label": "l3.mla_prep",
+     "op": "mla_prep",
+     "args": [
+      {
+       "buf": "mla_fused_partial"
+      },
+      {
+       "buf": "layers.3.gamma_q_a"
+      },
+      {
+       "buf": "layers.3.gamma_kv_a"
+      },
+      {
+       "buf": "slot_mapping"
+      },
+      {
+       "state": "kv"
+      },
+      {
+       "buf": "q_norm"
+      },
+      {
+       "buf": "mla_gate"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.q_b",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "q_norm"
+      },
+      {
+       "buf": "layers.3.w_q_b"
+      },
+      {
+       "buf": "q_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 18432
+      },
+      {
+       "i32": 1536
+      },
+      {
+       "i32": 18432
+      }
+     ]
+    },
+    {
+     "label": "l3.absorb",
+     "op": "mla_absorb",
+     "args": [
+      {
+       "buf": "q_partial"
+      },
+      {
+       "buf": "layers.3.w_kv_b"
+      },
+      {
+       "buf": "q_abs"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.attn",
+     "op": "mla_attn",
+     "args": [
+      {
+       "buf": "q_abs"
+      },
+      {
+       "buf": "q_abs",
+       "offset": 1024
+      },
+      {
+       "state": "kv",
+       "offset": 0
+      },
+      {
+       "state": "kv",
+       "offset": 1024
+      },
+      {
+       "buf": "block_table"
+      },
+      {
+       "buf": "seq_lens"
+      },
+      {
+       "buf": "mla_bsk"
+      },
+      {
+       "buf": "o_lat"
+      },
+      {
+       "buf": "mla_lse"
+      },
+      {
+       "buf": "mla_acc_o"
+      },
+      {
+       "buf": "mla_acc_lse"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.vup",
+     "op": "mla_vup_gate",
+     "args": [
+      {
+       "buf": "o_lat"
+      },
+      {
+       "buf": "layers.3.w_kv_b"
+      },
+      {
+       "buf": "mla_gate"
+      },
+      {
+       "buf": "gated"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.o_proj",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "gated"
+      },
+      {
+       "buf": "layers.3.w_o"
+      },
+      {
+       "buf": "hidden_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 12288
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l3.gather_attn",
+     "op": "tp_allgather_f32",
+     "args": [
+      {
+       "buf": "hidden_partial"
+      },
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "tp_sym"
+      },
+      {
+       "buf": "tp_peers"
+      },
+      {
+       "buf": "tp_epochs"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.res_mlp",
+     "op": "land_add_attnres_rms",
+     "args": [
+      {
+       "buf": "hidden_partial_all"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "layers.3.sw_mlp"
+      },
+      {
+       "buf": "layers.3.gamma_post"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "i32": 0
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l3.router",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.3.w_router"
+      },
+      {
+       "buf": "router_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 224
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 224
+      }
+     ]
+    },
+    {
+     "label": "l3.topk",
+     "op": "router_topk",
+     "args": [
+      {
+       "buf": "router_partial"
+      },
+      {
+       "buf": "layers.3.bias"
+      },
+      {
+       "buf": "layers.3.rs"
+      },
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.lat_down",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.3.w_lat_down"
+      },
+      {
+       "buf": "latent_partial"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3584
+      }
+     ]
+    },
+    {
+     "label": "l3.latent",
+     "op": "land_n3584",
+     "args": [
+      {
+       "buf": "latent_partial"
+      },
+      {
+       "buf": "latent"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.quant_x",
+     "op": "quant_x",
+     "args": [
+      {
+       "buf": "latent"
+      },
+      {
+       "buf": "slab",
+       "offset": 74587712
+      },
+      {
+       "buf": "slab",
+       "offset": 135142976
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.routing",
+     "op": "write_routing",
+     "args": [
+      {
+       "buf": "topk_idx"
+      },
+      {
+       "buf": "topk_weight"
+      },
+      {
+       "buf": "slab",
+       "offset": 137035328
+      },
+      {
+       "buf": "slab",
+       "offset": 139198016
+      },
+      {
+       "expr": {
+        "mul": [
+         "tokens",
+         16
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l3.mega_moe",
+     "op": "mega_moe",
+     "args": [
+      {
+       "buf": "routed_latent"
+      },
+      {
+       "buf": "stats"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "buf": "slab_peers"
+      },
+      {
+       "rank": "ep"
+      },
+      {
+       "buf": "slab",
+       "offset": 140279360
+      },
+      {
+       "buf": "slab",
+       "offset": 1779400256
+      },
+      {
+       "buf": "layers.3.l1_weights"
+      },
+      {
+       "buf": "layers.3.l1_weights_sf"
+      },
+      {
+       "buf": "slab",
+       "offset": 2600790080
+      },
+      {
+       "buf": "slab",
+       "offset": 4005750848
+      },
+      {
+       "buf": "layers.3.l2_weights"
+      },
+      {
+       "buf": "layers.3.l2_weights_sf"
+      }
+     ]
+    },
+    {
+     "label": "l3.gather_moe",
+     "op": "tp_allgather_bf16",
+     "args": [
+      {
+       "buf": "routed_latent"
+      },
+      {
+       "buf": "routed_latent_all"
+      },
+      {
+       "buf": "tp_sym"
+      },
+      {
+       "buf": "tp_peers"
+      },
+      {
+       "buf": "tp_epochs"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.lat_norm",
+     "op": "rms",
+     "args": [
+      {
+       "buf": "routed_latent_all"
+      },
+      {
+       "buf": "layers.3.gamma_lat"
+      },
+      {
+       "buf": "routed_latent_norm"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l3.lat_up",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "routed_latent_norm"
+      },
+      {
+       "buf": "layers.3.w_lat_up"
+      },
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l3.wsh",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "layers.3.wsh"
+      },
+      {
+       "buf": "shared_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 3072
+      }
+     ]
+    },
+    {
+     "label": "l3.shared_situ",
+     "op": "land_situ_n1536",
+     "args": [
+      {
+       "buf": "shared_partial"
+      },
+      {
+       "buf": "shared_act"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "l3.sh_down",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "shared_act"
+      },
+      {
+       "buf": "layers.3.sh_down"
+      },
+      {
+       "buf": "shared_partial2"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 1536
+      },
+      {
+       "i32": 7168
+      }
+     ]
+    },
+    {
+     "label": "l3.reduce_mlp",
+     "op": "tp_allreduce_f32",
+     "args": [
+      {
+       "buf": "shared_partial2"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "tp_ar_comm"
+      },
+      {
+       "buf": "tp_ar_comm_peers"
+      },
+      {
+       "buf": "tp_ar_flags"
+      },
+      {
+       "buf": "tp_ar_flag_peers"
+      },
+      {
+       "buf": "tp_ar_lamport"
+      },
+      {
+       "buf": "tp_ar_lamport_peers"
+      },
+      {
+       "buf": "tp_ar_state"
+      },
+      {
+       "buf": "tp_err"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "l3.hidden",
+     "op": "land_add2",
+     "args": [
+      {
+       "buf": "routed_partial"
+      },
+      {
+       "buf": "mlp_all"
+      },
+      {
+       "buf": "prefix2"
+      },
+      {
+       "buf": "hidden"
+      },
+      {
+       "i32": 1
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "out.res",
+     "op": "attnres_rms",
+     "args": [
+      {
+       "buf": "hidden"
+      },
+      {
+       "buf": "blocks"
+      },
+      {
+       "buf": "sw_out"
+      },
+      {
+       "buf": "gamma_final"
+      },
+      {
+       "buf": "normed"
+      },
+      {
+       "var": "rows"
+      }
+     ]
+    },
+    {
+     "label": "out.lm_head",
+     "op": "gemm_f32",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "w_lm"
+      },
+      {
+       "buf": "logit_partial"
+      },
+      {
+       "var": "rows"
+      },
+      {
+       "i32": 163840
+      },
+      {
+       "i32": 7168
+      },
+      {
+       "i32": 163840
+      }
+     ]
+    },
+    {
+     "label": "out.argmax",
+     "op": "argmax_f32",
+     "args": [
+      {
+       "buf": "logit_partial"
+      },
+      {
+       "buf": "next_token"
+      }
+     ]
+    }
+   ]
+  },
+  "tp_init": {
+   "once": true,
+   "calls": [
+    {
+     "label": "tp_init",
+     "op": "tp_lamport_init",
+     "args": [
+      {
+       "buf": "tp_ar_lamport"
+      }
+     ]
+    }
+   ]
+  }
  }
 }

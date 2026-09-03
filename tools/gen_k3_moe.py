@@ -161,7 +161,7 @@ def build(ranks, tokens_max):
         "topology": {"groups": {"ep": ranks}},
         "buffers": buffers,
         "ops": mp["ops"],
-        "programs": {"moe": program},
+        "programs": {"moe": kern_manifest.program(program)},
     }
     return kern_manifest.normalize(m)
 

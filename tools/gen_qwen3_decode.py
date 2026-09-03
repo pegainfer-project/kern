@@ -60,7 +60,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from kern_manifest import DumpIndex, normalize  # noqa: E402
+from kern_manifest import DumpIndex, normalize, program, SCHEMA_VERSION  # noqa: E402
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mine_capture as mc
@@ -85,7 +85,12 @@ BLOCK_Q = 4                   # unified 2D 实例每 block 的 query 行数（�
 # DSpark draft（dspark_qwen3_4b_block7）：几何与 target 同构，只有 5 层
 DRAFT_LAYERS = 5
 BLOCK_TOKENS = 7              # draft 每轮 query 数 = num_speculative_tokens
-VERIFY_TOKENS = BLOCK_TOKENS + 1   # verify = anchor + 7 drafts
+# A round stages one row group per sequence for draft and verify alike, so
+# both take BLOCK_TOKENS rows: verify = anchor + the first 6 drafts (d6 is
+# drafted, never verified). The verify pass is causal, so dropping the last
+# row changes nothing the other rows predict.
+VERIFY_TOKENS = BLOCK_TOKENS
+MASK_TOKEN = 151669           # the draft config's mask_token_id, the undrafted rows of draft's block
 MARKOV_RANK = 256
 TAPS = {0: 0, 8: 1, 16: 2, 24: 3, 32: 4}  # target_layer_ids [1,9,17,25,33]-1
 DRAFT_KV_DIM = DRAFT_LAYERS * 2 * KV_DIM  # 融合 KV GEMM 输出行宽 10240
@@ -418,6 +423,9 @@ DOMAINS = {
     "anchor_token": TOKEN_DOMAIN,
     "draft_tokens": TOKEN_DOMAIN,
     "verify_tokens": TOKEN_DOMAIN,
+    "draft_ids": TOKEN_DOMAIN,
+    "verify_ids": TOKEN_DOMAIN,
+    "nacc": {"min": 1, "max": VERIFY_TOKENS},
 }
 
 
@@ -443,22 +451,22 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         return {"cubin": cubin, "sha256": sha}
 
     buffers = {
-        "token_ids": {"dtype": "i64", "shape": ["tokens"], "kind": "input"},
-        "positions": {"dtype": "i64", "shape": ["tokens"], "kind": "input"},
-        "slot_mapping": {"dtype": "i64", "shape": ["tokens"], "kind": "input"},
+        "token_ids": {"dtype": "i64", "shape": ["tokens"], "kind": "input", "fill": "token"},
+        "positions": {"dtype": "i64", "shape": ["tokens"], "kind": "input", "fill": "position"},
+        "slot_mapping": {"dtype": "i64", "shape": ["tokens"], "kind": "input", "fill": "slot"},
         # attention 元数据按序列：block_table 一行一个序列（行距 MAX_BLOCKS
         # 就是 kernel 收到的 block_table_stride），seq_lens[i] = 序列 i 已见
         # token 数（含本次），cu_seqlens_q = 各序列 query 行数的前缀和
         # （seqs+1 项；shape 维度不能是表达式，按上界声明，尾部不被读）。
         # prefill 恒 seqs=1：只填第 0 行 / 前两项
         "block_table": {"dtype": "i32", "shape": ["seqs", MAX_BLOCKS], "kind": "input"},
-        "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input"},
-        "cu_seqlens_q": {"dtype": "i32", "shape": [MAX_SEQS + 1], "kind": "input"},
+        "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input", "fill": "seq_len"},
+        "cu_seqlens_q": {"dtype": "i32", "shape": [MAX_SEQS + 1], "kind": "input", "fill": "cu_seqlens"},
         # logits/next_token 一序列一行（decode 的 tokens = seqs），按 seqs
         # 上界分配（256 × 151936 × 2 B ≈ 74 MB），不挂 tokens（CHUNK_MAX
         # 上界要多付 ~600 MB）
         "logits": {"dtype": "bf16", "shape": ["seqs", VOCAB], "kind": "workspace"},
-        "next_token": {"dtype": "i64", "shape": ["seqs"], "kind": "output"},
+        "next_token": {"dtype": "i64", "shape": ["seqs"], "kind": "output", "fill": "tokens"},
     }
     for name, shape in {
         "residual": ["tokens", HIDDEN],
@@ -499,11 +507,19 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         # 一序列一行：draft/verify 都是 seqs 段 varlen（每段 7/8 行），
         # tokens = 7·seqs / 8·seqs；seqs=1 就是单序列的老契约
         buffers["anchor_token"] = {"dtype": "i64", "shape": ["seqs"],
-                                   "kind": "input"}
+                                   "kind": "input", "fill": "token"}
         buffers["draft_tokens"] = {"dtype": "i64", "shape": ["seqs", BLOCK_TOKENS],
                                    "kind": "output"}
         buffers["verify_tokens"] = {"dtype": "i64", "shape": ["seqs", VERIFY_TOKENS],
-                                    "kind": "output"}
+                                    "kind": "output", "fill": "tokens"}
+        # how many of verify_tokens' rows a sequence takes: accepted + 1
+        buffers["nacc"] = {"dtype": "i32", "shape": ["seqs"], "kind": "output", "fill": "count"}
+        # the round's device-written rows: draft's ids ([anchor, mask x6]
+        # from the anchor the caller staged) and verify's ([anchor, d0..d5])
+        buffers["draft_ids"] = {"dtype": "i64", "shape": ["tokens"], "kind": "carry"}
+        buffers["verify_ids"] = {"dtype": "i64", "shape": ["tokens"], "kind": "carry"}
+        # the last prompt row of a prefill chunk, for its head
+        buffers["final_x"] = {"dtype": "bf16", "shape": [1, HIDDEN], "kind": "workspace"}
         buffers["logits_blk"] = {"dtype": "bf16",
                                  "shape": ["tokens", VOCAB],
                                  "kind": "workspace"}
@@ -694,10 +710,51 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         kernels["attn_draft"] = single(
             pf_sym, ATTN_IFACE, pf_block, [cdiv(mul(S, 11), BLOCK_Q), KV_HEADS, 1],
             shared_mem=pf_smem, cubin=draft_cubin, sha256=draft_sha)
-        # verify：causal 实例，8 行/段 → 8·seqs//4 + seqs = 3·seqs
+        # verify：causal 实例，7 行/段 → 7·seqs//4 + seqs ≤ 3·seqs
         kernels["attn_verify"] = single(
             pf_sym, ATTN_IFACE, pf_block, [mul(S, 3), KV_HEADS, 1],
             shared_mem=pf_smem, cubin=causal_cubin, sha256=causal_sha)
+        # the round's glue (tools/kernels-src/spec_round.cu): draft's ids
+        # from the anchor and the mask, verify's from draft's output, and the
+        # count of verify rows taken (the matched prefix + 1)
+        kernels["splice_draft"] = single(
+            "kern_splice_draft", ["in buffer<i64>", "out buffer<i64>", "i32", "i64"],
+            [32, 1, 1], [S, 1, 1], **hw("spec_round"))
+        kernels["splice_verify"] = single(
+            "kern_splice_verify", ["in buffer<i64>", "in buffer<i64>", "out buffer<i64>", "i32", "i32"],
+            [32, 1, 1], [S, 1, 1], **hw("spec_round"))
+        kernels["spec_count"] = single(
+            "kern_spec_count", ["in buffer<i64>", "in buffer<i64>", "out buffer<i32>", "i32", "i32"],
+            [32, 1, 1], [S, 1, 1], **hw("spec_round"))
+        # prefill's head over its last row (tools/kernels-src/copy_rows.cu;
+        # `rows-1` is not in the expression set, so the kernel takes `rows`)
+        # and the one-row argmax it feeds
+        kernels["last_row"] = single(
+            "kern_last_row_bf16", ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
+            [256, 1, 1], [1, 1, 1], **hw("copy_rows"))
+        kernels["argmax_row"] = {
+            "params": ["in buffer<bf16>", "out buffer<i64>", "i32"],
+            "impl": {
+                "scratch": {
+                    "pmax": {"dtype": "f32", "shape": [1, 64]},
+                    "pidx": {"dtype": "i32", "shape": [1, 64]},
+                },
+                "launches": [
+                    step("kern_argmax_partial_bf16",
+                         ["in buffer<bf16>", "out buffer<f32>",
+                          "out buffer<i32>", "i32"],
+                         [1024, 1, 1], [1, 64, 1],
+                         [a(0), scr("pmax"), scr("pidx"), a(2)],
+                         **hw("argmax")),
+                    step("kern_argmax_final_i64",
+                         ["in buffer<f32>", "in buffer<i32>",
+                          "out buffer<i64>", "i32"],
+                         [64, 1, 1], [1, 1, 1],
+                         [scr("pmax"), scr("pidx"), a(1), i32(64)],
+                         **hw("argmax")),
+                ],
+            },
+        }
         # markov 链第 t 步作用在每序列的第 t 行——行集合 {s·7+t}：行距 7·V
         # 的 argmax、下标距 7 的 gather，grid.x = seqs，步的字节偏移烘在
         # buffer 参数里
@@ -762,7 +819,8 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
 
     def forward(attn_kernel, tail, mp="model.", layers=LAYERS, kv_state="kv",
                 block_stride=BLOCK_STRIDE, scales="kv_scales", taps=False,
-                lm_head_w="lm_head.weight", final_norm_w="model.norm.weight"):
+                lm_head_w="lm_head.weight", final_norm_w="model.norm.weight",
+                ids="token_ids"):
         """embed + 逐层的直线 dispatch 表，target/draft 共用（几何同构，
         激活 buffer 全部复用；差异全在权重名、层数、attention 实现、KV
         state 与收尾 tail）。tail: None=只落 KV（prefill）；"decode"=1 行
@@ -775,7 +833,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         num_seqs = i32(1) if attn_kernel == "attn" else S
         ds = [
             d("embed", "embedding",
-              [buf("token_ids"), buf(mp + "embed_tokens.weight"),
+              [buf(ids), buf(mp + "embed_tokens.weight"),
                buf("residual"), T, i32(HIDDEN)]),
             d("l0.input_norm", "rms_norm",
               [buf("x"), buf("residual"), i64(HIDDEN), i64(0), i64(0), i64(0),
@@ -845,7 +903,16 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
                 ds.append(d(l + "fc_tap", "gemm" if j == 0 else "gemm_acc",
                             [buf("residual"), buf(f"draft.fc.{j}.weight"),
                              buf("fc_out"), T, i32(HIDDEN), i32(HIDDEN)]))
-        if tail == "decode":
+        if tail == "prefill":
+            # the last row's token: a prefill that hands the first generated
+            # token back (its taps are then in the draft KV before a round)
+            ds.append(d("last_row", "last_row",
+                        [buf("final_x"), buf("x"), i32(HIDDEN), i32(HIDDEN), T]))
+            ds.append(gemm("lm_head", "final_x", lm_head_w, "logits",
+                           i32(1), VOCAB, HIDDEN))
+            ds.append(d("sample", "argmax_row",
+                        [buf("logits"), buf("next_token"), i32(VOCAB)]))
+        elif tail == "decode":
             # decode 的 tokens = seqs：x 的前 seqs 行各出一行 logits
             ds.append(gemm("lm_head", "x", lm_head_w, "logits",
                            S, VOCAB, HIDDEN))
@@ -930,41 +997,59 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
 
     states = {"kv": {"bytes_per_token": KV_BYTES_PER_TOKEN}}
     programs = {
-        "prefill": forward("attn_prefill", None, taps=spec),
-        # decode：bs=1 契约（seqs=1），3D split-KV 微程序；decode_batch：
-        # seqs 个序列各一行（tokens = seqs），2D 实例。哪个 bs 走哪个核是
-        # manifest 的选择，caller 按 seqs 选 program，runtime 不知情
-        "decode": forward("attn", "decode"),
-        "decode_batch": forward("attn_batch", "decode"),
+        # prefill: one sequence, as many rows as the chunk holds (tokens);
+        # decode: the bs=1 contract, 3D split-KV kernels; decode_batch: up
+        # to MAX_SEQS sequences of one row each, the 2D instance. Which bs
+        # runs which kernel is the manifest's choice: the caller picks the
+        # forward whose batch fits, the runtime does not know
+        "prefill": program(forward("attn_prefill", None, taps=spec), groups=1, rows="tokens"),
+        "decode": program(forward("attn", "decode"), groups=1, rows=1),
+        "decode_batch": program(forward("attn_batch", "decode"), groups=MAX_SEQS, rows=1),
     }
     if spec:
         states["draft_kv"] = {"bytes_per_token": DRAFT_KV_BYTES_PER_TOKEN}
-        # decode_spec = decode + tap（最后一个 prompt token/anchor 也要出 aux）；
-        # decode 保持无 tap，非投机路径不多付 5 个 GEMV
-        programs["decode_spec"] = forward("attn", "decode", taps=True)
-        programs["verify"] = forward("attn_verify", "verify", taps=True)
-        programs["draft"] = forward(
-            "attn_draft", "draft", mp="draft.", layers=DRAFT_LAYERS,
-            kv_state="draft_kv", block_stride=DRAFT_BLOCK_STRIDE,
-            scales="draft.kv_scales", lm_head_w="draft.lm_head.weight",
-            final_norm_w="draft.norm.weight")
-        programs["draft_precompute"] = draft_precompute()
+
+        def pre(prefix, calls):
+            return [dict(c, label=f"{prefix}.{c['label']}") for c in calls]
+        # prefill hands the first token back and projects every row's tap
+        # into the draft KV (positions / slot_mapping are the chunk's), so a
+        # round can start right after it
+        programs["prefill"] = program(
+            forward("attn_prefill", "prefill", taps=True) + pre("precompute", draft_precompute()),
+            groups=1, rows="tokens")
+        # round = one speculative round per sequence as one program: draft's
+        # rows spliced from the anchor the caller staged, the non-causal
+        # draft pass and its markov chain (7 drafts), verify's ids spliced
+        # from the first 6, the causal target pass over [anchor, d0..d5] with
+        # its taps, every row's tap into the draft KV (rejected rows land
+        # past the sequence's position and the next round overwrites them),
+        # and the count of rows taken. The caller reads verify_tokens and
+        # nacc.
+        programs["round"] = program(
+            [d("splice_draft", "splice_draft",
+               [buf("anchor_token"), buf("draft_ids"), i32(BLOCK_TOKENS), i64(MASK_TOKEN)])]
+            + pre("draft", forward(
+                "attn_draft", "draft", mp="draft.", layers=DRAFT_LAYERS,
+                kv_state="draft_kv", block_stride=DRAFT_BLOCK_STRIDE,
+                scales="draft.kv_scales", lm_head_w="draft.lm_head.weight",
+                final_norm_w="draft.norm.weight", ids="draft_ids"))
+            + [d("splice_verify", "splice_verify",
+                 [buf("anchor_token"), buf("draft_tokens"), buf("verify_ids"), i32(VERIFY_TOKENS),
+                  i32(BLOCK_TOKENS)])]
+            + pre("verify", forward("attn_verify", "verify", taps=True, ids="verify_ids"))
+            + pre("precompute", draft_precompute())
+            + [d("count", "spec_count",
+                 [buf("draft_tokens"), buf("verify_tokens"), buf("nacc"), i32(VERIFY_TOKENS),
+                  i32(BLOCK_TOKENS)])],
+            groups=MAX_SEQS, rows=BLOCK_TOKENS)
     for name, dom in DOMAINS.items():
         if name in buffers:
             buffers[name]["domain"] = dom
     # normalize: hoist inline cubin/sha256 into `modules`, fold the ABI
     # constants every call repeats into the impls, default identity wiring
     return normalize({
-        "schema_version": 3,
+        "schema_version": SCHEMA_VERSION,
         "model": "qwen3-4b-dspark" if spec else "qwen3-4b",
-        # DSpark's caller contract: draft rows = [anchor] + [mask] * 6
-        # (block7), verify = anchor + 7 drafts; the mask id is the draft
-        # config's mask_token_id
-        **({"spec": {"block": 7, "mask_token": 151669}} if spec else {}),
-        # prefill 按 chunk 调用（tokens ≤ CHUNK_MAX，seqs=1），decode 恒
-        # tokens=seqs=1，decode_batch 以 tokens=seqs=b 调用；
-        # spec 附加契约：draft 以 tokens=7、verify 以 tokens=8、
-        # draft_precompute 以 tokens=有效行数 调用
         "vars": {"tokens": {"max": CHUNK_MAX}, "seqs": {"max": MAX_SEQS}},
         "states": states,
         "buffers": buffers,
@@ -1017,7 +1102,7 @@ def main():
         manifest = build(by, eps, scale, pf, pins, spec=spec, silu=silu)
         out = repo / "examples" / name
         out.write_text(json.dumps(manifest, indent=1) + "\n")
-        counts = {p: len(v) for p, v in manifest["programs"].items()}
+        counts = {p: len(v["calls"]) for p, v in manifest["programs"].items()}
         print(f"wrote {out} ({out.stat().st_size // 1024} KiB, "
               f"{len(manifest['buffers'])} buffers, calls {counts})")
     print(f"topology checks passed (eps={eps!r}, attn scale={scale!r}, "

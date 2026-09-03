@@ -1,18 +1,21 @@
-//! Manifest schema (format 3). Parsing is already strict: unknown fields,
+//! Manifest schema (format 4). Parsing is already strict: unknown fields,
 //! duplicate names and malformed type strings are rejected at
 //! deserialization time. Semantic checks (references, dtypes, dataflow,
-//! bounds) live in [`crate::verify`].
+//! bounds) live in [`crate::verify`]; what a serving loop needs to drive
+//! the manifest (`fill`, `batch`) is projected by [`crate::protocol`].
 //!
 //! Vocabulary, one word per level so nothing collides:
 //!
 //! ```text
-//! programs.<name>[]          a *call* of an op            {"op": "attn", "args": [...]}
+//! programs.<name>            a *program*: its calling shape and its calls  {"batch": {...}, "calls": [...]}
+//! programs.<name>.calls[]    a *call* of an op            {"op": "attn", "args": [...]}
 //! ops.<name>                 an op: interface + impl      {"params": [...], "impl": {...}}
 //! ops.<name>.impl.launches[] a *launch* of a module entry {"module": "argmax", "entry": "kern_argmax_partial"}
 //! modules.<name>             an artifact the launches pin {"source": "argmax.cubin", "sha256": "..."}
 //! vars.<name>                a per-call scalar the caller supplies, bounded
 //! states.<name>              opaque persistent memory, sized by the runtime
-//! buffers.<name>             typed tensors: input / output / weight / workspace / carry / peer
+//! buffers.<name>             typed tensors: input / output / weight / workspace / carry / peer;
+//!                            `fill` names the role a caller-facing one plays in a call
 //! topology.groups.<name>     a rank group and its size; the manifest is SPMD over it
 //! ```
 
@@ -25,7 +28,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 /// The one format this crate reads and writes.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Deserialize a JSON object into a map, rejecting duplicate keys (plain
 /// serde silently keeps the last one).
@@ -58,16 +61,13 @@ where
 }
 
 /// The whole contract a model ships as: one JSON file naming its vars, states, buffers, modules, ops and programs.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Wire-format version; must be `3`.
+    /// Wire-format version; must be `4`.
     pub schema_version: u32,
     /// Free-form model label, e.g. `"qwen3-4b"`.
     pub model: String,
-    /// Speculative-decoding caller contract; absent for plain prefill/decode manifests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spec: Option<Spec>,
     /// Rank groups a multi-GPU manifest is SPMD over, e.g. `{"groups": {"ep": 4}}`; every rank loads the same manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology: Option<Topology>,
@@ -86,21 +86,38 @@ pub struct Manifest {
     /// Operators: a typed interface plus the launches that implement it.
     #[serde(deserialize_with = "unique_map")]
     pub ops: BTreeMap<String, Op>,
-    /// Named straight-line call lists, e.g. `"decode": [{"op": "embedding", "args": [...]}, ...]`.
+    /// Named straight-line programs, e.g. `"decode": {"batch": {"groups": 256, "rows": 1}, "calls": [...]}`.
     #[serde(deserialize_with = "unique_map")]
-    pub programs: BTreeMap<String, Vec<Call>>,
+    pub programs: BTreeMap<String, Program>,
 }
 
 impl Manifest {
     /// Sequence slots the runtime provisions for every `bytes_per_seq`
-    /// state: the rows a step addresses — the `rows` bound when the model
-    /// runs a group's batch (every rank holds a slice of every row's state),
-    /// else the `seqs` bound, 1 without either — plus one so a batched
-    /// caller can hold a padding lease, plus slot 0, which is never leased
-    /// — kernels may treat line index 0 as the null line.
+    /// state: the widest column axis of any line table (an input indexing
+    /// a per-sequence state, shaped `[lines, cols]` or `[lines, cols, w]`
+    /// — every rank holds a slice of every row's state, so the axis may
+    /// span a tray batch), 1 without one — plus one so a batched caller
+    /// can hold a padding lease, plus slot 0, which is never leased —
+    /// kernels may treat line index 0 as the null line.
     pub fn seq_slots(&self) -> u64 {
-        let rows = self.vars.get("rows").or(self.vars.get("seqs"));
-        rows.map_or(1, |v| v.max.max(1)) + 2
+        let cols = self
+            .buffers
+            .values()
+            .filter(|b| b.kind == BufferKind::Input)
+            .filter(|b| {
+                b.domain
+                    .as_ref()
+                    .and_then(|d| d.index_into.as_deref())
+                    .and_then(|s| self.states.get(s))
+                    .is_some_and(State::is_per_seq)
+            })
+            .filter_map(|b| match b.shape.get(1) {
+                Some(Dim::Var(v)) => self.vars.get(v).map(|v| v.max),
+                Some(Dim::Const(c)) => Some(*c),
+                None => None,
+            })
+            .max();
+        cols.map_or(1, |c| c.max(1)) + 2
     }
 
     /// Size of a declared topology group, if any.
@@ -117,18 +134,69 @@ impl Manifest {
     }
 }
 
-/// Speculative-decoding caller contract: `draft` runs over `block` rows per sequence — the anchor token followed by `block - 1` mask tokens; `verify` runs over the anchor and every drafted token. The runtime assigns no meaning to it.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+/// A program: a straight-line call list plus, when a serving loop may drive it, the shape of one call.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Spec {
-    /// Rows per `draft` call, e.g. `8`.
-    pub block: u64,
-    /// Token id filling the undrafted rows of `draft`, e.g. `248070`.
-    pub mask_token: i64,
+pub struct Program {
+    /// The shape of one call — `groups` sequences of `rows` rows each — for a program a serving loop drives; absent for one only a harness runs (a single layer under test, a barrier).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<Batch>,
+    /// Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub once: bool,
+    /// The calls, in order, e.g. `[{"op": "embedding", "args": [...]}, ...]`.
+    pub calls: Vec<Call>,
+}
+
+/// The shape of one call of a program: up to `groups` sequences, each contributing `rows` rows, e.g. `{"groups": 256, "rows": 1}` (a decode step over a batch) or `{"groups": 1, "rows": "tokens"}` (a prefill chunk).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Batch {
+    /// Upper bound on the sequences one call covers; a caller with fewer pads up to a bucket, e.g. `256`.
+    pub groups: u64,
+    /// Rows per sequence: a constant the program's kernels are laid out for (`1` for a decode step, `8` for a speculative round — exact, not a bound), or the var whose value is the row count of the call (`"tokens"`: one sequence, as many rows as the chunk).
+    pub rows: Dim,
+}
+
+/// The role a caller-facing buffer plays in a call: what the serving loop writes into an input or reads from an output. A closed set; the runtime never reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Fill {
+    /// Input: the token ids fed, one per row (a buffer over the row axis) or each sequence's first (over the sequence axis: the anchor of a speculative round).
+    Token,
+    /// Input: each row's position in its sequence.
+    Position,
+    /// Input: each row's token slot in the paged states, from the sequence's lease.
+    Slot,
+    /// Input: each sequence's length after this call (rows already in the state plus this call's).
+    SeqLen,
+    /// Input: exclusive prefix sums of rows per sequence, `groups + 1` entries.
+    CuSeqlens,
+    /// Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).
+    Tokens,
+    /// Output: how many of a sequence's `tokens` the caller takes, per sequence; without one it takes one.
+    Count,
+    /// Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.
+    Error,
+}
+
+impl fmt::Display for Fill {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Fill::Token => "token",
+            Fill::Position => "position",
+            Fill::Slot => "slot",
+            Fill::SeqLen => "seq_len",
+            Fill::CuSeqlens => "cu_seqlens",
+            Fill::Tokens => "tokens",
+            Fill::Count => "count",
+            Fill::Error => "error",
+        })
+    }
 }
 
 /// Rank groups, e.g. `{"groups": {"ep": 4}}`. Sizes are fixed in the manifest; the loading rank's index in each group is a load-time constant that `{"rank": "<group>"}` args receive and `peer` buffers are ordered by.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Topology {
     /// Group name to member count, e.g. `{"ep": 4}`.
@@ -137,7 +205,7 @@ pub struct Topology {
 }
 
 /// A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Var {
     /// Upper bound, e.g. `2048` for the token count of a prefill chunk.
@@ -150,7 +218,7 @@ impl Var {
 }
 
 /// Opaque persistent memory; the runtime provisions the bytes and hands the base pointer to `inout state` params. Exactly one of the three sizes is non-zero. States are always allocated through the driver's virtual-memory API with a fabric-shareable handle when the device has one, so a `peer` buffer may be `of` a state.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct State {
     /// Bytes per token slot, scaled by the capacity — a paged KV cache, e.g. `147456`.
@@ -176,7 +244,7 @@ fn is_zero(v: &u64) -> bool {
 }
 
 /// A typed tensor, e.g. `{"dtype": "bf16", "shape": ["tokens", 2560], "kind": "workspace"}`.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Buffer {
     /// Element type, e.g. `"bf16"`.
@@ -185,6 +253,9 @@ pub struct Buffer {
     pub shape: Vec<Dim>,
     /// Who provides the buffer and how long its contents live.
     pub kind: BufferKind,
+    /// `input` / `output` buffers only: the role a serving loop fills or reads it for, e.g. `"token"`; absent for one a harness stages by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
     /// Optional prior on the contents; the runtime rejects out-of-domain input writes and `kern test` synthesizes values from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<Domain>,
@@ -319,7 +390,7 @@ pub struct Provision {
 }
 
 /// One shape extent: a constant or a var name, e.g. `2560` or `"tokens"`.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Dim {
     Const(u64),
@@ -616,7 +687,7 @@ pub struct Module {
 }
 
 /// An operator: the typed interface a call binds, plus the launches that implement it.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Op {
     /// Interface params in call order, e.g. `["out buffer<bf16>", "in buffer<bf16>"]`.
@@ -627,7 +698,7 @@ pub struct Op {
 }
 
 /// An op implementation: private scratch buffers and one or more launches in order.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Impl {
     #[serde(default, deserialize_with = "unique_map", skip_serializing_if = "BTreeMap::is_empty")]
@@ -638,7 +709,7 @@ pub struct Impl {
 }
 
 /// A private buffer of one implementation, sized like a workspace buffer.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scratch {
     /// Element type, e.g. `"f32"`.
@@ -648,7 +719,7 @@ pub struct Scratch {
 }
 
 /// One launch of an implementation: a kernel entry in a pinned module, or a runtime built-in.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Launch {
     Kernel(KernelLaunch),
@@ -656,7 +727,7 @@ pub enum Launch {
 }
 
 /// A device kernel launch, e.g. `{"module": "argmax", "entry": "kern_argmax_partial_bf16", "block": [1024, 1, 1], "grid": [1, 64, 1]}`.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct KernelLaunch {
     /// Name of a `modules` entry, e.g. `"argmax"`.
@@ -682,7 +753,7 @@ pub struct KernelLaunch {
 }
 
 /// A runtime built-in launch, e.g. `{"entry": "extern:cublaslt_bf16_tn"}`.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExternLaunch {
     /// `extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ) or `cublaslt_bf16_tn_acc` (C += A·Wᵀ).
@@ -1102,7 +1173,7 @@ impl Expr {
 }
 
 /// One op call, e.g. `{"label": "l0.attn", "op": "attn", "args": [{"buf": "q"}, {"state": "kv"}, ...]}`.
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Call {
     /// Human-readable name for diagnostics, e.g. `"l0.attn"`.

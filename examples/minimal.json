@@ -1,5 +1,5 @@
 {
- "schema_version": 3,
+ "schema_version": 4,
  "model": "toy",
  "vars": {
   "tokens": {"max": 1024}
@@ -26,8 +26,8 @@
   }
  },
  "programs": {
-  "step": [
+  "step": {"calls": [
    {"op": "scale", "args": [{"buf": "x"}, {"buf": "w"}, {"buf": "y"}, {"state": "kv"}, {"var": "tokens"}]}
-  ]
+  ]}
  }
 }

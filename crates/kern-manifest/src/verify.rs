@@ -24,8 +24,12 @@
 //!      against the interface, var ranges fit scalar params
 //!   8. dataflow per program: no read-before-write, no writes to input,
 //!      weight or peer buffers, every output / carry buffer written by some
-//!      program
-//!   9. no unused declarations
+//!      program; a program is `once` or has a `batch`, not both; a batch
+//!      has `groups >= 1` and constant `rows >= 1` or a declared var
+//!   9. no unused declarations; a `fill` sits on an input or output of an
+//!      integer dtype, input roles on inputs and output roles on outputs
+//!      (whether the fills add up to a serving contract is
+//!      [`crate::protocol`]'s question, not this one's)
 //!  10. topology: group sizes > 0, every group used; a `peer` buffer is
 //!      `u64[group size]` `of` an exported buffer or a state; `export`,
 //!      `of` and `group` only where they mean something; `{"rank": g}`
@@ -100,6 +104,33 @@ fn shaped_size(
     size
 }
 
+/// A manifest that passed [`verify`]: every reference resolves, every
+/// launch fits the device limits at the var bounds, every program's
+/// dataflow is sound. Constructed by `verify` alone; a runtime loads only
+/// one of these, so nothing downstream checks again. Derefs to the
+/// [`Manifest`].
+#[derive(Debug, Clone)]
+pub struct Verified(Manifest);
+
+impl Verified {
+    /// Parse and verify; a parse error is reported as the one diagnostic.
+    pub fn from_json(s: &str) -> Result<Verified, VerifyErrors> {
+        let m = Manifest::from_json(s).map_err(|e| VerifyErrors(vec![e.to_string()]))?;
+        verify(m)
+    }
+
+    pub fn into_inner(self) -> Manifest {
+        self.0
+    }
+}
+
+impl std::ops::Deref for Verified {
+    type Target = Manifest;
+    fn deref(&self) -> &Manifest {
+        &self.0
+    }
+}
+
 /// Every diagnostic [`verify`] collected, reported together rustc-style.
 /// Derefs to the individual messages.
 #[derive(Debug)]
@@ -124,7 +155,18 @@ impl std::ops::Deref for VerifyErrors {
     }
 }
 
-pub fn verify(m: &Manifest) -> Result<(), VerifyErrors> {
+/// Verify `m`; the manifest comes back as a [`Verified`] or not at all.
+pub fn verify(m: Manifest) -> Result<Verified, VerifyErrors> {
+    let errs = diagnostics(&m);
+    if errs.is_empty() {
+        Ok(Verified(m))
+    } else {
+        Err(VerifyErrors(errs))
+    }
+}
+
+/// Every rule, every violation.
+fn diagnostics(m: &Manifest) -> Vec<String> {
     let mut errs: Vec<String> = Vec::new();
     let mut used_vars: BTreeSet<String> = BTreeSet::new();
     let mut used_buffers: BTreeSet<String> = BTreeSet::new();
@@ -192,8 +234,24 @@ pub fn verify(m: &Manifest) -> Result<(), VerifyErrors> {
         if let Some(d) = &b.domain {
             check_domain(name, b, d, m, &env_max, &env_min, &mut used_vars, &mut errs);
         }
-        // 10b. export / peer
         let ctx = format!("buffer `{name}`");
+        // 9b. fill
+        if let Some(fill) = b.fill {
+            let output = matches!(fill, Fill::Tokens | Fill::Count | Fill::Error);
+            match (b.kind, output) {
+                (BufferKind::Input, false) | (BufferKind::Output, true) => {}
+                (BufferKind::Input | BufferKind::Output, _) => errs.push(format!(
+                    "{ctx}: fill `{fill}` is {} but the buffer is {}",
+                    if output { "read from an output" } else { "written into an input" },
+                    b.kind
+                )),
+                (kind, _) => errs.push(format!("{ctx}: a fill sits on an input or output, not a {kind} buffer")),
+            }
+            if !matches!(b.dtype, DType::I32 | DType::I64) {
+                errs.push(format!("{ctx}: fill `{fill}` needs an i32 or i64 buffer, not {}", b.dtype));
+            }
+        }
+        // 10b. export / peer
         if b.kind == BufferKind::Peer {
             if b.export {
                 errs.push(format!("{ctx}: a peer buffer cannot itself be exported"));
@@ -597,9 +655,30 @@ pub fn verify(m: &Manifest) -> Result<(), VerifyErrors> {
         .collect();
     let mut actually_written: BTreeSet<String> = BTreeSet::new();
 
-    for (pname, calls) in &m.programs {
+    for (pname, p) in &m.programs {
+        if p.once && p.batch.is_some() {
+            errs.push(format!(
+                "program `{pname}`: `once` (run after load) and `batch` (driven per step) are exclusive"
+            ));
+        }
+        if let Some(batch) = &p.batch {
+            if batch.groups == 0 {
+                errs.push(format!("program `{pname}`: batch.groups must be >= 1"));
+            }
+            match &batch.rows {
+                Dim::Const(0) => errs.push(format!("program `{pname}`: batch.rows must be >= 1")),
+                Dim::Const(_) => {}
+                Dim::Var(v) => {
+                    if m.vars.contains_key(v) {
+                        used_vars.insert(v.clone());
+                    } else {
+                        errs.push(format!("program `{pname}`: batch.rows names unknown var `{v}`"));
+                    }
+                }
+            }
+        }
         let mut written = initially_written.clone();
-        for (i, c) in calls.iter().enumerate() {
+        for (i, c) in p.calls.iter().enumerate() {
             let ctx = match &c.label {
                 Some(l) => format!("program `{pname}` call #{i} ({l})"),
                 None => format!("program `{pname}` call #{i}"),
@@ -765,11 +844,7 @@ pub fn verify(m: &Manifest) -> Result<(), VerifyErrors> {
         }
     }
 
-    if errs.is_empty() {
-        Ok(())
-    } else {
-        Err(VerifyErrors(errs))
-    }
+    errs
 }
 
 fn scalar_fits(st: ScalarType, v: u64) -> bool {
@@ -887,7 +962,7 @@ mod tests {
     /// is the minimal single-launch op (ABI = interface, wiring defaulted);
     /// `attn` is a two-launch implementation with a private scratch buffer.
     const BASE: &str = r#"{
-      "schema_version": 3, "model": "toy",
+      "schema_version": 4, "model": "toy",
       "vars": { "tokens": { "max": 128 } },
       "states": { "kv": { "bytes_per_token": 4096 } },
       "buffers": {
@@ -935,12 +1010,12 @@ mod tests {
         }
       },
       "programs": {
-        "decode": [
+        "decode": { "calls": [
           { "label": "embed", "op": "embed",
             "args": [{ "buf": "x" }, { "buf": "w" }, { "buf": "h" }, { "var": "tokens" }] },
           { "label": "attn", "op": "attn",
             "args": [{ "buf": "h" }, { "state": "kv" }, { "buf": "y" }, { "var": "tokens" }, { "i64": 0 }] }
-        ]
+        ] }
       }
     }"#;
 
@@ -948,9 +1023,9 @@ mod tests {
         serde_json::from_str(BASE).unwrap()
     }
 
-    fn check(v: serde_json::Value) -> Result<(), VerifyErrors> {
+    fn check(v: serde_json::Value) -> Result<Verified, VerifyErrors> {
         let m: Manifest = serde_json::from_value(v).map_err(|e| VerifyErrors(vec![e.to_string()]))?;
-        verify(&m)
+        verify(m)
     }
 
     fn assert_err(v: serde_json::Value, needle: &str) {
@@ -1080,8 +1155,8 @@ mod tests {
     #[test]
     fn wrong_version() {
         let mut v = base();
-        v["schema_version"] = 2.into();
-        assert_err(v, "unsupported schema_version 2");
+        v["schema_version"] = 3.into();
+        assert_err(v, "unsupported schema_version 3");
     }
 
     #[test]
@@ -1094,21 +1169,21 @@ mod tests {
     #[test]
     fn unknown_op() {
         let mut v = base();
-        v["programs"]["decode"][0]["op"] = "nope".into();
+        v["programs"]["decode"]["calls"][0]["op"] = "nope".into();
         assert_err(v, "unknown op `nope`");
     }
 
     #[test]
     fn arg_count_mismatch() {
         let mut v = base();
-        v["programs"]["decode"][1]["args"].as_array_mut().unwrap().pop();
+        v["programs"]["decode"]["calls"][1]["args"].as_array_mut().unwrap().pop();
         assert_err(v, "takes 5 params, got 4 args");
     }
 
     #[test]
     fn read_before_write() {
         let mut v = base();
-        let calls = v["programs"]["decode"].as_array_mut().unwrap();
+        let calls = v["programs"]["decode"]["calls"].as_array_mut().unwrap();
         calls.swap(0, 1);
         assert_err(v, "read before ever being written");
     }
@@ -1116,7 +1191,7 @@ mod tests {
     #[test]
     fn write_to_weight() {
         let mut v = base();
-        v["programs"]["decode"][0]["args"][2] = serde_json::json!({ "buf": "w" });
+        v["programs"]["decode"]["calls"][0]["args"][2] = serde_json::json!({ "buf": "w" });
         assert_err(v, "writes to read-only weight buffer `w`");
     }
 
@@ -1130,7 +1205,7 @@ mod tests {
     #[test]
     fn output_never_written() {
         let mut v = base();
-        v["programs"]["decode"].as_array_mut().unwrap().pop();
+        v["programs"]["decode"]["calls"].as_array_mut().unwrap().pop();
         assert_err(v, "output buffer `y` is never written");
     }
 
@@ -1178,21 +1253,21 @@ mod tests {
     fn buf_offset_ok() {
         let mut v = base();
         // h is bf16 [tokens=128, 64] -> 16384 bytes max
-        v["programs"]["decode"][1]["args"][0] = serde_json::json!({ "buf": "h", "offset": 128 });
+        v["programs"]["decode"]["calls"][1]["args"][0] = serde_json::json!({ "buf": "h", "offset": 128 });
         check(v).unwrap();
     }
 
     #[test]
     fn buf_offset_misaligned() {
         let mut v = base();
-        v["programs"]["decode"][1]["args"][0] = serde_json::json!({ "buf": "h", "offset": 3 });
+        v["programs"]["decode"]["calls"][1]["args"][0] = serde_json::json!({ "buf": "h", "offset": 3 });
         assert_err(v, "not 2-aligned");
     }
 
     #[test]
     fn buf_offset_out_of_range() {
         let mut v = base();
-        v["programs"]["decode"][1]["args"][0] = serde_json::json!({ "buf": "h", "offset": 16384 });
+        v["programs"]["decode"]["calls"][1]["args"][0] = serde_json::json!({ "buf": "h", "offset": 16384 });
         assert_err(v, "outside buffer `h`");
     }
 
@@ -1201,7 +1276,7 @@ mod tests {
         let mut v = base();
         v["ops"]["attn"]["params"][3] = "u8".into();
         v["ops"]["attn"]["impl"]["launches"][0]["params"][3] = "u8".into();
-        v["programs"]["decode"][1]["args"][3] = serde_json::json!({ "u8": 1 });
+        v["programs"]["decode"]["calls"][1]["args"][3] = serde_json::json!({ "u8": 1 });
         check(v).unwrap();
         // binding a var with max 300 to a u8 param is rejected
         let mut v = base();
@@ -1236,7 +1311,7 @@ mod tests {
     #[test]
     fn buffer_arg_to_state_param() {
         let mut v = base();
-        v["programs"]["decode"][1]["args"][1] = serde_json::json!({ "buf": "h" });
+        v["programs"]["decode"]["calls"][1]["args"][1] = serde_json::json!({ "buf": "h" });
         assert_err(v, "does not match param `inout state`");
     }
 
@@ -1327,7 +1402,7 @@ mod tests {
         assert!(errs[0].contains("did not match any variant"), "{errs:?}");
         // and a typo in a call arg is a parse error, not a silently ignored key
         let mut v = base();
-        v["programs"]["decode"][1]["args"][0] = serde_json::json!({ "buf": "h", "offest": 128 });
+        v["programs"]["decode"]["calls"][1]["args"][0] = serde_json::json!({ "buf": "h", "offest": 128 });
         check(v).expect_err("unknown keys in args must fail");
     }
 
@@ -1381,7 +1456,7 @@ mod tests {
                   "args": [{ "param": 0 }, { "param": 1 }, { "param": 2 }, { "rank": "ep" }] }
             ] }
         });
-        v["programs"]["decode"].as_array_mut().unwrap().push(serde_json::json!({
+        v["programs"]["decode"]["calls"].as_array_mut().unwrap().push(serde_json::json!({
             "op": "barrier",
             "args": [{ "buf": "flags" }, { "buf": "flags_peers" }, { "rank": "ep" }, { "i32": 0 }]
         }));
@@ -1478,7 +1553,7 @@ mod tests {
         assert_err(v, "rank in group `ep` does not match param `f32`");
         let mut v = peer_base();
         v["ops"]["barrier"]["params"][3] = "u8".into();
-        v["programs"]["decode"][2]["args"][3] = serde_json::json!({ "u8": 0 });
+        v["programs"]["decode"]["calls"][2]["args"][3] = serde_json::json!({ "u8": 0 });
         assert_err(v, "a rank binds only to an i32 or i64 param, not `u8`");
         let mut v = peer_base();
         v["ops"]["barrier"]["impl"]["launches"][0]["args"][3] = serde_json::json!({ "rank": "nope" });
@@ -1501,7 +1576,7 @@ mod tests {
                            { "param": 1 }] }
             ] }
         });
-        v["programs"]["decode"].as_array_mut().unwrap().push(serde_json::json!({
+        v["programs"]["decode"]["calls"].as_array_mut().unwrap().push(serde_json::json!({
             "op": "pk",
             "args": [{ "buf": "pk_out" }, { "buf": "w" }, { "var": "tokens" }]
         }));
@@ -1562,7 +1637,7 @@ mod tests {
                                                             "strides": [128], "box": [128, 4], "swizzle": 128 } }] }
             ] }
         });
-        v["programs"]["decode"].as_array_mut().unwrap().push(serde_json::json!({
+        v["programs"]["decode"]["calls"].as_array_mut().unwrap().push(serde_json::json!({
             "op": "tm",
             "args": [{ "buf": "tm_out" }, { "buf": "raw" }]
         }));
@@ -1574,7 +1649,7 @@ mod tests {
         check(tensormap_base()).unwrap();
         // the call's offset shrinks what the descriptor may address: 512 - 0 ok, exactly fits
         let mut v = tensormap_base();
-        v["programs"]["decode"][2]["args"][1]["offset"] = 0.into();
+        v["programs"]["decode"]["calls"][2]["args"][1]["offset"] = 0.into();
         check(v).unwrap();
     }
 
@@ -1593,7 +1668,7 @@ mod tests {
         v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["dims"] = serde_json::json!([128, 5]);
         assert_err(v, "addresses 640 bytes but buffer `raw` has 512 bytes past offset 0");
         let mut v = tensormap_base();
-        v["programs"]["decode"][2]["args"][1]["offset"] = 16.into();
+        v["programs"]["decode"]["calls"][2]["args"][1]["offset"] = 16.into();
         assert_err(v, "has 496 bytes past offset 16");
     }
 
@@ -1640,7 +1715,8 @@ mod tests {
         v["ops"]["barrier"]["params"] = serde_json::json!(["inout buffer<u32>", "i32", "i32"]);
         v["ops"]["barrier"]["impl"]["launches"][0]["args"] =
             serde_json::json!([{ "param": 0 }, { "param": 1 }, { "rank": "ep" }]);
-        v["programs"]["decode"][2]["args"] = serde_json::json!([{ "buf": "flags" }, { "rank": "ep" }, { "i32": 0 }]);
+        v["programs"]["decode"]["calls"][2]["args"] =
+            serde_json::json!([{ "buf": "flags" }, { "rank": "ep" }, { "i32": 0 }]);
         check(v).unwrap();
     }
 
