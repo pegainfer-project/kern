@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
+use kern_manifest::Verified;
 use kern_runtime::Topology;
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler,
@@ -89,11 +90,11 @@ pub struct ServeOpts {
     #[arg(long)]
     pub eager: bool,
 
-    /// Speculative decoding: every step is one draft/verify round over the
-    /// batch (the manifest must carry the `draft`, `verify`,
-    /// `draft_precompute` and `decode_spec` programs)
+    /// Rows per sequence of a step: a shape some program of the manifest
+    /// declares (1 for a plain step, its block for a speculative round).
+    /// Default: the widest declared
     #[arg(long)]
-    pub spec: bool,
+    pub rows: Option<u64>,
 
     /// Extra stop token ids (generation_config.json's eos ids always apply)
     #[arg(long, value_delimiter = ',')]
@@ -180,12 +181,9 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
 
     let manifest_json = std::fs::read_to_string(&art.manifest)
         .with_context(|| format!("reading manifest {}", art.manifest.display()))?;
-    let served_name = o.served_model_name.clone().unwrap_or_else(|| {
-        serde_json::from_str::<serde_json::Value>(&manifest_json)
-            .ok()
-            .and_then(|v| v.get("model")?.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "kern".to_owned())
-    });
+    let manifest =
+        Verified::from_json(&manifest_json).with_context(|| format!("manifest {}", art.manifest.display()))?;
+    let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
 
     // The scheduler thread owns the tray for its whole life: load there,
     // report readiness, then drive.
@@ -198,7 +196,7 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
         eager: o.eager,
         max_seqs: o.max_seqs,
         stop_tokens,
-        spec: o.spec,
+        rows: o.rows,
         host_bytes,
     };
     let join = std::thread::Builder::new()
@@ -207,7 +205,7 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
             let load = || -> Result<KernScheduler> {
                 let t0 = Instant::now();
                 let weights_of = |topo: &Topology| rank_weights(&art.weights, topo);
-                let tray = Tray::load(&manifest_json, &art.kernels, &gpus, capacity, &weights_of, host_bytes)?;
+                let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &weights_of, host_bytes)?;
                 info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
                 KernScheduler::new(tray, policy)
             };

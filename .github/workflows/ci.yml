@@ -31,10 +31,26 @@ jobs:
       - name: Test kern-manifest
         run: cargo test -p kern-manifest
 
+      - name: Protocol names stay in the manifest
+        run: |
+          # kern-run and kern-serve drive the runtime through `Protocol`; a
+          # fill, program, var or buffer name in their non-test code is the
+          # serving contract leaking out of the manifest. Test fixtures
+          # (everything from `#[cfg(test)]` on) may spell names out.
+          names='"(token|position|slot|seq_len|cu_seqlens|count|error|prefill|decode|decode_batch|round|seqs|token_ids|next_token|slot_mapping|seq_lens|positions|block_table|cu_seqlens_q|tp_err|nacc|anchor_token|verify_tokens|draft_tokens|line_index)"'
+          bad=0
+          for f in $(find crates/kern-serve/src crates/kern-run/src -name '*.rs' | sort); do
+            if sed '/#\[cfg(test)\]/,$d' "$f" | grep -nE "$names" | sed "s|^|$f:|" | grep .; then bad=1; fi
+          done
+          if [ "$bad" != 0 ]; then
+            echo "::error::a manifest name is spelled out in serving code; read it off Protocol instead"
+            exit 1
+          fi
+
       - name: Schema golden check
         run: |
-          cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v3.schema.json
-          if ! diff -u schema/manifest-v3.schema.json /tmp/manifest-v3.schema.json; then
-            echo "::error::schema/manifest-v3.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v3.schema.json"
+          cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v4.schema.json
+          if ! diff -u schema/manifest-v4.schema.json /tmp/manifest-v4.schema.json; then
+            echo "::error::schema/manifest-v4.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v4.schema.json"
             exit 1
           fi

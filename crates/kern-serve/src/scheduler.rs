@@ -2,55 +2,49 @@
 //!
 //! Implements the pegainfer frontend's [`Scheduler`] contract — `submit`,
 //! `step`, `metrics` — over a kern manifest driven by a [`Tray`] (one
-//! runtime per GPU, in lockstep; `tray.rs` is the design). The caller
-//! contract the manifest must speak: input buffers `token_ids` /
-//! `slot_mapping` / `seq_lens` (`positions` and `cu_seqlens_q` when it has
-//! them), a `block_table` page table, a `next_token` output, and programs
-//! `decode` (one row per sequence; `decode_batch` for batches of more than
-//! one when the manifest has it, the bs=1 microprogram otherwise) and,
-//! optionally, `prefill` (single sequence, chunked). Two prefill contracts
-//! when there is one: state only (the last prompt token is the first
-//! decode step's input) or, when `prefill` writes `next_token` (hybrid GDN
-//! models, whose chunked kernels must see every prompt token), every
-//! prompt token through prefill and the first generated token from it.
-//! Without a `prefill` program the prompt goes through decode steps one
-//! token at a time — a row feeding its prompt is a row like any other,
-//! whose outputs are dropped until the last prompt token is in — which is
-//! what a decode-only tray manifest (K3 today) gets, correct and slow. A
-//! manifest with per-sequence states (`bytes_per_seq`) also has line
-//! tables indexing them; the tray stages them from the rows.
+//! runtime per GPU, in lockstep; `tray.rs` is the design). What the
+//! manifest must speak is its [`Protocol`]: fills naming which buffer
+//! carries the tokens, positions, slots and lengths of a call and which
+//! output hands tokens back, and a `batch` on every program a step may
+//! run — `groups` sequences of `rows` rows each. The scheduler picks a
+//! forward by shape and never by name: a decode step and a speculative
+//! round are the same motion — stage `rows` rows per sequence at its
+//! position, run the forward that accepts `(b, rows)`, read the tokens it
+//! hands each sequence, `count` of them when it says so — and differ only
+//! in the rows the operator asked for (`--rows`, a shape the manifest
+//! declares; the widest by default). A prompt goes through the forward
+//! that takes one sequence of as many rows as fed, in chunks; when that
+//! forward hands a token back (a hybrid GDN model, whose chunked kernels
+//! must see every prompt token) every prompt token goes through it and
+//! the first generated token comes from it, otherwise the last prompt
+//! token is the first step's input. Without such a forward the prompt
+//! goes through one-row steps, a token at a time — a row feeding its
+//! prompt is a row like any other, whose outputs are dropped until the
+//! last prompt token is in — which is what a decode-only tray manifest
+//! (K3 today) gets, correct and slow.
 //!
 //! Policy, deliberately simple:
 //! - prefill first: each step admits waiting requests (up to a token
-//!   budget when there is a `prefill` program) and prefills them one at a
-//!   time, then runs one decode step over every running sequence;
-//! - a request leases every KV page its worst case (`prompt + max_tokens`)
-//!   needs at admission (`Tray::lease`, on the rank with the fewest pages
-//!   in use), so decode never runs out of pages and nothing is ever
-//!   preempted; the row drops with the sequence;
-//! - decode batches are padded up to a bucket size — the same bucket on
-//!   every rank of the tray, from the most loaded one — and each bucket's
-//!   program is CUDA-graph-captured once; padding rows write into a page
+//!   budget when there is a chunk forward) and prefills them one at a
+//!   time, then runs one step over every running sequence;
+//! - a request leases every KV page its worst case (`prompt + max_tokens`,
+//!   plus `rows - 1` for the last step's rows past the end) needs at
+//!   admission (`Tray::lease`, on the rank with the fewest pages in use),
+//!   so a step never runs out of pages and nothing is ever preempted; the
+//!   row drops with the sequence;
+//! - batches are padded up to a bucket size — the same bucket on every
+//!   rank of the tray, from the most loaded one — and each bucket's
+//!   forward is CUDA-graph-captured once; padding rows write into a page
 //!   the tray leases for them and nobody reads;
 //! - greedy only: the manifest's `argmax` is the sampler. Non-greedy
 //!   sampling params are logged once and served greedily;
-//! - `--spec` (a manifest with a `spec` block and `draft` / `verify` /
-//!   `draft_precompute` / `decode_spec`; one rank only): every step is one
-//!   speculative round over the batch — `draft` proposes `n` tokens per
-//!   sequence, `verify` runs the target over `[anchor, drafts]` per
-//!   sequence, `draft_precompute` projects the target's taps into the
-//!   draft's context KV for every row (rejected rows land past the
-//!   sequence's position and are overwritten next round, exactly like the
-//!   target KV's free rollback), and the host accepts each sequence's
-//!   longest matching prefix. The lease grows by `n` tokens so the last
-//!   round's rejected rows have slots. A manifest with a `round` program
-//!   runs the whole round as one graph: draft, verify's ids spliced on
-//!   device, verify, precompute, accept on device, `advance` from the
-//!   device's `num_accepted` — one launch and one sync per round instead
-//!   of four; the host reads `draft_tokens` / `verify_tokens` and accepts
-//!   the same prefix. Whether a round beats a plain step at a given batch
-//!   size is the operator's call, not the scheduler's: the flag picks the
-//!   mode for the process.
+//! - a speculative round is a forward of several rows per sequence whose
+//!   `tokens` output is `[groups, rows]` and whose `count` output says how
+//!   many of a sequence's the device accepted: the rows past the count
+//!   land past the sequence's position and the next step overwrites them,
+//!   the paged state's free rollback. Whether a round beats a plain step
+//!   at a given batch size is the operator's call (`--rows`), not the
+//!   scheduler's;
 //! - prefix reuse: a finished sequence's KV lives on as snapshots
 //!   (`Tray::checkpoint` / `retire`, indexed by token hash in a `Prefix`
 //!   table keyed over the whole tray), and a new prompt starts from the
@@ -73,8 +67,9 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
-use kern_manifest::types::{Arg, Dim, Manifest};
+use anyhow::{bail, Result};
+use kern_manifest::protocol::{Forward, Rows};
+use kern_manifest::Protocol;
 use kern_runtime::{Chain, Denied, Error, Prefix, Tier};
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
@@ -83,7 +78,7 @@ use pegainfer_frontend::engine::{
 use tracing::{debug, info, warn};
 
 use crate::logline;
-use crate::tray::{Cell, Rising, Row, Shape, Sleeping, Snapshot, Tray};
+use crate::tray::{Cell, Rising, Row, Sleeping, Snapshot, Tray};
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
 /// fits and each bucket owns one captured graph.
@@ -107,89 +102,71 @@ pub struct Policy {
     pub max_seqs: usize,
     /// Token ids that end a request unless it asked `ignore_eos`.
     pub stop_tokens: Vec<u32>,
-    /// Speculative rounds instead of decode steps (needs the spec programs).
-    pub spec: bool,
+    /// Rows per sequence of a step, a shape the manifest declares; the
+    /// widest by default.
+    pub rows: Option<u64>,
     /// Pinned host memory per rank for parked snapshots (0: none).
     pub host_bytes: u64,
 }
 
-/// The manifest's speculative contract, one row-group per sequence.
-struct SpecPlan {
-    /// Tokens `draft` proposes per sequence (`draft_tokens` is `[seqs, n]`).
-    n_drafts: usize,
-    /// Rows per sequence in `draft`: `[anchor, mask, ...]`.
-    draft_rows: usize,
-    /// Rows per sequence in `verify`: `[anchor, drafts...]` = n + 1.
-    verify_rows: usize,
-    /// Fills the undrafted rows of `draft`.
-    mask_token: i64,
-    /// The target resumes a recurrent state from `num_accepted_tokens`
-    /// (one per sequence) and commits the accepted rows with `advance`.
-    advance: bool,
-    /// The manifest has `round`: the whole round is one program (draft
-    /// and verify rows per sequence coincide, so one staging serves both).
-    fused: bool,
-    counters: SpecDecodeCounters,
+/// How this process drives the manifest: the forwards a step and a
+/// prompt go through and the batch they allow. Pure over the protocol and
+/// the tray's size, so a synthetic manifest exercises every rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Plan {
+    /// Rows per sequence of a step.
+    rows: u64,
+    /// The forward that takes one sequence of `rows` rows; a batch of `b`
+    /// runs the one the protocol picks for `(b, rows)`.
+    step: Forward,
+    /// The forward a prompt chunk goes through, `None` when the prompt
+    /// goes through steps.
+    chunk: Option<Forward>,
+    /// Concurrent sequences per rank.
+    max_seqs: usize,
 }
 
-impl SpecPlan {
-    /// The manifest's speculative contract; a round's rows per sequence
-    /// must fit the `page`-token pad page.
-    fn check(m: &Manifest, page: usize) -> Result<SpecPlan> {
-        let fused = m.programs.contains_key("round");
-        need_programs(
-            m,
-            if fused {
-                &["decode_spec", "draft_precompute"]
-            } else {
-                &["decode_spec", "draft_precompute", "draft", "verify"]
-            },
-        )?;
-        let n_drafts = seqs_rows(m, "draft_tokens")?;
-        let verify_rows = seqs_rows(m, "verify_tokens")?;
-        if verify_rows != n_drafts + 1 {
-            bail!("verify_tokens has {verify_rows} rows per sequence, expected {} (anchor + drafts)", n_drafts + 1);
-        }
-        if n_drafts > MAX_SPEC_TOKENS {
-            bail!("{n_drafts} drafts per round, the frontend's metrics hold {MAX_SPEC_TOKENS}");
-        }
-        per_seq(m, "anchor_token")?;
-        // The target resumes a recurrent state from `num_accepted_tokens`
-        // and commits the accepted rows with `advance`: both or neither.
-        let advance = m.programs.contains_key("advance");
-        match (m.buffers.contains_key("num_accepted_tokens"), advance) {
-            (true, true) => per_seq(m, "num_accepted_tokens")?,
-            (true, false) => bail!(
-                "`num_accepted_tokens` resumes a recurrent state but no `advance` program commits the accepted rows"
-            ),
-            (false, true) => bail!("program `advance` without a `num_accepted_tokens` input"),
-            (false, false) => {}
-        }
-        let Some(spec) = &m.spec else {
-            bail!("the manifest has no `spec` block (draft rows per sequence and the mask token)");
+impl Plan {
+    /// `page` is the tray's page in tokens (the pad page a step's rows
+    /// must fit), `seqs_max` its sequences per rank, `want_rows` and
+    /// `want_seqs` the operator's asks.
+    fn check(p: &Protocol, page: usize, seqs_max: usize, want_rows: Option<u64>, want_seqs: usize) -> Result<Plan> {
+        let shapes = p.row_shapes();
+        let Some(rows) = want_rows.or(shapes.last().copied()) else {
+            bail!("no program takes a fixed number of rows per sequence: nothing to run a step with")
         };
-        let (draft_rows, mask_token) = (spec.block as usize, spec.mask_token);
-        if fused && draft_rows != verify_rows {
-            bail!("`round` needs draft and verify rows per sequence to coincide, got {draft_rows} and {verify_rows}");
-        }
-        let plan = SpecPlan {
-            n_drafts,
-            draft_rows,
-            verify_rows,
-            mask_token,
-            advance,
-            fused,
-            counters: SpecDecodeCounters { num_spec_tokens: n_drafts as u64, ..Default::default() },
+        let Some(step) = p.forward(1, Rows::Const(rows)).cloned() else {
+            bail!("no program takes one sequence of {rows} rows; the manifest declares rows {shapes:?}")
         };
-        if plan.rows() > page {
-            bail!("{} rows per sequence per round exceed the {page}-token pad page", plan.rows());
+        if rows as usize > page {
+            bail!("{rows} rows per sequence per step exceed the {page}-token pad page");
         }
-        Ok(plan)
+        if rows as usize - 1 > MAX_SPEC_TOKENS {
+            bail!("{} rows past the first per step, the frontend's metrics hold {MAX_SPEC_TOKENS}", rows - 1);
+        }
+        let chunk = p.chunk().cloned();
+        if chunk.is_none() && rows > 1 {
+            bail!(
+                "no program takes a prompt chunk, so prompts go through steps, which takes one-row steps, not {rows}"
+            );
+        }
+        let max_seqs = want_seqs
+            .clamp(1, seqs_max)
+            .min(p.rows.max as usize / rows as usize)
+            .min(p.max_groups(Rows::Const(rows)) as usize)
+            .max(1);
+        Ok(Plan { rows, step, chunk, max_seqs })
     }
 
-    /// Rows per sequence a round stages: the wider of draft's and verify's.
-    fn rows(&self) -> usize {
-        self.draft_rows.max(self.verify_rows)
+    /// Rows a step writes past the token it feeds: what a lease holds past
+    /// `prompt + max_tokens` so the last step's rows have slots.
+    fn headroom(&self) -> usize {
+        self.rows as usize - 1
+    }
+
+    /// The acceptance counters, for a plan whose steps take several rows.
+    fn counters(&self) -> Option<SpecDecodeCounters> {
+        (self.rows > 1).then(|| SpecDecodeCounters { num_spec_tokens: self.rows - 1, ..Default::default() })
     }
 }
 
@@ -277,13 +254,9 @@ impl Seq {
 pub struct KernScheduler {
     tray: Tray,
     policy: Policy,
-    spec: Option<SpecPlan>,
-    /// `Some(emits)`: the manifest has `prefill`, and whether it writes
-    /// `next_token` itself (see the module doc). `None`: prompts go
-    /// through decode steps.
-    prefill: Option<bool>,
-    /// The manifest has `decode_batch` for batches of more than one row.
-    decode_batch: bool,
+    plan: Plan,
+    /// Draft acceptance, for a plan whose steps take several rows.
+    counters: Option<SpecDecodeCounters>,
     waiting: VecDeque<QueuedRequest>,
     /// Admitted requests whose woken rows are still on the way in.
     waking: VecDeque<(QueuedRequest, Rising)>,
@@ -301,12 +274,12 @@ pub struct KernScheduler {
 /// Rolling counters for the periodic log line, reset when it prints.
 struct Stats {
     since: Instant,
-    /// Decode steps (speculative rounds under `--spec`) and their time.
+    /// Steps and their time.
     steps: u64,
     step_ns: u128,
     /// Tokens emitted to the ledger.
     tokens: u64,
-    /// Prompt tokens fed: through `prefill` (timed) or through decode steps.
+    /// Prompt tokens fed: through the chunk forward (timed) or through steps.
     prefill_tokens: u64,
     prefill_ns: u128,
     /// Prompt tokens found in a snapshot, and snapshots evicted for room.
@@ -318,17 +291,15 @@ struct Stats {
     host_evictions: u64,
     wakes: u64,
     wake_tokens: u64,
-    /// The speculative counters at the window's start, so the window's
+    /// The acceptance counters at the window's start, so the window's
     /// acceptance is reported rather than the process's.
     spec_at: (u64, u64, u64),
 }
 
 impl Stats {
-    fn new(spec: &Option<SpecPlan>) -> Stats {
-        let spec_at = spec.as_ref().map_or((0, 0, 0), |p| {
-            let c = &p.counters;
-            (c.num_drafts, c.num_draft_tokens, c.num_accepted_tokens)
-        });
+    fn new(counters: &Option<SpecDecodeCounters>) -> Stats {
+        let spec_at =
+            counters.as_ref().map_or((0, 0, 0), |c| (c.num_drafts, c.num_draft_tokens, c.num_accepted_tokens));
         Stats {
             since: Instant::now(),
             steps: 0,
@@ -355,44 +326,6 @@ pub struct Facts {
     pub max_request_tokens: usize,
 }
 
-/// The manifest's fit to this caller contract, settled before the GPU is
-/// touched: pure over the manifest, the tray's shape and size, so a
-/// synthetic manifest exercises every rejection.
-struct Contract {
-    prefill: Option<bool>,
-    decode_batch: bool,
-    spec: Option<SpecPlan>,
-}
-
-impl Contract {
-    /// `page` is the tray's page in tokens, `ranks` how many it drives;
-    /// `spec` asks for the speculative contract too.
-    fn check(m: &Manifest, page: usize, ranks: usize, spec: bool) -> Result<Contract> {
-        need_programs(m, &["decode"])?;
-        let prefill = m.programs.get("prefill").map(|calls| {
-            calls.iter().flat_map(|c| &c.args).any(|a| matches!(a, Arg::Buf { buf, .. } if buf == "next_token"))
-        });
-        if spec && ranks > 1 {
-            bail!("--spec drives one rank; this tray has {ranks}");
-        }
-        if spec && prefill.is_none() {
-            bail!("--spec needs a `prefill` program");
-        }
-        let spec = spec
-            .then(|| SpecPlan::check(m, page).context("--spec: the manifest's speculative contract"))
-            .transpose()?;
-        Ok(Contract { prefill, decode_batch: m.programs.contains_key("decode_batch"), spec })
-    }
-
-    /// Concurrent sequences per rank: `want` within the `seqs` bound and
-    /// what one call's rows — one per sequence, a round's row-group under
-    /// speculation — fit in `tokens`.
-    fn max_seqs(&self, shape: &Shape, want: usize) -> usize {
-        let rows = self.spec.as_ref().map_or(1, SpecPlan::rows);
-        want.clamp(1, shape.seqs_max).min(shape.tokens_max / rows).max(1)
-    }
-}
-
 /// What a lease attempt handed out.
 enum Got {
     Row(Row),
@@ -401,24 +334,23 @@ enum Got {
 
 impl KernScheduler {
     /// Wrap a loaded tray (weights bound, peers connected, pads leased):
-    /// check the manifest against this caller contract and settle the
-    /// policy within its bounds.
+    /// settle how this process drives the manifest, within its bounds.
     pub fn new(tray: Tray, policy: Policy) -> Result<KernScheduler> {
-        let c = Contract::check(tray.manifest(), tray.page(), tray.len(), policy.spec)?;
+        let plan = Plan::check(tray.protocol(), tray.page(), tray.seqs_max(), policy.rows, policy.max_seqs)?;
         let policy = Policy {
-            max_seqs: c.max_seqs(tray.shape(), policy.max_seqs),
-            chunk: policy.chunk.clamp(1, tray.shape().tokens_max),
+            max_seqs: plan.max_seqs,
+            chunk: policy.chunk.clamp(1, tray.protocol().rows.max as usize),
             ..policy
         };
-        let stats = Stats::new(&c.spec);
+        let counters = plan.counters();
+        let stats = Stats::new(&counters);
         let every_page = !tray.has_seq_state();
         let prefix = Prefix::new(tray.page());
         let s = KernScheduler {
             tray,
             policy,
-            spec: c.spec,
-            prefill: c.prefill,
-            decode_batch: c.decode_batch,
+            plan,
+            counters,
             waiting: VecDeque::new(),
             waking: VecDeque::new(),
             running: Vec::new(),
@@ -444,15 +376,12 @@ impl KernScheduler {
         }
     }
 
-    /// Slots a lease holds past `prompt + max_tokens`: a speculative
-    /// round writes `n_drafts` rows past the token it may still have to
-    /// emit, and the last round's rejects need slots.
     fn headroom(&self) -> usize {
-        self.spec.as_ref().map_or(0, |s| s.n_drafts)
+        self.plan.headroom()
     }
 
     fn log_ready(&self) {
-        let (tray, policy, spec, facts) = (&self.tray, &self.policy, self.spec.as_ref(), self.facts());
+        let (tray, policy, plan, facts) = (&self.tray, &self.policy, &self.plan, self.facts());
         let (slots, _) = tray.seq_slots();
         // Pages: what requests can lease (one more per rank holds the
         // padding rows). Graphs are captured per bucket on first use
@@ -468,18 +397,16 @@ impl KernScheduler {
             chunk = policy.chunk,
             buckets = ?BUCKETS.iter().filter(|&&b| b <= policy.max_seqs).collect::<Vec<_>>(),
             eager = policy.eager,
-            prefill = match self.prefill {
-                Some(true) => "emits next_token",
-                Some(false) => "state only",
-                None => "through decode steps",
+            rows = plan.rows,
+            step = %plan.step.name,
+            steps = ?tray.protocol().forwards.iter().filter(|f| f.rows == plan.step.rows).map(|f| (f.name.as_str(), f.groups)).collect::<Vec<_>>(),
+            prefill = match &plan.chunk {
+                Some(f) if f.emits.is_some() => format!("`{}`, emits the first token", f.name),
+                Some(f) => format!("`{}`, state only", f.name),
+                None => "through steps".to_string(),
             },
-            decode_batch = self.decode_batch,
             checkpoints = if self.every_page { "every page" } else { "at request end" },
             host_gib_per_rank = (policy.host_bytes > 0).then_some(policy.host_bytes >> 30),
-            drafts = spec.map(|s| s.n_drafts),
-            draft_rows = spec.map(|s| s.draft_rows),
-            verify_rows = spec.map(|s| s.verify_rows),
-            fused_round = spec.map(|s| s.fused),
             "scheduler ready"
         );
     }
@@ -539,7 +466,7 @@ impl KernScheduler {
                 self.waiting.pop_front();
                 continue;
             }
-            if self.prefill.is_some() && budget_used > 0 && budget_used + prompt - 1 > self.policy.prefill_budget {
+            if self.plan.chunk.is_some() && budget_used > 0 && budget_used + prompt - 1 > self.policy.prefill_budget {
                 break; // enough prefill for this step; decode must run
             }
             let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
@@ -600,9 +527,9 @@ impl KernScheduler {
         Ok(())
     }
 
-    /// Start `q` running in `row` (past the row's prefix): through
-    /// `prefill` when the manifest has one, else with the prompt queued
-    /// for the decode steps. Returns the prompt tokens prefilled, for the
+    /// Start `q` running in `row` (past the row's prefix): through the
+    /// chunk forward when the manifest has one, else with the prompt
+    /// queued for the steps. Returns the prompt tokens prefilled, for the
     /// step's budget.
     fn admit_one(&mut self, q: QueuedRequest, row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<usize> {
         let id = q.id;
@@ -622,15 +549,15 @@ impl KernScheduler {
         ledger.admit(id);
         let t0 = Instant::now();
         let start = row.prefix();
-        // With a prefill program every prompt token goes through it when
-        // it emits the first generated token itself; otherwise everything
-        // but the last, which is the first decode step's input. A snapshot
-        // hit skips its tokens (never the last one). Without one the
-        // prompt past the hit is fed a token per decode step.
-        let (n_pre, first, pending) = match self.prefill {
-            Some(emits) => {
-                let n_pre = if emits { prompt } else { prompt - 1 };
-                let first = self.prefill(&row, &ids[..n_pre], start)?;
+        // With a chunk forward every prompt token goes through it when it
+        // hands the first generated token back itself; otherwise
+        // everything but the last, which is the first step's input. A
+        // snapshot hit skips its tokens (never the last one). Without one
+        // the prompt past the hit is fed a token per step.
+        let (n_pre, first, pending) = match self.plan.chunk.clone() {
+            Some(f) => {
+                let n_pre = if f.emits.is_some() { prompt } else { prompt - 1 };
+                let first = self.prefill(&f, &row, &ids[..n_pre], start)?;
                 self.stats.prefill_ns += t0.elapsed().as_nanos();
                 self.stats.prefill_tokens += (n_pre - start) as u64;
                 (n_pre, first, VecDeque::new())
@@ -664,18 +591,6 @@ impl KernScheduler {
             admitted: t0,
         };
         self.checkpoint(&mut seq)?;
-        let first = match first {
-            Some(tok) => Some(tok),
-            None if self.spec.is_some() => {
-                // The last prompt token goes through `decode_spec` now
-                // (a round needs an anchor and its tap in the draft
-                // KV); its token is the first one emitted.
-                let tok = self.first_token(&seq)?;
-                seq.advance([seq.next]);
-                Some(tok)
-            }
-            None => None,
-        };
         if let Some(tok) = first {
             let (emitted, done) = seq.emit(&[tok], &self.policy.stop_tokens, ledger);
             self.stats.tokens += emitted;
@@ -756,193 +671,80 @@ impl KernScheduler {
     }
 
     /// Chunked single-sequence prefill of `ids[start..]` at positions
-    /// `start..` of `row` (`start` is the row's prefix); the first
-    /// generated token when the manifest's prefill emits it.
-    fn prefill(&mut self, row: &Row, ids: &[i64], start: usize) -> Result<Option<u32>> {
+    /// `start..` of `row` (`start` is the row's prefix) through `f`; the
+    /// first generated token when `f` hands it back.
+    fn prefill(&mut self, f: &Forward, row: &Row, ids: &[i64], start: usize) -> Result<Option<u32>> {
         let chunk = self.policy.chunk;
-        let emits = self.prefill == Some(true);
-        let spec = self.spec.is_some();
         let mut first = None;
         let mut pos = start;
         while pos < ids.len() {
             let c = (ids.len() - pos).min(chunk);
-            let cells = [Cell { row, ids: ids[pos..pos + c].to_vec(), pos, col: 0 }];
+            let cells = [Cell { row, ids: ids[pos..pos + c].to_vec(), pos }];
             let eager = self.policy.eager || c != chunk;
-            let mut st = self.tray.stage(&cells, bucket)?;
-            st.run("prefill", eager)?;
-            if spec {
-                // The chunk's taps (`fc_out`) into the draft's context KV;
-                // positions/slot_mapping are still the chunk's.
-                st.run("draft_precompute", eager)?;
-            }
+            let mut st = self.tray.stage(&cells, |_| 1)?;
+            st.run(f, eager)?;
             pos += c;
-            if emits && pos == ids.len() {
-                first = Some(st.read_i64("next_token")?[0][0] as u32);
+            if pos == ids.len() {
+                first = st.emitted(f)?[0].first().map(|&t| t as u32);
             }
         }
         Ok(first)
     }
 
-    /// Speculative admission: the last prompt token through `decode_spec`
-    /// (bs=1, taps) and its row into the draft KV; returns the first
-    /// generated token.
-    fn first_token(&mut self, s: &Seq) -> Result<u32> {
-        let cells = [Cell { row: &s.row, ids: vec![s.next as i64], pos: s.pos, col: 0 }];
-        let mut st = self.tray.stage(&cells, bucket)?;
-        st.run("decode_spec", self.policy.eager)?;
-        st.run("draft_precompute", self.policy.eager)?;
-        Ok(st.read_i64("next_token")?[0][0] as u32)
-    }
-
-    /// One speculative round over every running sequence: draft, verify,
-    /// precompute, accept — the `round` program, or the four phased ones.
-    fn spec_round(&mut self, ledger: &mut RequestLedger) -> Result<()> {
+    /// One step over every running sequence: `rows` rows per sequence at
+    /// its position, the forward the protocol picks for the batch, and
+    /// what it hands each sequence back.
+    fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         self.drop_aborted(ledger);
         let n = self.running.len();
         if n == 0 {
             return Ok(());
         }
-        let plan = self.spec.as_ref().unwrap();
-        let (nd, dr, mask, advance, fused) =
-            (plan.n_drafts, plan.draft_rows, plan.mask_token, plan.advance, plan.fused);
-        let eager = self.policy.eager;
+        let rows = self.plan.rows;
         let t0 = Instant::now();
-        let running = &self.running;
-        let tray = &mut self.tray;
-
-        // Draft: [anchor, mask × (dr-1)] per sequence at pos.., non-causal.
-        let cells: Vec<Cell> = running
+        let cells: Vec<Cell> = self
+            .running
             .iter()
-            .map(|s| {
-                let mut ids = vec![mask; dr];
-                ids[0] = s.next as i64;
-                Cell { row: &s.row, ids, pos: s.pos, col: 0 }
-            })
+            .map(|s| Cell { row: &s.row, ids: vec![s.next as i64; rows as usize], pos: s.pos })
             .collect();
-        let mut st = tray.stage(&cells, bucket)?;
-        st.write_seqs("anchor_token", |i| running[i].next as i64, 0i64)?;
-        let (drafts, vt) = if fused {
-            // Verify resumes from the committed state; the round's accept
-            // writes advance's own `num_accepted` and line table.
-            if advance {
-                st.write_seqs("num_accepted_tokens", |_| 1i32, 1)?;
-            }
-            st.run("round", eager)?;
-            let out = (st.read_i64("draft_tokens")?, st.read_i64("verify_tokens")?);
-            drop(st);
-            out
-        } else {
-            st.run("draft", eager)?;
-            let drafts = st.read_i64("draft_tokens")?;
-            drop(st);
-
-            // Verify: [anchor, d0..] per sequence at pos.., causal; row i of
-            // a group answers "what follows position pos+i".
-            let cells: Vec<Cell> = running
-                .iter()
-                .zip(&drafts)
-                .map(|(s, d)| {
-                    let mut ids = vec![s.next as i64];
-                    ids.extend_from_slice(d);
-                    Cell { row: &s.row, ids, pos: s.pos, col: 0 }
-                })
-                .collect();
-            let mut st = tray.stage(&cells, bucket)?;
-            if advance {
-                st.write_seqs("num_accepted_tokens", |_| 1i32, 1)?;
-            }
-            st.run("verify", eager)?;
-            let vt = st.read_i64("verify_tokens")?;
-            // Every row's tap into the draft KV (positions/slot_mapping are
-            // still verify's): rejected rows land past the sequence's new
-            // position and the next round overwrites them.
-            st.run("draft_precompute", eager)?;
-            (drafts, vt)
-        };
-
-        // Accept the longest matching prefix; vt[a] is the correction (or
-        // the bonus token when everything matched).
-        let accepted: Vec<usize> =
-            drafts.iter().zip(&vt).map(|(d, v)| d.iter().zip(v).take_while(|(x, y)| x == y).count()).collect();
-        if advance && !fused {
-            // Commit the accepted rows into the recurrent state: the
-            // target re-runs verify's rows from the state after the anchor
-            // and stores after the last accepted one — the line moves to
-            // entry `a` of its cell, `num_accepted_tokens` = a + 1.
-            let cells: Vec<Cell> = running
-                .iter()
-                .zip(&drafts)
-                .zip(&accepted)
-                .map(|((s, d), &a)| {
-                    let mut ids = vec![s.next as i64];
-                    ids.extend_from_slice(d);
-                    Cell { row: &s.row, ids, pos: s.pos, col: a }
-                })
-                .collect();
-            let mut st = tray.stage(&cells, bucket)?;
-            st.write_seqs("num_accepted_tokens", |i| accepted[i] as i32 + 1, 1)?;
-            st.run("advance", eager)?;
-        }
-        debug_assert_eq!(vt.len(), n);
-        self.stats.step_ns += t0.elapsed().as_nanos();
-        self.stats.steps += 1;
-
-        let running = std::mem::take(&mut self.running);
-        for (i, mut s) in running.into_iter().enumerate() {
-            let v = &vt[i];
-            let a = accepted[i];
-            let plan = self.spec.as_mut().unwrap();
-            for p in &mut plan.counters.num_accepted_tokens_per_pos[..a] {
-                *p += 1;
-            }
-            plan.counters.num_drafts += 1;
-            plan.counters.num_draft_tokens += nd as u64;
-            plan.counters.num_accepted_tokens += a as u64;
-            let toks: Vec<u32> = v[..=a].iter().map(|&t| t as u32).collect();
-            s.advance(std::iter::once(s.next).chain(toks[..a].iter().copied()));
-            let (n, done) = s.emit(&toks, &self.policy.stop_tokens, ledger);
-            self.stats.tokens += n;
-            if done {
-                self.finish(s);
-            } else {
-                self.checkpoint(&mut s)?;
-                self.running.push(s);
-            }
-        }
-        Ok(())
-    }
-
-    /// One decode step over every running sequence.
-    fn decode(&mut self, ledger: &mut RequestLedger) -> Result<()> {
-        self.drop_aborted(ledger);
-        let n = self.running.len();
-        if n == 0 {
-            return Ok(());
-        }
-        let t0 = Instant::now();
-        let cells: Vec<Cell> =
-            self.running.iter().map(|s| Cell { row: &s.row, ids: vec![s.next as i64], pos: s.pos, col: 0 }).collect();
-        let mut st = self.tray.stage(&cells, bucket)?;
-        let program = if st.b() > 1 && self.decode_batch { "decode_batch" } else { "decode" };
-        st.run(program, self.policy.eager)?;
-        let out = st.read_i64("next_token")?;
+        let cap = self.policy.max_seqs;
+        let mut st = self.tray.stage(&cells, |k| bucket(k).min(cap))?;
+        let f = st.forward(rows).expect("planned: every bucket up to max_seqs has a forward");
+        st.run(&f, self.policy.eager)?;
+        let out = st.emitted(&f)?;
         drop(st);
         self.stats.step_ns += t0.elapsed().as_nanos();
         self.stats.steps += 1;
 
         let running = std::mem::take(&mut self.running);
         for (i, mut s) in running.into_iter().enumerate() {
-            s.advance([s.next]);
+            let toks: Vec<u32> = out[i].iter().map(|&t| t as u32).collect();
+            if let Some(c) = &mut self.counters {
+                // The first token is the next input's answer; the rest are
+                // accepted drafts.
+                let accepted = toks.len().saturating_sub(1);
+                for p in &mut c.num_accepted_tokens_per_pos[..accepted] {
+                    *p += 1;
+                }
+                c.num_drafts += 1;
+                c.num_draft_tokens += rows - 1;
+                c.num_accepted_tokens += accepted as u64;
+            }
             // A row still feeding its prompt: this step's output is
             // dropped, the next prompt token is the next input.
             let done = match s.pending.pop_front() {
                 Some(t) => {
+                    s.advance([s.next]);
                     s.next = t;
                     self.stats.prefill_tokens += 1;
                     false
                 }
                 None => {
-                    let (n, done) = s.emit(&[out[i][0] as u32], &self.policy.stop_tokens, ledger);
+                    // The tokens taken are in the state now: the one fed
+                    // and every accepted one after it.
+                    let taken = toks.len().max(1);
+                    s.advance(std::iter::once(s.next).chain(toks[..taken - 1].iter().copied()));
+                    let (n, done) = s.emit(&toks, &self.policy.stop_tokens, ledger);
                     self.stats.tokens += n;
                     done
                 }
@@ -959,8 +761,7 @@ impl KernScheduler {
 
     /// One line per 5 s window in which anything happened; a window that
     /// only idled is dropped (and restarted, so the next line's rates are
-    /// over its own window). `steps` are speculative rounds under
-    /// `--spec`, and `accepted` / `accept_pct` are the window's.
+    /// over its own window). `accepted` / `accept_pct` are the window's.
     fn log_stats(&mut self) {
         let st = &self.stats;
         let dt = st.since.elapsed();
@@ -971,8 +772,7 @@ impl KernScheduler {
             let round = |x: f64, d: f64| (x * d).round() / d;
             let host = self.tray.host_tier();
             let (slots, slots_used) = self.tray.seq_slots();
-            let (drafts, draft_tokens, accepted) = self.spec.as_ref().map_or((0, 0, 0), |p| {
-                let c = &p.counters;
+            let (drafts, draft_tokens, accepted) = self.counters.as_ref().map_or((0, 0, 0), |c| {
                 (c.num_drafts - st.spec_at.0, c.num_draft_tokens - st.spec_at.1, c.num_accepted_tokens - st.spec_at.2)
             });
             info!(
@@ -998,13 +798,13 @@ impl KernScheduler {
                 slots_used = self.tray.has_seq_state().then_some(slots_used),
                 slots = self.tray.has_seq_state().then_some(slots),
                 remaps = self.tray.remaps(),
-                accepted = self.spec.as_ref().map(|_| round((accepted + drafts) as f64 / drafts.max(1) as f64, 100.0)),
+                accepted = self.counters.as_ref().map(|_| round((accepted + drafts) as f64 / drafts.max(1) as f64, 100.0)),
                 accept_pct =
-                    self.spec.as_ref().map(|_| round(accepted as f64 * 100.0 / draft_tokens.max(1) as f64, 1.0)),
+                    self.counters.as_ref().map(|_| round(accepted as f64 * 100.0 / draft_tokens.max(1) as f64, 1.0)),
                 "stats"
             );
         }
-        self.stats = Stats::new(&self.spec);
+        self.stats = Stats::new(&self.counters);
     }
 }
 
@@ -1015,11 +815,7 @@ impl Scheduler for KernScheduler {
 
     fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         self.admit(ledger)?;
-        if self.spec.is_some() {
-            self.spec_round(ledger)?;
-        } else {
-            self.decode(ledger)?;
-        }
+        self.step(ledger)?;
         self.log_stats();
         Ok(())
     }
@@ -1030,182 +826,117 @@ impl Scheduler for KernScheduler {
             kv_total_blocks: self.tray.pages_total() as u64,
             num_running_reqs: self.running.len() as u64,
             num_waiting_reqs: self.waiting.len() as u64,
-            spec_decode: self.spec.as_ref().map(|p| p.counters),
+            spec_decode: self.counters,
         }
-    }
-}
-
-fn need_programs(m: &Manifest, names: &[&str]) -> Result<()> {
-    match names.iter().find(|p| !m.programs.contains_key(**p)) {
-        Some(p) => bail!("manifest has no program `{p}`"),
-        None => Ok(()),
-    }
-}
-
-fn shape<'m>(m: &'m Manifest, name: &str) -> Result<&'m [Dim]> {
-    m.buffers.get(name).map(|b| b.shape.as_slice()).with_context(|| format!("manifest has no buffer `{name}`"))
-}
-
-/// A buffer shaped `[seqs, n]`, one row per sequence: `n`.
-fn seqs_rows(m: &Manifest, name: &str) -> Result<usize> {
-    match shape(m, name)? {
-        [Dim::Var(v), Dim::Const(n)] if v == "seqs" => Ok(*n as usize),
-        s => bail!("`{name}` shaped {s:?}, expected [seqs, n]"),
-    }
-}
-
-/// A buffer shaped `[seqs]`, one entry per sequence.
-fn per_seq(m: &Manifest, name: &str) -> Result<()> {
-    match shape(m, name)? {
-        [Dim::Var(v)] if v == "seqs" => Ok(()),
-        s => bail!("`{name}` shaped {s:?}, expected [seqs]"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kern_manifest::types::{Buffer, Spec};
+    use kern_manifest::types::Manifest;
 
-    /// The plain contract: 8 tokens, 4 sequences, a 3-page `block_table`
-    /// and a 3-line table over a recurrent state.
+    /// The plain contract: 8 rows, 4 sequences, a chunk forward that only
+    /// writes state, a one-row step for one sequence and one for four.
     fn plain() -> Manifest {
         Manifest::from_json(
             r#"{
-            "schema_version": 3, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 4}},
-            "states": {"kv": {"bytes_per_token": 1}, "gdn": {"bytes_per_seq": 24}},
+            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 4}},
+            "states": {"kv": {"bytes_per_token": 1}},
             "buffers": {
-                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"]},
-                "positions": {"kind": "input", "dtype": "i64", "shape": ["tokens"]},
-                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "domain": {"index_into": "kv"}},
-                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"]},
-                "cu_seqlens_q": {"kind": "input", "dtype": "i32", "shape": ["seqs"]},
+                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token"},
+                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "slot", "domain": {"index_into": "kv"}},
+                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
-                "line_index": {"kind": "input", "dtype": "i32", "shape": [3, "seqs"], "domain": {"index_into": "gdn", "stride": 8}},
-                "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"]}
+                "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"], "fill": "tokens"}
             },
-            "modules": {}, "ops": {}, "programs": {"prefill": [], "decode": [], "decode_batch": []}
+            "modules": {},
+            "ops": {
+                "write": {"params": ["in buffer<i64>", "in buffer<i32>"], "impl": {"launches": []}},
+                "head": {"params": ["in buffer<i64>", "out buffer<i64>"], "impl": {"launches": []}}
+            },
+            "programs": {
+                "prefill": {"batch": {"groups": 1, "rows": "tokens"}, "calls": [{"op": "write", "args": [{"buf": "token_ids"}, {"buf": "seq_lens"}]}]},
+                "decode": {"batch": {"groups": 1, "rows": 1}, "calls": [{"op": "head", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]},
+                "decode_batch": {"batch": {"groups": 4, "rows": 1}, "calls": [{"op": "head", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]}
+            }
         }"#,
         )
         .unwrap()
     }
 
-    fn buffer(kind: &str, shape: &str) -> Buffer {
-        serde_json::from_str(&format!(r#"{{"kind": "{kind}", "dtype": "i64", "shape": {shape}}}"#)).unwrap()
-    }
-
-    /// The same plus DSpark's contract: 3 drafts, `spec.block` 4.
+    /// The same plus a speculative round: 4 rows per sequence for up to 2
+    /// sequences, handing back 4 tokens and a count.
     fn speculative() -> Manifest {
-        let mut m = plain();
-        m.spec = Some(Spec { block: 4, mask_token: 7 });
-        m.buffers.insert("draft_tokens".into(), buffer("output", r#"["seqs", 3]"#));
-        m.buffers.insert("verify_tokens".into(), buffer("output", r#"["seqs", 4]"#));
-        m.buffers.insert("anchor_token".into(), buffer("input", r#"["seqs"]"#));
-        for p in ["decode_spec", "draft_precompute", "draft", "verify"] {
-            m.programs.insert(p.into(), vec![]);
-        }
-        m
+        let mut v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&plain()).unwrap()).unwrap();
+        v["buffers"]["verify_tokens"] =
+            serde_json::json!({"kind": "output", "dtype": "i64", "shape": ["seqs", 4], "fill": "tokens"});
+        v["buffers"]["nacc"] =
+            serde_json::json!({"kind": "output", "dtype": "i32", "shape": ["seqs"], "fill": "count"});
+        v["ops"]["round_head"] = serde_json::json!({"params": ["in buffer<i64>", "out buffer<i64>", "out buffer<i32>"], "impl": {"launches": []}});
+        v["programs"]["round"] = serde_json::json!({"batch": {"groups": 2, "rows": 4}, "calls": [
+            {"op": "round_head", "args": [{"buf": "token_ids"}, {"buf": "verify_tokens"}, {"buf": "nacc"}]}]});
+        Manifest::from_json(&v.to_string()).unwrap()
     }
 
-    fn check_on(m: &Manifest, ranks: usize, spec: bool) -> Result<(Shape, Contract)> {
-        let shape = Shape::check(m, &["line_index"], &["block_table"], 1)?;
-        let c = Contract::check(m, 16, ranks, spec)?;
-        Ok((shape, c))
+    fn check(m: &Manifest, page: usize, rows: Option<u64>, seqs: usize) -> Result<Plan> {
+        Plan::check(&Protocol::check(m)?, page, 4, rows, seqs)
     }
 
-    fn check(m: &Manifest, spec: bool) -> Result<Contract> {
-        check_on(m, 1, spec).map(|(_, c)| c)
-    }
-
-    fn rejects(m: &Manifest, spec: bool, what: &str) {
-        let Err(e) = check(m, spec) else { panic!("accepted, expected `{what}`") };
+    fn rejects(m: &Manifest, page: usize, rows: Option<u64>, what: &str) {
+        let Err(e) = check(m, page, rows, 4) else { panic!("accepted, expected `{what}`") };
         let e = format!("{e:#}");
         assert!(e.contains(what), "{e}");
     }
 
     #[test]
-    fn plain_contract() {
-        let (shape, c) = check_on(&plain(), 1, false).unwrap();
-        assert_eq!((c.prefill, c.decode_batch, c.spec.is_none()), (Some(false), true, true));
-        assert_eq!((c.max_seqs(&shape, 0), c.max_seqs(&shape, 3), c.max_seqs(&shape, 100)), (1, 3, 4));
+    fn plain_plan() {
+        let p = check(&plain(), 16, None, 4).unwrap();
+        assert_eq!(
+            (p.rows, p.step.name.as_str(), p.chunk.as_ref().map(|f| f.name.as_str())),
+            (1, "decode", Some("prefill"))
+        );
+        assert_eq!((p.headroom(), p.counters().is_none(), p.chunk.as_ref().unwrap().emits), (0, true, None));
+        // The operator's ask, within the sequences bound.
+        assert_eq!(
+            (check(&plain(), 16, None, 0).unwrap().max_seqs, check(&plain(), 16, None, 100).unwrap().max_seqs),
+            (1, 4)
+        );
     }
 
     #[test]
-    fn prefill_emits_when_it_writes_next_token() {
-        let mut m = plain();
-        let call = serde_json::from_str(r#"{"op": "head", "args": [{"buf": "next_token"}]}"#).unwrap();
-        m.programs.insert("prefill".into(), vec![call]);
-        assert_eq!(check(&m, false).unwrap().prefill, Some(true));
-    }
-
-    #[test]
-    fn decode_only_manifests_feed_the_prompt_through_decode() {
+    fn a_prompt_goes_through_steps_without_a_chunk_forward() {
         let mut m = plain();
         m.programs.remove("prefill");
-        m.programs.remove("decode_batch");
-        let c = check(&m, false).unwrap();
-        assert_eq!((c.prefill, c.decode_batch), (None, false));
-        rejects(&m, true, "--spec needs a `prefill` program");
+        let p = check(&m, 16, None, 4).unwrap();
+        assert_eq!((p.chunk, p.rows), (None, 1));
     }
 
     #[test]
-    fn plain_rejections() {
+    fn the_widest_rows_by_default() {
+        let p = check(&speculative(), 16, None, 4).unwrap();
+        assert_eq!((p.rows, p.step.name.as_str(), p.headroom()), (4, "round", 3));
+        assert_eq!(p.counters().map(|c| c.num_spec_tokens), Some(3));
+        // Four rows per sequence fit twice in 8, and the round takes two sequences.
+        assert_eq!(p.max_seqs, 2);
+        // The plain step on the same manifest, on request.
+        let p = check(&speculative(), 16, Some(1), 4).unwrap();
+        assert_eq!((p.rows, p.step.name.as_str(), p.max_seqs), (1, "decode", 4));
+    }
+
+    #[test]
+    fn plan_rejections() {
+        rejects(&plain(), 16, Some(4), "no program takes one sequence of 4 rows; the manifest declares rows [1]");
+        rejects(&speculative(), 2, Some(4), "exceed the 2-token pad page");
+        let mut m = speculative();
+        m.programs.remove("prefill");
+        rejects(&m, 16, Some(4), "prompts go through steps, which takes one-row steps, not 4");
+        // Only a chunk forward, one that hands a token back: nothing to step with.
         let mut m = plain();
+        let head = m.programs["decode"].calls[0].clone();
+        m.programs.get_mut("prefill").unwrap().calls.push(head);
         m.programs.remove("decode");
-        rejects(&m, false, "no program `decode`");
-        let Err(e) = check_on(&speculative(), 4, true) else { panic!("--spec on 4 ranks accepted") };
-        assert!(format!("{e:#}").contains("--spec drives one rank; this tray has 4"), "{e:#}");
-    }
-
-    #[test]
-    fn speculative_contract() {
-        let (shape, c) = check_on(&speculative(), 1, true).unwrap();
-        let s = c.spec.as_ref().unwrap();
-        assert_eq!(
-            (s.n_drafts, s.draft_rows, s.verify_rows, s.mask_token, s.advance, s.fused),
-            (3, 4, 4, 7, false, false)
-        );
-        assert_eq!(s.counters.num_spec_tokens, 3);
-        // Four rows per sequence per round fit twice in 8 tokens.
-        assert_eq!((c.max_seqs(&shape, 1), c.max_seqs(&shape, 4)), (1, 2));
-        // A plain manifest has no `decode_batch` to miss under --spec.
-        let mut m = speculative();
         m.programs.remove("decode_batch");
-        assert!(check(&m, true).is_ok());
-    }
-
-    #[test]
-    fn speculative_rejections() {
-        // The draft rows and the mask token come from the manifest, nowhere else.
-        let mut m = speculative();
-        m.spec = None;
-        rejects(&m, true, "no `spec` block");
-        let mut m = speculative();
-        m.programs.remove("verify");
-        rejects(&m, true, "--spec: the manifest's speculative contract: manifest has no program `verify`");
-        let mut m = speculative();
-        m.buffers.get_mut("verify_tokens").unwrap().shape = vec![Dim::Var("seqs".into()), Dim::Const(5)];
-        rejects(&m, true, "verify_tokens has 5 rows per sequence, expected 4");
-        let mut m = speculative();
-        m.buffers.get_mut("anchor_token").unwrap().shape = vec![Dim::Const(4)];
-        rejects(&m, true, "`anchor_token` shaped [Const(4)], expected [seqs]");
-        let mut m = speculative();
-        m.programs.insert("advance".into(), vec![]);
-        rejects(&m, true, "`advance` without a `num_accepted_tokens`");
-        let mut m = speculative();
-        m.buffers.insert("num_accepted_tokens".into(), buffer("input", r#"["seqs"]"#));
-        rejects(&m, true, "no `advance` program");
-        m.programs.insert("advance".into(), vec![]);
-        assert!(check(&m, true).unwrap().spec.unwrap().advance);
-        // `round` fuses draft and verify: their rows must coincide.
-        let mut m = speculative();
-        m.programs.insert("round".into(), vec![]);
-        m.programs.remove("draft");
-        assert!(check(&m, true).unwrap().spec.unwrap().fused);
-        m.spec = Some(Spec { block: 3, mask_token: 7 });
-        rejects(&m, true, "coincide, got 3 and 4");
-        // A round's rows must fit the pad page.
-        let Err(e) = Contract::check(&speculative(), 2, 1, true) else { panic!("4 rows in a 2-token page") };
-        assert!(format!("{e:#}").contains("exceed the 2-token pad page"), "{e:#}");
+        rejects(&m, 16, None, "no program takes a fixed number of rows");
     }
 }

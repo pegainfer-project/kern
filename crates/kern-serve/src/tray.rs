@@ -39,18 +39,18 @@
 //! out per rank. Rows per rank `b` is one bucket for the whole tray (the
 //! most rows any rank has, rounded up), padded on every rank with the
 //! rank's pad lease — a page and a slot no sequence owns, whose junk
-//! nobody reads. Which inputs span the group and which are a rank's own
-//! is read off the manifest: a buffer over the `rows` var carries the
-//! tray batch — this rank's rows first, then the other members' in group
-//! order from it, the layout the collectives assume — and one over
-//! `tokens` or `seqs` carries this rank's rows alone. `token_ids` and the
-//! line tables of a sharded state are of the first kind in a tray
-//! manifest; `slot_mapping`, `seq_lens` and the page tables are always of
-//! the second. Outputs likewise: a `next_token` over `rows` holds this
-//! rank's rows in its first block, so every cell is read from its owner.
-//! A manifest with a `tp_err` output declares the collectives' error
-//! word; it is read after every step and a nonzero value is a failed
-//! step, never a silent one.
+//! nobody reads. Which buffer carries what, and which inputs span the
+//! group and which are a rank's own, is the manifest's [`Protocol`]: a
+//! fill over the tray axis carries the tray batch — this rank's rows
+//! first, then the other members' in group order from it, the layout the
+//! collectives assume — and one over the rows or sequences axis carries
+//! this rank's rows alone. The tokens fed and the line tables of a
+//! sharded state are of the first kind in a tray manifest; the slots, the
+//! sequence lengths and the page tables are always of the second. Outputs
+//! likewise: a `tokens` fill over the tray axis holds this rank's rows in
+//! its first block, so every cell is read from its owner. A manifest with
+//! an `error` fill declares the collectives' error word; it is read after
+//! every step and a nonzero value is a failed step, never a silent one.
 //!
 //! [`Staged`] borrows the tray for as long as the step lives: nothing can
 //! lease, fork or stage again until the outputs are read and it drops,
@@ -61,8 +61,10 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use kern_manifest::types::{BufferKind, Dim, Manifest};
-use kern_run::{i64_from_le, le_bytes_i32, le_bytes_i64};
+use kern_manifest::protocol::{Axis, Filled, Forward};
+use kern_manifest::types::{Fill, Manifest};
+use kern_manifest::{Protocol, Verified};
+use kern_run::le_bytes_i32;
 use kern_runtime::{
     Checkpoint, Denied, Error, GroupRank, Kept, Lease, Parked, PeerHandle, Room, Runtime, Topology, Waking,
 };
@@ -169,128 +171,11 @@ impl<K: Kept> Kept for Group<K> {
     }
 }
 
-/// A line table over a per-sequence state, `[lines, cols]` or
-/// `[lines, cols, w]`: `rows` lines per sequence, `width` entries per
-/// (line, sequence) cell, its columns the tray batch's rows or this
-/// rank's.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LineTable {
-    pub name: String,
-    pub rows: usize,
-    pub width: usize,
-    pub tray: bool,
-}
-
-/// How this manifest's caller contract lays a step out: which of the
-/// standard inputs it has and which axis each spans. Pure over the
-/// manifest and the runtime's table names, so a synthetic manifest
-/// exercises every rejection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Shape {
-    /// The `seqs` bound, less what the `rows` bound allows per rank.
-    pub seqs_max: usize,
-    pub tokens_max: usize,
-    /// The manifest has a `rows` var: the tray batch's row axis.
-    pub rows: bool,
-    /// `token_ids` spans the tray batch rather than this rank.
-    pub ids_tray: bool,
-    pub positions: bool,
-    pub cu_seqlens: bool,
-    /// A `tp_err` output: the collectives' error word.
-    pub err_word: bool,
-    pub line_tables: Vec<LineTable>,
-    pub page_tables: Vec<String>,
-}
-
-impl Shape {
-    /// `seq_tables` / `page_tables` are the runtime's, `t` the tray batch
-    /// group's size.
-    pub fn check(m: &Manifest, seq_tables: &[&str], page_tables: &[&str], t: usize) -> Result<Shape> {
-        for name in ["token_ids", "slot_mapping", "seq_lens"] {
-            if !m.buffers.contains_key(name) {
-                bail!("manifest has no input buffer `{name}`");
-            }
-        }
-        if !page_tables.contains(&"block_table") {
-            bail!("`block_table` is not a page table (an input indexing a paged state)");
-        }
-        let seqs = var_max(m, "seqs")?;
-        let tokens_max = var_max(m, "tokens")?;
-        let rows = m.vars.get("rows").map(|v| v.max as usize);
-        if t > 1 && rows.is_none() {
-            bail!("a `tp` group of {t} needs a `rows` var: the tray batch's row axis");
-        }
-        let seqs_max = rows.map_or(seqs, |r| seqs.min(r / t)).max(1);
-        let axis = |name: &str, kind: BufferKind, own: &str| -> Result<bool> {
-            let b = m.buffers.get(name).with_context(|| format!("manifest has no buffer `{name}`"))?;
-            if b.kind != kind {
-                bail!("`{name}` is {}, expected {kind}", b.kind);
-            }
-            match b.shape.first() {
-                Some(Dim::Var(v)) if v == own => Ok(false),
-                Some(Dim::Var(v)) if v == "rows" && rows.is_some() => Ok(true),
-                _ => bail!("`{name}` shaped {:?}, expected [{own}] or [rows]", b.shape),
-            }
-        };
-        let ids_tray = axis("token_ids", BufferKind::Input, "tokens")?;
-        // `next_token` over `rows` holds this rank's rows first, so a cell is
-        // read from its owner the same way either way.
-        axis("next_token", BufferKind::Output, "seqs")?;
-        let line_tables = seq_tables
-            .iter()
-            .map(|name| {
-                let (rows_, width, v) = match shape(m, name)? {
-                    [Dim::Const(r), Dim::Var(v)] => (*r, 1, v),
-                    [Dim::Const(r), Dim::Var(v), Dim::Const(w)] => (*r, *w, v),
-                    s => {
-                        bail!("line table `{name}` shaped {s:?}, expected [lines, seqs|rows] or [lines, seqs|rows, w]")
-                    }
-                };
-                let tray = match v.as_str() {
-                    "seqs" => false,
-                    "rows" if rows.is_some() => true,
-                    _ => bail!("line table `{name}` is over `{v}`, expected `seqs` or `rows`"),
-                };
-                Ok(LineTable { name: name.to_string(), rows: rows_ as usize, width: width as usize, tray })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let page_tables = page_tables
-            .iter()
-            .map(|name| match shape(m, name)? {
-                [Dim::Var(v), Dim::Const(_)] if v == "seqs" => Ok(name.to_string()),
-                s => bail!("`{name}` shaped {s:?}, expected [seqs, n]"),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let is_output = |name: &str| m.buffers.get(name).is_some_and(|b| b.kind == BufferKind::Output);
-        Ok(Shape {
-            seqs_max,
-            tokens_max,
-            rows: rows.is_some(),
-            ids_tray,
-            positions: m.buffers.contains_key("positions"),
-            cu_seqlens: m.buffers.contains_key("cu_seqlens_q"),
-            err_word: is_output("tp_err"),
-            line_tables,
-            page_tables,
-        })
-    }
-}
-
-fn var_max(m: &Manifest, name: &str) -> Result<usize> {
-    m.vars.get(name).map(|v| v.max as usize).with_context(|| format!("manifest has no var `{name}`"))
-}
-
-fn shape<'m>(m: &'m Manifest, name: &str) -> Result<&'m [Dim]> {
-    m.buffers.get(name).map(|b| b.shape.as_slice()).with_context(|| format!("manifest has no buffer `{name}`"))
-}
-
-/// One row's part of a step: the tokens it feeds at `pos..`, and the
-/// entry of a wide line table's cell that carries its line.
+/// One row's part of a step: the tokens it feeds at `pos..`.
 pub struct Cell<'a> {
     pub row: &'a Row,
     pub ids: Vec<i64>,
     pub pos: usize,
-    pub col: usize,
 }
 
 /// Which cells each rank owns, in cell order, and the bucket they were
@@ -332,7 +217,7 @@ unsafe impl Send for Sent {}
 pub struct Tray {
     ranks: Vec<Runtime>,
     groups: Groups,
-    shape: Shape,
+    protocol: Protocol,
     /// One page and slot per rank no sequence owns: padding rows write here.
     pad: Vec<Lease>,
 }
@@ -346,16 +231,17 @@ impl Tray {
     /// topology (`tp` splits the ranks into consecutive groups; every
     /// other group spans them all), bind each rank's weights
     /// (`weights_of` names them for a rank's topology), connect the peers,
-    /// reserve `host_bytes` of pinned memory per rank and lease the pad.
+    /// run what the manifest runs once, reserve `host_bytes` of pinned
+    /// memory per rank and lease the pad.
     pub fn load(
-        manifest_json: &str,
+        m: &Verified,
         kernels: &Path,
         gpus: &[usize],
         capacity: Option<u64>,
         weights_of: &(dyn Fn(&Topology) -> Result<Vec<PathBuf>> + Sync),
         host_bytes: u64,
     ) -> Result<Tray> {
-        let m = Manifest::from_json(manifest_json)?;
+        let protocol = Protocol::check(m)?;
         let n = gpus.len();
         anyhow::ensure!(n >= 1, "no GPUs");
         let t = m.group_size("tp").unwrap_or(1) as usize;
@@ -387,9 +273,8 @@ impl Tray {
                 .map(|(q, &gpu)| {
                     let topo = topology(q);
                     s.spawn(move || -> Result<Sent> {
-                        let mut rt =
-                            Runtime::load(manifest_json, kernels, gpu, capacity, has_topology.then_some(&topo))
-                                .with_context(|| format!("rank {q} on gpu {gpu}"))?;
+                        let mut rt = Runtime::load(m, kernels, gpu, capacity, has_topology.then_some(&topo))
+                            .with_context(|| format!("rank {q} on gpu {gpu}"))?;
                         let files = weights_of(&topo)?;
                         let maps = files
                             .iter()
@@ -434,9 +319,14 @@ impl Tray {
                 }
             }
         }
-        let seq_tables: Vec<&str> = ranks[0].seq_tables().collect();
-        let page_tables: Vec<&str> = ranks[0].page_tables().collect();
-        let shape = Shape::check(&m, &seq_tables, &page_tables, t)?;
+        // Once after load, the peers mapped: a tray manifest's setup (the
+        // allreduce's Lamport stages are poisoned, not zeroed).
+        let env = protocol.env(1, 1, t as u64);
+        for p in &protocol.once {
+            for (q, rt) in ranks.iter().enumerate() {
+                rt.run(p, &env).with_context(|| format!("rank {q}: `{p}`"))?;
+            }
+        }
         if host_bytes > 0 {
             let t0 = std::time::Instant::now();
             for (q, rt) in ranks.iter_mut().enumerate() {
@@ -454,15 +344,21 @@ impl Tray {
                 bail!("rank {q}: capacity {} tokens holds one page; nothing left to serve from", rt.capacity());
             }
         }
-        Ok(Tray { ranks, groups, shape, pad })
+        Ok(Tray { ranks, groups, protocol, pad })
     }
 
     pub fn manifest(&self) -> &Manifest {
         &self.ranks[0].manifest
     }
 
-    pub fn shape(&self) -> &Shape {
-        &self.shape
+    pub fn protocol(&self) -> &Protocol {
+        &self.protocol
+    }
+
+    /// Sequences one rank may run at once: the manifest's bound, and its
+    /// share of the tray batch when there is one.
+    pub fn seqs_max(&self) -> usize {
+        seqs_max(&self.protocol, self.groups.t)
     }
 
     /// Ranks driven.
@@ -623,95 +519,97 @@ impl Tray {
         let owners: Vec<usize> = cells.iter().map(|c| c.row.owner.0).collect();
         let layout = Layout::new(&owners, per, self.groups.n, bucket);
         let (b, t) = (layout.b, self.groups.t);
-        if b > self.shape.seqs_max {
-            bail!("{b} rows per rank, the manifest allows {}", self.shape.seqs_max);
+        if b > self.seqs_max() {
+            bail!("{b} rows per rank, the manifest allows {}", self.seqs_max());
         }
-        let mut env = BTreeMap::from([("tokens".to_string(), (per * b) as u64), ("seqs".to_string(), b as u64)]);
-        if self.shape.rows {
-            env.insert("rows".to_string(), (t * b) as u64);
-        }
+        let env = self.protocol.env(b as u64, per as u64, t as u64);
         for q in 0..self.groups.n {
             self.stage_rank(q, cells, &layout, &env)?;
         }
         Ok(Staged { tray: self, layout, env })
     }
 
-    /// Rank `q`'s inputs for a step (see the module doc for which span
-    /// the group).
+    /// Rank `q`'s inputs for a step: every fill, the page tables and the
+    /// line tables (see the module doc for which span the group).
     fn stage_rank(&mut self, q: usize, cells: &[Cell<'_>], l: &Layout, env: &BTreeMap<String, u64>) -> Result<()> {
         let (per, b, me) = (l.per, l.b, self.groups.member(q));
-        let shape = &self.shape;
+        let p = &self.protocol;
         let pad = &self.pad[q];
         // Every rank's slot for a row is the lease at its own member index.
         let lease_on = |i: usize| -> &Lease { &cells[i].row.parts[me] };
-        let blocks: Vec<usize> = if shape.ids_tray { self.groups.blocks(q).collect() } else { vec![q] };
-        let mut ids = Vec::with_capacity(per * b * blocks.len());
-        for &r in &blocks {
-            for i in l.rows(r) {
-                match i {
-                    Some(i) => ids.extend_from_slice(&cells[i].ids),
-                    None => ids.extend(std::iter::repeat_n(0, per)),
-                }
+        // The ranks whose rows a buffer over `axis` holds, in block order.
+        let blocks = |axis: Axis| -> Vec<usize> {
+            if axis == Axis::Tray {
+                self.groups.blocks(q).collect()
+            } else {
+                vec![q]
             }
-        }
-        let mut positions = Vec::with_capacity(per * b);
-        let mut slots = Vec::with_capacity(per * b);
-        let mut seq_lens = Vec::with_capacity(b);
-        for i in l.rows(q) {
-            let (pos, lease) = match i {
-                Some(i) => (cells[i].pos, cells[i].row.own()),
-                None => (0, pad),
+        };
+        let mut writes: Vec<(&Filled, Vec<i64>)> = Vec::new();
+        for f in &p.fills {
+            let v: Vec<i64> = match (f.fill, f.axis) {
+                (Fill::Token, Axis::Rows | Axis::Tray) => blocks(f.axis)
+                    .iter()
+                    .flat_map(|&r| l.rows(r))
+                    .flat_map(|i| i.map_or(vec![0; per], |i| cells[i].ids.clone()))
+                    .collect(),
+                // Each sequence's first token, the anchor a drafting program
+                // splices its own rows from.
+                (Fill::Token, Axis::Groups) => l.rows(q).map(|i| i.map_or(0, |i| cells[i].ids[0])).collect(),
+                (Fill::Position, _) => {
+                    l.rows(q).flat_map(|i| (0..per).map(move |j| (i.map_or(0, |i| cells[i].pos) + j) as i64)).collect()
+                }
+                (Fill::Slot, _) => l
+                    .rows(q)
+                    .flat_map(|i| {
+                        let (pos, lease) = i.map_or((0, pad), |i| (cells[i].pos, cells[i].row.own()));
+                        lease.slots(pos..pos + per)
+                    })
+                    .collect(),
+                (Fill::SeqLen, _) => l.rows(q).map(|i| (i.map_or(0, |i| cells[i].pos) + per) as i64).collect(),
+                (Fill::CuSeqlens, _) => (0..=b as i64).map(|i| i * per as i64).collect(),
+                (Fill::Tokens | Fill::Count | Fill::Error, _) => continue,
+                (Fill::Token, Axis::Fixed(_)) => unreachable!("the protocol checks fill shapes"),
             };
-            positions.extend((pos..pos + per).map(|p| p as i64));
-            slots.extend(lease.slots(pos..pos + per));
-            seq_lens.push((pos + per) as i32);
+            writes.push((f, v));
         }
-        let cu: Vec<i32> = (0..=b as i32).map(|i| i * per as i32).collect();
-        let mut tables: Vec<(String, Vec<i32>)> = Vec::with_capacity(shape.page_tables.len());
-        for name in &shape.page_tables {
+        let mut tables: Vec<(&str, Vec<i32>)> = Vec::with_capacity(p.page_tables.len());
+        for t in &p.page_tables {
             let mut table = Vec::new();
             for i in l.rows(q) {
-                i.map_or(pad, |i| cells[i].row.own()).extend_row(name, &mut table)?;
+                i.map_or(pad, |i| cells[i].row.own()).extend_row(&t.name, &mut table)?;
             }
-            tables.push((name.clone(), table));
+            tables.push((&t.name, table));
         }
         // Line tables are written whole: cell `[r, c]` carries the line of
-        // the row in column `c` — entry `col` of a wide table's cell, the
-        // null line 0 in the rest — and the pad's past the batch.
-        let mut lines: Vec<(String, Vec<i32>)> = Vec::with_capacity(shape.line_tables.len());
-        for LineTable { name, rows, width: w, tray } in &shape.line_tables {
-            let (cols_max, blocks): (usize, Vec<usize>) = if *tray {
-                (var_max(&self.ranks[q].manifest, "rows")?, self.groups.blocks(q).collect())
-            } else {
-                (var_max(&self.ranks[q].manifest, "seqs")?, vec![q])
+        // the row in column `c` in entry 0 (a program that moves along a
+        // wide cell does so on the device), the null line 0 in the rest,
+        // and the pad's past the batch.
+        let mut lines: Vec<(&str, Vec<i32>)> = Vec::with_capacity(p.line_tables.len());
+        for t in &p.line_tables {
+            let cols_max = match t.axis {
+                Axis::Tray => p.tray.as_ref().map_or(0, |b| b.max) as usize,
+                _ => p.groups.max as usize,
             };
-            let mut table = vec![0i32; rows * cols_max * w];
-            for r in 0..*rows {
+            let blocks = blocks(t.axis);
+            let (name, w) = (t.name.as_str(), t.width);
+            let mut table = vec![0i32; t.lines * cols_max * w];
+            for r in 0..t.lines {
                 let fill = pad.seq_line(name, r)?;
                 for c in 0..cols_max {
                     let (d, j) = (c / b, c % b);
                     let cell = blocks.get(d).and_then(|&rank| l.rows(rank).nth(j).flatten());
-                    let (line, col) = match cell {
-                        Some(i) => (lease_on(i).seq_line(name, r)?, cells[i].col),
-                        None => (fill, 0),
+                    table[(r * cols_max + c) * w] = match cell {
+                        Some(i) => lease_on(i).seq_line(name, r)?,
+                        None => fill,
                     };
-                    if col >= *w {
-                        bail!("line table `{name}`: entry {col} of a {w}-wide cell");
-                    }
-                    table[(r * cols_max + c) * w + col] = line;
                 }
             }
-            lines.push((name.clone(), table));
+            lines.push((name, table));
         }
         let rt = &mut self.ranks[q];
-        rt.write_input_at("token_ids", &le_bytes_i64(&ids), env)?;
-        if shape.positions {
-            rt.write_input_at("positions", &le_bytes_i64(&positions), env)?;
-        }
-        rt.write_input_at("slot_mapping", &le_bytes_i64(&slots), env)?;
-        rt.write_input_at("seq_lens", &le_bytes_i32(&seq_lens), env)?;
-        if shape.cu_seqlens {
-            rt.write_input_at("cu_seqlens_q", &le_bytes_i32(&cu), env)?;
+        for (f, v) in &writes {
+            rt.write_input_at(&f.name, &f.encode(v), env)?;
         }
         for (name, table) in &tables {
             rt.write_input_at(name, &le_bytes_i32(table), env)?;
@@ -723,8 +621,15 @@ impl Tray {
     }
 }
 
-/// A step staged on every rank: write what else it needs, run it, read
-/// its outputs. Holds the tray until it drops.
+/// Sequences per rank: the sequences bound, and the tray bound's share
+/// when the batch spans `t` ranks.
+fn seqs_max(p: &Protocol, t: usize) -> usize {
+    let g = p.groups.max as usize;
+    p.tray.as_ref().map_or(g, |r| g.min(r.max as usize / t)).max(1)
+}
+
+/// A step staged on every rank: run a forward, read what it handed back.
+/// Holds the tray until it drops.
 pub struct Staged<'t> {
     tray: &'t mut Tray,
     layout: Layout,
@@ -732,75 +637,56 @@ pub struct Staged<'t> {
 }
 
 impl Staged<'_> {
-    /// Rows per rank the step was padded to.
-    pub fn b(&self) -> usize {
-        self.layout.b
+    /// The forward the protocol picks for this step's shape: `b` sequences
+    /// of `rows` rows on every rank.
+    pub fn forward(&self, rows: u64) -> Option<Forward> {
+        self.tray.protocol.forward(self.layout.b as u64, kern_manifest::protocol::Rows::Const(rows)).cloned()
     }
 
-    /// A per-sequence input (shaped `[seqs]`, this rank's rows): `of(i)`
-    /// for cell `i`, `fill` in the padding rows.
-    pub fn write_seqs<T: Le>(&mut self, name: &str, of: impl Fn(usize) -> T, fill: T) -> Result<()> {
-        for q in 0..self.tray.groups.n {
-            let v: Vec<T> = self.layout.rows(q).map(|i| i.map_or(fill, &of)).collect();
-            self.tray.ranks[q].write_input_at(name, &T::le_bytes(&v), &self.env)?;
-        }
-        Ok(())
-    }
-
-    /// Run `program` on every rank, eagerly or through its graph (captured
-    /// on first use), then read the error word when the manifest has one.
-    pub fn run(&mut self, program: &str, eager: bool) -> Result<()> {
+    /// Run `f` on every rank, eagerly or through its graph (captured on
+    /// first use), then read the error word when the manifest has one.
+    pub fn run(&mut self, f: &Forward, eager: bool) -> Result<()> {
         for (q, rt) in self.tray.ranks.iter_mut().enumerate() {
-            run_program(rt, program, &self.env, eager).with_context(|| format!("rank {q}"))?;
+            run_program(rt, &f.name, &self.env, eager).with_context(|| format!("rank {q}"))?;
         }
-        if self.tray.shape.err_word {
+        if let Some(e) = self.tray.protocol.any(Fill::Error) {
             for (q, rt) in self.tray.ranks.iter().enumerate() {
-                let err = i32::from_le_bytes(rt.read_output("tp_err")?[..4].try_into().unwrap());
+                let err = e.decode(&rt.read_output(&e.name)?)[0];
                 if err != 0 {
-                    bail!("rank {q}: `{program}` reports collective error {err}");
+                    bail!("rank {q}: `{}` reports collective error {err}", f.name);
                 }
             }
         }
         Ok(())
     }
 
-    /// A per-sequence output (`[seqs]`, `[seqs, k]`, or over `rows` with
-    /// this rank's rows first): each cell's `k` values, in cell order,
-    /// read from its owner.
-    pub fn read_i64(&self, name: &str) -> Result<Vec<Vec<i64>>> {
-        let k = match shape(self.tray.manifest(), name)? {
-            [Dim::Var(_)] => 1,
-            [Dim::Var(_), Dim::Const(k)] => *k as usize,
-            s => bail!("output `{name}` shaped {s:?}, expected [seqs], [seqs, k], [rows] or [rows, k]"),
-        };
+    /// What `f` handed each cell, in cell order, read from its owner: its
+    /// `tokens` output's cell, cut to its `count` (one without a count);
+    /// empty for a forward that only advances state.
+    pub fn emitted(&self, f: &Forward) -> Result<Vec<Vec<i64>>> {
         let mut out: Vec<Vec<i64>> = vec![Vec::new(); self.layout.cells];
+        let Some(i) = f.emits else { return Ok(out) };
+        let p = &self.tray.protocol;
+        let (t, c) = (&p.fills[i], f.count.map(|c| &p.fills[c]));
+        let k = t.width as usize;
         for (q, rt) in self.tray.ranks.iter().enumerate() {
             if self.layout.own[q].is_empty() {
                 continue;
             }
-            let all = i64_from_le(&rt.read_output(name)?);
+            let all = t.decode(&rt.read_output(&t.name)?);
+            let counts = match c {
+                Some(c) => Some(c.decode(&rt.read_output(&c.name)?)),
+                None => None,
+            };
             for (j, &i) in self.layout.own[q].iter().enumerate() {
-                out[i] = all[j * k..(j + 1) * k].to_vec();
+                let n = counts.as_ref().map_or(1, |v| v[j]);
+                if n < 1 || n > k as i64 {
+                    bail!("rank {q}: `{}` says {n} of the {k} rows are taken", c.expect("counted").name);
+                }
+                out[i] = all[j * k..j * k + n as usize].to_vec();
             }
         }
         Ok(out)
-    }
-}
-
-/// An input element type: how a list of it is written to a buffer.
-pub trait Le: Copy {
-    fn le_bytes(v: &[Self]) -> Vec<u8>;
-}
-
-impl Le for i64 {
-    fn le_bytes(v: &[i64]) -> Vec<u8> {
-        le_bytes_i64(v)
-    }
-}
-
-impl Le for i32 {
-    fn le_bytes(v: &[i32]) -> Vec<u8> {
-        le_bytes_i32(v)
     }
 }
 
@@ -813,14 +699,7 @@ fn run_program(rt: &mut Runtime, program: &str, env: &BTreeMap<String, u64>, eag
     if !rt.is_captured(program, env) {
         let t = std::time::Instant::now();
         rt.capture(program, env)?;
-        info!(
-            program,
-            seqs = env.get("seqs"),
-            tokens = env.get("tokens"),
-            rows = env.get("rows"),
-            capture_ms = logline::ms(t.elapsed()),
-            "captured"
-        );
+        info!(program, env = ?env, capture_ms = logline::ms(t.elapsed()), "captured");
     }
     Ok(rt.run_captured(program, env)?)
 }
@@ -829,92 +708,35 @@ fn run_program(rt: &mut Runtime, program: &str, env: &BTreeMap<String, u64>, eag
 mod tests {
     use super::*;
 
-    /// A tray manifest: 4 ranks' rows in `rows`, `token_ids` and the line
-    /// table over it, the page table and `slot_mapping` a rank's own.
+    /// A tray manifest: 4 ranks' rows in `rows`, the tokens and the line
+    /// table over it, the page table and the slots a rank's own.
     fn tray() -> Manifest {
         Manifest::from_json(
             r#"{
-            "schema_version": 3, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 8}, "rows": {"max": 32}},
+            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 8}, "rows": {"max": 32}},
             "topology": {"groups": {"ep": 4, "tp": 4}},
             "states": {"kv": {"bytes_per_token": 1}, "kda": {"bytes_per_seq": 24}},
             "buffers": {
-                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["rows"]},
-                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "domain": {"index_into": "kv"}},
-                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"]},
+                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["rows"], "fill": "token"},
+                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "slot", "domain": {"index_into": "kv"}},
+                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
                 "kda.line_index": {"kind": "input", "dtype": "i32", "shape": [3, "rows"], "domain": {"index_into": "kda", "stride": 8}},
-                "next_token": {"kind": "output", "dtype": "i64", "shape": ["rows"]},
-                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1]}
+                "next_token": {"kind": "output", "dtype": "i64", "shape": ["rows"], "fill": "tokens"},
+                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"}
             },
-            "modules": {}, "ops": {}, "programs": {"decode": []}
+            "modules": {}, "ops": {"step": {"params": ["in buffer<i64>", "out buffer<i64>"], "impl": {"launches": []}}},
+            "programs": {"decode": {"batch": {"groups": 8, "rows": 1}, "calls": [{"op": "step", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]}}
         }"#,
         )
         .unwrap()
     }
 
-    /// The single-rank contract: everything over `tokens` / `seqs`.
-    fn plain() -> Manifest {
-        Manifest::from_json(
-            r#"{
-            "schema_version": 3, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 4}},
-            "states": {"kv": {"bytes_per_token": 1}, "gdn": {"bytes_per_seq": 24}},
-            "buffers": {
-                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"]},
-                "positions": {"kind": "input", "dtype": "i64", "shape": ["tokens"]},
-                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "domain": {"index_into": "kv"}},
-                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"]},
-                "cu_seqlens_q": {"kind": "input", "dtype": "i32", "shape": ["seqs"]},
-                "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
-                "line_index": {"kind": "input", "dtype": "i32", "shape": [3, "seqs"], "domain": {"index_into": "gdn", "stride": 8}},
-                "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"]}
-            },
-            "modules": {}, "ops": {}, "programs": {"prefill": [], "decode": [], "decode_batch": []}
-        }"#,
-        )
-        .unwrap()
-    }
-
-    fn rejects(m: &Manifest, seq: &[&str], t: usize, what: &str) {
-        let Err(e) = Shape::check(m, seq, &["block_table"], t) else { panic!("accepted, expected `{what}`") };
-        let e = format!("{e:#}");
-        assert!(e.contains(what), "{e}");
-    }
-
     #[test]
-    fn tray_shape() {
-        let s = Shape::check(&tray(), &["kda.line_index"], &["block_table"], 4).unwrap();
-        assert_eq!((s.seqs_max, s.tokens_max, s.rows), (8, 8, true));
-        assert_eq!((s.ids_tray, s.positions, s.cu_seqlens, s.err_word), (true, false, false, true));
-        let lines: Vec<_> = s.line_tables.iter().map(|t| (t.name.as_str(), t.rows, t.width, t.tray)).collect();
-        assert_eq!((lines, s.page_tables.clone()), (vec![("kda.line_index", 3, 1, true)], vec!["block_table".into()]));
-        // The `rows` bound caps rows per rank: 32 rows over 8 ranks is 4.
-        assert_eq!(Shape::check(&tray(), &["kda.line_index"], &["block_table"], 8).unwrap().seqs_max, 4);
-    }
-
-    #[test]
-    fn plain_shape() {
-        let s = Shape::check(&plain(), &["line_index"], &["block_table"], 1).unwrap();
-        assert_eq!((s.seqs_max, s.rows, s.ids_tray), (4, false, false));
-        assert_eq!((s.positions, s.cu_seqlens, s.err_word, s.line_tables[0].tray), (true, true, false, false));
-    }
-
-    #[test]
-    fn shape_rejections() {
-        rejects(&plain(), &["line_index"], 4, "needs a `rows` var");
-        let mut m = plain();
-        m.buffers.remove("seq_lens");
-        rejects(&m, &["line_index"], 1, "no input buffer `seq_lens`");
-        let mut m = plain();
-        m.buffers.get_mut("token_ids").unwrap().shape = vec![Dim::Const(8)];
-        rejects(&m, &["line_index"], 1, "expected [tokens] or [rows]");
-        let mut m = plain();
-        m.buffers.get_mut("line_index").unwrap().shape = vec![Dim::Const(3)];
-        rejects(&m, &["line_index"], 1, "expected [lines, seqs|rows]");
-        let mut m = plain();
-        m.buffers.get_mut("block_table").unwrap().shape = vec![Dim::Var("seqs".into())];
-        rejects(&m, &["line_index"], 1, "expected [seqs, n]");
-        let Err(e) = Shape::check(&plain(), &[], &[], 1) else { panic!("no page table accepted") };
-        assert!(e.to_string().contains("block_table"), "{e}");
+    fn a_tray_batch_shares_the_rows_bound() {
+        let p = Protocol::check(&tray()).unwrap();
+        // 32 rows over a group of 4 is 8 per rank, the sequences bound; over 8 it is 4.
+        assert_eq!((seqs_max(&p, 4), seqs_max(&p, 8), seqs_max(&p, 1)), (8, 4, 8));
     }
 
     #[test]
