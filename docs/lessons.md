@@ -46,6 +46,23 @@ span 5 + 一行对），把两种形状每层的 KDA state / KV / hidden / logit
 第一步是倒两边的 logits 看 top-2 差**（`K3_GOLDEN_DUMP` + `K3_GOLDEN_DUMP_BUFS=logit_partial`），
 差在一个 logit 内就换 prompt 或换成有 margin 的 fixture，不读核。
 
+## 2026-09-04，K5 span 移植到 v4 master 与 t=4 门禁
+
+**行数一变，输出就变；相等门禁要连 bucket 规则一起搬。** 移植时把 `step()` 的 bucket 写成
+`bucket(k).min(max_seqs)`，256 行的 run 被截成 16 行——93 层输出全是乱码加 `position past the
+lease` panic，这个好抓。改成 `.min(max_seqs.max(k))` 之后一切"正常"：P2 逐 token 门禁过、E3
+文本通顺，只是 conc1 长 prompt 的 sha 全部对不上 K5 线。这个写法对 run 给的是 k 本身而不是阶梯
+值：2k 的尾块 223 行不再垫到 256、12.9k 的尾块 160 不垫到 192，cuBLAS 按 m 选核，近平局一翻
+就是另一条续写。定位靠的是 `k3_golden` 在 v4 线重跑 93 层 12.9k oracle（115/128、13 步逐 token
+与 K5 同）把 runtime 排除，再对两条线 `stage` 的行数。规则：**同一条输入的 sha 是门禁时，
+每一步的 m（bucket）也是契约的一部分**，改行数规则先跑 conc1 的 sha 对照；行数规则写成
+可单测的纯函数（`rows_per_rank`），不写成 closure 里的算术。
+
+**make_room 之后旧的命中不能再用。** `admit` 拿到 prefix 命中后 lease 报 `Busy`，`make_room`
+把最冷的 resident 快照 park 掉——只有一条时正是那个命中——重试还拿着旧的 `Resident` 去取，
+`expect("hit")` panic，之后每个请求 500。master 上就有，4 层 fixture 一步一请求、`--capacity 2048`
+才撞上。规则：凡是"腾地方"之后的重试，重新查一次；`expect` 只留给类型已经排除的状态。
+
 ## 2026-09-03，v4 投机轮
 
 **"旧路径与 plain 逐字同、新路径不同"不等于新路径有 bug。** dspark 的 verify 从 8 行改

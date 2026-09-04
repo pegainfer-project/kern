@@ -193,7 +193,7 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 同一 session 醒来后再睡，host 上按 device 页节点去重的链认不出它（醒来的是新页），会
 再拷一份；旧的那份最冷，缺地方时先走。
 
-## tray 级（E5 第四块，2026-09-03，t=1 smoke 过，多卡待测）
+## tray 级（E5 第四块，2026-09-03；t=4 门禁 2026-09-04 过）
 
 `kern-serve --gpus 0,1,2,3` 一个进程驱一个 tray：`tray.rs` 持 n 个 `Runtime`，单线程
 按序驱动（graph launch 1–3 µs，一线程驱四卡与四线程等价，实测见 multi-gpu.md），每步
@@ -235,7 +235,11 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   EP4 下 run 落在 rank 1 时 rank 0 若不垫，它自己的第 0 行就被当 span 跳过、又被 span
   核当 span 算进那条序列的 state（2026-09-03 E3 第一版：8 条相同 prompt 出 8 种答案）；scheduler 每步挑最老的还在喂 prompt 的序列，
   c = min(`--chunk`, manifest 的 `span.max`, 待喂 token 数, `seqs.max − (n − 1)`)，
-  其余序列各一行。没有 span program 时逐 token（12.9k 的 prompt 要 12.9k 步）。b>1 走形状包含
+  其余序列各一行。每 rank 的行数：k ≤ `--max-seqs` 时 bucket 再钉到 max_seqs（原规则），run 超过它时
+  走阶梯（`rows_per_rank`）——同一个 run 不论同步还有什么都落同一个 bucket；cuBLAS 按 m 选核，2k prompt
+  的尾块 223 行不垫到 256、12.9k 的尾块 160 不垫到 192，输出就在近平局处与 K5 线分道（2026-09-04 移植第
+  二轮踩过，t=1 conc1 的 sha 全部对不上，runtime 用 93 层 12.9k oracle 证明是同的）。没有 span program 时
+  逐 token（12.9k 的 prompt 要 12.9k 步）。b>1 走形状包含
   `(b, 1)` 的 program 里 `groups` 上界最紧的那个；没有 chunk program 时 `--rows` 只能是 1。
 - 权重按 rank：kern.toml 的 `weights` 里 `{ep}` / `{tp}` 换成该 rank 在组里的下标，文件
   名里的 `*` 按名字序展开（`dense-tp4/r{tp}/l*.safetensors`），mmap 不读入。
@@ -282,12 +286,37 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   13.32；另一形状 13.63 对 13.90），是近平局，不是串扰。串扰（第一版没垫 lead pad）的样子是
   8 条 8 种、互不成句的答案。见 lessons。
 
+**K3 EP4×TP4（t=4，2026-09-04，tray07 4×GB300，二进制与 t=1 同一份，脚本与逐请求数据在
+`~/bench_results/2026-09-04-k5-v4-port-tp4/`）**：
+
+- **4 层逐 token 对 `k3_golden`**（`k3-4l-ep4-tp4.json`，`--max-seqs 6 --chunk 8`，前 i 个 token 作 prompt、取 1 个，
+  按 k3_golden 的近平局规则判）：EP4×TP4 35/40 + 4 excused + 1 近平局（step 13，3.0 ulp，与 `k3_golden` TP4
+  同一个 token）；EP4 t=1 37/40 + 3，与 `k3_golden` 同。
+- **93 层 E3 场景在 EP4×TP4 上**（`k3-93l-tp4-span.json`，`--max-seqs 16 --chunk 256`；右列是同日同二进制的 EP4 t=1）：
+
+| 场景 | EP4×TP4 | EP4 t=1（同日） |
+|---|---|---|
+| conc1 短 prompt 64 token | 逐字同（sha 与 t=1、K5 线同），ITL **22.7 ms** | 31.2 ms |
+| conc1 2k prompt TTFT | 1.26 s | 0.80 s |
+| conc1 冷 12.9k prompt TTFT | 7.39 s（51 个 span 步 ≈ **145 ms/步**） | 4.49 s（≈ 88 ms/步） |
+| conc8 × 1k prompt TTFT | 0.89–5.18 s | 0.59–3.17 s |
+| conc8 稳态 decode ITL p50 | **29.3 ms** | 36.5 ms |
+| conc7 decode + 3 s 后冷 12.9k 到达 | 12.9k 的 TTFT 9.31 s；其余 7 条 ITL p50 28.7 / mean 52–64 / p90 146 ms | 4.66 s；36.6 / 47–52 / 88 ms |
+| 多轮 prefix 命中第二轮 TTFT（接在 E 之后，命中的是 D 里 conc8 步算的快照） | 722 ms | 467 ms |
+
+  - decode 步 TP4 比 t=1 快 8–9 ms（E5 的账），**span 步反过来慢 57 ms**（145 对 88）：并发者 p50 好、mean / p90
+    差；12.9k 的 TTFT 7.4 对 4.5 s。TP4 的 span 步没拆（run 的 MLA attention 行归 owner 一张卡、其余三卡空等，
+    加每层两次 256 行的 collective，是首先要量的两项）——归 K5 D2 / E5 的下一步，不是门禁。
+  - 输出：t=1 的 conc1 sha（短 / 2k / 12k 冷 / 12k 迟到）与 K5 线 2026-09-03 与 BLOCK_M 96 复测全同
+    （ec2071a1bd49 / eed14fa316ea / 607802289f15 / ad2eea8cd2f0）；TP4 短 prompt 同，2k / 12k 在第一个近平局后
+    分道（TP 归约是另一条数值路径）。并发的 1k 条目每次跑的 sha 都不同（到达顺序决定 bucket 组合），K5 线自己
+    两次跑也如此，不作门。无 panic、无 `tp_err`。
+
 **没测**（按 CLAUDE.md 的门禁排队）：
 1. t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变；
-2. 4 层 K3 EP4×TP4（`k3-4l-ep4-tp4.json`）：kern-serve 逐 token 喂 fixture，与 `k3_golden` 同 37/40；
-3. owner-only 页在 t>1 下：mixed 行、prefix 命中（retire → lease_from）、park / wake 之后 warm == cold；
-4. 全成或全不成：某一卡 `--host-gib` 故意给小，park 整体退回、四卡 host 占用回到原值；
-5. 93 层短 prompt 的 conc1 / conc8 步时对 k3_golden 的 20.8 / 25.5 ms（E3 量到 ITL 32 / 38 ms，含 tray 的 staging 与 HTTP，没拆）。
+2. owner-only 页在 t>1 下：mixed 行、prefix 命中（retire → lease_from）、park / wake 之后 warm == cold；
+3. 全成或全不成：某一卡 `--host-gib` 故意给小，park 整体退回、四卡 host 占用回到原值；
+4. 93 层短 prompt 的 conc1 / conc8 步时对 k3_golden 的 20.8 / 25.5 ms（E3 量到 ITL 32 / 38 ms，含 tray 的 staging 与 HTTP，没拆）。
 
 ## 没做（按需要加）
 
