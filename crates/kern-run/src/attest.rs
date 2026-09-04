@@ -1229,7 +1229,7 @@ impl Fuzz {
             "{}/{} bit-identical · {} ({})",
             self.bit_identical,
             self.compared,
-            plural(self.rounds, "round"),
+            format!("{} round{}", self.rounds, if self.rounds == 1 { "" } else { "s" }),
             self.modes.join(" ")
         );
         if self.value_identical > 0 {
