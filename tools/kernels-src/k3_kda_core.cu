@@ -15,7 +15,7 @@
 //       const f32*  gamma_o,       // [128]
 //       void* kda_base, const int* line_index, long long line_bytes,  // rec at offset 0
 //       bf16* out,                 // [B, INNER]
-//       int B);
+//       int B, const int* span_at, int span);  // rows [*span_at, +span) are a span (K8 + K11 do them): the block returns
 //
 //   grid  (B, HEADS=96, 1)      (grid.x == B exactly, per the ABI; the `B`
 //                               argument itself is therefore never read)
@@ -142,7 +142,7 @@ extern "C" __global__ __launch_bounds__(128) void kern_k3_kda_core(
     const float* __restrict__ gamma_o,
     void* kda_base, const int* __restrict__ line_index, long long line_bytes,
     bf16* __restrict__ out,
-    int B) {
+    int B, const int* __restrict__ span_at, int span) {
 #if KDA_SWIZZLE
   // Linearise (blockIdx.x, blockIdx.y) -> (b, h) head-fastest so that blocks
   // issued close in time walk contiguous rec, instead of 64 lines 6.5 MB apart.
@@ -153,6 +153,7 @@ extern "C" __global__ __launch_bounds__(128) void kern_k3_kda_core(
   const int b = blockIdx.x;
   const int h = blockIdx.y;
 #endif
+  if ((unsigned)(b - span_at[0]) < (unsigned)span) return;
   const int d = threadIdx.x;
   const int base = h * KD;
 

@@ -18,7 +18,7 @@ use clap::Args;
 use crate::config::{Config, Target};
 use crate::{env, i64_from_le, le_bytes_i32, le_bytes_i64, prefill_emits_next_token, Caller, STOP_TOKENS};
 use kern_manifest::types::{Dim, Manifest};
-use kern_runtime::Runtime;
+use kern_runtime::{Capacity, Runtime};
 use tracing::info;
 
 /// Flags of `kern run`; anything not given comes from the target in
@@ -172,7 +172,10 @@ fn execute(o: Opts) -> Result<()> {
     let t0 = Instant::now();
     // One sequence: its reach, unless told otherwise (a manifest without
     // paged state takes the runtime's fit).
-    let capacity = o.capacity.or_else(|| kern_runtime::seq_capacity(&Manifest::from_json(&manifest_json).ok()?));
+    let capacity = o
+        .capacity
+        .or_else(|| kern_runtime::seq_capacity(&Manifest::from_json(&manifest_json).ok()?))
+        .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
     let mut rt = Runtime::load(&manifest_json, &o.kernels, o.gpu, capacity, None)?;
     let load_t = t0.elapsed();
 

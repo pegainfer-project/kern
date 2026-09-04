@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use kern_runtime::Topology;
+use kern_runtime::{Capacity, Topology};
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler,
 };
@@ -165,7 +165,12 @@ fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
 
 pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     let gpus = if o.gpus.is_empty() { vec![d.gpu.unwrap_or(0)] } else { o.gpus.clone() };
-    let capacity = o.capacity.or(d.capacity);
+    // Every sequence of a tray batch group holds a token slot on each of
+    // its `t` ranks, and each rank its pad.
+    let manifest_json = std::fs::read_to_string(&art.manifest)
+        .with_context(|| format!("reading manifest {}", art.manifest.display()))?;
+    let t = kern_manifest::Manifest::from_json(&manifest_json)?.group_size("tp").unwrap_or(1) as usize;
+    let capacity = Capacity { tokens: o.capacity.or(d.capacity), seqs: ((o.max_seqs + 1) * t) as u64 };
     let chunk = o.chunk.or(d.chunk).unwrap_or(512) as usize;
     let mut stop_tokens = hf_stop_tokens(&o.model_path);
     stop_tokens.extend(&o.stop_tokens);
@@ -178,8 +183,6 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     );
     info!(ids = ?stop_tokens, "stop tokens");
 
-    let manifest_json = std::fs::read_to_string(&art.manifest)
-        .with_context(|| format!("reading manifest {}", art.manifest.display()))?;
     let served_name = o.served_model_name.clone().unwrap_or_else(|| {
         serde_json::from_str::<serde_json::Value>(&manifest_json)
             .ok()
@@ -207,7 +210,7 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
             let load = || -> Result<KernScheduler> {
                 let t0 = Instant::now();
                 let weights_of = |topo: &Topology| rank_weights(&art.weights, topo);
-                let tray = Tray::load(&manifest_json, &art.kernels, &gpus, capacity, &weights_of, host_bytes)?;
+                let tray = Tray::load(&manifest_json, &art.kernels, &gpus, Some(capacity), &weights_of, host_bytes)?;
                 info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
                 KernScheduler::new(tray, policy)
             };

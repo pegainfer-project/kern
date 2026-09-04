@@ -378,6 +378,67 @@ static inline void ref_kda_core(const bf16* conv_q, const bf16* conv_k,
 }
 
 // =========================================================================
+// K9  kern_k3_span_gather:  K2 applied to batch rows at..at+span one after
+//     another, all on row at's line, into the span's own rows 0..span;
+//     beta transposed [HEADS][span], flow bf16 [span][128]
+// =========================================================================
+static inline void ref_span_gather(const float* partial, const float* cw,
+                                   void* kda_base, const int* line_index,
+                                   long long line_bytes, const float* wsm,
+                                   bf16* span_q, bf16* span_k, bf16* span_v,
+                                   bf16* span_beta, bf16* span_flow,
+                                   const int* span_at, int span) {
+  const int at = *span_at;
+  partial += (size_t)at * KDA_FUSED;
+  wsm += (size_t)at * WSM;
+  line_index += at;
+  for (int i = 0; i < span; ++i)
+    ref_conv_silu(partial + (size_t)i * KDA_FUSED, cw, kda_base, line_index,
+                  line_bytes, span_q + (size_t)i * INNER,
+                  span_k + (size_t)i * INNER, span_v + (size_t)i * INNER, 1);
+  for (int i = 0; i < span; ++i) {
+    for (int h = 0; h < HEADS; ++h)
+      span_beta[(size_t)h * span + i] = f2b(wsm[(size_t)i * WSM + h]);
+    for (int j = 0; j < 128; ++j)
+      span_flow[(size_t)i * 128 + j] = f2b(wsm[(size_t)i * WSM + 96 + j]);
+  }
+}
+
+// =========================================================================
+// K10 kern_k3_span_state:  rec of row at's line <-> buf [HEADS][128][128] f32
+// =========================================================================
+static inline void ref_span_state(void* kda_base, const int* line_index,
+                                  long long line_bytes, const int* span_at,
+                                  float* buf, int to_line) {
+  float* rec = rec_ptr(kda_base, line_index, line_bytes, *span_at);
+  if (to_line) std::memcpy(rec, buf, (size_t)REC_BYTES);
+  else std::memcpy(buf, rec, (size_t)REC_BYTES);
+}
+
+// =========================================================================
+// K11 kern_k3_kda_out_gate:  the K3 epilogue on the span's raw bf16 attention
+//     rows 0..span, into batch rows at..at+span of `gated`
+// =========================================================================
+static inline void ref_kda_out_gate(const bf16* attn, const float* gate_partial,
+                                    const float* gamma_o, bf16* gated,
+                                    const int* span_at, int span) {
+  parallel_for(span * HEADS, [&](int ih) {
+    int i = ih / HEADS, h = ih % HEADS, b = *span_at + i;
+    const bf16* row = attn + (size_t)i * INNER + (size_t)h * 128;
+    bf16* dst = gated + (size_t)b * INNER + (size_t)h * 128;
+    double ss = 0.0;
+    for (int dv = 0; dv < 128; ++dv) ss += (double)b2f(row[dv]) * (double)b2f(row[dv]);
+    double r = 1.0 / std::sqrt(ss / 128.0 + (double)EPS);
+    for (int d = 0; d < 128; ++d) {
+      bf16 o = f2b((float)((double)b2f(row[d]) * r * (double)gamma_o[d]));
+      double g = (double)b2f(f2b(gate_partial[(size_t)b * KDA_FUSED +
+                                              3 * INNER + (size_t)h * 128 + d]));
+      dst[d] = bmul(o, f2b((float)sigmoidd(g)));
+    }
+  });
+}
+
+// =========================================================================
 // K4  kern_k3_mla_prep
 // =========================================================================
 //   q_norm  = rms(bf16(P[0..1536]),    gamma_q_a)

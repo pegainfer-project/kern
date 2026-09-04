@@ -40,7 +40,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::types::{Arg, BufferKind, Call, DType, Dim, Dir, Manifest, ParamType, Provision};
 use kern_manifest::verify;
-use kern_runtime::{values, Runtime};
+use kern_runtime::{values, Capacity, Runtime};
 use serde_json::{json, Value};
 
 /// Flags of `kern test`; anything not given comes from the target /
@@ -790,7 +790,9 @@ fn restore_state(
 }
 
 fn load_side(json: &str, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
-    let mut rt = Runtime::load(json, &o.kernels, o.gpu, Some(o.capacity), None)?;
+    // The attestation drives the manifest's whole batch of sequences.
+    let seqs = Manifest::from_json(json)?.seq_slots() - 2;
+    let mut rt = Runtime::load(json, &o.kernels, o.gpu, Some(Capacity { tokens: Some(o.capacity), seqs }), None)?;
     rt.load_weights(blobs)?;
     Caller::new(rt)
 }

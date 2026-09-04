@@ -88,29 +88,32 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     opt-in；可选 `cluster: [x, y, z]` 线程块簇，grid 每轴必须是它的倍数，
     runtime 走 `cuLaunchKernelEx`）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
     `{"scratch": name}` 接私有工作区 / 字面量标量（impl 私有常量）/
-    `{"rank": group}` / `{"tensormap": {...}}`；**不写 = 按序转发接口参数**。
-    **tensormap** 是 launch 私有的参数类型（`"tensormap"`，128 字节
-    `CUtensorMap` 按值传，接口上不许出现）：`{"param": i, "dtype":
-    "u8"|"u4"|"i32"|"bf16"|..., "dims": [内层在前, 元素数], "strides":
-    [第 2 维起的字节步长], "box": [smem tile 元素数], "swizzle": 0|32|64|128,
-    "l2_promotion": 0|64|128|256, "oob_nan": bool}`——对接口第 i 个 buffer
-    参（call 的 offset 照算）在装载时 `cuTensorMapEncodeTiled`；dtype 是
-    TMA 眼里的元素类型，与 buffer 的 dtype 无关（一个 `u8` slab 上可以同
-    时挂 fp8 activation 和 i32 scale 的描述符）；`dims` 最外层可以写 0，
-    意思是"铺满这个 buffer / state"——装载时按 call 的 offset 之后剩下的
-    字节数算出该维（分页 cache 的页数是 runtime 定的，manifest 不知道）。
-    DeepGEMM 这类 TMA kernel
-    的 18 个描述符就这样从 manifest 里长出来，host 侧不再有 launch 代码。
-    **bytes<n> / pack** 是另一种 launch 私有参数：核的 ABI 收 struct
+    `{"rank": group}` / `{"pack": {...}}`；**不写 = 按序转发接口参数**。
+    **bytes<n> / pack** 是 launch 私有的参数类型：核的 ABI 收 struct
     （CUTLASS、CuTe DSL 编出来的核都是），manifest 就声明 `"bytes<48>"`，
     实参 `{"pack": {"size": 48, "fields": [{"at": 0, "param": 3},
     {"at": 8, "i32": 512}, {"at": 12, "var": "tokens"}, {"at": 16,
     "i64": 4608}]}}`：每个字段一个字节偏移和来源（接口参——指针带 call 的
-    offset、标量带值——/ scratch / 字面量 / var / expr / rank），没写到的
-    字节为 0；宽度默认随来源（指针与 i64 8、i32/f32/var/expr 4、u8 1），
-    `"width"` 可改。指针和字面量在装载时定死，var 字段每次 run 重算，
-    与标量参一样。FlashInfer 的 MLA decode 核 28 个参数（5 个 tensormap +
-    张量 struct + FastDivmod）就这样铺平（`k3-kernel-abi.md` K5）。所以一个"ABI 即接口"的单 launch op 只
+    offset、标量带值——/ scratch / 字面量 / var / expr / rank / tensormap），
+    没写到的字节为 0；宽度默认随来源（指针与 i64 8、i32/f32/var/expr 4、
+    u8 1、tensormap 128），`"width"` 可改。指针和字面量在装载时定死，var
+    字段每次 run 重算，与标量参一样。
+    **tensormap** 字段是 128 字节的 `CUtensorMap`，偏移必须 64 对齐：
+    `{"at": 0, "tensormap": {"param": i, "dtype":
+    "u8"|"u4"|"i32"|"bf16"|..., "dims": [内层在前, 元素数], "strides":
+    [第 2 维起的字节步长], "box": [smem tile 元素数], "swizzle": 0|32|64|128,
+    "l2_promotion": 0|64|128|256, "oob_nan": bool}}`——对接口第 i 个 buffer
+    / state 参（call 的 offset 照算）在装载时 `cuTensorMapEncodeTiled`；
+    dtype 是 TMA 眼里的元素类型，与 buffer 的 dtype 无关（一个 `u8` slab
+    上可以同时挂 fp8 activation 和 i32 scale 的描述符）；`dims` 最外层可以
+    写 0，意思是"铺满这个 buffer / state"——装载时按 call 的 offset 之后
+    剩下的字节数算出该维（分页 cache 的页数是 runtime 定的，manifest 不
+    知道）。核收裸描述符（CuTe DSL）就是 `bytes<128>` 里一个 at 0 的字段；
+    核收 cute `TiledCopy`（CUTLASS）就是 `bytes<256>`：描述符在 0，动态
+    stride 的 int 在 128（`k3-kernel-abi.md` K8）。DeepGEMM 这类 TMA kernel
+    的 18 个描述符就这样从 manifest 里长出来，host 侧不再有 launch 代码。
+    FlashInfer 的 MLA decode 核 28 个参数（5 个描述符 + 张量 struct +
+    FastDivmod）也是这么铺平的（`k3-kernel-abi.md` K5）。所以一个"ABI 即接口"的单 launch op 只
     需要 `module`、`entry`、`block`、`grid` 四个字段；两段式 argmax、
     vLLM attention（unified + reduce_segments）这类"一个逻辑算子 = 多次
     launch + 私有中间缓冲"整体折叠成一个 impl，不向调用方泄漏。
@@ -284,16 +287,15 @@ header 重复——没有权重文件也要能 verify。冗余在 manifest 不�
     已写；`{"rank": g}` 只接 `i32`/`i64` 参且 g 已声明；**带 extern launch
     的 op 不得收到 peer buffer**——runtime 内置（cublasLt）永远不碰 peer
     内存；
-12. tensormap / pack / cluster：`tensormap` 只许作 launch 参、只接
-    `{"tensormap"}` 实参、只能描述接口上的 buffer 或 state 参（不进 extern）；
-    维数 1–5、`strides` 比 `dims` 少一且为 16 的正倍数、`box` 每维
-    1..=256、内层 box 字节数是 16 的倍数且不超过 swizzle 跨度、
-    `dims[0]` 字节数是 16 的倍数、只有最外层维可为 0（铺满）；描述符寻址
-    的字节数（末元素之后）在每个 call 上不得超过 `buffer 字节数 − offset`
-    （var 上界；铺满的维不算）。`bytes<n>` 同样只许作 launch 参、只接
-    `{"pack"}` 实参且 `size == n`，字段都在 image 内、互不重叠，引用的
+12. pack / tensormap / cluster：`bytes<n>` 只许作 launch 参（不进 extern）、
+    只接 `{"pack"}` 实参且 `size == n`，字段都在 image 内、互不重叠，引用的
     接口参 / scratch / var / group 都存在；引用 `out` 接口参的指针字段算
-    该 launch 写了它。`cluster`
+    该 launch 写了它。tensormap 字段宽 128、偏移 64 对齐、只能描述接口上
+    的 buffer 或 state 参；维数 1–5、`strides` 比 `dims` 少一且为 16 的正
+    倍数、`box` 每维 1..=256、内层 box 字节数是 16 的倍数且不超过 swizzle
+    跨度、`dims[0]` 字节数是 16 的倍数、只有最外层维可为 0（铺满）；描述
+    符寻址的字节数（末元素之后）在每个 call 上不得超过 `buffer 字节数 −
+    offset`（var 上界；铺满的维不算），`out` 参上的描述符算写了它。`cluster`
     无零维、不超 16 块，grid 在 var 上下界都被它整除。
 
 反序列化层已拒绝：未知字段（包括实参对象里的未知键）、重复名字、非法

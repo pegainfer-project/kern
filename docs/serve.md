@@ -195,6 +195,10 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 不在这里（rendezvous 是 harness 的事）。scheduler 只看得到 `Row` / `Snapshot` /
 `Sleeping` / `Rising` 和 `Cell`，看不到 `Runtime`、`Lease` 或某个 rank 的输入。
 
+- **先全部 launch 再逐个 sync**：一步里 n 个 rank 的图先全部 launch（`Runtime::enqueue` /
+  `enqueue_captured`），再逐个 `synchronize`——EP 的 dispatch 与 tray collective 都在核里等
+  peer，先 sync rank 0 就等到核的超时（`CUDA_ERROR_LAUNCH_FAILED`，2026-09-03 E3 第一次
+  跑 K3 EP4 就撞上；qwen 单卡 smoke 看不出来）。
 - **一行 = tp 组每个成员一份**：owner 卡持 MLA 页 + KDA slot（`Runtime::lease`），
   peer 卡只持 slot（`Runtime::lease_slot`，runtime 新增 slot-only 租约，见 runtime.md）。
   lease / lease_from / fork / checkpoint / retire / park / wake / awake 各在组里每个成员
@@ -214,10 +218,18 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   的特例，同一条代码。bucket 对整个 tray 取一次（行最多的 rank 决定），每卡各自 pad
   到 b，pad 页每卡一页。`Staged` 借住 `&mut Tray` 直到输出读完，中间不能 lease / fork /
   再 stage。manifest 有 `tp_err` 输出时每步读一次，非零即该步失败。
-- **K3 没有 prefill program**：`prefill` 可选；没有时 prompt 在 prefix 命中之外的部分
-  逐 token 走 decode 步（该行的输出在最后一个 prompt token 进去之前丢掉），正确但 12.9k
-  的 prompt 要 12.9k 步——真正的 prefill 是 K5 的事。`decode_batch` 也可选，没有时 b>1
-  也走 `decode`。`--spec` 限一个 rank。
+- **K3 没有 prefill program，prompt 走 span**：`prefill` 可选；没有时 prompt 在 prefix
+  命中之外的部分走 decode 步，该行的输出在最后一个 prompt token 进去之前丢掉。manifest 有
+  `decode_span`（K5：`span` var + `span_at` 输入）时一步里**一个** cell 可以是一段 span——
+  同一序列的 c 个连续 token 各占一行（`Layout` 里每 cell 有行数，span cell 排在 owner 块
+  的最前面，`span_at` = 该 owner 的块下标 × b，每个 rank 各自算），位置 / slot / seq_len
+  逐行递增，输出取末行；**组里没有这个 cell 的 rank 在自己块最前面垫 c 行 pad**（`Layout.lead`）
+  ——var 是全 tray 一份，每个 rank 都跑 `decode_span`、都跳过 `[span_at, span_at + c)`，
+  EP4 下 span 落在 rank 1 时 rank 0 若不垫，它自己的第 0 行就被当 span 跳过、又被 span
+  核当 span 算进那条序列的 state（2026-09-03 E3 第一版：8 条相同 prompt 出 8 种答案）；scheduler 每步挑最老的还在喂 prompt 的序列，
+  c = min(`--chunk`, manifest 的 `span.max`, 待喂 token 数, `seqs.max − (n − 1)`)，
+  其余序列各一行。没有 `decode_span` 时逐 token（12.9k 的 prompt 要 12.9k 步）。
+  `decode_batch` 也可选，没有时 b>1 也走 `decode`。`--spec` 限一个 rank。
 - 权重按 rank：kern.toml 的 `weights` 里 `{ep}` / `{tp}` 换成该 rank 在组里的下标，文件
   名里的 `*` 按名字序展开（`dense-tp4/r{tp}/l*.safetensors`），mmap 不读入。
   `--capacity` / `--host-gib` / `--max-seqs` 都是 per rank。
@@ -230,15 +242,44 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 `park_wake` 例子加了 `--wake` / `--every-page`，串接每页 checkpoint 的链与部分 wake 都逐字节回）。
 `--host-gib 8` 下 c4 的填充就把 host 层打穿（一条 15k 的快照 2.06 GiB），测 wake 用 24。
 
+**K3 93 层 EP4 span（E3，2026-09-03，tray07 4×GB300，`--max-seqs 16`，`--chunk 256` 对逐 token 的
+`--chunk 1`；prompt 是 docs/*.md 语料按 K3 tokenizer 切的 12.9k / 2k / 8 × 1k token，脚本与
+逐请求数据在 `~/bench_results/2026-09-03-k5-span-kernels/`）**：
+
+| 场景 | span（chunk 256） | 逐 token（chunk 1） |
+|---|---|---|
+| conc1 短 prompt 64 token | 逐字同，ITL 32 ms | ITL 32 ms |
+| conc1 2k prompt TTFT | **0.83 s** | 63.9 s |
+| conc1 冷 12.9k prompt TTFT | **4.6 s**（51 个 span 步 ≈ 90 ms/步） | 416.8 s |
+| conc8 × 1k prompt TTFT | 0.56–3.2 s（span 一步一条，排队） | 38 s（8 条同时逐 token） |
+| conc8 稳态 decode ITL p50 | 38 ms（B=8） | 38 ms |
+| conc7 decode + 3 s 后冷 12.9k 到达 | 12.9k 的 TTFT 4.8 s；其余 7 条 256 步的 ITL p50 38 / mean 52 / p90 91 ms | — |
+| 同上，`--chunk 64` | 12.9k 的 TTFT 16.4 s；其余 7 条 ITL 61 ms 整段 | — |
+| 多轮 prefix 命中（1k + 答案 + 新一轮） | 第二轮 TTFT 112 ms（第一轮 463 ms） | — |
+
+- **span 步的税**：其余序列在有 256 行 span 的那一步 ITL ≈ 90 ms（+52 ms），64 行 ≈ 61 ms（+23 ms）。
+  12.9k 按 256 切是 51 步、按 64 切是 202 步，所以 chunk 256 两头都好（TTFT 4.8 对 16.4 s，
+  并发者 mean 52 对 61 ms）。K5 的门"ITL ≤ +25%"按 mean 算是 **+37%**（52 对 38，p50 不变）——
+  未达；再往下要 D2 的预算 policy（span 长按稠密 / attention 预算定，或 span 步只带一部分
+  decode 行），不是 span 实现的事。
+- **输出**：conc1 短 prompt 64 token 与逐 token 逐字同；2k / 12.9k 的输出与逐 token 在第 8 / 第 1
+  个近平局后分道（两条数值路径，cuBLAS 按 m 选核，同 t=1 smoke 的注）；同一路径自己是确定的
+  ——冷 12.9k 的 256 token 在 5 次不同并发环境下 sha 全同（ad2eea8cd2f0），2k conc1 重启服务后同。
+- **相同 prompt 并发不是逐字相等的门**：8 条"The capital of France is"锁步，3 条答 " Paris."、5 条答
+  " the capital of France is…"——`k3_golden` 把两种 batch 形状的 logits 倒出来比，两种形状的
+  hidden / KDA state / KV 都只差 bf16 噪声，" the" 对 " Paris" 的 top-2 差 **0.2 logit**（13.53 对
+  13.32；另一形状 13.63 对 13.90），是近平局，不是串扰。串扰（第一版没垫 lead pad）的样子是
+  8 条 8 种、互不成句的答案。见 lessons。
+
 **没测**（按 CLAUDE.md 的门禁排队）：
 1. t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变；
 2. 4 层 K3 EP4×TP4（`k3-4l-ep4-tp4.json`）：kern-serve 逐 token 喂 fixture，与 `k3_golden` 同 37/40；
 3. owner-only 页在 t>1 下：mixed 行、prefix 命中（retire → lease_from）、park / wake 之后 warm == cold；
 4. 全成或全不成：某一卡 `--host-gib` 故意给小，park 整体退回、四卡 host 占用回到原值；
-5. 93 层短 prompt 的 conc1 / conc8 步时对 k3_golden 的 20.8 / 25.5 ms。
+5. 93 层短 prompt 的 conc1 / conc8 步时对 k3_golden 的 20.8 / 25.5 ms（E3 量到 ITL 32 / 38 ms，含 tray 的 staging 与 HTTP，没拆）。
 
 ## 没做（按需要加）
 
-混批（chunked prefill 进 decode 步）、抢占 / 动态页分配、
+span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
 真采样（temperature/top-p 作为 manifest 内的 `sample` op；投机下是 rejection sampling）、logprobs / echo、
 bs 2–16 的 split-KV decode、步间 host 空转（token 反馈进图）。

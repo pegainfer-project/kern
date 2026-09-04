@@ -566,6 +566,18 @@
             "rank"
           ],
           "type": "object"
+        },
+        {
+          "description": "A 128-byte TMA descriptor over an interface buffer or state, encoded\nat load time; sits at a 64-byte aligned offset (a bare `CUtensorMap`\nparam is a `bytes<128>` with this field at 0, a cute `TiledCopy` has\nits dynamic strides after it).",
+          "properties": {
+            "tensormap": {
+              "$ref": "#/$defs/TensorMap"
+            }
+          },
+          "required": [
+            "tensormap"
+          ],
+          "type": "object"
         }
       ],
       "description": "One field of a `pack`: a byte offset plus where the value comes from, e.g. `{\"at\": 8, \"var\": \"tokens\"}`.",
@@ -815,19 +827,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "A TMA descriptor over an interface buffer, encoded at load time.",
-          "properties": {
-            "tensormap": {
-              "$ref": "#/$defs/TensorMap"
-            }
-          },
-          "required": [
-            "tensormap"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "An aggregate assembled from fields at byte offsets, for a `bytes<n>` param.",
           "properties": {
             "pack": {
@@ -909,7 +908,7 @@
     },
     "ParamType": {
       "description": "One parameter: a scalar (`\"i32\"`, `\"i64\"`, `\"f32\"`, `\"u8\"`), a directional pointer (`\"in buffer<bf16>\"`, `\"out buffer<f32>\"`, `\"inout state\"`), or a launch-private `\"tensormap\"` (128-byte TMA descriptor) or `\"bytes<n>\"` (an n-byte aggregate filled by a `pack` launch arg).",
-      "pattern": "^(i32|i64|f32|u8|tensormap|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
+      "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
       "type": "string"
     },
     "Scratch": {

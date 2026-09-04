@@ -79,7 +79,8 @@ fn run_world(
     rendezvous: &dyn Fn(&mut Runtime) -> kern_runtime::Result<()>,
     sync: &dyn Fn(),
 ) -> kern_runtime::Result<(Vec<u8>, f64)> {
-    let mut rt = Runtime::load(json, kernels, gpu, Some(1), Some(topo))?;
+    let mut rt =
+        Runtime::load(json, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(topo))?;
     rt.load_weights(&[weights])?;
     rendezvous(&mut rt)?;
     let env: BTreeMap<String, u64> = [("tokens".to_string(), rows as u64)].into();

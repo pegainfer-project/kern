@@ -15,8 +15,12 @@
 //! prompt token through prefill and the first generated token from it.
 //! Without a `prefill` program the prompt goes through decode steps one
 //! token at a time — a row feeding its prompt is a row like any other,
-//! whose outputs are dropped until the last prompt token is in — which is
-//! what a decode-only tray manifest (K3 today) gets, correct and slow. A
+//! whose outputs are dropped until the last prompt token is in — or, when
+//! the manifest has `decode_span`, one sequence per step feeds a run of up
+//! to `chunk` prompt tokens as consecutive rows (the span contract in
+//! `tray.rs`), the first generated token being the last row's. That is
+//! what a decode-only tray manifest (K3 today) gets: correct, and slow
+//! without the span. A
 //! manifest with per-sequence states (`bytes_per_seq`) also has line
 //! tables indexing them; the tray stages them from the rows.
 //!
@@ -284,6 +288,9 @@ pub struct KernScheduler {
     prefill: Option<bool>,
     /// The manifest has `decode_batch` for batches of more than one row.
     decode_batch: bool,
+    /// The manifest has `decode_span`: one sequence per step may feed a run
+    /// of up to this many prompt tokens, a row each.
+    span: Option<usize>,
     waiting: VecDeque<QueuedRequest>,
     /// Admitted requests whose woken rows are still on the way in.
     waking: VecDeque<(QueuedRequest, Rising)>,
@@ -412,6 +419,7 @@ impl KernScheduler {
         };
         let stats = Stats::new(&c.spec);
         let every_page = !tray.has_seq_state();
+        let span = tray.shape().span;
         let prefix = Prefix::new(tray.page());
         let s = KernScheduler {
             tray,
@@ -419,6 +427,7 @@ impl KernScheduler {
             spec: c.spec,
             prefill: c.prefill,
             decode_batch: c.decode_batch,
+            span,
             waiting: VecDeque::new(),
             waking: VecDeque::new(),
             running: Vec::new(),
@@ -912,7 +921,10 @@ impl KernScheduler {
         Ok(())
     }
 
-    /// One decode step over every running sequence.
+    /// One decode step over every running sequence. Under the span
+    /// contract the oldest sequence still feeding its prompt feeds a run of
+    /// up to `chunk` tokens, a row each, within the step's row bound; only
+    /// the run's last output matters, as with a prefill chunk.
     fn decode(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         self.drop_aborted(ledger);
         let n = self.running.len();
@@ -920,10 +932,30 @@ impl KernScheduler {
             return Ok(());
         }
         let t0 = Instant::now();
-        let cells: Vec<Cell> =
-            self.running.iter().map(|s| Cell { row: &s.row, ids: vec![s.next as i64], pos: s.pos, col: 0 }).collect();
+        let room = self.tray.shape().seqs_max + 1 - n;
+        let cap = self.span.map_or(1, |mx| mx.min(self.policy.chunk).min(room));
+        let runner = (cap > 1).then(|| self.running.iter().position(|s| !s.pending.is_empty())).flatten();
+        let fed: Vec<Vec<u32>> = self
+            .running
+            .iter_mut()
+            .enumerate()
+            .map(|(i, s)| {
+                let run = if Some(i) == runner { (cap - 1).min(s.pending.len()) } else { 0 };
+                std::iter::once(s.next).chain(s.pending.drain(..run)).collect()
+            })
+            .collect();
+        let cells: Vec<Cell> = self
+            .running
+            .iter()
+            .zip(&fed)
+            .map(|(s, ids)| Cell { row: &s.row, ids: ids.iter().map(|&t| t as i64).collect(), pos: s.pos, col: 0 })
+            .collect();
         let mut st = self.tray.stage(&cells, bucket)?;
-        let program = if st.b() > 1 && self.decode_batch { "decode_batch" } else { "decode" };
+        let program = match (runner.is_some(), st.b() > 1 && self.decode_batch) {
+            (true, _) => "decode_span",
+            (false, true) => "decode_batch",
+            (false, false) => "decode",
+        };
         st.run(program, self.policy.eager)?;
         let out = st.read_i64("next_token")?;
         drop(st);
@@ -932,7 +964,8 @@ impl KernScheduler {
 
         let running = std::mem::take(&mut self.running);
         for (i, mut s) in running.into_iter().enumerate() {
-            s.advance([s.next]);
+            s.advance(fed[i].iter().copied());
+            self.stats.prefill_tokens += (fed[i].len() - 1) as u64;
             // A row still feeding its prompt: this step's output is
             // dropped, the next prompt token is the next input.
             let done = match s.pending.pop_front() {

@@ -73,6 +73,18 @@ pub use prefix::{Chain, Hit, Kept, Prefix, Tier};
 /// The host tier's block is handed out in these units.
 const HOST_GRAIN: u64 = 1 << 16;
 
+/// What the caller will hold in the pooled states at once: pages for
+/// `tokens` tokens of every paged state and `seqs` sequences' slots of every
+/// per-sequence state (plus the null slot and a spare). A number the caller
+/// knows — its batch, its serving bound — never the manifest's var bounds,
+/// which say what a step may address, not how many sequences live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capacity {
+    /// Tokens of paged state; `None` takes what the device has left.
+    pub tokens: Option<u64>,
+    pub seqs: u64,
+}
+
 /// This rank's place in every group the manifest's `topology` declares.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Topology {
@@ -328,11 +340,12 @@ impl Drop for Waking {
 impl Runtime {
     /// Verify the manifest, load every `*.cubin` under `kernels_dir`, resolve
     /// ops, allocate all buffers and states, and lower every program.
-    /// `state_capacity_tokens` scales each declared state by its
-    /// `bytes_per_token` (a fixed-`bytes` state is allocated as declared);
-    /// `None` fits the states to the device: whatever memory is free once
-    /// everything else is allocated, less [`HEADROOM`], but never more
-    /// than every sequence the manifest can run at once could reference.
+    /// `capacity` sizes the pooled states ([`Capacity`]; a fixed-`bytes`
+    /// state is allocated as declared); `None` fits them to the device:
+    /// whatever memory is free once everything else is allocated, less
+    /// [`HEADROOM`], but never more than every sequence the manifest can
+    /// run at once could reference, with a slot per row the manifest
+    /// bounds.
     /// A manifest with a `topology` needs this rank's [`Topology`]: one
     /// entry per declared group, sizes matching; without one the argument
     /// is ignored.
@@ -340,7 +353,7 @@ impl Runtime {
         manifest_json: &str,
         kernels_dir: &std::path::Path,
         gpu: usize,
-        state_capacity_tokens: Option<u64>,
+        capacity: Option<Capacity>,
         topology: Option<&Topology>,
     ) -> Result<Runtime> {
         let manifest = Manifest::from_json(manifest_json)?;
@@ -437,9 +450,13 @@ impl Runtime {
         let slot_bytes: u64 = manifest.states.values().map(|s| s.bytes_per_seq).sum();
         let fixed_bytes: u64 =
             manifest.states.values().filter(|s| s.bytes_per_token == 0 && s.bytes_per_seq == 0).map(|s| s.bytes).sum();
-        let first_slots = if slot_bytes > 0 { manifest.seq_slots() } else { 0 };
+        let first_slots = match (slot_bytes > 0, capacity) {
+            (false, _) => 0,
+            (true, Some(c)) => c.seqs + 2,
+            (true, None) => manifest.seq_slots(),
+        };
         let chunk = chunk_size(&manifest, page, chunk_granularity(dev)? as u64);
-        let chunks = match state_capacity_tokens {
+        let chunks = match capacity.and_then(|c| c.tokens) {
             Some(asked) => {
                 let aligned = asked / page * page;
                 if aligned == 0 {
@@ -1292,7 +1309,7 @@ impl Runtime {
             bail!(Api, "program `{program}`: call range [{lo}, {hi}) outside 0..{n}");
         }
         self.require_peers()?;
-        let env = self.dense_env(env)?;
+        let env = self.dense_env(env, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         if lo < hi {
             let (l0, _) = prog.call_ranges[lo];
@@ -1330,7 +1347,7 @@ impl Runtime {
             bail!(Api, "program `{program}`: call range [{lo}, {hi}) outside 0..{}", prog.call_ranges.len());
         }
         self.require_peers()?;
-        let env = self.dense_env(env)?;
+        let env = self.dense_env(env, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         let n = hi - lo;
         let events = Events::new(n + 1)?;
@@ -1370,12 +1387,19 @@ impl Runtime {
     }
 
     /// Validate the caller's var values and densify them into manifest var
-    /// order — the index space every compiled expression uses.
-    fn dense_env(&self, env: &BTreeMap<String, u64>) -> Result<Vec<u64>> {
+    /// order — the index space every compiled expression uses. A program
+    /// needs the vars it reads (`used`); the rest are no part of it and
+    /// densify to the minimum whatever the caller passed, so a graph is
+    /// keyed by the values that shaped it.
+    fn dense_env(&self, env: &BTreeMap<String, u64>, used: &[bool]) -> Result<Vec<u64>> {
         self.manifest
             .vars
             .iter()
-            .map(|(var, decl)| {
+            .zip(used)
+            .map(|((var, decl), &used)| {
+                if !used {
+                    return Ok(kern_manifest::types::Var::MIN);
+                }
                 let Some(&v) = env.get(var) else {
                     bail!(Api, "var `{var}` not provided");
                 };
@@ -1394,15 +1418,24 @@ impl Runtime {
 
     /// Execute one program with the given var values, then synchronize.
     pub fn run(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
+        self.enqueue(program, env)?;
+        self.ctx.bind_to_thread()?;
+        self.stream.synchronize()?;
+        Ok(())
+    }
+
+    /// Issue one program's launches onto the stream and return without
+    /// waiting. Ranks whose kernels wait on each other (an EP dispatch, a
+    /// tray collective) must all be issued before any is waited for:
+    /// `enqueue` each, then [`Runtime::synchronize`] each.
+    pub fn enqueue(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
-        let env = self.dense_env(env)?;
+        let env = self.dense_env(env, &prog.vars)?;
         self.ctx.bind_to_thread()?;
-        self.replay(prog, &env)?;
-        self.stream.synchronize()?;
-        Ok(())
+        self.replay(prog, &env)
     }
 
     /// Capture one program into an instantiated CUDA graph. Grid dims and
@@ -1415,7 +1448,7 @@ impl Runtime {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
-        let env = self.dense_env(env)?;
+        let env = self.dense_env(env, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(
             unsafe {
@@ -1451,13 +1484,19 @@ impl Runtime {
     /// Whether `capture(program, env)` has been done for exactly these var
     /// values.
     pub fn is_captured(&self, program: &str, env: &BTreeMap<String, u64>) -> bool {
-        self.dense_env(env).is_ok_and(|env| self.graphs.contains_key(&(program.to_string(), env)))
+        self.programs
+            .get(program)
+            .and_then(|prog| self.dense_env(env, &prog.vars).ok())
+            .is_some_and(|env| self.graphs.contains_key(&(program.to_string(), env)))
     }
 
     /// The graph captured for (program, env), or an `Api` error naming the
     /// var values that were captured instead.
     fn graph(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<sys::CUgraphExec> {
-        let dense = self.dense_env(env)?;
+        let Some(prog) = self.programs.get(program) else {
+            bail!(Api, "no program `{program}`");
+        };
+        let dense = self.dense_env(env, &prog.vars)?;
         if let Some(exec) = self.graphs.get(&(program.to_string(), dense.clone())) {
             return Ok(*exec);
         }
@@ -1471,11 +1510,17 @@ impl Runtime {
 
     /// Replay a previously captured program, then synchronize.
     pub fn run_captured(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
-        let exec = self.graph(program, env)?;
-        self.ctx.bind_to_thread()?;
-        cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")?;
+        self.enqueue_captured(program, env)?;
         self.stream.synchronize()?;
         Ok(())
+    }
+
+    /// Launch a previously captured program's graph without waiting (see
+    /// [`Runtime::enqueue`]).
+    pub fn enqueue_captured(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
+        let exec = self.graph(program, env)?;
+        self.ctx.bind_to_thread()?;
+        cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")
     }
 
     /// Issue every launch of a compiled program onto the stream (no sync).
@@ -1488,15 +1533,14 @@ impl Runtime {
 
     fn launch(&self, l: &Launch, env: &[u64]) -> Result<()> {
         // Materialize the slots; only var-dependent scalars are left to
-        // compute, everything else was finished at load. Tensor maps ride
-        // along as pointers to their 128-byte images.
+        // compute, everything else was finished at load. Packs (and the
+        // tensor maps inside them) ride along as pointers to their images.
         let mut vals = Vec::with_capacity(l.slots.len());
         let mut images: Vec<Option<Vec<u8>>> = Vec::with_capacity(l.slots.len());
         for s in &l.slots {
             let (v, m) = match s {
                 Slot::Const(rv) => (*rv, None),
                 Slot::Expr(e) => (RVal { val: e.eval(env)?, bytes: 0 }, None),
-                Slot::TensorMap(b) => (RVal { val: 0, bytes: 0 }, Some(b.0.to_vec())),
                 Slot::Pack(p) => (RVal { val: 0, bytes: 0 }, Some(p.image(env)?)),
             };
             vals.push(v);
@@ -1513,7 +1557,7 @@ impl Runtime {
                 };
                 // Every scalar/pointer slot staged as a little-endian u64;
                 // the launch ABI reads the low `size_bytes()` of each slot.
-                // A tensormap or pack slot points at its image instead.
+                // A pack slot points at its image instead.
                 let raw: Vec<u64> = vals.iter().map(|r| r.val).collect();
                 let mut params: Vec<*mut c_void> = raw
                     .iter()
