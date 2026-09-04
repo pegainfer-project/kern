@@ -1226,10 +1226,11 @@ struct Fuzz {
 impl Fuzz {
     fn lines(&self) -> Vec<String> {
         let mut s = format!(
-            "{}/{} bit-identical · {} ({})",
+            "{}/{} bit-identical · {} round{} ({})",
             self.bit_identical,
             self.compared,
-            format!("{} round{}", self.rounds, if self.rounds == 1 { "" } else { "s" }),
+            self.rounds,
+            if self.rounds == 1 { "" } else { "s" },
             self.modes.join(" ")
         );
         if self.value_identical > 0 {
