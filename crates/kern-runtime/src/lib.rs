@@ -498,7 +498,7 @@ impl Runtime {
         let mut mapper = Mapper::new(arenas, physical);
         mapper.run(&initial)?;
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
-        tracing::info!(
+        tracing::debug!(
             "state budget {:.1} GiB in {chunks} chunks of {} MiB: {} pages of {page} tokens, {} sequence slots",
             gib(chunks as u64 * chunk),
             chunk >> 20,
