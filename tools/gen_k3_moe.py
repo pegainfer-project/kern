@@ -14,6 +14,7 @@ the cubins are pinned by sha256 (tools/build_k3_mega.sh, build_kernels.sh).
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -27,7 +28,7 @@ EXPERTS = 224
 
 
 def mega_build():
-    out = REPO / "target" / "cubins"
+    out = pathlib.Path(os.environ.get("K3_MEGA_CUBINS", REPO / "target" / "cubins"))
     if not (out / "k3_mega_moe.cubin").exists() or not (out / "k3_mega_layout_dump").exists():
         subprocess.run([str(REPO / "tools" / "build_k3_mega.sh"), str(out)], check=True)
     return out

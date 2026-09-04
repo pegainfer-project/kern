@@ -163,15 +163,29 @@ struct MegaGeom {
   static_assert(kSmemSize <= kSmemCapacity, "MegaMoE smem budget overflow");
 };
 
-// Every world pins ONE config, chosen at the protocol maximum, so peers of a
-// collective launch agree on BLOCK_M and a row's MMA K-accumulation order
-// does not depend on the world size (the EP-vs-EP1 oracle leans on this).
+// Every world pins ONE config, so peers of a collective launch agree on
+// BLOCK_M and a row's MMA K-accumulation order does not depend on the world
+// size (the EP-vs-EP1 oracle leans on this). The entry is BLOCK_M 96: on the
+// K3 layer shape it is fastest or tied from 8 to 512 tokens per rank under
+// real routing (-12..15% against the protocol-max entry, 192; -34% at 256
+// uniform), with bit-identical output — see the k3_moe_bench sweep,
+// bench_results 2026-09-04-k5-span-profile. `-DK3_MEGA_CFG=<i>` builds
+// another ladder entry for such sweeps.
+constexpr int index_of_block_m(int block_m) {
+  for (int i = 0; i < kNumBlockConfigs; ++i)
+    if (kBlockLadder[i].block_m == block_m) return i;
+  return -1;
+}
+
 template <int kExperts, int kRanks>
 constexpr int pinned_config() {
-  constexpr int cfg = mega_block_config_index(kMaxTokensPerRank, kRanks, kExperts, kNumTopk);
-  static_assert(kBlockLadder[cfg].block_m == 192,
-                "the protocol-max config is expected to be the BLOCK_M 192 entry");
+#ifdef K3_MEGA_CFG
+  return K3_MEGA_CFG;
+#else
+  constexpr int cfg = index_of_block_m(96);
+  static_assert(cfg >= 0, "the ladder lost its BLOCK_M 96 entry");
   return cfg;
+#endif
 }
 
 }  // namespace k3_mega
