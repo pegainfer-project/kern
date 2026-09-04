@@ -28,9 +28,11 @@
 //! two-step act, since a park in flight cannot be undone: room is found on
 //! every rank first ([`Runtime::room`]), and bytes move only once all of
 //! it is. An owner is chosen when a row is leased — the open rank with the
-//! fewest pages in use — and is fixed for the row's life and everything
-//! that descends from it: pages live on that GPU, a parked copy lives in
-//! that GPU's pinned block.
+//! fewest rows, then the fewest pages in use (pages count the snapshots
+//! kept there, so a rank holding a long prefix would otherwise sit idle
+//! while the others prefill) — and is fixed for the row's life and
+//! everything that descends from it: pages live on that GPU, a parked
+//! copy lives in that GPU's pinned block.
 //!
 //! # Staging
 //!
@@ -549,13 +551,15 @@ impl Tray {
         Ok(Group { owner, me, parts: parts? })
     }
 
-    /// A fresh row of `tokens` on the open rank with the fewest pages in
-    /// use (`open` says which ranks can take another row), a slot-only
-    /// lease on each of its peers. [`Denied::Busy`] when no rank is open.
-    pub fn lease(&mut self, tokens: usize, open: impl Fn(Rank) -> bool) -> Result<Row, Error> {
+    /// A fresh row of `tokens` on the open rank with the fewest rows, then
+    /// the fewest pages in use (`rows` says how many a rank holds, `None`
+    /// when it can take no more), a slot-only lease on each of its peers.
+    /// [`Denied::Busy`] when no rank is open.
+    pub fn lease(&mut self, tokens: usize, rows: impl Fn(Rank) -> Option<usize>) -> Result<Row, Error> {
         let owner = (0..self.groups.n)
-            .filter(|&q| open(Rank(q)))
-            .min_by_key(|&q| (self.ranks[q].pages_used(), q))
+            .filter_map(|q| rows(Rank(q)).map(|n| (n, self.ranks[q].pages_used(), q)))
+            .min()
+            .map(|(_, _, q)| q)
             .ok_or(Error::Denied(Denied::Busy))?;
         let me = self.groups.member(owner);
         let slots = Group { owner: Rank(owner), me, parts: vec![(); self.groups.t] };

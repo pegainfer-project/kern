@@ -214,7 +214,8 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   独立记账、slot 编号不跨卡比对，所以没有一致性要重建）。park 是唯一不能半途撤销
   的动作（拷贝已入队），runtime 拆成 `room`（找地方，`Room` drop 即退）+ `park`（拷），
   tray 先在每个成员上找齐再拷。`Waking` 提前 drop 会等拷贝落地，所以 wake 的回滚就是 drop。
-- **owner**：新行落到"还开着（行数 < `--max-seqs`，per rank）且页占用最少"的 rank，
+- **owner**：新行落到"还开着（行数 < `--max-seqs`，per rank）且行数最少、再比页占用最少"的 rank
+  （2026-09-04 之前只比页：页数含留着的快照，持有 12k 快照的卡在 conc8 里一行都分不到——`[3, 2, 0, 3]`），
   终身不变，后代（checkpoint、parked、wake 回来的）都跟着它——页在那张卡上，pinned
   块绑在那张卡的 NUMA 节点上。
 - **`Prefix` 按 tray 键**：`Prefix<Snapshot, Sleeping>`，键还是 token 哈希链、与卡无关。
@@ -331,6 +332,32 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
     2k / 12k 在第一个近平局后分道（TP 归约是另一条数值路径；块不等长之后 TP4 的 12k 冷 sha 反而与 t=1 同，
     2k 仍不同——近平局两边落哪边）。并发的 1k 条目每次跑的 sha 都不同（到达顺序决定 bucket 组合），K5 线自己
     两次跑也如此，不作门。无 panic、无 `tp_err`。
+
+**每个 tp 组每步各一条 run（2026-09-04，tray07，同一天的 E3 场景；脚本与逐请求数据在
+`~/bench_results/2026-09-04-t1-runs-per-rank/`）**：之前整个 tray 每步只放一条 run，t=1 的另外三张卡在 span 步里
+跑的是 c 行 pad——两种配置的 decode 都是四卡并行，prefill 都只用一张卡的算力。改成每个 tp 组各挑最老的还在喂
+prompt 的序列各喂一段 run（`scheduler::runs`），所有 run 一样长；同时 owner 从"页最少"改成"行最少、再页最少"
+（页数含留着的快照，之前持有 12k 快照的卡在 conc8 里一行都分不到，`[3, 2, 0, 3]`，改后 `[2, 2, 2, 2]`）。
+对照左列是块不等长那天的同二进制 t=1：
+
+| 场景（EP4 t=1） | 之前 | 现在 |
+|---|---|---|
+| A 短 prompt TTFT / ITL p50 | 221 ms / 31.0 | 233 / 31.0（sha 同） |
+| B 2k TTFT | 801 ms | 816（sha 同） |
+| C 冷 12.9k TTFT | 4466 ms | 4476（sha 同） |
+| D conc8×1k TTFT 均值 [min–max] / ITL p50 / p90 | 1962 [669–3294] / 36.4 / 65（四条 83） | **917 [612–1135]** / 34.5 / **34.5** |
+| E 迟到 12.9k TTFT；其余 7 条 TTFT 均值 / p90 | 4644 ms；2075 / 88 | 4543；**1199** / 87 |
+| F turn2 TTFT | 462 ms | 474（sha 同） |
+
+  - conc8：8 条 1k 各 4 个 chunk，两条一卡，第二条等第一条的 4 步——最慢一条 1.13 s 就是 8 个 span 步；之前
+    32 个 span 步串在一张卡上，最慢 3.3 s。ITL p90 从 65 回到 34：没有人再跟着别人的 span 步走。
+  - 只对 span 步分摊，decode 步没变（ITL 34–36 同以前的抖动范围）。同 prompt 的 conc1 sha 四个场景全同；
+    并发条目的 sha 变了，一是同以前"不作门"，二是 room 之前按整个 tray 的行数算（`seqs.max + 1 − n`），conc8
+    下把 run 切成 249、247、…（旧日志里 span 249/247/246/244 的 capture 就是它），现在按 rank 算、整 256。
+    TP4（一个组，每步仍一条 run）conc1 sha 同；conc8 按 TTFT 排序后相邻两条的间隔（一条 1k prompt 的 4 个
+    span 步）三轮都是 ≈ 400 ms，首条的 TTFT 638 / 688 / 809 ms 在轮与轮之间漂，不是 span 步变了。
+  - 一条短 prompt 会把同步别人的 run 拉短到它的长度（c 取最小）：换它一步出首 token。conc8 里没触发
+    （8 条一样长）；混合长短的公平性是 K5 D2 预算策略的事。
 
 **没测**（按 CLAUDE.md 的门禁排队）：
 1. t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变；

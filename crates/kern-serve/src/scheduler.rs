@@ -35,7 +35,8 @@
 //!   time, then runs one step over every running sequence;
 //! - a request leases every KV page its worst case (`prompt + max_tokens`,
 //!   plus `rows - 1` for the last step's rows past the end) needs at
-//!   admission (`Tray::lease`, on the rank with the fewest pages in use),
+//!   admission (`Tray::lease`, on the rank with the fewest rows, then
+//!   pages),
 //!   so a step never runs out of pages and nothing is ever preempted; the
 //!   row drops with the sequence;
 //! - batches are padded up to a bucket size — the same bucket on every
@@ -546,7 +547,7 @@ impl KernScheduler {
                             tray.wake(p, h.len, worst).map(Got::Rising)
                         }
                     },
-                    None => tray.lease(worst, |r| rows[r.index()] < cap).map(Got::Row),
+                    None => tray.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(Got::Row),
                 };
                 match attempt {
                     Err(Error::Denied(Denied::Busy)) if self.make_room()? => {}
