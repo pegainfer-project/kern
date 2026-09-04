@@ -12,7 +12,7 @@ use std::process::Command;
 use anyhow::{bail, ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use kern_run::attest::TestOpts;
-use kern_run::config::{Config, Target};
+use kern_run::config::Config;
 use kern_run::run::RunOpts;
 
 #[derive(Parser)]
@@ -38,11 +38,11 @@ enum Cmd {
         #[command(flatten)]
         opts: RunOpts,
     },
-    /// A/B a kernel swap — each target's `reference` (A) against its
-    /// `manifest` (B); all targets when none is named. Exit 0 PASS, 1 FAIL,
-    /// 2 INCONCLUSIVE (the worst over the targets)
+    /// A/B a kernel swap: a target's `reference` (A) against its
+    /// `manifest` (B). Exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE
     Test {
-        targets: Vec<String>,
+        /// Target in kern.toml (needed when it declares several)
+        target: Option<String>,
         #[command(flatten)]
         opts: TestOpts,
     },
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
                 _ => {
                     ensure!(
                         target.is_none(),
-                        "no kern.toml with targets found; `{}` cannot be looked up",
+                        "no kern.toml with targets found at or above the cwd; `{}` cannot be looked up",
                         target.unwrap_or_default()
                     );
                     None
@@ -86,32 +86,29 @@ fn main() -> Result<()> {
             };
             kern_run::run::run(opts, cfg.as_ref(), t)
         }
-        Cmd::Test { targets, opts } => {
-            let sel: Vec<(Option<&String>, Option<&Target>)> = match &cfg {
+        Cmd::Test { target, opts } => {
+            let t = match &cfg {
                 Some(c) if !c.targets.is_empty() => {
-                    c.select(&targets)?.into_iter().map(|(n, t)| (Some(n), Some(t))).collect()
+                    let (name, t) = c.one(target.as_deref())?;
+                    ensure!(
+                        opts.reference.is_some() || t.reference.is_some(),
+                        "target `{name}` in {} has no `reference`; kern test is A/B and needs one (or --reference)",
+                        c.path.display()
+                    );
+                    Some(t)
                 }
                 _ => {
-                    ensure!(targets.is_empty(), "no kern.toml with targets found; {targets:?} cannot be looked up");
-                    vec![(None, None)]
+                    ensure!(
+                        target.is_none(),
+                        "no kern.toml with targets found at or above the cwd; `{}` cannot be looked up",
+                        target.unwrap_or_default()
+                    );
+                    None
                 }
             };
-            let multi = sel.len() > 1;
-            let mut worst = 0;
-            for (name, t) in sel {
-                let mut o = opts.clone();
-                if multi {
-                    let name = name.unwrap();
-                    if let Some(dir) = &opts.out {
-                        std::fs::create_dir_all(dir)?;
-                        o.out = Some(dir.join(format!("{name}.json")));
-                    }
-                    println!("\n════ {name} ════\n");
-                }
-                worst = worst.max(kern_run::attest::run(o, cfg.as_ref(), t)?);
-            }
-            if worst != 0 {
-                std::process::exit(worst);
+            let code = kern_run::attest::run(opts, cfg.as_ref(), t)?;
+            if code != 0 {
+                std::process::exit(code);
             }
             Ok(())
         }

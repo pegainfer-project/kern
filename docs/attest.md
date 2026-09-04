@@ -5,8 +5,8 @@
 下是否一致、快了多少。老 program 就是 oracle；manifest 里**没有阈值**。
 
 ```bash
-./target/release/kern test --out attestation.json   # A/B/kernels/weights 来自 kern.toml 的 target
-./target/release/kern test \                        # 或全用 flag（没有 kern.toml 时）
+./target/release/kern test qwen3-4b --out attestation.json   # A/B/kernels/weights 来自 kern.toml 的 target
+./target/release/kern test \                                 # 或全用 flag（没有 kern.toml 时）
   --reference examples/qwen3-4b.json --manifest examples/qwen3-4b-silu-mined.json \
   --kernels kernels --weights weights/qwen3-4b-decode.safetensors --out attestation.json
                                   # --diff-only 只看静态 diff；--no-perf 跳过计时
@@ -15,13 +15,20 @@
 
 `kern.toml`（`crates/kern-run/src/config.rs` 有完整说明）里一个 target 就是
 `manifest`（B）+ `reference`（A，用户自己拷一份信得过的）+ `kernels` +
-`weights`；`kern test` 不带名字跑全部 target，退出码取最差；`--out` 此时
-是目录，一个 target 一个 JSON。target 的名字用户随便起，kern 不解释。
+`weights`。`kern test` 一次只测一个 target：只有一个就不用点名，有多个必须
+点名；target 没有 `reference` 直接报错——没有 A 就没有测试。要跑全部，
+shell 里 for 一下。target 的名字用户随便起，kern 不解释。
 
-报告全部走 stdout：`--format text`（默认；tty 上带颜色——绿 = 相同、黄 =
-±0 / 警告 / INCONCLUSIVE、红 = 差异 / FAIL，`--color never` 或 `NO_COLOR`
-关掉）或 `--format md`（GitHub 表格，直接贴 PR / kernel package README）。
-每段标题带该段耗时。完整数据用 `--out` 写 JSON。
+报告走 stdout，一行一个事实：行首是段名（`diff` / `tap` / `local` /
+`logits` / `noise` / `fuzz` / `perf` / `sweep` / `roofline`），事实之间用
+` · `，两边用 `a → b`，段耗时在行尾；**最后一行以 verdict 开头**（`PASS` /
+`FAIL` / `INCONCLUSIVE`，同退出码 0 / 1 / 2），`tail -1 | cut -d' ' -f1`
+就是结论。相同的只给计数（`900/900 bit-identical`），不同的才点名，最坏的
+在前、最多 8 条，其余进 `--out`。`--json` 改成在末尾打一个 JSON 对象（同样
+的段、同样的字段，`jq .verdict.pass`、`jq .perf.steps[0].graph_ms` 直接
+取）。`--out` 写存档：`summary` 就是那个对象，`detail` 是每一条有差异的
+比较（cut、buffer、差异元素数、ulp）——相同的不存，PASS 的存档只有几 KB。
+stderr 默认安静（`RUST_LOG=debug` 看 runtime 装载）。
 
 `examples/qwen3-4b-silu-mined.json` 是自带的 A/B fixture：和
 `qwen3-4b.json` 唯一的区别是 `silu_mul` 的 impl 从 HF hub 的

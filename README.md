@@ -90,8 +90,9 @@ cargo build --release
 # the loop: evidence for a kernel swap — diff, tap a seeded workload once
 # (random tokens, multi-chunk prefill, N decode steps), then per cut: noise
 # floor, bit-diff, fuzz around the tap; end-to-end logits are the verdict;
-# eager/TPOT/sweep timing. ~10 s, exit 0 on PASS
-./target/release/kern test --out attestation.json
+# eager/TPOT/sweep timing. ~10 s, one line per fact, the last line is the
+# verdict (exit 0 PASS / 1 FAIL / 2 INCONCLUSIVE); --json for one object
+./target/release/kern test qwen3-4b
 ```
 
 `kern <cmd> --help` lists the flags; `crates/kern-run/src/config.rs`
