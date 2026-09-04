@@ -593,3 +593,113 @@
     grid-column: 1 / -1;
   }
 }
+
+/* -------------------------------------------------------------- protocol */
+
+.protocol {
+  padding-top: clamp(24px, 4vh, 48px);
+}
+
+.protocol .kicker {
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: var(--blue);
+  margin: 0 0 10px;
+}
+
+.protocol h2 {
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin: 0 0 18px;
+}
+
+.protocol-lead {
+  max-width: 70ch;
+  margin: 0 0 28px;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.protocol-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(16px, 2vw, 28px);
+  align-items: start;
+}
+
+.protocol-card {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px 20px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.protocol-card h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+  font-family: "DM Mono", monospace;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.protocol-card h3 span {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--blue);
+}
+
+.protocol-card p {
+  margin: 0 0 12px;
+}
+
+.fill-head {
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin: 14px 0 4px;
+}
+
+.fill-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fill-list li {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.fill-list code,
+.protocol-note code {
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.protocol-note {
+  margin: 14px 0 0;
+  font-size: 13.5px;
+}
+
+@media (max-width: 900px) {
+  .protocol-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

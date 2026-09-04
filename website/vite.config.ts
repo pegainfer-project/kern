@@ -5,10 +5,10 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const schemaFile = resolve(here, "../schema/manifest-v3.schema.json");
+const schemaFile = resolve(here, "../schema/manifest-v4.schema.json");
 
 // Serve/emit the golden wire-format schema (the file CI golden-checks) at
-// /schema/manifest-v3.schema.json — the URL its $id declares.
+// /schema/manifest-v4.schema.json — the URL its $id declares.
 function emitManifestSchema(): Plugin {
   return {
     name: "emit-manifest-schema",
@@ -18,12 +18,12 @@ function emitManifestSchema(): Plugin {
     generateBundle() {
       this.emitFile({
         type: "asset",
-        fileName: "schema/manifest-v3.schema.json",
+        fileName: "schema/manifest-v4.schema.json",
         source: readFileSync(schemaFile, "utf8"),
       });
     },
     configureServer(server) {
-      server.middlewares.use("/schema/manifest-v3.schema.json", (_req, res) => {
+      server.middlewares.use("/schema/manifest-v4.schema.json", (_req, res) => {
         res.setHeader("Content-Type", "application/schema+json");
         res.end(readFileSync(schemaFile, "utf8"));
       });

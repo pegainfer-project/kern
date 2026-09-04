@@ -40,6 +40,7 @@ function Sig({ s, depth = 0 }: { s: any; depth?: number }): ReactNode {
     ));
   }
   if (s.enum) return (s.enum as string[]).map((e) => JSON.stringify(e)).join(" | ");
+  if (s.oneOf) return (s.oneOf as any[]).map((v) => JSON.stringify(v.const)).join(" | ");
   switch (s.type) {
     case "integer":
       return FORMAT_NAMES[s.format] ?? "int";
@@ -109,16 +110,29 @@ function fmtDefault(v: any): string {
 /* ------------------------------------------------------------- reference */
 
 const GROUPS: { label: string; names: string[] }[] = [
-  { label: "root", names: ["Manifest", "Spec", "Module"] },
+  { label: "root", names: ["Manifest", "Module", "Topology"] },
   {
     label: "declarations",
-    names: ["Var", "State", "Buffer", "Dim", "DType", "BufferKind", "Domain", "Bound"],
+    names: ["Var", "State", "Buffer", "Fill", "Dim", "DType", "BufferKind", "Domain", "Bound"],
   },
   {
     label: "ops",
-    names: ["Op", "ParamType", "Impl", "Scratch", "Launch", "KernelLaunch", "ExternLaunch", "LaunchArg"],
+    names: [
+      "Op",
+      "ParamType",
+      "Impl",
+      "Scratch",
+      "Launch",
+      "KernelLaunch",
+      "ExternLaunch",
+      "LaunchArg",
+      "Pack",
+      "Field",
+      "TensorMap",
+      "TmaDType",
+    ],
   },
-  { label: "programs", names: ["Call", "Arg", "Expr"] },
+  { label: "programs", names: ["Program", "Batch", "Call", "Arg", "Expr"] },
 ];
 
 // Future-proof: anything the schema gains that the curated groups don't
@@ -140,7 +154,7 @@ function defFor(name: string): any {
 }
 
 function kindOf(d: any): string {
-  if (d.enum) return "closed enum";
+  if (d.enum || d.oneOf) return "closed enum";
   if (d.pattern) return "patterned string";
   if (d.anyOf) return "union (untagged)";
   if (d.type === "object") return "object";
@@ -191,6 +205,19 @@ function DefSection({ name }: { name: string }) {
         <div className="enum-chips">
           {(d.enum as string[]).map((e) => (
             <code key={e}>{e}</code>
+          ))}
+        </div>
+      )}
+
+      {d.oneOf && (
+        <div className="variant-list">
+          {(d.oneOf as any[]).map((v) => (
+            <div className="variant-row" key={v.const}>
+              <span className="variant-sig">
+                <code>{v.const}</code>
+              </span>
+              {v.description && <span className="prop-desc">{v.description}</span>}
+            </div>
           ))}
         </div>
       )}
@@ -268,7 +295,7 @@ function WireDiagram() {
           className="wire-diagram"
           viewBox="0 0 1060 610"
           role="img"
-          aria-label="Structure of a kern manifest: one file containing vars, states, buffers, modules, ops and programs; calls bind to op interfaces; implementations launch entries of modules pinned by sha256, local or from a registry."
+          aria-label="Structure of a kern manifest: one file containing vars, states, buffers, modules, ops and programs; a program is a call list plus the batch shape a serving loop drives it at; calls bind to op interfaces; implementations launch entries of modules pinned by sha256, local or from a registry."
         >
           {/* manifest file */}
           <path className="box" d={sketch(42, 92, 230, 330)} />
@@ -334,7 +361,7 @@ function WireDiagram() {
             gemm(x, w, y)
           </text>
           <text className="t-note" x={790} y={282}>
-            no control flow
+            batch · groups × rows · no control flow
           </text>
 
           {/* impl sources */}
@@ -398,7 +425,7 @@ const STEPS: { key: string; type: string; text: string }[] = [
   { key: "buffers", type: "Buffer", text: "x is written by the caller, w is bound from the weights file, y is read back; shapes use tokens." },
   { key: "modules", type: "Module", text: "the compiled code, identified by sha256; toy.cubin is a label." },
   { key: "ops", type: "Op", text: "scale is an interface — five typed, directional params — plus an impl: one launch of scale_rows from toy, tokens blocks of 64 threads." },
-  { key: "programs", type: "Call", text: "step calls scale once, binding x, w, y, kv and tokens to its params in order." },
+  { key: "programs", type: "Program", text: "step calls scale once, binding x, w, y, kv and tokens to its params in order. It declares no batch, so no serving loop drives it; a harness stages x by name." },
 ];
 
 function MinimalExample() {
@@ -429,6 +456,88 @@ function MinimalExample() {
   );
 }
 
+/* -------------------------------------------------------------- protocol */
+
+const FILLS: { const: string; description: string }[] = defs.Fill?.oneOf ?? [];
+const inputs = FILLS.filter((f) => f.description.startsWith("Input:"));
+const outputs = FILLS.filter((f) => f.description.startsWith("Output:"));
+
+function FillList({ items }: { items: typeof FILLS }) {
+  return (
+    <ul className="fill-list">
+      {items.map((f) => (
+        <li key={f.const}>
+          <code>{f.const}</code>
+          <span>{f.description.replace(/^(Input|Output): /, "")}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Protocol() {
+  const batch = defs.Batch?.properties ?? {};
+  return (
+    <section className="protocol" aria-label="The serving protocol">
+      <p className="kicker">SERVING PROTOCOL · THREE WORDS</p>
+      <h2>The loop reads fill, batch and once. Nothing else.</h2>
+      <p className="protocol-lead">
+        How a serving loop drives a manifest — which buffer takes the token, which
+        program takes how many sequences of how many rows, where the produced token
+        is read back — is declared in the file, not known by the caller. Every axis
+        is derived from these declarations: the runtime never reads a buffer or
+        program by name.
+      </p>
+      <div className="protocol-grid">
+        <div className="protocol-card">
+          <h3>
+            <a className="tref" href="#t-Fill">fill</a>
+            <span>on a buffer</span>
+          </h3>
+          <p>{defs.Fill?.description}</p>
+          <p className="fill-head">inputs the loop writes</p>
+          <FillList items={inputs} />
+          <p className="fill-head">outputs the loop reads</p>
+          <FillList items={outputs} />
+        </div>
+        <div className="protocol-card">
+          <h3>
+            <a className="tref" href="#t-Batch">batch</a>
+            <span>on a program</span>
+          </h3>
+          <p>{defs.Batch?.description}</p>
+          <ul className="fill-list">
+            {Object.keys(batch).map((k) => (
+              <li key={k}>
+                <code>{k}</code>
+                <span>{batch[k].description}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="protocol-note">
+            One code path, four shapes: prefill is 1 group of <code>tokens</code>{" "}
+            rows, decode is b groups of 1 row, a speculative round is b groups of r
+            rows cut by <code>count</code>, a span is a decode step where one group
+            carries a run of <code>span</code> rows.
+          </p>
+        </div>
+        <div className="protocol-card">
+          <h3>
+            <a className="tref" href="#t-Program">once</a>
+            <span>on a program</span>
+          </h3>
+          <p>{defs.Program?.properties?.once?.description}</p>
+          <p className="protocol-note">
+            A program with neither <code>batch</code> nor <code>once</code> is not
+            driven by a loop at all: a single layer under test, a barrier, a
+            harness's material.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ page */
 
 const RAW_URL = "/schema/manifest-v4.schema.json";
@@ -438,6 +547,7 @@ const TYPES_URL =
 export default function SchemaPage() {
   const typeCount = Object.keys(defs).length + 1; // + root
   const exprForms = (defs.Expr?.anyOf ?? []).length;
+  const fillRoles = (defs.Fill?.oneOf ?? []).length;
   return (
     <div className="schema-page" id="top">
       <header className="site-header">
@@ -489,11 +599,17 @@ export default function SchemaPage() {
               <span className="fact-num">{exprForms}</span>
               <span className="fact-cap">expression forms — the entire scalar language</span>
             </div>
+            <div className="fact">
+              <span className="fact-num">{fillRoles}</span>
+              <span className="fact-cap">fill roles — the entire serving protocol</span>
+            </div>
           </div>
 
         </section>
 
         <MinimalExample />
+
+        <Protocol />
 
         <section className="schema-hero schema-diagram">
           <WireDiagram />
