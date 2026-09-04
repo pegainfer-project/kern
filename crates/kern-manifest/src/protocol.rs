@@ -298,6 +298,7 @@ impl Protocol {
                 Fill::CuSeqlens => matches!(axis, Axis::Fixed(n) if n > groups.max),
                 Fill::Tokens => axis == Axis::Groups || (axis == Axis::Tray && width == 1),
                 Fill::SpanAt | Fill::Error => axis == Axis::Fixed(1) && b.dtype == DType::I32,
+                Fill::Blocks => matches!(axis, Axis::Fixed(n) if n >= 2) && b.dtype == DType::I32,
             };
             if !ok {
                 errs.push(format!(
@@ -310,6 +311,7 @@ impl Protocol {
                         Fill::CuSeqlens => "expected [n] with n >= groups + 1",
                         Fill::Tokens => "expected [groups], [groups, w] or [tray]",
                         Fill::SpanAt | Fill::Error => "expected i32 [1]",
+                        Fill::Blocks => "expected i32 [members + 1]",
                     }
                 ));
                 continue;
@@ -328,13 +330,16 @@ impl Protocol {
         if fills.iter().filter(|f| f.fill == Fill::Token && f.axis == Axis::Groups).count() > 1 {
             errs.push("fill `token` over the sequences is on more than one buffer".into());
         }
-        for fill in [Fill::Position, Fill::CuSeqlens, Fill::SpanAt, Fill::Count, Fill::Error] {
+        for fill in [Fill::Position, Fill::CuSeqlens, Fill::SpanAt, Fill::Blocks, Fill::Count, Fill::Error] {
             if one(fill).is_none() && m.buffers.values().any(|b| b.fill == Some(fill)) {
                 errs.push(format!("fill `{fill}` is on more than one buffer"));
             }
         }
         if fills.iter().any(|f| f.fill == Fill::Token && f.axis == Axis::Tray) && tray.is_none() {
             errs.push("a `token` fill spans the tray but no var names the tray batch".into());
+        }
+        if one(Fill::Blocks).is_some() && tray.is_none() {
+            errs.push("fill `blocks` without a var naming the tray batch".into());
         }
 
         // Tables: the inputs indexing a state that have no role of their own
@@ -588,11 +593,12 @@ impl Protocol {
     }
 
     /// The var env of a call: `b` sequences of `per` rows on this rank,
-    /// `t` ranks in the tray batch.
-    pub fn env(&self, b: u64, per: u64, t: u64) -> BTreeMap<String, u64> {
+    /// `tray` rows in the whole tray batch (the sum of its members' blocks;
+    /// this rank's `b * per` when it is alone).
+    pub fn env(&self, b: u64, per: u64, tray: u64) -> BTreeMap<String, u64> {
         let mut env = BTreeMap::from([(self.rows.var.clone(), b * per), (self.groups.var.clone(), b)]);
-        if let Some(tray) = &self.tray {
-            env.insert(tray.var.clone(), t * b * per);
+        if let Some(t) = &self.tray {
+            env.insert(t.var.clone(), tray);
         }
         env
     }
@@ -708,7 +714,8 @@ mod tests {
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
                 "kda.line_index": {"kind": "input", "dtype": "i32", "shape": [3, "rows"], "domain": {"index_into": "kda", "stride": 8}},
                 "next_token": {"kind": "output", "dtype": "i64", "shape": ["rows"], "fill": "tokens"},
-                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"}
+                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"},
+                "tp_blocks": {"kind": "input", "dtype": "i32", "shape": [5], "fill": "blocks"}
             },
             "modules": {}, "ops": {"head": {"params": ["out buffer<i64>"], "impl": {"launches": [{"entry": "extern:x"}]}}},
             "programs": {
@@ -773,7 +780,7 @@ mod tests {
         assert_eq!(p.forward(5, Rows::Const(1)), None);
         assert_eq!(p.chunk().map(|f| f.name.as_str()), Some("prefill"));
         assert_eq!((p.row_shapes(), p.max_groups(Rows::Const(1))), (vec![1], 4));
-        assert_eq!(p.env(3, 2, 1), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
+        assert_eq!(p.env(3, 2, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
     }
 
     #[test]
@@ -837,7 +844,7 @@ mod tests {
         assert_eq!(p.line_tables[0].axis, Axis::Tray);
         assert_eq!(p.any(Fill::Error).map(|f| f.name.as_str()), Some("tp_err"));
         assert_eq!(p.once, vec!["tp_init".to_string()]);
-        assert_eq!(p.env(2, 1, 4), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
+        assert_eq!(p.env(2, 1, 8), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
     }
 
     #[test]

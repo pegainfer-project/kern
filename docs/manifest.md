@@ -264,8 +264,10 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
 
 - **buffer 上的 `fill`**：这个 buffer 在循环里的角色。input：`token`
   （每行一个；形如 `[seqs]` 时每组一个，即投机轮的 anchor）、`position`、
-  `slot`、`seq_len`、`cu_seqlens`；output：`tokens`（`[seqs]` 每组一个，
-  `[seqs, r]` 每行一个）、`count`（每组取几个，缺省恒 1）、`error`
+  `slot`、`seq_len`、`cu_seqlens`、`span_at`、`blocks`（tray batch 各成员的块：
+  按成员序的行数前缀和，`[t + 1]` 个 i32，末项是 tray 的行数；块不必等长，
+  collective 核按它把本卡行号换算成 tray 行号）；output：`tokens`（`[seqs]`
+  每组一个，`[seqs, r]` 每行一个）、`count`（每组取几个，缺省恒 1）、`error`
   （非零即该步失败，tray 的 allreduce 用）。fill 只许落在 input / output
   的 i32 / i64 buffer 上，与 `domain` 平级可共存；caller 按 buffer 的
   dtype 编码，不写死 i64 / i32。页表和 line 表不加 fill：`index_into`

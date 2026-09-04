@@ -15,8 +15,9 @@
 //              peer's second half; barrier; read the second half. Plain 16 B
 //              loads and stores, no poison, so it works for any row count.
 //
-// Row layout is kern's "own rows first": rank r's local row j is tray row
-// (r*rows + j) mod N*rows, so the partials are rotated differently on every
+// Row layout is kern's "own rows first" (peer_collective.cu): rank q's block
+// is tray rows [blocks[q], blocks[q+1]) and rank r's local row j is tray row
+// (blocks[r] + j) mod rows, so the partials are rotated differently on every
 // rank. Every remote write lands at the *receiver's* local row for the same
 // tray row (`row_on`, `local_row`), and every rank reads its own buffers in
 // its own order; sums are taken in rank order, so all ranks produce
@@ -37,14 +38,15 @@
 // barriers, 8.5 us each against the 3.8 us a poison exchange costs, so the
 // crossover sits near 200 rows (ONESHOT_MAX_ROWS), not at TensorRT-LLM's 128.
 //
-//   kern_peer_allreduce_f32(in f32 x[N*rows, hidden], out f32 y[same],
+//   kern_peer_allreduce_f32(in f32 x[rows, hidden], out f32 y[same],
 //                           inout u8 comm, in u64 comm_peers[N],
 //                           inout u8 flags, in u64 flag_peers[N],
 //                           inout u8 lamport, in u64 lamport_peers[N],
 //                           inout i32 state[8], out i32 err[1],
-//                           i32 rank, i32 rows, i32 hidden, i64 stage_bytes,
+//                           in i32 blocks[N + 1], i32 rank, i32 rows, i32 hidden, i64 stage_bytes,
 //                           i32 mode, i64 timeout_ns)
-//     N is the compile-time NRANKS (default 4, `-DNRANKS=`). `comm` holds
+//     N is the compile-time NRANKS (default 4, `-DNRANKS=`); `rows` is the
+//     tray's, blocks[N]. `comm` holds
 //     2 * N*rows_max*hidden f32 (partial copy, then the sum); `flags` holds
 //     N * 256 i32; `lamport` holds 3 stages of `stage_bytes` >= N*N*rows_max*
 //     hidden*4 bytes, filled with -0.0 by kern_peer_lamport_init once after
@@ -128,15 +130,14 @@ __device__ __forceinline__ float4 add4(float4 a, float4 b) {
 }
 
 // Rank `to`'s local row holding the tray row that is local row `j` on `from`.
-__device__ __forceinline__ int row_on(int j, int rows, int from, int to) {
-    const int blk = j / rows;
-    return ((blk + from - to + 2 * NRANKS) % NRANKS) * rows + (j - blk * rows);
+__device__ __forceinline__ int row_on(int j, const int* off, int from, int to) {
+    const int rows = off[NRANKS];
+    return ((j + off[from]) % rows - off[to] + rows) % rows;
 }
 
 // Rank `q`'s local row holding tray row `t`.
-__device__ __forceinline__ int local_row(int t, int rows, int q) {
-    const int rows_all = NRANKS * rows;
-    return (t - q * rows + rows_all) % rows_all;
+__device__ __forceinline__ int local_row(int t, const int* off, int q) {
+    return (t - off[q] + off[NRANKS]) % off[NRANKS];
 }
 
 // Timed spin: true if `ready` came up before `timeout_ns` passed.
@@ -183,10 +184,13 @@ __device__ __forceinline__ void publish(int* counter, int* slot, int value, long
 }
 
 __device__ __forceinline__ void oneshot(const float* x, float* y, uint8_t* lamport, const unsigned long long* lamport_peers,
-                                        int* state, int* err, int rank, int rows, int hidden, long long stage_bytes,
-                                        long long timeout_ns) {
+                                        int* state, int* err, const int* blocks, int rank, int rows, int hidden,
+                                        long long stage_bytes, long long timeout_ns) {
     const Index ix(hidden);
-    const int rows_all = NRANKS * rows;
+    int off[NRANKS + 1];
+#pragma unroll
+    for (int q = 0; q <= NRANKS; ++q) off[q] = blocks[q];
+    const int rows_all = rows;
     const int tot = rows_all * ix.per_row;
     const int flag = state[2];
     long long* clear_ptr = reinterpret_cast<long long*>(state + 4);
@@ -211,7 +215,7 @@ __device__ __forceinline__ void oneshot(const float* x, float* y, uint8_t* lampo
         if (is_neg_zero(v.z)) v.z = 0.f;
         if (is_neg_zero(v.w)) v.w = 0.f;
 #pragma unroll
-        for (int q = 0; q < NRANKS; ++q) slot[q][row_on(j, rows, rank, q) * ix.per_row + ix.in_token] = v;
+        for (int q = 0; q < NRANKS; ++q) slot[q][row_on(j, off, rank, q) * ix.per_row + ix.in_token] = v;
     }
     // Poison the stage two behind for its next use.
     const float4 poison = neg_zero4();
@@ -274,10 +278,13 @@ struct Barrier {
 };
 
 __device__ __forceinline__ void twoshot(const float* x, float* y, uint8_t* comm, const unsigned long long* comm_peers,
-                                        int* flags, const unsigned long long* flag_peers, int* state, int* err, int rank,
-                                        int rows, int hidden, long long timeout_ns) {
+                                        int* flags, const unsigned long long* flag_peers, int* state, int* err, const int* blocks,
+                                        int rank, int rows, int hidden, long long timeout_ns) {
     const Index ix(hidden);
-    const int rows_all = NRANKS * rows;
+    int off[NRANKS + 1];
+#pragma unroll
+    for (int q = 0; q <= NRANKS; ++q) off[q] = blocks[q];
+    const int rows_all = rows;
     const int tot = rows_all * ix.per_row;
     float4* bufs[NRANKS];
 #pragma unroll
@@ -290,27 +297,27 @@ __device__ __forceinline__ void twoshot(const float* x, float* y, uint8_t* comm,
     // whole peer grid, so a row must be handled by the same cluster on every
     // rank: clusters are dealt tray rows, and the rotation only moves the
     // address (`local_row`). Own rows first means rank r's slice is tray
-    // rows [r*rows, (r+1)*rows).
+    // rows [blocks[r], blocks[r+1]).
     for (int t = ix.token; t < rows_all; t += ix.token_stride) {
-        const int idx = local_row(t, rows, rank) * ix.per_row + ix.in_token;
+        const int idx = local_row(t, off, rank) * ix.per_row + ix.in_token;
         local[idx] = reinterpret_cast<const float4*>(x)[idx];
     }
     barrier.sync(err, timeout_ns);
-    const int first = rank * rows;
-    for (int t = first + ((ix.token - first) % ix.token_stride + ix.token_stride) % ix.token_stride; t < first + rows;
+    const int first = off[rank], last = off[rank + 1];
+    for (int t = first + ((ix.token - first) % ix.token_stride + ix.token_stride) % ix.token_stride; t < last;
          t += ix.token_stride) {
         float4 vals[NRANKS];
 #pragma unroll
-        for (int q = 0; q < NRANKS; ++q) vals[q] = bufs[q][local_row(t, rows, q) * ix.per_row + ix.in_token];
+        for (int q = 0; q < NRANKS; ++q) vals[q] = bufs[q][local_row(t, off, q) * ix.per_row + ix.in_token];
         float4 acc = vals[0];
 #pragma unroll
         for (int q = 1; q < NRANKS; ++q) acc = add4(acc, vals[q]);
 #pragma unroll
-        for (int q = 0; q < NRANKS; ++q) bufs[q][tot + local_row(t, rows, q) * ix.per_row + ix.in_token] = acc;
+        for (int q = 0; q < NRANKS; ++q) bufs[q][tot + local_row(t, off, q) * ix.per_row + ix.in_token] = acc;
     }
     barrier.sync(err, timeout_ns);
     for (int t = ix.token; t < rows_all; t += ix.token_stride) {
-        const int idx = local_row(t, rows, rank) * ix.per_row + ix.in_token;
+        const int idx = local_row(t, off, rank) * ix.per_row + ix.in_token;
         reinterpret_cast<float4*>(y)[idx] = local[tot + idx];
     }
     publish(state, state + 1, barrier.phase, nullptr, 0);
@@ -319,13 +326,13 @@ __device__ __forceinline__ void twoshot(const float* x, float* y, uint8_t* comm,
 extern "C" __global__ void __launch_bounds__(1024)
 kern_peer_allreduce_f32(const float* x, float* y, uint8_t* comm, const unsigned long long* comm_peers, int* flags,
                         const unsigned long long* flag_peers, uint8_t* lamport, const unsigned long long* lamport_peers,
-                        int* state, int* err, int rank, int rows, int hidden, long long stage_bytes, int mode,
-                        long long timeout_ns) {
-    const bool one = mode == 1 || (mode == 0 && NRANKS * rows <= ONESHOT_MAX_ROWS);
+                        int* state, int* err, const int* blocks, int rank, int rows, int hidden, long long stage_bytes,
+                        int mode, long long timeout_ns) {
+    const bool one = mode == 1 || (mode == 0 && rows <= ONESHOT_MAX_ROWS);
     if (one) {
-        oneshot(x, y, lamport, lamport_peers, state, err, rank, rows, hidden, stage_bytes, timeout_ns);
+        oneshot(x, y, lamport, lamport_peers, state, err, blocks, rank, rows, hidden, stage_bytes, timeout_ns);
     } else {
-        twoshot(x, y, comm, comm_peers, flags, flag_peers, state, err, rank, rows, hidden, timeout_ns);
+        twoshot(x, y, comm, comm_peers, flags, flag_peers, state, err, blocks, rank, rows, hidden, timeout_ns);
     }
 }
 

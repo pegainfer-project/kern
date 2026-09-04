@@ -350,7 +350,7 @@ fn execute(o: Opts) -> Result<()> {
         }
     }
 
-    let env = caller.protocol.env(1, rows, 1);
+    let env = caller.protocol.env(1, rows, rows);
     if !o.eager {
         let t = Instant::now();
         caller.rt.capture(&step.name, &env)?;

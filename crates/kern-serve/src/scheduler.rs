@@ -85,8 +85,12 @@ use crate::logline;
 use crate::tray::{Cell, Rising, Row, Sleeping, Snapshot, Tray};
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
-/// fits and each bucket owns one captured graph.
-const BUCKETS: [usize; 13] = [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256];
+/// fits and each bucket owns one captured graph. The steps past 256 are
+/// a tray's: a full run and a row or two on each other rank, padded by
+/// a few rows rather than a block (cutting the run instead costs a whole
+/// step whenever a prompt's remainder spills over).
+const BUCKETS: [usize; 23] =
+    [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 264, 272, 288, 304, 320, 384, 512, 640, 768, 1024];
 
 fn bucket(n: usize) -> usize {
     BUCKETS.iter().copied().find(|&b| b >= n).unwrap_or(n)
@@ -732,6 +736,7 @@ impl KernScheduler {
         let room = self.tray.seqs_max() + 1 - n;
         let cap = self.plan.span.map_or(1, |mx| mx.min(self.policy.chunk).min(room));
         let runner = (cap > 1).then(|| self.running.iter().position(|s| !s.pending.is_empty())).flatten();
+        let max_seqs = self.policy.max_seqs;
         // What each sequence feeds: its next token `rows` times, or the
         // runner's next and the prompt tokens after it.
         let fed: Vec<Vec<u32>> = self
@@ -749,8 +754,7 @@ impl KernScheduler {
             .zip(&fed)
             .map(|(s, ids)| Cell { row: &s.row, ids: ids.iter().map(|&t| t as i64).collect(), pos: s.pos })
             .collect();
-        let cap = self.policy.max_seqs;
-        let mut st = self.tray.stage(&cells, rows as usize, |k| rows_per_rank(k, cap))?;
+        let mut st = self.tray.stage(&cells, rows as usize, |k| rows_per_rank(k, max_seqs))?;
         let f = st.forward(rows).expect("planned: every bucket up to max_seqs has a forward");
         st.run(&f, self.policy.eager)?;
         let out = st.emitted(&f)?;

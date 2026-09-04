@@ -177,6 +177,8 @@ pub enum Fill {
     CuSeqlens,
     /// Input: the first row of the call's span (`batch.span`), one word; 0 when the call has none.
     SpanAt,
+    /// Input: the tray batch's blocks — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the tray's rows.
+    Blocks,
     /// Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).
     Tokens,
     /// Output: how many of a sequence's `tokens` the caller takes, per sequence; without one it takes one.
@@ -194,6 +196,7 @@ impl fmt::Display for Fill {
             Fill::SeqLen => "seq_len",
             Fill::CuSeqlens => "cu_seqlens",
             Fill::SpanAt => "span_at",
+            Fill::Blocks => "blocks",
             Fill::Tokens => "tokens",
             Fill::Count => "count",
             Fill::Error => "error",

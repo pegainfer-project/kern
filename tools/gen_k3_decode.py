@@ -379,8 +379,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     if tp > 1:
         # The tray-local all-gather (peer_collective.cu): one op per row dtype,
         # both over the same symmetric buffer and epoch carry.
-        coll = ["inout buffer<u8>", "in buffer<u64>", "inout buffer<u32>", "out buffer<i32>",
-                "i32", "i32", "i32", "i32", "i32", "i64"]
+        coll = ["inout buffer<u8>", "in buffer<u64>", "inout buffer<u32>", "out buffer<i32>", "in buffer<i32>",
+                "i32", "i32", "i32", "i32", "i64"]
         for dt in ["f32", "bf16"]:
             ops[f"tp_allgather_{dt}"] = {
                 "params": [f"in buffer<{dt}>", f"out buffer<{dt}>"] + coll,
@@ -393,7 +393,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
         ops["tp_allreduce_f32"] = {
             "params": ["in buffer<f32>", "out buffer<f32>", "inout buffer<u8>", "in buffer<u64>",
                        "inout buffer<i32>", "in buffer<u64>", "inout buffer<u8>", "in buffer<u64>",
-                       "inout buffer<i32>", "out buffer<i32>", "i32", "i32", "i32", "i64", "i32", "i64"],
+                       "inout buffer<i32>", "out buffer<i32>", "in buffer<i32>", "i32", "i32", "i32", "i64", "i32",
+                       "i64"],
             "impl": {"launches": [launch("peer_allreduce", "kern_peer_allreduce_f32", defines={"NRANKS": tp},
                                          grid=[TP_AR_GRID, 1, 1], block=[H // 4 // 8, 1, 1], cluster=[8, 1, 1])]},
         }
@@ -457,6 +458,10 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
             "tp_ar_lamport_peers": {"dtype": "u64", "shape": [tp], "kind": "peer", "of": "tp_ar_lamport", "group": "tp"},
             "tp_ar_state": {"dtype": "i32", "shape": [8], "kind": "carry"},
             "tp_err": {"dtype": "i32", "shape": [1], "kind": "output", "fill": "error"},
+            # The tray's blocks: rank q's rows are tray rows [tp_blocks[q], tp_blocks[q+1]),
+            # the last entry the tray's `rows` (peer_collective.cu "own rows first").
+            "tp_blocks": {"dtype": "i32", "shape": [tp + 1], "kind": "input", "fill": "blocks",
+                          "domain": {"min": 0, "max": rows_max, "monotone": True}},
         })
     states = {
         "kv": {"bytes_per_token": n_mla * LATENT_ROW * 2},
@@ -555,14 +560,14 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
         if tp == 1:
             return own
         step(label, f"tp_allgather_{dt}", own, whole, b("tp_sym"), b("tp_peers"), b("tp_epochs"), b("tp_err"),
-             {"rank": "tp"}, i32(tp), B, i32(row_bytes), i32(ag_region), i64(TP_TIMEOUT_NS))
+             b("tp_blocks"), {"rank": "tp"}, i32(tp), i32(row_bytes), i32(ag_region), i64(TP_TIMEOUT_NS))
         return whole
 
     def reduced(label, partial, whole):
         """The tray group's sum of a head-sharded f32 [rows, H] partial."""
         step(label, "tp_allreduce_f32", partial, whole, b("tp_ar_comm"), b("tp_ar_comm_peers"), b("tp_ar_flags"),
              b("tp_ar_flag_peers"), b("tp_ar_lamport"), b("tp_ar_lamport_peers"), b("tp_ar_state"), b("tp_err"),
-             {"rank": "tp"}, B, i32(H), i64(ar_stage), i32(0), i64(TP_TIMEOUT_NS))
+             b("tp_blocks"), {"rank": "tp"}, RB, i32(H), i64(ar_stage), i32(0), i64(TP_TIMEOUT_NS))
         return whole
 
     def span_kda(L, w, line, KB, S):

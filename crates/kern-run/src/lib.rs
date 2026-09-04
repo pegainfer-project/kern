@@ -94,7 +94,7 @@ impl Caller {
     pub fn stage(&mut self, ids: &[i64]) -> Result<Env> {
         let c = ids.len();
         let pos = self.pos as usize;
-        let e = self.protocol.env(1, c as u64, 1);
+        let e = self.protocol.env(1, c as u64, c as u64);
         let p = self.protocol.clone();
         let mut put =
             |f: &kern_manifest::protocol::Filled, v: &[i64]| self.rt.write_input_at(&f.name, &f.encode(v), &e);

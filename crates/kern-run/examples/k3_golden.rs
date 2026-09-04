@@ -364,6 +364,11 @@ impl Batch {
             all.extend((0..b).map(|j| peer(q, j)));
         }
         rt.write_input_at("token_ids", &le_bytes_i64(&all), &e)?;
+        // The tray's blocks, equal here: rank (me + d)'s rows at block d.
+        if rt.manifest.buffers.contains_key("tp_blocks") {
+            let blocks: Vec<i32> = (0..=tp).map(|d| (d * n) as i32).collect();
+            rt.write_input("tp_blocks", &le_bytes_i32(&blocks))?;
+        }
         let mut slots = Vec::with_capacity(n);
         let mut lens = Vec::with_capacity(n);
         for (r, t) in toks.iter().enumerate() {

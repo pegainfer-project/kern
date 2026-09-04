@@ -11,12 +11,15 @@
 // is fine for a gather whose output is the data itself and was the ceiling
 // for the reduction.
 //
-// Row layout, "own rows first": a group of R ranks runs one batch of R*rows
-// rows; rank r's local row j is tray row (r*rows + j) mod R*rows, so a rank's
-// own rows are always rows 0..rows of every gathered buffer and the ops that
-// only work on their owner's rows (paged attention, the expert dispatch) need
-// no rank-dependent offset. Source q's rows land at local block
-// (q - r) mod R, placed in source order 0..R-1, so every rank produces
+// Row layout, "own rows first": a group of R ranks runs one batch of
+// `blocks[R]` tray rows, rank q's block being tray rows
+// [blocks[q], blocks[q+1]) — blocks need not be equal (one rank may carry a
+// prefill run, the others a row each). Rank r's local row j is tray row
+// (blocks[r] + j) mod blocks[R]: a rank's own rows are always rows 0..own of
+// every gathered buffer and the ops that only work on their owner's rows
+// (paged attention, the expert dispatch) need no rank-dependent offset.
+// Source q's rows land at local rows (blocks[q] - blocks[r]) mod blocks[R]
+// onwards, in source order around the group, so every rank produces
 // bit-identical results.
 //
 // Symmetric buffer: `sym` holds 2 * nranks regions of `region_packs`
@@ -27,11 +30,13 @@
 // every rank runs the same launch sequence with the same grid, so the
 // epochs agree. A stale slot holds an older epoch and never matches.
 //
-//   kern_peer_allgather(in u8 x[rows * row_bytes], out u8 y[nranks * rows * row_bytes],
+//   kern_peer_allgather(in u8 x[own * row_bytes], out u8 y[blocks[nranks] * row_bytes],
 //                       inout u8 sym, in u64 peers[nranks], inout u32 epochs[grid],
-//                       out i32 err[1], i32 rank, i32 nranks, i32 rows, i32 row_bytes,
+//                       in i32 blocks[nranks + 1], i32 rank, i32 nranks, i32 row_bytes,
 //                       i32 region_packs, i64 timeout_ns)
-//     own rows are copied to block 0, source q's to block (q - rank) mod nranks.
+//     own rows are copied to local rows 0.., source q's to local row
+//     (blocks[q] - blocks[rank]) mod blocks[nranks] onwards; a region holds
+//     one source's rows, so region_packs >= rows_max * row_bytes / 16.
 //     row_bytes a multiple of 8. block [256,1,1], grid [G,1,1] with G fixed
 //     per op (the epochs carry is per CTA), nranks <= 8; `err` is sticky:
 //     1 + the source rank a slot never arrived from within `timeout_ns`,
@@ -118,12 +123,14 @@ __device__ __forceinline__ void epoch_end(unsigned* epochs, int* err, unsigned e
 }
 
 extern "C" __global__ void kern_peer_allgather(const uint2* x, uint2* y, uint4* sym, const unsigned long long* peers,
-                                               unsigned* epochs, int* err, int rank, int nranks, int rows,
+                                               unsigned* epochs, int* err, const int* blocks, int rank, int nranks,
                                                int row_bytes, int region_packs, long long timeout_ns) {
     __shared__ unsigned s_e;
     __shared__ int s_fail;
     const unsigned e = epoch_begin(epochs, &s_e, &s_fail);
-    const int nown = rows * (row_bytes >> 3);
+    const int per = row_bytes >> 3;
+    const int total = blocks[nranks];
+    const int nown = (blocks[rank + 1] - blocks[rank]) * per;
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     const int stride = gridDim.x * blockDim.x;
     const int sub = (e & 1) * nranks;
@@ -135,20 +142,17 @@ extern "C" __global__ void kern_peer_allgather(const uint2* x, uint2* y, uint4* 
             st_ll(reinterpret_cast<uint4*>(peers[q]) + (long long)(sub + rank) * region_packs + p, d.x, d.y, e);
         }
     }
-    for (int p = tid; p < nown; p += stride) {
-        y[p] = x[p];
-        const uint4* slots[MAX_RANKS];
-        int nslots = 0;
-        for (int q = 0; q < nranks; ++q) {
-            if (q != rank) slots[nslots++] = sym + (long long)(sub + q) * region_packs + p;
-        }
-        uint2 d[MAX_RANKS];
-        const int missing = recv_ll(slots, nslots, e, timeout_ns, d);
-        if (missing) atomicMax(&s_fail, missing + (missing > rank ? 1 : 0));
-        int i = 0;
-        for (int q = 0; q < nranks; ++q) {
-            if (q == rank) continue;
-            y[(long long)((q - rank + nranks) % nranks) * nown + p] = d[i++];
+    for (int p = tid; p < nown; p += stride) y[p] = x[p];
+    for (int q = 0; q < nranks; ++q) {
+        if (q == rank) continue;
+        const int n_q = (blocks[q + 1] - blocks[q]) * per;
+        uint2* dst = y + (long long)((blocks[q] - blocks[rank] + total) % total) * per;
+        const uint4* region = sym + (long long)(sub + q) * region_packs;
+        for (int p = tid; p < n_q; p += stride) {
+            const uint4* slot = region + p;
+            uint2 d;
+            if (recv_ll(&slot, 1, e, timeout_ns, &d)) atomicMax(&s_fail, q + 1);
+            dst[p] = d;
         }
     }
     epoch_end(epochs, err, e, &s_fail);

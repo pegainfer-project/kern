@@ -221,8 +221,14 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 - **staging 按 fill 的轴**：fill 或 line 表跨过的第三个 var 就是 tray 轴（k3 的
   `rows`）；tray 轴上的 token fill / line 表 / tokens 输出跨组（本卡的行先、再按组序轮到
   其它成员的块，collective 假定的布局），行轴 / 组轴上的 slot / seq_len / 页表是本卡自己
-  的行；qwen 的契约（没有 tray 轴）是 t=1 的特例，同一条代码。bucket 对整个 tray 取一次（行最多的 rank 决定），每卡各自 pad
-  到 b，pad 页每卡一页。`Staged` 借住 `&mut Tray` 直到输出读完，中间不能 lease / fork /
+  的行；qwen 的契约（没有 tray 轴）是 t=1 的特例，同一条代码。**块不等长**（2026-09-04）：
+  每个 rank 的块是它自己的行数（至少 1 行 pad），组内块长之和垫到阶梯就是 tray 的行数
+  （`rows` var；多组时各组垫到同一个数，垫在最小的块上；t=1 退化成每卡等块），块的前缀和写进
+  `blocks` fill，collective 核按它换算行号（peer_collective.cu）；own 轴的 buffer 仍按最大块的
+  bucket b 铺、pad 页每卡一页。一条序列 256 行的 run 于是让 tray 是 256 + 3 行而不是 4 × 256——
+  之前 768 行 pad 走完整套核和每层 allreduce，是 TP4 span 步 142 对 t=1 87 ms 的全部差额。
+  256 之上的阶梯加了 264 / 272 / 288 / 304 / 320，一条 run 加几张卡的一两行只垫几行（曾试过把 run 缩到
+  阶梯值上一行不垫：6 个 token 的 prompt 被切成两步、1k 的 4 步变 5 步，省几行 pad 换整整一步，撤了）。`Staged` 借住 `&mut Tray` 直到输出读完，中间不能 lease / fork /
   再 stage。manifest 有 `error` fill 的输出时每步读一次，非零即该步失败。
 - **K3 没有 prefill program，prompt 走 span**：`prefill` 可选；没有时 prompt 在 prefix
   命中之外的部分走 decode 步，该行的输出在最后一个 prompt token 进去之前丢掉。manifest 有
@@ -286,33 +292,40 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   13.32；另一形状 13.63 对 13.90），是近平局，不是串扰。串扰（第一版没垫 lead pad）的样子是
   8 条 8 种、互不成句的答案。见 lessons。
 
-**K3 EP4×TP4（t=4，2026-09-04，tray07 4×GB300，二进制与 t=1 同一份，脚本与逐请求数据在
-`~/bench_results/2026-09-04-k5-v4-port-tp4/`）**：
+**K3 EP4×TP4（t=4，2026-09-04，tray07 4×GB300，二进制与 t=1 同一份；等块版的脚本与逐请求数据在
+`~/bench_results/2026-09-04-k5-v4-port-tp4/`，块不等长版在 `~/bench_results/2026-09-04-tp4-blocks/`）**：
 
 - **4 层逐 token 对 `k3_golden`**（`k3-4l-ep4-tp4.json`，`--max-seqs 6 --chunk 8`，前 i 个 token 作 prompt、取 1 个，
   按 k3_golden 的近平局规则判）：EP4×TP4 35/40 + 4 excused + 1 近平局（step 13，3.0 ulp，与 `k3_golden` TP4
-  同一个 token）；EP4 t=1 37/40 + 3，与 `k3_golden` 同。
-- **93 层 E3 场景在 EP4×TP4 上**（`k3-93l-tp4-span.json`，`--max-seqs 16 --chunk 256`；右列是同日同二进制的 EP4 t=1）：
+  同一个 token）；EP4 t=1 37/40 + 3，与 `k3_golden` 同。块不等长之后两者不变（tray 4 rank 等块时 `blocks` 表
+  退化成 q × b，走的是新核）。
+- **93 层 E3 场景在 EP4×TP4 上**（`k3-93l-tp4-span.json`，`--max-seqs 16 --chunk 256`；中列是块不等长之前同日的
+  等块版，右列是同日同二进制的 EP4 t=1）：
 
-| 场景 | EP4×TP4 | EP4 t=1（同日） |
-|---|---|---|
-| conc1 短 prompt 64 token | 逐字同（sha 与 t=1、K5 线同），ITL **22.7 ms** | 31.2 ms |
-| conc1 2k prompt TTFT | 1.26 s | 0.80 s |
-| conc1 冷 12.9k prompt TTFT | 7.39 s（51 个 span 步 ≈ **145 ms/步**） | 4.49 s（≈ 88 ms/步） |
-| conc8 × 1k prompt TTFT | 0.89–5.18 s | 0.59–3.17 s |
-| conc8 稳态 decode ITL p50 | **29.3 ms** | 36.5 ms |
-| conc7 decode + 3 s 后冷 12.9k 到达 | 12.9k 的 TTFT 9.31 s；其余 7 条 ITL p50 28.7 / mean 52–64 / p90 146 ms | 4.66 s；36.6 / 47–52 / 88 ms |
-| 多轮 prefix 命中第二轮 TTFT（接在 E 之后，命中的是 D 里 conc8 步算的快照） | 722 ms | 467 ms |
+| 场景 | EP4×TP4（块不等长） | EP4×TP4（等块，之前） | EP4 t=1（同日） |
+|---|---|---|---|
+| conc1 短 prompt 64 token | 逐字同（sha 与 t=1、K5 线同），ITL **22.7 ms** | 同 | 31.2 ms |
+| conc1 2k prompt TTFT | 0.86 s | 1.26 s | 0.80 s |
+| conc1 冷 12.9k prompt TTFT | **4.59 s**（51 个 span 步 ≈ 90 ms/步） | 7.39 s（≈ 145 ms/步） | 4.47 s（≈ 88 ms/步） |
+| conc8 × 1k prompt TTFT | 0.64–3.32 s | 0.89–5.18 s | 0.67–3.29 s |
+| conc8 稳态 decode ITL p50 | **28.5 ms** | 29.3 ms | 36.3 ms |
+| conc7 decode + 3 s 后冷 12.9k 到达 | 12.9k 的 TTFT 4.87 s；其余 7 条 ITL p50 28.8 / mean 42–48 / p90 92–93 ms | 9.31 s；28.7 / 52–64 / 146 ms | 4.64 s；36.4 / 47–52 / 88–89 ms |
+| 多轮 prefix 命中第二轮 TTFT（接在 E 之后，命中的是 D 里 conc8 步算的快照） | 487 ms | 722 ms | 462 ms |
 
-  - decode 步 TP4 比 t=1 快 8–9 ms（E5 的账），**span 步反过来慢 55 ms**（142 对 87，nsys 拆解在
+  - decode 步 TP4 比 t=1 快 8–9 ms（E5 的账）。**span 步曾反过来慢 55 ms**（142 对 87，nsys 拆解在
     `~/bench_results/2026-09-04-tp4-prefill/`）：全部是 pad 行的账——tray batch 每 rank 行数相同，一条序列 256 行的
     run 让 tray 变成 1024 行、768 行是 pad，它们被 `kda_core` / `conv_silu` 当 decode 行算（+25 ms，t=1 的 span 行
     是跳过的）、进每层的 allreduce（+19）、land / rms（+8）、allgather（+4）；真实计算 TP4 66 ms 对 t=1 81（GEMM 切列
-    快 7）。去掉 pad 也只是持平（MoE 扫描、MLA、KDA 递推都不按 rank 分摊）；要更快得把 run 的 token 切到各 rank
-    （K4/K5 重定义）。`k3_golden` 的 tray batch 不接 span，TP4 的 span 路径没有 oracle 门禁。
+    快 7）。**块不等长之后（上表左列）span 步 ≈ 90 ms，与 t=1 持平**：conc7 里并发者的 ITL p90 就是 span 步
+    （93 对 t=1 的 88），12.9k 冷 TTFT 4.59 对 4.47 s。持平而不是更快，因为 MoE 扫描、MLA、KDA 递推都不按 rank
+    分摊；要更快得把 run 的 token 切到各 rank（K4/K5 重定义）。conc8 里 TP4 的 ITL p90 有四条是 84–88 ms：
+    它们先出首 token，之后跟着别人的 span 步走（一步一个 span，四卡一个 tray），等块版 TTFT 慢到大家几乎一起
+    出首 token，反而没这一段；总时长 8.9 → 6.6 s。`k3_golden` 的 tray batch 不接 span，TP4 的 span 路径没有
+    oracle 门禁。
   - 输出：t=1 的 conc1 sha（短 / 2k / 12k 冷 / 12k 迟到）与 K5 线 2026-09-03 与 BLOCK_M 96 复测全同
-    （ec2071a1bd49 / eed14fa316ea / 607802289f15 / ad2eea8cd2f0）；TP4 短 prompt 同，2k / 12k 在第一个近平局后
-    分道（TP 归约是另一条数值路径）。并发的 1k 条目每次跑的 sha 都不同（到达顺序决定 bucket 组合），K5 线自己
+    （ec2071a1bd49 / eed14fa316ea / 607802289f15 / ad2eea8cd2f0），块不等长之后 t=1 全部不变；TP4 短 prompt 同，
+    2k / 12k 在第一个近平局后分道（TP 归约是另一条数值路径；块不等长之后 TP4 的 12k 冷 sha 反而与 t=1 同，
+    2k 仍不同——近平局两边落哪边）。并发的 1k 条目每次跑的 sha 都不同（到达顺序决定 bucket 组合），K5 线自己
     两次跑也如此，不作门。无 panic、无 `tp_err`。
 
 **没测**（按 CLAUDE.md 的门禁排队）：

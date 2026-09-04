@@ -1436,7 +1436,7 @@ fn execute(o: Opts) -> Result<i32> {
         Rows::Const(r) => r,
         Rows::Var => 1,
     };
-    let env_of = |f: &Forward| pa.env(1, rows_of(f), 1);
+    let env_of = |f: &Forward| pa.env(1, rows_of(f), rows_of(f));
     let out = Out { json: o.json };
     let mut sum = Summary { a: o.a.display().to_string(), b: o.b.display().to_string(), ..Default::default() };
     out.show(vec![row("kern test", format!("A {} → B {}", sum.a, sum.b), None)]);

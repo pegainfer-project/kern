@@ -201,19 +201,26 @@ pub struct Cell<'a> {
 struct Layout {
     /// `own[q]` = indices of the cells rank `q` owns, in block order.
     own: Vec<Vec<usize>>,
-    /// Rows per rank after padding.
+    /// Rows per rank for the buffers over this rank's own rows: the
+    /// bucket of the largest block.
     b: usize,
     /// Tokens per row.
     per: usize,
     /// Rows each cell fills: its run's length, else 1.
     len: Vec<usize>,
-    /// Padding rows leading rank `q`'s block in place of the run.
+    /// Padding rows leading rank `q`'s block in place of the run: a group
+    /// without the run holds its stand-in once, in its first member's block.
     lead: Vec<usize>,
+    /// Rows in rank `q`'s block of the tray batch: `lead`, its cells'
+    /// rows, then padding up to the tray's rows.
+    block: Vec<usize>,
+    /// Rows of the tray batch, the same in every group.
+    tray: usize,
 }
 
 impl Layout {
     /// `cells[i]` = (owner, rows) of cell `i`; at most one cell has more
-    /// than one row.
+    /// than one row. `bucket` pads a row count up to its graph's.
     fn new(cells: &[(usize, usize)], per: usize, groups: &Groups, bucket: impl Fn(usize) -> usize) -> Layout {
         let mut own = vec![Vec::new(); groups.n];
         for (i, &(q, _)) in cells.iter().enumerate() {
@@ -228,13 +235,27 @@ impl Layout {
         let run = cells.iter().find(|&&(_, l)| l > 1);
         let lead: Vec<usize> = (0..groups.n)
             .map(|q| match run {
-                Some(&(owner, l)) if !groups.blocks(q).any(|r| r == owner) => l,
+                Some(&(owner, l)) if groups.members(q).start == q && !groups.members(q).contains(&owner) => l,
                 _ => 0,
             })
             .collect();
-        let most = (0..groups.n).map(|q| lead[q] + own[q].iter().map(|&i| len[i]).sum::<usize>()).max().unwrap_or(0);
-        // A bucket short of the rows would drop rows on the floor: never.
-        Layout { own, b: bucket(most).max(most).max(1), per, len, lead }
+        // Every rank holds at least its pad row; a group's blocks add up
+        // to the tray's rows, the largest group's bucket, the padding on
+        // the smallest blocks first. A bucket short of the rows would
+        // drop rows on the floor: never.
+        let mut block: Vec<usize> =
+            (0..groups.n).map(|q| (lead[q] + own[q].iter().map(|&i| len[i]).sum::<usize>()).max(1)).collect();
+        let total = |block: &[usize], q: usize| groups.members(q).map(|r| block[r]).sum::<usize>();
+        let most = (0..groups.n).step_by(groups.t).map(|g| total(&block, g)).max().unwrap_or(1);
+        let tray = bucket(most).max(most);
+        for g in (0..groups.n).step_by(groups.t) {
+            for _ in total(&block, g)..tray {
+                let q = groups.members(g).min_by_key(|&r| (block[r], r)).expect("a group has members");
+                block[q] += 1;
+            }
+        }
+        let widest = block.iter().copied().max().unwrap_or(1);
+        Layout { own, b: bucket(widest).max(widest), per, len, lead, block, tray }
     }
 
     /// The run's length, when a cell feeds one.
@@ -242,12 +263,45 @@ impl Layout {
         self.len.iter().copied().find(|&l| l > 1)
     }
 
-    /// Rank `q`'s rows: the run's stand-in padding when its group has no
+    /// Rank `q`'s block: the run's stand-in padding when its group has no
     /// cell of the run, `(cell, row within the cell)` for its own cells'
     /// rows, then `None` for each padding row.
-    fn rows(&self, q: usize) -> impl Iterator<Item = Option<(usize, usize)>> + '_ {
+    fn block_rows(&self, q: usize) -> impl Iterator<Item = Option<(usize, usize)>> + '_ {
         let mine = self.own[q].iter().flat_map(|&i| (0..self.len[i]).map(move |j| (i, j)));
-        std::iter::repeat_n(None, self.lead[q]).chain(mine.map(Some)).chain(std::iter::repeat(None)).take(self.b)
+        std::iter::repeat_n(None, self.lead[q]).chain(mine.map(Some)).chain(std::iter::repeat(None)).take(self.block[q])
+    }
+
+    /// Rank `q`'s rows for the buffers over its own rows: its block, then
+    /// padding up to `b`.
+    fn rows(&self, q: usize) -> impl Iterator<Item = Option<(usize, usize)>> + '_ {
+        self.block_rows(q).chain(std::iter::repeat(None)).take(self.b)
+    }
+
+    /// The tray batch as rank `q` lays it out: its own block first, then
+    /// the other members' around the group.
+    fn tray_rows(&self, groups: &Groups, q: usize) -> impl Iterator<Item = Option<(usize, usize)>> + '_ {
+        groups.blocks(q).flat_map(move |r| self.block_rows(r))
+    }
+
+    /// Where rank `r`'s block starts in rank `q`'s layout of the tray;
+    /// `None` when `r` is not in `q`'s group.
+    fn offset_in(&self, groups: &Groups, q: usize, r: usize) -> Option<usize> {
+        let d = groups.blocks(q).position(|x| x == r)?;
+        Some(groups.blocks(q).take(d).map(|x| self.block[x]).sum())
+    }
+
+    /// The tray's blocks in member order for rank `q`'s group, as
+    /// exclusive prefix sums of rows: the `blocks` fill.
+    fn offsets(&self, groups: &Groups, q: usize) -> Vec<usize> {
+        groups
+            .members(q)
+            .scan(0, |acc, r| {
+                let o = *acc;
+                *acc += self.block[r];
+                Some(o)
+            })
+            .chain(std::iter::once(self.tray))
+            .collect()
     }
 
     /// The row a cell's token is read from on its owner: its last.
@@ -303,6 +357,14 @@ impl Tray {
                     bail!("topology group `{g}` has {size} members; this process drives {n} GPUs and spans it with all of them");
                 }
             }
+        }
+        // A tray of several members lays its blocks out through the
+        // `blocks` fill (peer_collective.cu "own rows first"); alone, the
+        // block is the tray.
+        if t > 1 && !protocol.fills.iter().any(|f| f.fill == Fill::Blocks) {
+            bail!(
+                "the manifest's `tp` group has {t} members but no input has fill `blocks` (the tray's rows per member)"
+            );
         }
         let groups = Groups { n, t };
         let topology = |q: usize| -> Topology {
@@ -579,11 +641,16 @@ impl Tray {
         let placed: Vec<(usize, usize)> =
             cells.iter().map(|c| (c.row.owner.0, if run.is_some() { c.ids.len() } else { 1 })).collect();
         let layout = Layout::new(&placed, per, &self.groups, bucket);
-        let (b, t) = (layout.b, self.groups.t);
-        if b > self.seqs_max() {
-            bail!("{b} rows per rank, the manifest allows {}", self.seqs_max());
+        let b = layout.b;
+        if b > self.protocol.groups.max as usize {
+            bail!("{b} rows per rank, the manifest allows {}", self.protocol.groups.max);
         }
-        let mut env = self.protocol.env(b as u64, per as u64, t as u64);
+        if let Some(t) = &self.protocol.tray {
+            if (layout.tray * per) as u64 > t.max {
+                bail!("{} rows in the tray batch, the manifest allows {}", layout.tray * per, t.max);
+            }
+        }
+        let mut env = self.protocol.env(b as u64, per as u64, (layout.tray * per) as u64);
         if let (Some(s), Some(c)) = (&self.protocol.span, run) {
             env.insert(s.var.clone(), c as u64);
         }
@@ -596,38 +663,32 @@ impl Tray {
     /// Rank `q`'s inputs for a step: every fill, the page tables and the
     /// line tables (see the module doc for which span the group).
     fn stage_rank(&mut self, q: usize, cells: &[Cell<'_>], l: &Layout, env: &BTreeMap<String, u64>) -> Result<()> {
-        let (per, b, me) = (l.per, l.b, self.groups.member(q));
+        let (per, b, me, groups) = (l.per, l.b, self.groups.member(q), self.groups);
         let p = &self.protocol;
         let pad = &self.pad[q];
         // Every rank's slot for a row is the lease at its own member index.
         let lease_on = |i: usize| -> &Lease { &cells[i].row.parts[me] };
-        // The ranks whose rows a buffer over `axis` holds, in block order.
-        let blocks = |axis: Axis| -> Vec<usize> {
-            if axis == Axis::Tray {
-                self.groups.blocks(q).collect()
-            } else {
-                vec![q]
-            }
-        };
         // A row is a cell's `per` tokens (the `j`-th `per` of a run) at
         // the cell's position plus `j`.
         let ids_of = |c: Option<(usize, usize)>| -> Vec<i64> {
             c.map_or(vec![0; per], |(i, j)| cells[i].ids[j * per..(j + 1) * per].to_vec())
         };
         let pos_of = |c: Option<(usize, usize)>| -> usize { c.map_or(0, |(i, j)| cells[i].pos + j) };
-        // The run's first row on this rank: block `d` of its owner, whose
-        // cells it heads; the leading padding of the own block when no
-        // block here has it.
+        // The run's first row on this rank: where its owner's block starts,
+        // whose cells it heads; where the group's stand-in padding starts
+        // when no block here has it.
         let span_at = (0..cells.len())
             .find(|&i| l.len[i] > 1)
-            .and_then(|i| self.groups.blocks(q).position(|r| r == cells[i].row.owner.0))
-            .map_or(0, |d| (d * b) as i64);
+            .and_then(|i| {
+                l.offset_in(&groups, q, cells[i].row.owner.0)
+                    .or_else(|| l.offset_in(&groups, q, groups.members(q).start))
+            })
+            .map_or(0, |o| (o * per) as i64);
         let mut writes: Vec<(&Filled, Vec<i64>)> = Vec::new();
         for f in &p.fills {
             let v: Vec<i64> = match (f.fill, f.axis) {
-                (Fill::Token, Axis::Rows | Axis::Tray) => {
-                    blocks(f.axis).iter().flat_map(|&r| l.rows(r)).flat_map(ids_of).collect()
-                }
+                (Fill::Token, Axis::Rows) => l.rows(q).flat_map(ids_of).collect(),
+                (Fill::Token, Axis::Tray) => l.tray_rows(&groups, q).flat_map(ids_of).collect(),
                 // Each sequence's first token, the anchor a drafting program
                 // splices its own rows from.
                 (Fill::Token, Axis::Groups) => l.rows(q).map(|c| ids_of(c)[0]).collect(),
@@ -642,6 +703,7 @@ impl Tray {
                 (Fill::SeqLen, _) => l.rows(q).map(|c| (pos_of(c) + per) as i64).collect(),
                 (Fill::CuSeqlens, _) => (0..=b as i64).map(|i| i * per as i64).collect(),
                 (Fill::SpanAt, _) => vec![span_at],
+                (Fill::Blocks, _) => l.offsets(&groups, q).into_iter().map(|o| (o * per) as i64).collect(),
                 (Fill::Tokens | Fill::Count | Fill::Error, _) => continue,
                 (Fill::Token, Axis::Fixed(_)) => unreachable!("the protocol checks fill shapes"),
             };
@@ -661,18 +723,16 @@ impl Tray {
         // and the pad's past the batch.
         let mut lines: Vec<(&str, Vec<i32>)> = Vec::with_capacity(p.line_tables.len());
         for t in &p.line_tables {
-            let cols_max = match t.axis {
-                Axis::Tray => p.tray.as_ref().map_or(0, |b| b.max) as usize,
-                _ => p.groups.max as usize,
+            let (cols_max, cols): (usize, Vec<Option<(usize, usize)>>) = match t.axis {
+                Axis::Tray => (p.tray.as_ref().map_or(0, |b| b.max) as usize, l.tray_rows(&groups, q).collect()),
+                _ => (p.groups.max as usize, l.rows(q).collect()),
             };
-            let blocks = blocks(t.axis);
             let (name, w) = (t.name.as_str(), t.width);
             let mut table = vec![0i32; t.lines * cols_max * w];
             for r in 0..t.lines {
                 let fill = pad.seq_line(name, r)?;
                 for c in 0..cols_max {
-                    let (d, j) = (c / b, c % b);
-                    let cell = blocks.get(d).and_then(|&rank| l.rows(rank).nth(j).flatten());
+                    let cell = cols.get(c).copied().flatten();
                     table[(r * cols_max + c) * w] = match cell {
                         Some((i, _)) => lease_on(i).seq_line(name, r)?,
                         None => fill,
@@ -805,7 +865,8 @@ mod tests {
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
                 "kda.line_index": {"kind": "input", "dtype": "i32", "shape": [3, "rows"], "domain": {"index_into": "kda", "stride": 8}},
                 "next_token": {"kind": "output", "dtype": "i64", "shape": ["rows"], "fill": "tokens"},
-                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"}
+                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"},
+                "tp_blocks": {"kind": "input", "dtype": "i32", "shape": [5], "fill": "blocks"}
             },
             "modules": {}, "ops": {"step": {"params": ["in buffer<i64>", "out buffer<i64>"], "impl": {"launches": []}}},
             "programs": {"decode": {"batch": {"groups": 8, "rows": 1}, "calls": [{"op": "step", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]}}
@@ -836,15 +897,47 @@ mod tests {
         let bucket = |k: usize| [1usize, 2, 4, 8].into_iter().find(|&b| b >= k).unwrap_or(k);
         let one = |q: usize| (q, 1);
         let l = Layout::new(&[one(0), one(0), one(1), one(3), one(0)], 1, &Groups { n: 4, t: 1 }, bucket);
-        assert_eq!((l.b, l.per, l.len.len(), l.run()), (4, 1, 5, None));
+        assert_eq!((l.b, l.per, l.len.len(), l.run(), l.tray), (4, 1, 5, None, 4));
         assert_eq!(l.own, vec![vec![0, 1, 4], vec![2], vec![], vec![3]]);
+        // Alone, a rank's block is the tray: every rank pads to the same rows.
+        assert_eq!(l.block, vec![4, 4, 4, 4]);
         assert_eq!(l.rows(0).collect::<Vec<_>>(), [Some((0, 0)), Some((1, 0)), Some((4, 0)), None]);
         assert_eq!(l.rows(2).collect::<Vec<_>>(), [None, None, None, None]);
         assert_eq!(l.last_rows(0).collect::<Vec<_>>(), [(0, 0), (1, 1), (2, 4)]);
+        assert_eq!(l.offsets(&Groups { n: 4, t: 1 }, 2), vec![0, 4]);
         // No cells still stage one padding row per rank.
         assert_eq!(Layout::new(&[], 1, &Groups { n: 2, t: 1 }, bucket).b, 1);
         // A bucket short of the rows (a cap meant for sequences) never cuts a run.
         assert_eq!(Layout::new(&[one(0), (0, 6)], 1, &Groups { n: 1, t: 1 }, |k| bucket(k).min(4)).b, 7);
+    }
+
+    #[test]
+    fn a_tray_groups_blocks_add_up_to_its_rows() {
+        let bucket = |k: usize| [1usize, 2, 4, 8, 16, 24, 32].into_iter().find(|&b| b >= k).unwrap_or(k);
+        let g = Groups { n: 4, t: 4 };
+        // One rank carries a run of 13, the others a row each: 16 tray
+        // rows, no padding, the run's owner's block the widest.
+        let l = Layout::new(&[(1, 13), (0, 1), (2, 1), (3, 1)], 1, &g, bucket);
+        assert_eq!((l.block.clone(), l.tray, l.b, l.lead.clone()), (vec![1, 13, 1, 1], 16, 16, vec![0; 4]));
+        assert_eq!(l.offsets(&g, 2), vec![0, 1, 14, 15, 16]);
+        // Rank 3 lays the tray out as its own block, then 0, 1, 2: the run
+        // starts after rank 3's and rank 0's rows.
+        assert_eq!((l.offset_in(&g, 3, 1), l.offset_in(&g, 1, 1), l.offset_in(&g, 0, 1)), (Some(2), Some(0), Some(1)));
+        assert_eq!(l.tray_rows(&g, 3).count(), 16);
+        assert_eq!(l.tray_rows(&g, 3).take(3).collect::<Vec<_>>(), [Some((3, 0)), Some((1, 0)), Some((0, 0))]);
+        // Padding to the bucket lands on the smallest blocks first, and a
+        // rank without cells still holds a row.
+        let l = Layout::new(&[(0, 5), (1, 1), (1, 1)], 1, &g, bucket);
+        assert_eq!((l.block.clone(), l.tray, l.b), (vec![5, 4, 4, 3], 16, 8));
+        assert_eq!(l.rows(1).collect::<Vec<_>>(), [Some((1, 0)), Some((2, 0)), None, None, None, None, None, None]);
+        // Two groups pad to the same tray rows; a foreign group leads with the run.
+        let l = Layout::new(&[(0, 3), (5, 1)], 1, &Groups { n: 8, t: 4 }, bucket);
+        assert_eq!((l.block.clone(), l.tray), (vec![3, 2, 2, 1, 3, 2, 2, 1], 8));
+        assert_eq!(l.lead, vec![0, 0, 0, 0, 3, 0, 0, 0]);
+        assert_eq!(
+            (l.offset_in(&Groups { n: 8, t: 4 }, 5, 0), l.offsets(&Groups { n: 8, t: 4 }, 5)),
+            (None, vec![0, 3, 5, 7, 8])
+        );
     }
 
     #[test]
@@ -862,8 +955,14 @@ mod tests {
         // Peers of the owner's tray group carry the run in the owner's
         // block already: no lead there, but a foreign group leads.
         let l = Layout::new(&[(1, 3), one(2)], 1, &Groups { n: 4, t: 2 }, bucket);
-        assert_eq!((l.b, l.lead.clone()), (4, vec![0, 0, 3, 3]));
+        // The stand-in sits in the foreign group's first block; both
+        // groups pad to the tray's bucket, 8, on their smallest blocks.
+        assert_eq!((l.b, l.lead.clone(), l.block.clone(), l.tray), (4, vec![0, 0, 3, 0], vec![4, 4, 4, 4], 8));
         assert_eq!(l.rows(0).collect::<Vec<_>>(), [None, None, None, None]);
         assert_eq!(l.rows(2).collect::<Vec<_>>(), [None, None, None, Some((1, 0))]);
+        assert_eq!(
+            (l.offset_in(&Groups { n: 4, t: 2 }, 3, 2), l.offset_in(&Groups { n: 4, t: 2 }, 3, 1)),
+            (Some(4), None)
+        );
     }
 }

@@ -676,6 +676,11 @@
           "type": "string"
         },
         {
+          "const": "blocks",
+          "description": "Input: the tray batch's blocks — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the tray's rows.",
+          "type": "string"
+        },
+        {
           "const": "tokens",
           "description": "Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).",
           "type": "string"
