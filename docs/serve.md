@@ -304,9 +304,12 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 | conc7 decode + 3 s 后冷 12.9k 到达 | 12.9k 的 TTFT 9.31 s；其余 7 条 ITL p50 28.7 / mean 52–64 / p90 146 ms | 4.66 s；36.6 / 47–52 / 88 ms |
 | 多轮 prefix 命中第二轮 TTFT（接在 E 之后，命中的是 D 里 conc8 步算的快照） | 722 ms | 467 ms |
 
-  - decode 步 TP4 比 t=1 快 8–9 ms（E5 的账），**span 步反过来慢 57 ms**（145 对 88）：并发者 p50 好、mean / p90
-    差；12.9k 的 TTFT 7.4 对 4.5 s。TP4 的 span 步没拆（run 的 MLA attention 行归 owner 一张卡、其余三卡空等，
-    加每层两次 256 行的 collective，是首先要量的两项）——归 K5 D2 / E5 的下一步，不是门禁。
+  - decode 步 TP4 比 t=1 快 8–9 ms（E5 的账），**span 步反过来慢 55 ms**（142 对 87，nsys 拆解在
+    `~/bench_results/2026-09-04-tp4-prefill/`）：全部是 pad 行的账——tray batch 每 rank 行数相同，一条序列 256 行的
+    run 让 tray 变成 1024 行、768 行是 pad，它们被 `kda_core` / `conv_silu` 当 decode 行算（+25 ms，t=1 的 span 行
+    是跳过的）、进每层的 allreduce（+19）、land / rms（+8）、allgather（+4）；真实计算 TP4 66 ms 对 t=1 81（GEMM 切列
+    快 7）。去掉 pad 也只是持平（MoE 扫描、MLA、KDA 递推都不按 rank 分摊）；要更快得把 run 的 token 切到各 rank
+    （K4/K5 重定义）。`k3_golden` 的 tray batch 不接 span，TP4 的 span 路径没有 oracle 门禁。
   - 输出：t=1 的 conc1 sha（短 / 2k / 12k 冷 / 12k 迟到）与 K5 线 2026-09-03 与 BLOCK_M 96 复测全同
     （ec2071a1bd49 / eed14fa316ea / 607802289f15 / ad2eea8cd2f0）；TP4 短 prompt 同，2k / 12k 在第一个近平局后
     分道（TP 归约是另一条数值路径）。并发的 1k 条目每次跑的 sha 都不同（到达顺序决定 bucket 组合），K5 线自己
