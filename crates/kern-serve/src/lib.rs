@@ -20,7 +20,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::Verified;
-use kern_runtime::Topology;
+use kern_runtime::{Capacity, Topology};
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler,
 };
@@ -166,7 +166,6 @@ fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
 
 pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     let gpus = if o.gpus.is_empty() { vec![d.gpu.unwrap_or(0)] } else { o.gpus.clone() };
-    let capacity = o.capacity.or(d.capacity);
     let chunk = o.chunk.or(d.chunk).unwrap_or(512) as usize;
     let mut stop_tokens = hf_stop_tokens(&o.model_path);
     stop_tokens.extend(&o.stop_tokens);
@@ -184,6 +183,10 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     let manifest =
         Verified::from_json(&manifest_json).with_context(|| format!("manifest {}", art.manifest.display()))?;
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
+    // Every sequence of a tray batch group holds a token slot on each of
+    // its `t` ranks, and each rank its pad.
+    let t = manifest.group_size("tp").unwrap_or(1) as usize;
+    let capacity = Capacity { tokens: o.capacity.or(d.capacity), seqs: ((o.max_seqs + 1) * t) as u64 };
 
     // The scheduler thread owns the tray for its whole life: load there,
     // report readiness, then drive.

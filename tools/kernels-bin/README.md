@@ -31,3 +31,28 @@ Rebuild (inside an image with FlashInfer and the CuTe DSL, a free GPU):
 
 The DSL JIT is deterministic for a fixed toolchain; a different toolchain is
 a different cubin and the manifests pin whichever one is checked in.
+
+## `flash_kda_d128.cubin`
+
+MoonshotAI's FlashKDA chunked KDA prefill forward (CUTLASS/CuTe, MIT), the
+K3 span kernel: kernel 1 `_flash_kda_fwd_prepare` (intra-chunk, grid
+(tiles, H), 256 threads, 21248 B smem) and kernel 2
+`_flash_kda_fwd_recurrence` (state recurrence + output, grid (1, H), 192
+threads, 98432 B smem), one instantiation `<D=128, has_state_in,
+has_state_out, output_state, varlen=false>`. Sources, license and the trim are
+under `tools/flash-kda/` (see its `PROVENANCE.md`); the parameter ABI (11
+cute TiledCopy structs of 256 B each: a `CUtensorMap` at 0 plus one runtime
+stride `int` at 128 for the q/k/g and q/v copies, then scalars) is documented
+in `docs/k3-kernel-abi.md` and was lifted with `tools/kernel-capture`.
+
+| parameter | value |
+|---|---|
+| head dim | 128 (q/k/v/g `[T, H, 128]` bf16, beta `[H, T]` bf16) |
+| chunk | 16 tokens |
+| state | f32 `[H][128 v][128 k]` in and out |
+| target | sm_103a (GB300) |
+| toolchain | CUDA 13.1 nvcc, CUTLASS 4.x headers (FlashInfer 0.6's `3rdparty/cutlass`) |
+
+Rebuild (host nvcc, no GPU needed):
+
+    CUTLASS_INCLUDE=<cutlass>/include NVCC=/usr/local/cuda-13.1/bin/nvcc tools/flash-kda/build.sh

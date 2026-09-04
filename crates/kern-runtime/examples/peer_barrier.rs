@@ -89,7 +89,13 @@ fn main() {
         threads.push(std::thread::spawn(move || {
             let run = || -> kern_runtime::Result<(f64, f64, i32)> {
                 let topo = Topology::one("ep", rank as u64, n as u64);
-                let mut rt = Runtime::load(&verified, &kernels, gpu, Some(1), Some(&topo))?;
+                let mut rt = Runtime::load(
+                    &verified,
+                    &kernels,
+                    gpu,
+                    Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }),
+                    Some(&topo),
+                )?;
                 let mine = rt.export_handles()?;
                 posted.lock().unwrap()[rank] = Some(mine);
                 gate.wait();

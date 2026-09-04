@@ -23,6 +23,11 @@
 //!
 //! `--free N` appends N greedy steps past the fixture (row 0's own argmax fed
 //! back) and prints them, to read the continuation back through a tokenizer.
+//! `K3_GOLDEN_DUMP=<dir>` (with `K3_GOLDEN_DUMP_BUFS=a,b,...`) writes every
+//! row's states and the named buffers after each scripted step, so two runs
+//! that must agree (a span against per-token steps, say) can be diffed
+//! layer by layer and their logits read for the top-2 margin before a
+//! differing token is called a bug.
 //! `--seqs N` runs N sequences per rank as one batch (`tokens` == `seqs` ==
 //! N). Plain: every row feeds the fixture and every row must match row 0
 //! token for token. `--mixed`: row 0 feeds the fixture, rows 1.. feed a
@@ -152,6 +157,8 @@ struct Outcome {
     excused: usize,
     failures: Vec<String>,
     step_ms: Option<f64>,
+    /// the `decode_span` step's replay time (`--span`), same batch as the last step
+    span_ms: Option<f64>,
 }
 
 type Handles = BTreeMap<String, PeerHandle>;
@@ -247,7 +254,9 @@ struct Batch {
     me: usize,
     seqs_max: usize,
     rows_max: usize,
-    pos: usize,
+    /// Each row's position (tokens fed so far); a span moves one row by
+    /// many, so rows drift apart.
+    pos: Vec<usize>,
 }
 
 impl Batch {
@@ -258,8 +267,13 @@ impl Batch {
         let leases = (0..tp)
             .map(|_| (0..rows).map(|_| rt.lease(tokens_per_row)).collect::<Result<Vec<_>, _>>())
             .collect::<Result<Vec<_>, _>>()?;
-        let b = Batch { leases, me, seqs_max, rows_max, pos: 0 };
-        b.stage_tables(rt)?;
+        let b = Batch { leases, me, seqs_max, rows_max, pos: vec![0; rows] };
+        b.stage_tables(rt, &(0..rows).collect::<Vec<_>>())?;
+        // K3's KDA kernels take the span's first row from an input; the
+        // span (when there is one) is row 0's tokens, at the front.
+        if rt.manifest.buffers.contains_key("span_at") {
+            rt.write_input("span_at", &0i32.to_le_bytes())?;
+        }
         Ok(b)
     }
 
@@ -267,17 +281,19 @@ impl Batch {
         &self.leases[self.me]
     }
 
-    /// Page-table rows: row i = own lease i, the rest (never dereferenced,
-    /// but domain-checked) repeat lease 0. Line-table columns are the tray
-    /// batch's rows, own rows first, then rank (me + d)'s at block d.
-    fn stage_tables(&self, rt: &mut Runtime) -> anyhow::Result<()> {
+    /// Page-table rows: batch row i = own lease `cells[i]` (a span repeats
+    /// its row's lease), the rest (never dereferenced, but domain-checked)
+    /// repeat the last. Line-table columns are the tray batch's rows, own
+    /// rows first, then rank (me + d)'s at block d.
+    fn stage_tables(&self, rt: &mut Runtime, cells: &[usize]) -> anyhow::Result<()> {
         let tp = self.leases.len();
-        let b = self.own().len();
+        let b = cells.len();
+        anyhow::ensure!(b <= self.seqs_max, "{b} batch rows, manifest seqs bound is {}", self.seqs_max);
         let tables: Vec<String> = rt.page_tables().map(str::to_string).collect();
         for name in tables {
             let mut table = Vec::new();
             for i in 0..self.seqs_max {
-                self.own()[i.min(b - 1)].extend_row(&name, &mut table)?;
+                self.own()[cells[i.min(b - 1)]].extend_row(&name, &mut table)?;
             }
             rt.write_input(&name, &le_bytes_i32(&table))?;
         }
@@ -290,7 +306,7 @@ impl Batch {
             for r in 0..l0.seq_lines(&name)? {
                 for i in 0..self.rows_max {
                     let (d, j) = (i / b, i % b);
-                    table.push(if d < tp { self.leases[(self.me + d) % tp][j].seq_line(&name, r)? } else { 0 });
+                    table.push(if d < tp { self.leases[(self.me + d) % tp][cells[j]].seq_line(&name, r)? } else { 0 });
                 }
             }
             rt.write_input(&name, &le_bytes_i32(&table))?;
@@ -303,39 +319,65 @@ impl Batch {
     fn fork(&mut self, rt: &mut Runtime, row: usize, tokens_per_row: usize) -> anyhow::Result<()> {
         anyhow::ensure!(self.own().len() < self.seqs_max, "no row for a fork: {} rows", self.seqs_max);
         for q in 0..self.leases.len() {
-            let child = rt.fork(&mut self.leases[q][row], self.pos, tokens_per_row)?;
+            let child = rt.fork(&mut self.leases[q][row], self.pos[row], tokens_per_row)?;
             self.leases[q].push(child);
         }
-        self.stage_tables(rt)
+        self.pos.push(self.pos[row]);
+        self.stage_tables(rt, &(0..self.own().len()).collect::<Vec<_>>())
     }
 
-    /// Stage one step: this rank's `toks` as rows 0..B, then rank
-    /// (me + d)'s rows at block d from `peer(q, row)` (docs/multi-gpu.md
-    /// "own rows first").
+    /// Stage one step: this rank's rows as batch rows 0.., row r
+    /// contributing `toks[r]` (one token, or a span of them: consecutive
+    /// positions of that row, its tables repeated), then rank (me + d)'s
+    /// rows at block d from `peer(q, row)` (docs/multi-gpu.md "own rows
+    /// first"). Returns the env and the program it selects, and moves the
+    /// rows' positions.
     fn stage(
-        &self,
+        &mut self,
         rt: &mut Runtime,
-        toks: &[i64],
+        toks: &[Vec<i64>],
         peer: &dyn Fn(usize, usize) -> i64,
-    ) -> anyhow::Result<BTreeMap<String, u64>> {
+    ) -> anyhow::Result<(BTreeMap<String, u64>, &'static str)> {
         let (tp, me) = (self.leases.len(), self.me);
         let b = self.own().len();
         assert_eq!(toks.len(), b);
-        let e = BTreeMap::from([
-            ("tokens".to_string(), b as u64),
-            ("seqs".to_string(), b as u64),
-            ("rows".to_string(), (tp * b) as u64),
+        let span = toks[0].len();
+        anyhow::ensure!(toks[1..].iter().all(|t| t.len() <= 1), "only row 0 may carry a span");
+        anyhow::ensure!(span == 1 || tp == 1, "a span in a tray batch is not staged here");
+        // The tables follow the batch rows every step: a span row's lease
+        // fills `span` rows this step and one the next; a row with nothing
+        // to feed (done while others catch up) is not in the batch.
+        let cells: Vec<usize> = (0..b).flat_map(|r| std::iter::repeat_n(r, toks[r].len())).collect();
+        let n = cells.len();
+        self.stage_tables(rt, &cells)?;
+        let mut e = BTreeMap::from([
+            ("tokens".to_string(), n as u64),
+            ("seqs".to_string(), n as u64),
+            ("rows".to_string(), (tp * n) as u64),
         ]);
-        let mut all = toks.to_vec();
+        if span > 1 {
+            e.insert("span".to_string(), span as u64);
+        }
+        let mut all: Vec<i64> = toks.concat();
         for d in 1..tp {
             let q = (me + d) % tp;
             all.extend((0..b).map(|j| peer(q, j)));
         }
         rt.write_input_at("token_ids", &le_bytes_i64(&all), &e)?;
-        let slots: Vec<i64> = self.own().iter().map(|l| l.slot(self.pos)).collect();
+        let mut slots = Vec::with_capacity(n);
+        let mut lens = Vec::with_capacity(n);
+        for (r, t) in toks.iter().enumerate() {
+            for j in 0..t.len() {
+                slots.push(self.own()[r].slot(self.pos[r] + j));
+                lens.push((self.pos[r] + j + 1) as i32);
+            }
+        }
         rt.write_input_at("slot_mapping", &le_bytes_i64(&slots), &e)?;
-        rt.write_input_at("seq_lens", &le_bytes_i32(&vec![(self.pos + 1) as i32; b]), &e)?;
-        Ok(e)
+        rt.write_input_at("seq_lens", &le_bytes_i32(&lens), &e)?;
+        for (r, t) in toks.iter().enumerate() {
+            self.pos[r] += t.len();
+        }
+        Ok((e, if span > 1 { "decode_span" } else { "decode" }))
     }
 }
 
@@ -356,6 +398,12 @@ fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
 /// `fork` = (step, stray feeds): after that many steps two children of row
 /// 0 join as the last rows on every rank, the twin feeding row 0's tokens
 /// and the stray `stray[q][step..]`; their tokens before the fork are empty.
+/// `span` > 1: row 0 feeds its scripted tokens `span` at a time through
+/// `decode_span` steps (a prompt as chunks; the predictions for a chunk
+/// come out together), then generates one by one; the other rows step one
+/// token at a time throughout, so row 0 runs ahead. The timings, with
+/// `iters` > 0, are the last decode step's replay and the last span
+/// step's.
 #[allow(clippy::too_many_arguments)]
 fn run_batch(
     rt: &mut Runtime,
@@ -366,16 +414,23 @@ fn run_batch(
     iters: usize,
     free: usize,
     fork: Option<(usize, &[Vec<i64>])>,
-) -> anyhow::Result<(Vec<Vec<Vec<i64>>>, Option<f64>)> {
+    span: usize,
+    span_from: usize,
+) -> anyhow::Result<(Vec<Vec<Vec<i64>>>, Option<f64>, Option<f64>)> {
     let tp = feeds.len();
     let rows = feeds[me].len();
     let steps = feeds[me][0].len();
+    anyhow::ensure!(span <= steps, "a span of {span} needs {span} fixture tokens, the fixture has {steps}");
+    anyhow::ensure!(span <= 1 || fork.is_none(), "--span and --fork together are not run here");
     let mut batch = Batch::new(rt, tp, me, rows, tokens_per_row)?;
     let mut out: Vec<Vec<Vec<i64>>> = vec![vec![Vec::with_capacity(steps + free); rows]; tp];
     let mut env = BTreeMap::new();
+    let mut span_env = None;
     // After the scripted feed, `free` more steps run each row on its own
-    // argmax (a greedy continuation, for reading the text back).
-    for step in 0..steps + free {
+    // argmax (a greedy continuation, for reading the text back). A row's
+    // k-th token is its feed's, then its own (k-1)-th output.
+    let mut step = 0;
+    while out[me].iter().any(|o| o.len() < steps + free) {
         if fork.is_some_and(|(at, _)| at == step) {
             for _ in 0..2 {
                 batch.fork(rt, 0, tokens_per_row)?;
@@ -384,42 +439,116 @@ fn run_batch(
                 }
             }
         }
-        let feed = |q: usize, r: usize| match fork {
-            Some((_, stray)) if r == rows + 1 => stray[q][step],
-            Some(_) if r == rows => feeds[q][0][step],
-            _ => feeds[q][r][step],
+        let feed = |q: usize, r: usize, k: usize| match fork {
+            Some((_, stray)) if r == rows + 1 => stray[q][k],
+            Some(_) if r == rows => feeds[q][0][k],
+            _ => feeds[q][r][k],
         };
-        let token = |q: usize, r: usize| if step < steps { feed(q, r) } else { *out[q][r].last().unwrap() };
-        let toks: Vec<i64> = (0..out[me].len()).map(|r| token(me, r)).collect();
-        env = batch.stage(rt, &toks, &token)?;
+        let token = |q: usize, r: usize, k: usize| if k < steps { feed(q, r, k) } else { out[q][r][k - 1] };
+        let counts: Vec<usize> = (0..out[me].len())
+            .map(|r| match out[me][r].len() {
+                fed if fed >= steps + free => 0,
+                fed if r == 0 && fed < steps && fed >= span_from => span.max(1).min(steps - fed),
+                _ => 1,
+            })
+            .collect();
+        let count = |r: usize| counts[r];
+        let toks: Vec<Vec<i64>> =
+            (0..out[me].len()).map(|r| (0..count(r)).map(|j| token(me, r, out[me][r].len() + j)).collect()).collect();
+        let peer = |q: usize, r: usize| token(q, r, out[q][r].len());
+        let (e, program) = batch.stage(rt, &toks, &peer)?;
         if graph {
-            if !rt.is_captured("decode", &env) {
-                rt.capture("decode", &env)?;
+            if !rt.is_captured(program, &e) {
+                rt.capture(program, &e)?;
             }
-            rt.run_captured("decode", &env)?;
+            rt.run_captured(program, &e)?;
         } else {
-            rt.run("decode", &env)?;
+            rt.run(program, &e)?;
         }
-        batch.pos += 1;
+        if program == "decode_span" {
+            span_env = Some(e.clone());
+        } else {
+            env = e;
+        }
         let bytes = rt.read_output("next_token")?;
         let b = out[me].len();
+        let n: usize = (0..b).map(count).sum();
         for (q, o) in out.iter_mut().enumerate() {
             let block = (q + tp - me) % tp;
+            let mut at = block * n;
             for (r, row) in o.iter_mut().enumerate() {
-                let at = (block * b + r) * 8;
-                row.push(i64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()));
+                for _ in 0..count(r) {
+                    row.push(i64::from_le_bytes(bytes[at * 8..at * 8 + 8].try_into().unwrap()));
+                    at += 1;
+                }
             }
         }
-    }
-    let ms = if iters > 0 {
-        if !rt.is_captured("decode", &env) {
-            rt.capture("decode", &env)?;
+        if let Ok(dir) = std::env::var("K3_GOLDEN_DUMP") {
+            if rt.rank("ep").unwrap_or(0) == 0 && step <= steps {
+                let pos: Vec<usize> = out[me].iter().map(Vec::len).collect();
+                dump_rows(rt, batch.own(), &pos, step, Path::new(&dir))?;
+            }
         }
-        Some(rt.time_captured("decode", &env, iters)? as f64)
-    } else {
-        None
+        step += 1;
+    }
+    for o in out.iter_mut().flat_map(|o| o.iter_mut()) {
+        o.truncate(steps + free);
+    }
+    let time = |rt: &mut Runtime, program: &str, e: &BTreeMap<String, u64>| -> anyhow::Result<f64> {
+        if !rt.is_captured(program, e) {
+            rt.capture(program, e)?;
+        }
+        Ok(rt.time_captured(program, e, iters)? as f64)
     };
-    Ok((out, ms))
+    // no decode step ran when the span covered the whole feed
+    let ms = if iters > 0 && !env.is_empty() { Some(time(rt, "decode", &env)?) } else { None };
+    let span_ms = match (&span_env, iters) {
+        (Some(e), 1..) => Some(time(rt, "decode_span", e)?),
+        _ => None,
+    };
+    Ok((out, ms, span_ms))
+}
+
+/// Debug aid (`K3_GOLDEN_DUMP=<dir>`): every row's per-sequence state
+/// (the whole slot), its per-token state (the slots fed so far) and the
+/// `hidden` buffer after a step, as `r<row>-p<pos>-<state>.bin` /
+/// `s<step>-hidden.bin`, for diffing two runs that must agree.
+fn dump_rows(rt: &Runtime, leases: &[Lease], pos: &[usize], step: usize, dir: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let states: Vec<(String, bool, u64)> = rt
+        .state_sizes()
+        .iter()
+        .map(|(n, st, _)| {
+            (n.to_string(), st.is_per_seq(), if st.is_per_seq() { st.bytes_per_seq } else { st.bytes_per_token })
+        })
+        .collect();
+    let tables: Vec<String> = rt.seq_tables().map(str::to_string).collect();
+    for (r, lease) in leases.iter().enumerate() {
+        for (name, per_seq, bytes) in &states {
+            let data = if *per_seq {
+                let Some(table) = tables.iter().find(|t| t.starts_with(&format!("{name}."))) else { continue };
+                let lines = lease.seq_lines(table)? as u64;
+                let line0 = lease.seq_line(table, 0)? as u64;
+                rt.read_state_at(name, (line0 * (bytes / lines)) as usize, *bytes as usize)?
+            } else {
+                // whole pages, in slot order (a page's inner layout is the kernels')
+                let page = rt.page() as usize;
+                let mut pages: Vec<usize> = lease.slots(0..pos[r]).iter().map(|&s| s as usize / page).collect();
+                pages.dedup();
+                let mut v = Vec::new();
+                for p in pages {
+                    v.extend(rt.read_state_at(name, p * page * *bytes as usize, page * *bytes as usize)?);
+                }
+                v
+            };
+            std::fs::write(dir.join(format!("r{r}-p{}-{name}.bin", pos[r])), data)?;
+        }
+    }
+    let bufs = std::env::var("K3_GOLDEN_DUMP_BUFS").unwrap_or_else(|_| "hidden".to_string());
+    for name in bufs.split(',').filter(|n| rt.manifest.buffers.contains_key(*n)) {
+        std::fs::write(dir.join(format!("s{step}-{name}.bin")), rt.read_buffer(name)?)?;
+    }
+    Ok(())
 }
 
 /// A seeded random prompt in the fixture's vocabulary, `len` tokens.
@@ -451,6 +580,8 @@ fn run_rank(
     seed: u64,
     free: usize,
     fork: Option<usize>,
+    span: usize,
+    span_from: usize,
     rendezvous: &dyn Fn(&mut Runtime) -> kern_runtime::Result<()>,
 ) -> anyhow::Result<Outcome> {
     let manifest = kern_manifest::Verified::from_json(json)?;
@@ -464,7 +595,9 @@ fn run_rank(
     // topology); alone, a group of one. Every rank leases the whole tray
     // batch's rows.
     let (me, tp) = topo.groups.get("tp").map(|g| (g.index as usize, g.size as usize)).unwrap_or((0, 1));
-    let capacity = (per_row * (seqs.max(1) + 2 * fork.is_some() as usize) * tp) as u64;
+    // Every row of the tray batch, forks included, leased on this rank.
+    let rows = ((seqs.max(1) + 2 * fork.is_some() as usize) * tp) as u64;
+    let capacity = kern_runtime::Capacity { tokens: Some(per_row as u64 * rows), seqs: rows };
     let mut rt = Runtime::load(&manifest, kernels, gpu, Some(capacity), Some(topo))?;
     let maps: Vec<memmap2::Mmap> = files
         .iter()
@@ -501,6 +634,7 @@ fn run_rank(
         excused: 0,
         failures: Vec::new(),
         step_ms: None,
+        span_ms: None,
     };
     // Every distinct feed first runs as a batch of `seqs` copies of itself,
     // so the mixed batch can be held to it row by row at the same batch
@@ -534,7 +668,7 @@ fn run_rank(
             let copies: Vec<Vec<Vec<i64>>> = (0..tp).map(|q| vec![feeds[q][r].clone(); seqs]).collect();
             let strays: Vec<Vec<i64>> = (0..tp).map(|q| feeds[q][r].clone()).collect();
             let shape = fork.map(|at| (at, strays.as_slice()));
-            let (t, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, shape)?;
+            let (t, _, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, shape, 0, 0)?;
             solo[r] = Some(t[me][0].clone());
         }
     }
@@ -550,15 +684,26 @@ fn run_rank(
     let stray_solo = match (&stray, fork) {
         (Some(f), Some(at)) => {
             let copies = vec![vec![f.clone(); seqs]; tp];
-            let (t, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, Some((at, strays.as_slice())))?;
+            let (t, _, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, Some((at, strays.as_slice())), 0, 0)?;
             Some(t[me][0].clone())
         }
         _ => None,
     };
-    let (table, ms) =
-        run_batch(&mut rt, &feeds, me, per_row, graph, iters, free, fork.map(|at| (at, strays.as_slice())))?;
+    let (table, ms, span_ms) = run_batch(
+        &mut rt,
+        &feeds,
+        me,
+        per_row,
+        graph,
+        iters,
+        free,
+        fork.map(|at| (at, strays.as_slice())),
+        span,
+        span_from,
+    )?;
     let tokens = &table[me];
     out.step_ms = ms;
+    out.span_ms = span_ms;
     out.tokens = tokens[0][..steps].to_vec();
     out.free = tokens[0][steps..].to_vec();
     if tp > 1 {
@@ -584,6 +729,19 @@ fn run_rank(
                 golden.margin_ulp(step),
                 golden.top5[step]
             ));
+        }
+    }
+    // Plain mode: every row is the fixture, so every row is held to it
+    // (rows past 0 step one token at a time whatever `--span` says).
+    if !mixed {
+        for r in 1..seqs {
+            let bad: Vec<String> = (0..steps)
+                .filter(|&i| golden.argmax[i] >= 0 && !matches!(golden.accept(i, tokens[r][i]), (true, _) | (_, true)))
+                .map(|i| format!("step {i}: got {}, reference {}", tokens[r][i], golden.argmax[i]))
+                .collect();
+            if !bad.is_empty() {
+                out.failures.push(format!("row {r} off the fixture at {} steps: {}", bad.len(), bad.join("; ")));
+            }
         }
     }
     for r in 0..seqs {
@@ -640,6 +798,8 @@ fn main() {
     let mut seed = 1u64;
     let mut free = 0usize;
     let mut fork: Option<usize> = None;
+    let mut span = 0usize;
+    let mut span_from = 0usize;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut v = || args.next().expect("value");
@@ -661,6 +821,8 @@ fn main() {
             "--seed" => seed = v().parse().unwrap(),
             "--free" => free = v().parse().unwrap(),
             "--fork" => fork = Some(v().parse().unwrap()),
+            "--span" => span = v().parse().unwrap(),
+            "--span-from" => span_from = v().parse().unwrap(),
             _ => panic!("unknown arg {a}"),
         }
     }
@@ -772,6 +934,8 @@ fn main() {
                 seed,
                 free,
                 fork,
+                span,
+                span_from,
                 &rendezvous,
             );
             results.lock().unwrap()[local] = Some(r.map_err(|e| format!("{e:#}")));
@@ -798,6 +962,9 @@ fn main() {
                     o.failures.len(),
                     o.step_ms.map(|ms| format!("; {ms:.3} ms/step (captured, {iters} iters)")).unwrap_or_default()
                 );
+                if let Some(ms) = o.span_ms {
+                    println!("  span step ({span} rows of one sequence): {ms:.3} ms (captured, {iters} iters)");
+                }
                 for f in &o.failures {
                     println!("  {f}");
                 }

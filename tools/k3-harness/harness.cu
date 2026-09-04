@@ -165,6 +165,7 @@ struct Opt {
   std::string kernel, cubin;
   int B = 1, ctx = 2048, nb = 4, snapshot = 1, two = 1, reps = 50;
   int nmla = 1, layer = 0;
+  int span = 0;  // K2 / K3: rows [1, 1 + span) are a span the kernel must skip
   uint64_t seed = 1234;
   int gx = -1, gy = -1, gz = -1, bx = -1, by = -1, bz = -1;
   long long smem = -1;
@@ -173,10 +174,12 @@ struct Opt {
 struct Geo {
   unsigned gx, gy, gz, bx, by, bz, smem;
 };
-static Geo geo(const Opt& o, unsigned gy, unsigned gz, unsigned bx, unsigned by,
-               unsigned bz, unsigned smem) {
+// Launch geometry with the CLI overrides applied; `gx` is the document's
+// grid.x (the batch for most kernels).
+static Geo geo_at(const Opt& o, unsigned gx, unsigned gy, unsigned gz, unsigned bx, unsigned by,
+                  unsigned bz, unsigned smem) {
   Geo g;
-  g.gx = o.gx > 0 ? (unsigned)o.gx : (unsigned)o.B;
+  g.gx = o.gx > 0 ? (unsigned)o.gx : gx;
   g.gy = o.gy > 0 ? (unsigned)o.gy : gy;
   g.gz = o.gz > 0 ? (unsigned)o.gz : gz;
   g.bx = o.bx > 0 ? (unsigned)o.bx : bx;
@@ -186,6 +189,9 @@ static Geo geo(const Opt& o, unsigned gy, unsigned gz, unsigned bx, unsigned by,
   std::printf("  launch       grid(%u,%u,%u) block(%u,%u,%u) smem=%u\n", g.gx,
               g.gy, g.gz, g.bx, g.by, g.bz, g.smem);
   return g;
+}
+static Geo geo(const Opt& o, unsigned gy, unsigned gz, unsigned bx, unsigned by, unsigned bz, unsigned smem) {
+  return geo_at(o, (unsigned)o.B, gy, gz, bx, by, bz, smem);
 }
 
 static CUfunction getfn(CUmodule m, const char* name) {
@@ -400,8 +406,10 @@ static void run_conv_silu(const Opt& o, CUmodule mod) {
   CUdeviceptr dk = dpoison(ck_ref.size() * 2);
   CUdeviceptr dv = dpoison(cv_ref.size() * 2);
   long long lb = LINE_BYTES;
-  int b_ = B;
-  void* args[] = {&dpart, &dcw, &L.d, &L.dindex, &lb, &dq, &dk, &dv, &b_};
+  int b_ = B, span = o.span, at0 = span ? 1 : 0;
+  if (at0 + span > B) { fprintf(stderr, "--span %d needs B >= %d\n", span, at0 + span); exit(1); }
+  CUdeviceptr dat = dput(&at0, 4);
+  void* args[] = {&dpart, &dcw, &L.d, &L.dindex, &lb, &dq, &dk, &dv, &b_, &dat, &span};
   // document default: grid (B, 3, 24), block 128 -> 4 columns per thread.
   Geo g = geo(o, 3, 24, 128, 1, 1, 0);
   CUfunction f = getfn(mod, "kern_k3_conv_silu");
@@ -411,6 +419,14 @@ static void run_conv_silu(const Opt& o, CUmodule mod) {
   dget(cq.data(), dq, cq.size() * 2);
   dget(ck.data(), dk, ck.size() * 2);
   dget(cv.data(), dv, cv.size() * 2);
+  // The span's rows are K9's: whatever the kernel left there is right.
+  for (int b = at0; b < at0 + span; ++b) {
+    for (size_t i = (size_t)b * INNER; i < (size_t)(b + 1) * INNER; ++i) {
+      cq_ref[i] = cq[i];
+      ck_ref[i] = ck[i];
+      cv_ref[i] = cv[i];
+    }
+  }
   cmp_bf16("conv_q", cq, cq_ref);
   cmp_bf16("conv_k", ck, ck_ref);
   cmp_bf16("conv_v", cv, cv_ref);
@@ -418,6 +434,10 @@ static void run_conv_silu(const Opt& o, CUmodule mod) {
   // windows only: rec is untouched by K2, so compare the window bytes.
   std::vector<uint8_t> line_got(L.h.size());
   dget(line_got.data(), L.d, line_got.size());
+  for (int b = at0; b < at0 + span; ++b) {
+    size_t off = (size_t)L.index[b] * LINE_BYTES;
+    std::copy(line_got.begin() + off, line_got.begin() + off + LINE_BYTES, line_ref.begin() + off);
+  }
   {
     size_t nwin = (size_t)B * 3 * 3 * INNER;
     auto at = [&](std::vector<uint8_t>& v, size_t i) -> double {
@@ -480,19 +500,26 @@ static void run_kda_core(const Opt& o, CUmodule mod) {
   CUdeviceptr dgo = dput(gamma_o.data(), gamma_o.size() * 4);
   CUdeviceptr dout = dpoison(out_ref.size() * 2);
   long long lb = LINE_BYTES;
-  int b_ = B;
+  int b_ = B, span = o.span, at0 = span ? 1 : 0;
+  if (at0 + span > B) { fprintf(stderr, "--span %d needs B >= %d\n", span, at0 + span); exit(1); }
+  CUdeviceptr dat = dput(&at0, 4);
   void* args[] = {&dcq, &dck, &dcv, &dwsm,     &dgate, &dwfb, &ddt,
-                  &dal, &dgo, &L.d, &L.dindex, &lb,    &dout, &b_};
+                  &dal, &dgo, &L.d, &L.dindex, &lb,    &dout, &b_, &dat, &span};
   Geo g = geo(o, HEADS, 1, 128, 1, 1, 0);
   CUfunction f = getfn(mod, "kern_k3_kda_core");
   launch(f, g, args);
 
   std::vector<bf16> out(out_ref.size());
   dget(out.data(), dout, out.size() * 2);
-  cmp_bf16("out", out, out_ref);
-
   std::vector<uint8_t> line_got(L.h.size());
   dget(line_got.data(), L.d, line_got.size());
+  // The span's rows are K8 / K11's: whatever the kernel left there is right.
+  for (int b = at0; b < at0 + span; ++b) {
+    for (size_t i = (size_t)b * INNER; i < (size_t)(b + 1) * INNER; ++i) out_ref[i] = out[i];
+    size_t off = (size_t)L.index[b] * LINE_BYTES;
+    std::copy(line_got.begin() + off, line_got.begin() + off + LINE_BYTES, line_ref.begin() + off);
+  }
+  cmp_bf16("out", out, out_ref);
   {
     size_t nrec = (size_t)B * (REC_BYTES / 4);
     auto at = [&](std::vector<uint8_t>& v, size_t i) -> double {
@@ -870,12 +897,146 @@ static void run_land_situ(const Opt& o, CUmodule mod) {
                                              g.smem, 0, args, nullptr)); }, roof);
 }
 
+// The span's first batch row in the K9 / K10 / K11 runs: the rows before it
+// are decode rows the kernels must leave alone.
+static const int SPAN_AT = 3;
+
+// ---- K9 span_gather (B = span) ------------------------------------------
+static void run_span_gather(const Opt& o, CUmodule mod) {
+  const int S = o.B, N = SPAN_AT + S;
+  Rng r(o.seed);
+  std::vector<float> partial((size_t)N * KDA_FUSED), cw((size_t)3 * 4 * INNER), wsm((size_t)N * WSM);
+  fill_f32(partial, r, 0, 2.0);
+  fill_f32(cw, r, 0, 0.3);
+  fill_f32(wsm, r, 0, 2.0);
+  Line L = make_lines(N, r);
+  int at = SPAN_AT;
+  CUdeviceptr dat = dput(&at, 4);
+
+  std::vector<uint8_t> line_ref = L.h;
+  std::vector<bf16> cq_ref((size_t)S * INNER), ck_ref((size_t)S * INNER), cv_ref((size_t)S * INNER),
+      beta_ref((size_t)HEADS * S), flow_ref((size_t)S * 128);
+  ref_span_gather(partial.data(), cw.data(), line_ref.data(), L.index.data(), LINE_BYTES, wsm.data(),
+                  cq_ref.data(), ck_ref.data(), cv_ref.data(), beta_ref.data(), flow_ref.data(), &at, S);
+
+  CUdeviceptr dpart = dput(partial.data(), partial.size() * 4);
+  CUdeviceptr dcw = dput(cw.data(), cw.size() * 4);
+  CUdeviceptr dwsm = dput(wsm.data(), wsm.size() * 4);
+  CUdeviceptr dq = dpoison(cq_ref.size() * 2), dk = dpoison(ck_ref.size() * 2), dv = dpoison(cv_ref.size() * 2);
+  CUdeviceptr dbeta = dpoison(beta_ref.size() * 2), dflow = dpoison(flow_ref.size() * 2);
+  long long lb = LINE_BYTES;
+  int span = S;
+  void* args[] = {&dpart, &dcw, &L.d, &L.dindex, &lb, &dwsm, &dq, &dk, &dv, &dbeta, &dflow, &dat, &span};
+  // document default: grid (INNER/512, 4, ceil(span/8)), block 128; grid.x is not B here.
+  Geo g = geo_at(o, (unsigned)(INNER / 512), 4, (unsigned)((S + 7) / 8), 128, 1, 1, 0);
+  CUfunction f = getfn(mod, "kern_k3_span_gather");
+  launch(f, g, args);
+
+  std::vector<bf16> cq(cq_ref.size()), ck(ck_ref.size()), cv(cv_ref.size()), beta(beta_ref.size()),
+      flow(flow_ref.size());
+  dget(cq.data(), dq, cq.size() * 2);
+  dget(ck.data(), dk, ck.size() * 2);
+  dget(cv.data(), dv, cv.size() * 2);
+  dget(beta.data(), dbeta, beta.size() * 2);
+  dget(flow.data(), dflow, flow.size() * 2);
+  cmp_bf16("conv_q", cq, cq_ref);
+  cmp_bf16("conv_k", ck, ck_ref);
+  cmp_bf16("conv_v", cv, cv_ref);
+  cmp_bf16("span_beta", beta, beta_ref);
+  cmp_bf16("span_flow", flow, flow_ref);
+  std::vector<uint8_t> line_got(L.h.size());
+  dget(line_got.data(), L.d, line_got.size());
+  {
+    // the windows of row at's line (the only line the kernel touches)
+    size_t nwin = (size_t)3 * 3 * INNER;
+    size_t base = (size_t)L.index[at] * LINE_BYTES + REC_BYTES;
+    auto win_at = [&](std::vector<uint8_t>& v, size_t i) -> double {
+      int s = (int)(i / (3 * INNER));
+      size_t off = i % (3 * INNER);
+      return (double)b2f(((bf16*)(v.data() + base + (size_t)s * WIN_BYTES))[off]);
+    };
+    cmp_gen("win(state)", nwin, [&](size_t i) { return win_at(line_got, i); },
+            [&](size_t i) { return win_at(line_ref, i); });
+    cmp_gen("other lines untouched", L.h.size() - LINE_BYTES,
+            [&](size_t i) { size_t j = i < (size_t)L.index[at] * LINE_BYTES ? i : i + LINE_BYTES; return (double)line_got[j]; },
+            [&](size_t i) { size_t j = i < (size_t)L.index[at] * LINE_BYTES ? i : i + LINE_BYTES; return (double)line_ref[j]; });
+  }
+  double roof = (double)S * 3 * INNER * 4 + (double)3 * 4 * INNER * 4 + (double)3 * 3 * INNER * 2 * 2
+              + (double)S * 3 * INNER * 2 + (double)S * WSM * 4 + (double)S * (HEADS + 128) * 2;
+  time_and_report(o, [&] { CU(cuLaunchKernel(f, g.gx, g.gy, g.gz, g.bx, g.by, g.bz, g.smem, 0, args, nullptr)); }, roof);
+}
+
+// ---- K10 span_state ------------------------------------------------------
+static void run_span_state(const Opt& o, CUmodule mod) {
+  Rng r(o.seed);
+  Line L = make_lines(SPAN_AT + o.B, r);
+  int at = SPAN_AT;
+  CUdeviceptr dat = dput(&at, 4);
+  std::vector<float> buf_ref((size_t)REC_BYTES / 4), buf_in((size_t)REC_BYTES / 4);
+  fill_f32(buf_in, r, 0, 0.1);
+  std::vector<uint8_t> line_ref = L.h;
+  long long lb = LINE_BYTES;
+  CUdeviceptr dbuf = dpoison(REC_BYTES);
+  CUfunction f = getfn(mod, "kern_k3_span_state");
+  Geo g = geo_at(o, (unsigned)HEADS, 32, 1, 128, 1, 1, 0);
+
+  int to_line = 0;
+  void* args[] = {&L.d, &L.dindex, &lb, &dat, &dbuf, &to_line};
+  ref_span_state(line_ref.data(), L.index.data(), LINE_BYTES, &at, buf_ref.data(), 0);
+  launch(f, g, args);
+  std::vector<float> buf(buf_ref.size());
+  dget(buf.data(), dbuf, buf.size() * 4);
+  cmp_exact("buf = rec", buf, buf_ref);
+
+  to_line = 1;
+  CU(cuMemcpyHtoD(dbuf, buf_in.data(), REC_BYTES));
+  ref_span_state(line_ref.data(), L.index.data(), LINE_BYTES, &at, buf_in.data(), 1);
+  launch(f, g, args);
+  std::vector<uint8_t> line_got(L.h.size());
+  dget(line_got.data(), L.d, line_got.size());
+  cmp_exact("rec = buf (whole line blob)", line_got, line_ref);
+  to_line = 0;
+  time_and_report(o, [&] { CU(cuLaunchKernel(f, g.gx, g.gy, g.gz, g.bx, g.by, g.bz, g.smem, 0, args, nullptr)); },
+                  2.0 * REC_BYTES);
+}
+
+// ---- K11 kda_out_gate (B = span) ----------------------------------------
+static void run_kda_out_gate(const Opt& o, CUmodule mod) {
+  const int S = o.B, N = SPAN_AT + S;
+  Rng r(o.seed);
+  std::vector<bf16> attn((size_t)S * INNER), gated((size_t)N * INNER);
+  std::vector<float> gate((size_t)N * KDA_FUSED), gamma_o(128);
+  fill_bf16(attn, r, 0, 1.0);
+  fill_bf16(gated, r, 0, 1.0);
+  fill_f32(gate, r, 0, 2.0);
+  fill_f32(gamma_o, r, 1.0, 0.1);
+  int at = SPAN_AT;
+  std::vector<bf16> out_ref = gated;  // rows before the span stay as they were
+  ref_kda_out_gate(attn.data(), gate.data(), gamma_o.data(), out_ref.data(), &at, S);
+
+  CUdeviceptr da = dput(attn.data(), attn.size() * 2);
+  CUdeviceptr dg = dput(gated.data(), gated.size() * 2);
+  CUdeviceptr dgate = dput(gate.data(), gate.size() * 4);
+  CUdeviceptr dgo = dput(gamma_o.data(), gamma_o.size() * 4);
+  CUdeviceptr dat = dput(&at, 4);
+  int span = S;
+  void* args[] = {&da, &dgate, &dgo, &dg, &dat, &span};
+  Geo g = geo(o, HEADS, 1, 128, 1, 1, 0);
+  CUfunction f = getfn(mod, "kern_k3_kda_out_gate");
+  launch(f, g, args);
+  std::vector<bf16> out(out_ref.size());
+  dget(out.data(), dg, out.size() * 2);
+  cmp_bf16("gated", out, out_ref);
+  double roof = (double)S * INNER * 2 * 2 + (double)S * INNER * 4 + 128 * 4;
+  time_and_report(o, [&] { CU(cuLaunchKernel(f, g.gx, g.gy, g.gz, g.bx, g.by, g.bz, g.smem, 0, args, nullptr)); }, roof);
+}
+
 // ======================================================================
 static const char* kKernels[] = {
     "attnres_rms", "land_add_attnres_rms", "land_add2", "conv_silu",
     "kda_core",    "mla_prep",             "mla_paged_attn",
     "mla_paged_attn_old", "router_topk", "argmax_f32", "rms", "land",
-    "land_situ"};
+    "land_situ",   "span_gather",          "span_state",    "kda_out_gate"};
 
 static void usage() {
   std::printf(
@@ -915,6 +1076,7 @@ int main(int argc, char** argv) {
     if (a == "--kernel") o.kernel = need();
     else if (a == "--cubin") o.cubin = need();
     else if (a == "--B") o.B = std::atoi(need());
+    else if (a == "--span") o.span = std::atoi(need());
     else if (a == "--ctx") o.ctx = std::atoi(need());
     else if (a == "--nb") o.nb = std::atoi(need());
     else if (a == "--snapshot") o.snapshot = std::atoi(need());
@@ -973,6 +1135,9 @@ int main(int argc, char** argv) {
   else if (k == "rms") run_rms(o, mod);
   else if (k == "land") run_land(o, mod);
   else if (k == "land_situ") run_land_situ(o, mod);
+  else if (k == "span_gather") run_span_gather(o, mod);
+  else if (k == "span_state") run_span_state(o, mod);
+  else if (k == "kda_out_gate") run_kda_out_gate(o, mod);
   else { std::fprintf(stderr, "unknown kernel `%s`\n", k.c_str()); usage(); return 2; }
 
   // one machine-readable line per run, for run_all.sh

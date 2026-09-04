@@ -39,6 +39,7 @@ export CUDA_VISIBLE_DEVICES=3          # tray03: one card each, check nvidia-smi
 | `--kernel <name>` | — | the document's kernel name (see the table below) |
 | `--cubin <path>` | — | any cubin exporting the documented entry |
 | `--B N` | 1 | batch rows; the acceptance set is 1, 2, 8, 64 |
+| `--span N` | 0 | K2/K3: rows [1, 1+N) are a span the kernel must skip (`span_at` = 1); their outputs and line bytes are not compared, every other row is |
 | `--ctx N` | 2048 | K5 context length (max seq_lens); up to 32768 |
 | `--nb N` | 4 | attnres candidate blocks, 0..8 |
 | `--snapshot 0\|1` | 1 | K1a/K1b snapshot flag |
@@ -75,6 +76,9 @@ smem is 0 everywhere.
 | `rms` | `kern_k3_rms` | (B,1,1) | 1024 | yes |
 | `land` | `kern_k3_land` | (B,ceil(n/1024),1) | 1024 | yes |
 | `land_situ` | `kern_k3_land_situ` | (B,ceil(n/1024),1) | 1024 | yes |
+| `span_gather` | `kern_k3_span_gather` (B = span) | (24,4,ceil(B/8)) | 128 | rows per block yours |
+| `span_state` | `kern_k3_span_state` | (96,32,1) | 128 | yes |
+| `kda_out_gate` | `kern_k3_kda_out_gate` (B = span) | (B,96,1) | 128 | yes |
 
 Non-`B` shapes the harness pins (they are not CLI options because the model
 fixes them): `rms` h = LATENT = 3584; `land` n = 3584, off = 128, ldc = 4096

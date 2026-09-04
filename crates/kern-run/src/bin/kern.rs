@@ -172,9 +172,10 @@ fn verify(path: &Path) -> Result<bool> {
         println!("  lines     `{}` [{}, {}{w}]", t.name, t.lines, axis(t.axis).trim_matches(['[', ']']));
     }
     for f in &p.forwards {
-        let rows = match f.rows {
-            Rows::Const(r) => format!("{r} rows"),
-            Rows::Var => "rows as fed".into(),
+        let rows = match (f.rows, p.span.as_ref().filter(|_| f.span)) {
+            (Rows::Const(_), Some(s)) => format!("1 row, one of them a run of up to {} (`{}`)", s.max, s.var),
+            (Rows::Const(r), None) => format!("{r} rows"),
+            (Rows::Var, _) => "rows as fed".into(),
         };
         let emits = match f.emits {
             Some(i) => format!(", hands back `{}`", p.fills[i].name),

@@ -3,6 +3,49 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-03，K5 span（FlashKDA 接入、k3_golden 多行 span、runtime 容量）
+
+**capture 里的分配字母不是参数名。** FlashKDA recurrence 的 16 个参数按模板签名猜成
+q/k/v…，kern 的 out 全零、probe 却对；把 probe 里每个 buffer 的地址打出来对 capture 的
+参数表，才看到 p0 是 v、p10 是 out 的 TMA **store** 描述符、p11 才是 out 指针。规则：
+vendored 核的 ABI 用 `kernel-capture lift.py --names`（地址→名字表）把参数直接落成
+名字，再拿 `program_io` 喂 probe 的 dump 与 probe 输出逐位比对，不看模板。
+
+**表在 run 之前重铺一次就把 mixed 行毁了。** `k3_golden --span` 第一版在每步 run 之前
+把 line table 按"每行一 cell"的老布局再铺一遍，行 0 的 span 于是读到行 1 的 slot，
+行 1..3 从第 1 步起就离开 fixture；改成表每步只按本步的 cell 布局铺一次、run 之后
+不动。多行 staging 的规则：一步之内"铺表 → run → 读输出"三件事之间不许有第二次铺。
+
+**运行时不许拿 manifest 的 var 上界当活跃序列数。** 池预算按 `seqs.max + 2` 个 slot
+预留，93 层 K3 的 slot 449 MB × 258 = 115 GB，EP4 每卡 190 GB 权重之后 `cuMemCreate`
+在第 39 878 块失败。序列数是调用方知道的（它的 batch、它的 `--max-seqs`），
+`Runtime::load` 现在收 `Capacity { tokens, seqs }`；var 上界只说一步能寻址多少行
+（见 serve.md 的"manifest 里不许出现 slot 数"——同一条规则的另一半）。
+
+**一个线程驱多张互相等待的卡，launch 与 wait 必须分开。** kern-serve 的 tray 逐 rank 调
+`Runtime::run`（launch + sync），K3 EP4 第一步 rank 0 的 MoE dispatch 在核里等 rank 1
+——它还没被 launch——55 s 后核超时、`CUDA_ERROR_LAUNCH_FAILED`。qwen 单卡的 smoke 与
+k3_golden（每 rank 一个线程）都看不到。规则：runtime 的 `run` = `enqueue` + `synchronize`，
+锁步驱动的调用方先把每个 rank 都 enqueue 再挨个 synchronize；凡是核里有跨卡等待的
+manifest，单线程多卡的门禁必须跑过一次。
+
+**var 是一步一份、批是一 rank 一份：批不同的 rank 也得把 var 说的东西摆出来。** EP4 t=1
+下每个 rank 各有自己的行，但 `span` / `span_at` 全 tray 同值；span 在 rank 1 时 rank 0
+的第 0 行（别的序列的 decode 行）被 K2/K3 当 span 跳过、又被 K9/FlashKDA 当 span 拿去更新
+那条序列的 state——输出是"只看见 span 那几个 token"的续写。k3_golden 看不到：它每个 rank
+跑同一份行。规则：没有 span cell 的组在块前面垫 c 行 pad（`Layout.lead`），让 `span_at`
+指向 pad；门禁用**多条相同 prompt 并发**——锁步的相同序列必须逐字相同，不同即串扰
+（比 fixture 便宜且直接）。
+
+**"相同 prompt 不同答案"先读 margin，再找串扰。** lead pad 修好之后 8 条"The capital of France
+is"还是 3 条 " Paris."、5 条 " the capital of France is…"，又追了几小时的核（K2/K3 harness 加
+`--span`、K9 行界、pad 行）——最后 `k3_golden` 用 5 个 token 的 fixture 复现（span 5 单行错、
+span 5 + 一行对），把两种形状每层的 KDA state / KV / hidden / logits 倒出来比：全部只差 bf16
+噪声，top-2 差 0.2 logit。自然语言 prompt 也有近平局（E5 那条"随机 token 必翻"是它的特例），
+一条通顺但走偏的续写正是近平局的样子；真串扰是 8 条 8 种、互不成句。规则：**相等门禁的分歧，
+第一步是倒两边的 logits 看 top-2 差**（`K3_GOLDEN_DUMP` + `K3_GOLDEN_DUMP_BUFS=logit_partial`），
+差在一个 logit 内就换 prompt 或换成有 margin 的 fixture，不读核。
+
 ## 2026-09-03，v4 投机轮
 
 **"旧路径与 plain 逐字同、新路径不同"不等于新路径有 bug。** dspark 的 verify 从 8 行改

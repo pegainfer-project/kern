@@ -21,7 +21,7 @@ use crate::{Caller, Env, STOP_TOKENS};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, Dim, Dir};
 use kern_manifest::Verified;
-use kern_runtime::Runtime;
+use kern_runtime::{Capacity, Runtime};
 use tracing::info;
 
 /// Flags of `kern run`; anything not given comes from the target in
@@ -184,7 +184,10 @@ fn execute(o: Opts) -> Result<()> {
     let verified = Verified::from_json(&manifest_json)?;
     // One sequence: its reach, unless told otherwise (a manifest without
     // paged state takes the runtime's fit).
-    let capacity = o.capacity.or_else(|| kern_runtime::seq_capacity(&verified));
+    let capacity = o
+        .capacity
+        .or_else(|| kern_runtime::seq_capacity(&verified))
+        .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
     let mut rt = Runtime::load(&verified, &o.kernels, o.gpu, capacity, None)?;
     let load_t = t0.elapsed();
 

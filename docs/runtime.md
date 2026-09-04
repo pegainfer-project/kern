@@ -44,10 +44,14 @@ kernel 都过了才 unmap），完成后主线程在下一次 `lease` / `checkpo
 放不下）。`seqs.max` 只限一步 batch 的行数；slot 从 `seqs.max + 2` 个起按需长
 （session 睡着时它的 checkpoint 拿着 slot，活跃请求再要就从空闲页拆），
 `index_into` per-seq state 的域上界是运行时的 slot 上限（`Provision`）。预算：
-`--capacity` 给则 = capacity × Σbytes_per_token + (seqs.max+2) × Σbytes_per_seq，
-capacity 向下对齐到 manifest 里 `index_into` 该 state 的最大页单位（block table
-的 `stride`），不会出现半页；不给（`Runtime::load(.., None)`，kern-serve 的默认）
-则在 buffer、scratch 和定长 state 都分完之后 `cuMemGetInfo`，剩余显存减
+调用方以 `Capacity { tokens, seqs }` 报自己的数——`seqs` 是它要同时活着的序列数
+（kern-serve：每 rank `(max_seqs + 1) × t`，pad 也算一条），**不是 manifest 的
+`seqs.max`**（那是一步能寻址的行数；93 层 K3 的 slot 449 MB，按 `rows.max` 256 预留
+就是 115 GB，EP4 直接 OOM）；`tokens` 给则 = tokens × Σbytes_per_token +
+(seqs+2) × Σbytes_per_seq，tokens 向下对齐到 manifest 里 `index_into` 该 state 的
+最大页单位（block table 的 `stride`），不会出现半页；`tokens: None`（kern-serve
+不给 `--capacity` 时的默认）则在 buffer、scratch 和定长 state 都分完之后
+`cuMemGetInfo`，剩余显存减
 `HEADROOM`（1 GiB）全给。整块读写 state（`read_state` / `write_state_at` /
 `zero_states`，attest 用）只在第一次 remap 之前有效。
 `Runtime::lease(tokens)` 一次租下 KV 页和每个 per-seq state 的一个 slot
@@ -148,10 +152,10 @@ tray03 4×GB300 实测 captured burst **3.75 µs/barrier**、eager run+sync
 15.8 µs；`--drop r` 让 r 缺席，其余 rank 2 s 内报"等 r 超时"而不是挂住；
 换成 multicast bulk copy 的同名 kernel 装载即被拒。
 
-**TMA 描述符与簇 launch**：launch 实参 `{"tensormap": {...}}` 在装载时对
+**TMA 描述符与簇 launch**：pack 里的 `tensormap` 字段在装载时对
 finished 指针（buffer 基址 + call offset）`cuTensorMapEncodeTiled` 成
-128 字节镜像（64 字节对齐），launch 时按值塞进参数槽（ABI 校验里它就
-是一个 128 字节参数）；`cluster` 走 `cuLaunchKernelEx` +
+128 字节镜像，拷进 pack 镜像的字段偏移处，launch 时整个 pack 按值塞进参数
+槽（ABI 校验里它就是一个 `bytes<n>` 参数）；`cluster` 走 `cuLaunchKernelEx` +
 `CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION`（无 cluster 的 launch 也走同一
 条路，attrs 为空）。E1 门禁 `crates/kern-runtime/examples/k3_moe_ep.rs`：
 K3 pruned 第 1 层 MoE（224 expert，top-16，mxfp4 权重）作为三个 op 的
@@ -191,7 +195,9 @@ cos_sin_cache 预计算、kv_scales 全 1、tied lm_head clone）。
 **CUDA graph（默认开，`--eager` 回退）**：tokens=1 下 436 个 call 的
 grid/标量实参全是常量，每步只有 4 个小 input buffer 的**内容**变、指针不变
 → 整个 call 表 stream-capture 成一张静态图，H2D 写留在图外，每步一次
-`cuGraphLaunch`。graph 按 (program, env) 键控：decode 捕在 tokens=1，
+`cuGraphLaunch`。graph 按 (program, env) 键控——env 只需给这个 program 的 launch 真正读到的 var（grid、
+shared_mem、标量实参、pack 字段），其余 var 不属于它，caller 给不给、给多少都归一成最小值（K3 的 `decode` 不读
+`span`，`decode_span` 读）：decode 捕在 tokens=1，
 prefill 捕在 tokens=chunk（整块走图、余数块 eager 一次）。要点：capture
 不能用 legacy NULL stream（runtime 已改 `new_stream()`）；cublasLt 可被
 捕获（workspace 预分配，算法启发式在捕获时定死，顺带省了每步的 CPU

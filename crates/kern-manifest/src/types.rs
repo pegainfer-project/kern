@@ -156,6 +156,9 @@ pub struct Batch {
     pub groups: u64,
     /// Rows per sequence: a constant the program's kernels are laid out for (`1` for a decode step, `8` for a speculative round — exact, not a bound), or the var whose value is the row count of the call (`"tokens"`: one sequence, as many rows as the chunk).
     pub rows: Dim,
+    /// The var whose value is the length of the call's span: one of the sequences (rows `1` each) feeds a run of that many consecutive tokens, a row each, starting at the row the `span_at` fill names, e.g. `"span"` (a prompt chunk riding a decode step). Absent for a call whose sequences all feed `rows`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<String>,
 }
 
 /// The role a caller-facing buffer plays in a call: what the serving loop writes into an input or reads from an output. A closed set; the runtime never reads it.
@@ -172,6 +175,8 @@ pub enum Fill {
     SeqLen,
     /// Input: exclusive prefix sums of rows per sequence, `groups + 1` entries.
     CuSeqlens,
+    /// Input: the first row of the call's span (`batch.span`), one word; 0 when the call has none.
+    SpanAt,
     /// Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).
     Tokens,
     /// Output: how many of a sequence's `tokens` the caller takes, per sequence; without one it takes one.
@@ -188,6 +193,7 @@ impl fmt::Display for Fill {
             Fill::Slot => "slot",
             Fill::SeqLen => "seq_len",
             Fill::CuSeqlens => "cu_seqlens",
+            Fill::SpanAt => "span_at",
             Fill::Tokens => "tokens",
             Fill::Count => "count",
             Fill::Error => "error",
@@ -566,11 +572,9 @@ pub enum ParamType {
     State { dir: Dir },
     /// A by-value scalar, e.g. `"i32"`.
     Scalar(ScalarType),
-    /// A 128-byte TMA descriptor (`CUtensorMap`) passed by value, launch-private:
-    /// wired with a `{"tensormap": {...}}` launch arg over an interface buffer.
-    TensorMap,
     /// An aggregate of `n` bytes passed by value (a kernel whose ABI takes
-    /// structs), launch-private: wired with a `{"pack": {...}}` launch arg.
+    /// structs, or a bare 128-byte `CUtensorMap`), launch-private: wired with
+    /// a `{"pack": {...}}` launch arg.
     Bytes(u32),
 }
 
@@ -580,7 +584,6 @@ impl ParamType {
     pub fn size_bytes(self) -> u64 {
         match self {
             ParamType::Buf { .. } | ParamType::State { .. } => 8,
-            ParamType::TensorMap => 128,
             ParamType::Bytes(n) => n as u64,
             ParamType::Scalar(ScalarType::I64) => 8,
             ParamType::Scalar(ScalarType::U8) => 1,
@@ -592,7 +595,7 @@ impl ParamType {
     pub fn dir(self) -> Option<Dir> {
         match self {
             ParamType::Buf { dir, .. } | ParamType::State { dir } => Some(dir),
-            ParamType::Scalar(_) | ParamType::TensorMap | ParamType::Bytes(_) => None,
+            ParamType::Scalar(_) | ParamType::Bytes(_) => None,
         }
     }
 }
@@ -607,7 +610,6 @@ impl FromStr for ParamType {
             "i64" => return Ok(ParamType::Scalar(ScalarType::I64)),
             "f32" => return Ok(ParamType::Scalar(ScalarType::F32)),
             "u8" => return Ok(ParamType::Scalar(ScalarType::U8)),
-            "tensormap" => return Ok(ParamType::TensorMap),
             _ => {}
         }
         if let Some(n) = s.strip_prefix("bytes<").and_then(|r| r.strip_suffix('>')) {
@@ -641,7 +643,6 @@ impl fmt::Display for ParamType {
             ParamType::Buf { dtype, dir } => write!(f, "{dir} buffer<{dtype}>"),
             ParamType::State { dir } => write!(f, "{dir} state"),
             ParamType::Scalar(st) => write!(f, "{st}"),
-            ParamType::TensorMap => write!(f, "tensormap"),
             ParamType::Bytes(n) => write!(f, "bytes<{n}>"),
         }
     }
@@ -659,7 +660,7 @@ impl schemars::JsonSchema for ParamType {
                 `\"inout state\"`), or a launch-private `\"tensormap\"` (128-byte TMA descriptor) \
                 or `\"bytes<n>\"` (an n-byte aggregate filled by a `pack` launch arg).",
             "type": "string",
-            "pattern": "^(i32|i64|f32|u8|tensormap|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
+            "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
         })
     }
 }
@@ -833,8 +834,6 @@ pub enum LaunchArg {
     U8 { u8: u8 },
     /// This rank's index in the named topology group, a load-time constant.
     Rank { rank: String },
-    /// A TMA descriptor over an interface buffer, encoded at load time.
-    TensorMap { tensormap: TensorMap },
     /// An aggregate assembled from fields at byte offsets, for a `bytes<n>` param.
     Pack { pack: Pack },
 }
@@ -889,6 +888,11 @@ pub enum FieldSrc {
     Expr { expr: Expr },
     /// This rank's index in the named topology group.
     Rank { rank: String },
+    /// A 128-byte TMA descriptor over an interface buffer or state, encoded
+    /// at load time; sits at a 64-byte aligned offset (a bare `CUtensorMap`
+    /// param is a `bytes<128>` with this field at 0, a cute `TiledCopy` has
+    /// its dynamic strides after it).
+    TensorMap { tensormap: TensorMap },
 }
 
 impl Field {
@@ -904,6 +908,7 @@ impl Field {
             | FieldSrc::Expr { .. }
             | FieldSrc::Rank { .. } => Some(4),
             FieldSrc::U8 { .. } => Some(1),
+            FieldSrc::TensorMap { .. } => Some(128),
         })
     }
 }
@@ -925,6 +930,14 @@ impl Pack {
                     continue;
                 }
             };
+            if matches!(f.src, FieldSrc::TensorMap { .. }) {
+                if w != 128 {
+                    errs.push(format!("field #{i}: a tensormap field is 128 bytes, not {w}"));
+                }
+                if !f.at.is_multiple_of(64) {
+                    errs.push(format!("field #{i}: tensormap at {} is not 64-byte aligned", f.at));
+                }
+            }
             match f.at.checked_add(w) {
                 Some(end) if end <= self.size => spans.push((f.at, end, i)),
                 _ => errs.push(format!("field #{i} at {} spans {w} bytes, past the {} byte image", f.at, self.size)),
@@ -1081,9 +1094,6 @@ impl fmt::Display for LaunchArg {
             LaunchArg::F32 { f32: v } => write!(f, "f32 literal {v}"),
             LaunchArg::U8 { u8: v } => write!(f, "u8 literal {v}"),
             LaunchArg::Rank { rank } => write!(f, "rank in group `{rank}`"),
-            LaunchArg::TensorMap { tensormap } => {
-                write!(f, "tensormap over interface param #{}", tensormap.param)
-            }
             LaunchArg::Pack { pack } => write!(f, "pack of {} bytes", pack.size),
         }
     }

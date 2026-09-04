@@ -17,6 +17,13 @@
 //   pid<N>/module_<moduleId>.cubin   one file per distinct loaded module
 //   pid<N>/launches.jsonl            one JSON object per captured kernel launch
 //
+// TMA descriptors are lifted too: every cuTensorMapEncodeTiled call is
+// recorded (encode arguments plus the 128 descriptor bytes it produced), and
+// at launch each staged parameter is scanned for those bytes, so a parameter
+// that carries a CUtensorMap — alone, or inside a CUTLASS TiledCopy struct —
+// comes out annotated with the dtype/dims/strides/box/swizzle that made it,
+// which is exactly what a manifest `tensormap` arg needs.
+//
 // The driver calls InitializeInjection() once, before the first CUDA call, on
 // any library named by CUDA_INJECTION64_PATH.
 
@@ -41,7 +48,6 @@
 #define MAX_PARAMS 4096
 
 #define MAX_ABI_PARAMS 128
-#define MAX_SYMBOL 640
 
 static CUpti_SubscriberHandle g_subscriber;
 static char g_out_dir[4096];
@@ -64,7 +70,9 @@ typedef struct {
 } KernelAttrs;
 
 typedef struct {
-  char symbol[MAX_SYMBOL];
+  // Heap-owned: a CUTLASS template instantiation mangles to a few KiB, and a
+  // truncated name would never match at launch.
+  char *symbol;
   int nparams;
   size_t offset[MAX_ABI_PARAMS];
   size_t size[MAX_ABI_PARAMS];
@@ -96,6 +104,26 @@ static KernelAttrs read_attrs(CUfunction func) {
 static KernelAbi *g_abi;
 static size_t g_abi_count;
 static size_t g_abi_cap;
+
+// One encoded TMA descriptor: the arguments cuTensorMapEncodeTiled was given
+// and the 128 bytes it wrote. Kept in a ring so a host that re-encodes per
+// call (CUTLASS/cute build descriptors on every launch) keeps the recent ones;
+// a launch only ever carries descriptors encoded moments before it.
+#define TMAP_BYTES 128
+#define TMAP_RANK_MAX 5
+#define TMAP_RING 4096
+typedef struct {
+  unsigned char bytes[TMAP_BYTES];
+  int data_type, rank, interleave, swizzle, l2_promotion, oob_fill;
+  uint64_t address;
+  uint64_t dim[TMAP_RANK_MAX];
+  uint64_t stride[TMAP_RANK_MAX];
+  uint32_t box[TMAP_RANK_MAX];
+  uint32_t elem_stride[TMAP_RANK_MAX];
+} TensorMapRecord;
+static TensorMapRecord g_tmaps[TMAP_RING];
+static size_t g_tmap_next;
+static size_t g_tmap_count;
 // cuModuleLoadData below triggers another MODULE_LOADED callback on this
 // thread; the guard keeps that recursion from re-entering the loader.
 static __thread int g_in_self_load;
@@ -152,7 +180,11 @@ static void cache_module_abi(const CUpti_ModuleResourceData *module) {
       if (!abi) {
         break;
       }
-      snprintf(abi->symbol, sizeof(abi->symbol), "%s", name);
+      abi->symbol = strdup(name);
+      if (!abi->symbol) {
+        g_abi_count--;
+        break;
+      }
       abi->attrs = read_attrs(funcs[i]);
       abi->nparams = 0;
       for (size_t p = 0; p < MAX_ABI_PARAMS; p++) {
@@ -237,6 +269,119 @@ static void write_pointer_field(FILE *out, const unsigned char *bytes) {
           ",\"pointer\":{\"memory_type\":\"%s\",\"range_start\":\"0x%llx\","
           "\"range_size\":%zu}",
           type_name, (unsigned long long)range_start, range_size);
+}
+
+static void record_tensormap(const cuTensorMapEncodeTiled_params *p) {
+  if (!p->tensorMap || p->tensorRank == 0 || p->tensorRank > TMAP_RANK_MAX) {
+    return;
+  }
+  TensorMapRecord r;
+  memset(&r, 0, sizeof(r));
+  memcpy(r.bytes, p->tensorMap, TMAP_BYTES);
+  r.data_type = (int)p->tensorDataType;
+  r.rank = (int)p->tensorRank;
+  r.interleave = (int)p->interleave;
+  r.swizzle = (int)p->swizzle;
+  r.l2_promotion = (int)p->l2Promotion;
+  r.oob_fill = (int)p->oobFill;
+  r.address = (uint64_t)(uintptr_t)p->globalAddress;
+  for (int i = 0; i < r.rank; i++) {
+    r.dim[i] = p->globalDim[i];
+    r.box[i] = p->boxDim[i];
+    r.elem_stride[i] = p->elementStrides ? p->elementStrides[i] : 1;
+    if (i + 1 < r.rank) {
+      r.stride[i] = p->globalStrides[i];
+    }
+  }
+  pthread_mutex_lock(&g_lock);
+  g_tmaps[g_tmap_next] = r;
+  g_tmap_next = (g_tmap_next + 1) % TMAP_RING;
+  if (g_tmap_count < TMAP_RING) {
+    g_tmap_count++;
+  }
+  pthread_mutex_unlock(&g_lock);
+}
+
+// Caller holds g_lock.
+static const TensorMapRecord *tensormap_lookup(const unsigned char *bytes) {
+  for (size_t i = 0; i < g_tmap_count; i++) {
+    if (memcmp(g_tmaps[i].bytes, bytes, TMAP_BYTES) == 0) {
+      return &g_tmaps[i];
+    }
+  }
+  return NULL;
+}
+
+static void write_u64_list(FILE *out, const uint64_t *v, int n) {
+  fputc('[', out);
+  for (int i = 0; i < n; i++) {
+    fprintf(out, "%s%llu", i ? "," : "", (unsigned long long)v[i]);
+  }
+  fputc(']', out);
+}
+
+static void write_u32_list(FILE *out, const uint32_t *v, int n) {
+  fputc('[', out);
+  for (int i = 0; i < n; i++) {
+    fprintf(out, "%s%u", i ? "," : "", v[i]);
+  }
+  fputc(']', out);
+}
+
+// Names follow the CUtensorMap* enums so the JSON is readable without cuda.h;
+// the raw enum value rides along for anything the table does not know.
+static const char *tmap_dtype_name(int t) {
+  static const char *names[] = {"u8",   "u16",  "u32",  "i32",  "u64",  "i64",
+                                "f16",  "f32",  "f64",  "bf16", "f32_ftz", "tf32",
+                                "tf32_ftz", "fp8_e4m3", "fp8_e5m2", "u4_align8", "u4_align16", "u6_align16"};
+  return t >= 0 && (size_t)t < sizeof(names) / sizeof(*names) ? names[t] : "?";
+}
+
+// Scan a staged parameter for descriptors the process encoded earlier.
+// CUtensorMap is 64-byte aligned, so a descriptor inside a struct parameter
+// (a cute TiledCopy carries one plus its dynamic strides) sits at a 64-byte
+// offset; the scan walks those offsets only. Emits a "tensormaps" array with
+// one entry per hit, empty arrays are skipped.
+static void write_tensormap_fields(FILE *out, const unsigned char *staged,
+                                   size_t size) {
+  int hits = 0;
+  for (size_t at = 0; at + TMAP_BYTES <= size; at += 64) {
+    const TensorMapRecord *r = tensormap_lookup(staged + at);
+    if (!r) {
+      continue;
+    }
+    fprintf(out, hits ? "," : ",\"tensormaps\":[");
+    hits++;
+    fprintf(out,
+            "{\"at\":%zu,\"dtype\":\"%s\",\"dtype_enum\":%d,\"rank\":%d,"
+            "\"address\":\"0x%llx\",\"dims\":",
+            at, tmap_dtype_name(r->data_type), r->data_type, r->rank,
+            (unsigned long long)r->address);
+    write_u64_list(out, r->dim, r->rank);
+    fprintf(out, ",\"strides\":");
+    write_u64_list(out, r->stride, r->rank - 1);
+    fprintf(out, ",\"box\":");
+    write_u32_list(out, r->box, r->rank);
+    fprintf(out, ",\"elem_strides\":");
+    write_u32_list(out, r->elem_stride, r->rank);
+    // Swizzle / L2 promotion enums map to their byte spans (0, 32, 64, 128 and
+    // 0, 64, 128, 256), which is the unit the manifest speaks.
+    static const int swizzle_bytes[] = {0, 32, 64, 128};
+    static const int l2_bytes[] = {0, 64, 128, 256};
+    fprintf(out,
+            ",\"interleave\":%d,\"swizzle\":%d,\"l2_promotion\":%d,\"oob_fill\":%d",
+            r->interleave,
+            r->swizzle >= 0 && r->swizzle < 4 ? swizzle_bytes[r->swizzle] : -1,
+            r->l2_promotion >= 0 && r->l2_promotion < 4 ? l2_bytes[r->l2_promotion] : -1,
+            r->oob_fill);
+    unsigned char addr[8];
+    memcpy(addr, &r->address, 8);
+    write_pointer_field(out, addr);
+    fputc('}', out);
+  }
+  if (hits) {
+    fputc(']', out);
+  }
 }
 
 // Fill offset[]/size[] for a launch, preferring the live handle and falling
@@ -334,6 +479,9 @@ static void record_launch(const char *symbol, CUfunction func,
     if (staged && size[index] == 8) {
       write_pointer_field(g_launches, staged);
     }
+    if (staged && size[index] >= TMAP_BYTES) {
+      write_tensormap_fields(g_launches, staged, size[index]);
+    }
     fputc('}', g_launches);
   }
   fprintf(g_launches, "]}\n");
@@ -375,7 +523,17 @@ static void CUPTIAPI callback(void *userdata, CUpti_CallbackDomain domain,
   if (data->callbackSite != CUPTI_API_EXIT) {
     return;
   }
-  if (cbid == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel) {
+  if (cbid == CUPTI_DRIVER_TRACE_CBID_cuTensorMapEncodeTiled) {
+    // Also on EXIT: the descriptor bytes exist only after the driver wrote
+    // them. cute reaches this entry point through cudaGetDriverEntryPoint, and
+    // CUPTI still sees the call, so no symbol interposition is needed.
+    const cuTensorMapEncodeTiled_params *p =
+        (const cuTensorMapEncodeTiled_params *)data->functionParams;
+    if (data->functionReturnValue &&
+        *(const CUresult *)data->functionReturnValue == CUDA_SUCCESS) {
+      record_tensormap(p);
+    }
+  } else if (cbid == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel) {
     const cuLaunchKernel_params *p =
         (const cuLaunchKernel_params *)data->functionParams;
     record_launch(data->symbolName, p->f, p->gridDimX, p->gridDimY, p->gridDimZ,
@@ -421,6 +579,8 @@ int InitializeInjection(void) {
                       CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel);
   cuptiEnableCallback(1, g_subscriber, CUPTI_CB_DOMAIN_DRIVER_API,
                       CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx);
+  cuptiEnableCallback(1, g_subscriber, CUPTI_CB_DOMAIN_DRIVER_API,
+                      CUPTI_DRIVER_TRACE_CBID_cuTensorMapEncodeTiled);
   fprintf(stderr, "[kernel-capture] active, writing to %s\n", g_out_dir);
   return 1;
 }

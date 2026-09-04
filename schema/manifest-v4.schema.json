@@ -155,6 +155,13 @@
         "rows": {
           "$ref": "#/$defs/Dim",
           "description": "Rows per sequence: a constant the program's kernels are laid out for (`1` for a decode step, `8` for a speculative round — exact, not a bound), or the var whose value is the row count of the call (`\"tokens\"`: one sequence, as many rows as the chunk)."
+        },
+        "span": {
+          "description": "The var whose value is the length of the call's span: one of the sequences (rows `1` each) feeds a run of that many consecutive tokens, a row each, starting at the row the `span_at` fill names, e.g. `\"span\"` (a prompt chunk riding a decode step). Absent for a call whose sequences all feed `rows`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -598,6 +605,18 @@
             "rank"
           ],
           "type": "object"
+        },
+        {
+          "description": "A 128-byte TMA descriptor over an interface buffer or state, encoded\nat load time; sits at a 64-byte aligned offset (a bare `CUtensorMap`\nparam is a `bytes<128>` with this field at 0, a cute `TiledCopy` has\nits dynamic strides after it).",
+          "properties": {
+            "tensormap": {
+              "$ref": "#/$defs/TensorMap"
+            }
+          },
+          "required": [
+            "tensormap"
+          ],
+          "type": "object"
         }
       ],
       "description": "One field of a `pack`: a byte offset plus where the value comes from, e.g. `{\"at\": 8, \"var\": \"tokens\"}`.",
@@ -649,6 +668,11 @@
         {
           "const": "cu_seqlens",
           "description": "Input: exclusive prefix sums of rows per sequence, `groups + 1` entries.",
+          "type": "string"
+        },
+        {
+          "const": "span_at",
+          "description": "Input: the first row of the call's span (`batch.span`), one word; 0 when the call has none.",
           "type": "string"
         },
         {
@@ -892,19 +916,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "A TMA descriptor over an interface buffer, encoded at load time.",
-          "properties": {
-            "tensormap": {
-              "$ref": "#/$defs/TensorMap"
-            }
-          },
-          "required": [
-            "tensormap"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "An aggregate assembled from fields at byte offsets, for a `bytes<n>` param.",
           "properties": {
             "pack": {
@@ -986,7 +997,7 @@
     },
     "ParamType": {
       "description": "One parameter: a scalar (`\"i32\"`, `\"i64\"`, `\"f32\"`, `\"u8\"`), a directional pointer (`\"in buffer<bf16>\"`, `\"out buffer<f32>\"`, `\"inout state\"`), or a launch-private `\"tensormap\"` (128-byte TMA descriptor) or `\"bytes<n>\"` (an n-byte aggregate filled by a `pack` launch arg).",
-      "pattern": "^(i32|i64|f32|u8|tensormap|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
+      "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
       "type": "string"
     },
     "Program": {

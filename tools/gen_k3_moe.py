@@ -42,7 +42,7 @@ def tmap(param, dtype, dims, strides, box, swizzle=0, l2=256):
          "l2_promotion": l2}
     if swizzle:
         t["swizzle"] = swizzle
-    return {"tensormap": t}
+    return {"pack": {"size": 128, "fields": [{"at": 0, "tensormap": t}]}}
 
 
 def mega_pieces(ranks, tokens_max, wprefix=""):
@@ -116,7 +116,7 @@ def mega_pieces(ranks, tokens_max, wprefix=""):
                    "inout buffer<u8>", "inout buffer<u8>", "in buffer<u8>", "in buffer<i32>"],
         "impl": {"launches": [{
             **mega, "entry": f"kern_k3_mega_moe_e{EXPERTS}_r{ranks}_situ",
-            "params": ["out buffer<bf16>", "out buffer<i32>", "i32", "in buffer<u64>", "i32"] + ["tensormap"] * 18,
+            "params": ["out buffer<bf16>", "out buffer<i32>", "i32", "in buffer<u64>", "i32"] + ["bytes<128>"] * 18,
             "block": [lay["num_threads"], 1, 1], "grid": [lay["num_sms"], 1, 1], "cluster": [2, 1, 1],
             "shared_mem": lay["smem_size"],
             "args": [{"param": i} for i in range(5)] + maps + maps,

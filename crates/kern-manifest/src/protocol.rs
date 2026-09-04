@@ -33,6 +33,15 @@
 //! are the same call to the driver — stage `rows` rows per sequence, run,
 //! read `tokens` and `count` — which is why there is no role: the shape
 //! is the role.
+//!
+//! One shape rides another: a program whose `batch` names a `span` var
+//! takes a decode step's call (`rows` 1) in which one sequence feeds a
+//! run of consecutive tokens, a row each, the var set to the run's length
+//! and the `span_at` fill to its first row — a prompt chunk in the middle
+//! of a batch, for a model whose recurrent kernels take the run as one
+//! sequence and whose others see rows like any other. The driver stages a
+//! run as that many rows of the sequence (each with its position, slot,
+//! length and page-table row) and reads the last row's token.
 
 use crate::types::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -122,6 +131,9 @@ pub struct Forward {
     /// Upper bound on sequences per call.
     pub groups: u64,
     pub rows: Rows,
+    /// One sequence of the call feeds a run of rows sized by
+    /// [`Protocol::span`]; only a call with a run goes through it.
+    pub span: bool,
     /// The `tokens` output it writes, as an index into [`Protocol::fills`];
     /// `None` for a call that only advances state.
     pub emits: Option<usize>,
@@ -131,9 +143,10 @@ pub struct Forward {
 }
 
 impl Forward {
-    /// Whether the program accepts a call of `groups` sequences of `rows`.
+    /// Whether the program accepts a call of `groups` sequences of `rows`
+    /// with no run among them.
     pub fn accepts(&self, groups: u64, rows: Rows) -> bool {
-        self.rows == rows && groups <= self.groups
+        !self.span && self.rows == rows && groups <= self.groups
     }
 }
 
@@ -170,6 +183,8 @@ pub struct Protocol {
     /// The var the tray batch's rows go in, for a manifest whose batch
     /// spans a rank group.
     pub tray: Option<Bound>,
+    /// The var a run's length goes in, when some program takes one.
+    pub span: Option<Bound>,
     /// Every buffer with a fill, in name order.
     pub fills: Vec<Filled>,
     pub page_tables: Vec<PageTable>,
@@ -282,7 +297,7 @@ impl Protocol {
                 Fill::SeqLen | Fill::Count => width == 1 && axis == Axis::Groups,
                 Fill::CuSeqlens => matches!(axis, Axis::Fixed(n) if n > groups.max),
                 Fill::Tokens => axis == Axis::Groups || (axis == Axis::Tray && width == 1),
-                Fill::Error => axis == Axis::Fixed(1) && b.dtype == DType::I32,
+                Fill::SpanAt | Fill::Error => axis == Axis::Fixed(1) && b.dtype == DType::I32,
             };
             if !ok {
                 errs.push(format!(
@@ -294,7 +309,7 @@ impl Protocol {
                         Fill::SeqLen | Fill::Count => "expected [groups]",
                         Fill::CuSeqlens => "expected [n] with n >= groups + 1",
                         Fill::Tokens => "expected [groups], [groups, w] or [tray]",
-                        Fill::Error => "expected i32 [1]",
+                        Fill::SpanAt | Fill::Error => "expected i32 [1]",
                     }
                 ));
                 continue;
@@ -313,7 +328,7 @@ impl Protocol {
         if fills.iter().filter(|f| f.fill == Fill::Token && f.axis == Axis::Groups).count() > 1 {
             errs.push("fill `token` over the sequences is on more than one buffer".into());
         }
-        for fill in [Fill::Position, Fill::CuSeqlens, Fill::Count, Fill::Error] {
+        for fill in [Fill::Position, Fill::CuSeqlens, Fill::SpanAt, Fill::Count, Fill::Error] {
             if one(fill).is_none() && m.buffers.values().any(|b| b.fill == Some(fill)) {
                 errs.push(format!("fill `{fill}` is on more than one buffer"));
             }
@@ -365,6 +380,7 @@ impl Protocol {
         // Forwards: the shape, and by dataflow what each hands back.
         let mut forwards: Vec<Forward> = Vec::new();
         let mut once = Vec::new();
+        let mut span_var: Option<Bound> = None;
         for (pname, p) in &m.programs {
             if p.once {
                 once.push(pname.clone());
@@ -396,6 +412,44 @@ impl Protocol {
             };
             if batch.groups > groups.max {
                 errs.push(format!("{ctx}: {} groups exceed the {} `{}` allows", batch.groups, groups.max, groups.var));
+            }
+            let span = batch.span.as_ref().and_then(|v| {
+                if rows_of != Rows::Const(1) {
+                    let rows = match &batch.rows {
+                        Dim::Const(r) => r.to_string(),
+                        Dim::Var(v) => v.clone(),
+                    };
+                    errs.push(format!("{ctx}: a span rides a call of one row per sequence, not `{rows}`"));
+                }
+                if *v == rows.var || *v == groups.var {
+                    errs.push(format!(
+                        "{ctx}: batch.span is `{v}`, which sizes the call itself; a run needs its own var"
+                    ));
+                }
+                match var_max(v) {
+                    Some(max) if max > rows.max => {
+                        errs.push(format!(
+                            "{ctx}: a run of {max} rows (`{v}`) exceeds the {} rows `{}` allows",
+                            rows.max, rows.var
+                        ));
+                        None
+                    }
+                    Some(max) => Some(Bound { var: v.clone(), max }),
+                    None => {
+                        errs.push(format!("{ctx}: batch.span names unknown var `{v}`"));
+                        None
+                    }
+                }
+            });
+            if let Some(s) = &span {
+                match &span_var {
+                    Some(other) if *other != *s => errs.push(format!(
+                        "{ctx}: batch.span is `{}`, but `{}` sizes a run in another program; one var sizes every run",
+                        s.var, other.var
+                    )),
+                    Some(_) => {}
+                    None => span_var = Some(s.clone()),
+                }
             }
             let written: BTreeSet<&str> = p
                 .calls
@@ -466,19 +520,32 @@ impl Protocol {
                     )),
                 }
             }
-            if let Some(same) = forwards.iter().find(|f| f.groups == batch.groups && f.rows == rows_of) {
+            let spanned = batch.span.is_some();
+            if let Some(same) =
+                forwards.iter().find(|f| f.groups == batch.groups && f.rows == rows_of && f.span == spanned)
+            {
                 errs.push(format!("{ctx} and `{}` accept the same call shape; a shape names one program", same.name));
             }
-            forwards.push(Forward { name: pname.clone(), groups: batch.groups, rows: rows_of, emits, count });
+            forwards.push(Forward {
+                name: pname.clone(),
+                groups: batch.groups,
+                rows: rows_of,
+                span: spanned,
+                emits,
+                count,
+            });
         }
         if forwards.is_empty() {
             errs.push("no program declares a `batch`: nothing for a serving loop to drive".into());
         } else if forwards.iter().all(|f| f.emits.is_none()) {
             errs.push("no program with a `batch` writes a `tokens` output: no call hands a token back".into());
         }
+        if span_var.is_some() && one(Fill::SpanAt).is_none() {
+            errs.push("a program takes a run of rows (batch.span) but no input has fill `span_at`".into());
+        }
 
         if errs.is_empty() {
-            Ok(Protocol { rows, groups, tray, fills, page_tables, line_tables, forwards, once })
+            Ok(Protocol { rows, groups, tray, span: span_var, fills, page_tables, line_tables, forwards, once })
         } else {
             Err(ProtocolErrors(errs))
         }
@@ -495,18 +562,29 @@ impl Protocol {
         self.forward(1, Rows::Var)
     }
 
+    /// The program for a call of `groups` sequences of one row, one of
+    /// them a run: the one with the tightest bound that takes it.
+    pub fn spanned(&self, groups: u64) -> Option<&Forward> {
+        self.forwards.iter().filter(|f| f.span && groups <= f.groups).min_by_key(|f| f.groups)
+    }
+
     /// Every constant rows-per-sequence some program accepts, ascending.
     pub fn row_shapes(&self) -> Vec<u64> {
-        let mut v: Vec<u64> =
-            self.forwards.iter().filter_map(|f| if let Rows::Const(r) = f.rows { Some(r) } else { None }).collect();
+        let mut v: Vec<u64> = self
+            .forwards
+            .iter()
+            .filter(|f| !f.span)
+            .filter_map(|f| if let Rows::Const(r) = f.rows { Some(r) } else { None })
+            .collect();
         v.sort_unstable();
         v.dedup();
         v
     }
 
-    /// Most sequences any program accepts at `rows` per sequence.
+    /// Most sequences any program accepts at `rows` per sequence, no run
+    /// among them.
     pub fn max_groups(&self, rows: Rows) -> u64 {
-        self.forwards.iter().filter(|f| f.rows == rows).map(|f| f.groups).max().unwrap_or(0)
+        self.forwards.iter().filter(|f| !f.span && f.rows == rows).map(|f| f.groups).max().unwrap_or(0)
     }
 
     /// The var env of a call: `b` sequences of `per` rows on this rank,
@@ -642,6 +720,22 @@ mod tests {
         .unwrap()
     }
 
+    /// The plain contract plus a run: a `span` var, the `span_at` word
+    /// and a decode step over 4 sequences, one of which may feed a run.
+    fn spanned() -> Manifest {
+        let mut m = plain();
+        m.vars.insert("span".into(), serde_json::from_str(r#"{"max": 6}"#).unwrap());
+        m.buffers.insert(
+            "span_at".into(),
+            serde_json::from_str(r#"{"kind": "input", "dtype": "i32", "shape": [1], "fill": "span_at"}"#).unwrap(),
+        );
+        m.programs.insert(
+            "decode_span".into(),
+            serde_json::from_str(r#"{"batch": {"groups": 4, "rows": 1, "span": "span"}, "calls": [{"op": "head", "args": [{"buf": "next_token"}]}]}"#).unwrap(),
+        );
+        m
+    }
+
     fn rejects(m: &Manifest, what: &str) {
         let Err(e) = Protocol::check(m) else { panic!("accepted, expected `{what}`") };
         assert!(e.iter().any(|x| x.contains(what)), "no `{what}` in {e:#?}");
@@ -664,6 +758,7 @@ mod tests {
         );
         let names: Vec<(&str, u64, Rows, bool)> =
             p.forwards.iter().map(|f| (f.name.as_str(), f.groups, f.rows, f.emits.is_some())).collect();
+        assert!(p.forwards.iter().all(|f| !f.span));
         assert_eq!(
             names,
             [
@@ -693,6 +788,45 @@ mod tests {
         // The plain decode in the same manifest hands back one per sequence.
         let decode = p.forwards.iter().find(|f| f.name == "decode").unwrap();
         assert_eq!((decode.emits.map(|i| p.fills[i].width), decode.count), (Some(1), None));
+    }
+
+    #[test]
+    fn span_contract() {
+        let p = Protocol::check(&spanned()).unwrap();
+        assert_eq!(p.span, Some(Bound { var: "span".into(), max: 6 }));
+        assert_eq!(p.any(Fill::SpanAt).map(|f| (f.name.as_str(), f.axis)), Some(("span_at", Axis::Fixed(1))));
+        // A call with a run goes through the span program, one without
+        // through the plain ones; the span program is no plain shape.
+        assert_eq!(p.spanned(3).map(|f| f.name.as_str()), Some("decode_span"));
+        assert_eq!(p.forward(3, Rows::Const(1)).map(|f| f.name.as_str()), Some("decode_batch"));
+        assert_eq!((p.spanned(5), p.row_shapes(), p.max_groups(Rows::Const(1))), (None, vec![1], 4));
+        assert_eq!(Protocol::check(&plain()).unwrap().span, None);
+    }
+
+    #[test]
+    fn span_rules() {
+        let mut m = spanned();
+        m.programs.get_mut("decode_span").unwrap().batch.as_mut().unwrap().rows = Dim::Const(4);
+        rejects(&m, "a span rides a call of one row per sequence, not `4`");
+        let mut m = spanned();
+        m.programs.get_mut("decode_span").unwrap().batch.as_mut().unwrap().span = Some("tokens".into());
+        rejects(&m, "batch.span is `tokens`, which sizes the call itself");
+        let mut m = spanned();
+        m.programs.get_mut("decode_span").unwrap().batch.as_mut().unwrap().span = Some("nope".into());
+        rejects(&m, "batch.span names unknown var `nope`");
+        let mut m = spanned();
+        m.vars.get_mut("span").unwrap().max = 9;
+        rejects(&m, "a run of 9 rows (`span`) exceeds the 8 rows `tokens` allows");
+        let mut m = spanned();
+        m.buffers.get_mut("span_at").unwrap().fill = None;
+        rejects(&m, "no input has fill `span_at`");
+        let mut m = spanned();
+        m.buffers.get_mut("span_at").unwrap().shape = vec![Dim::Const(2)];
+        rejects(&m, "expected i32 [1]");
+        let mut m = spanned();
+        m.vars.insert("other".into(), serde_json::from_str(r#"{"max": 2}"#).unwrap());
+        m.programs.get_mut("decode").unwrap().batch.as_mut().unwrap().span = Some("other".into());
+        rejects(&m, "one var sizes every run");
     }
 
     #[test]
@@ -747,19 +881,21 @@ mod tests {
     #[test]
     fn batch_rules() {
         let mut m = plain();
-        m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 5, rows: Dim::Const(1) });
+        m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 5, rows: Dim::Const(1), span: None });
         rejects(&m, "5 groups exceed the 4");
         let mut m = plain();
-        m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 4, rows: Dim::Const(3) });
+        m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 4, rows: Dim::Const(3), span: None });
         rejects(&m, "4 sequences of 3 rows exceed the 8");
         let mut m = plain();
-        m.programs.get_mut("prefill").unwrap().batch = Some(Batch { groups: 2, rows: Dim::Var("tokens".into()) });
+        m.programs.get_mut("prefill").unwrap().batch =
+            Some(Batch { groups: 2, rows: Dim::Var("tokens".into()), span: None });
         rejects(&m, "one sequence, not 2 groups");
         let mut m = plain();
-        m.programs.get_mut("prefill").unwrap().batch = Some(Batch { groups: 1, rows: Dim::Var("seqs".into()) });
+        m.programs.get_mut("prefill").unwrap().batch =
+            Some(Batch { groups: 1, rows: Dim::Var("seqs".into()), span: None });
         rejects(&m, "the rows of a call go in `tokens`");
         let mut m = plain();
-        m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 1, rows: Dim::Const(1) });
+        m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 1, rows: Dim::Const(1), span: None });
         rejects(&m, "accept the same call shape");
         let mut m = plain();
         for p in m.programs.values_mut() {
@@ -777,7 +913,7 @@ mod tests {
     fn what_a_forward_hands_back_is_dataflow() {
         // A round handing back 4 per sequence must be a 4-row call.
         let mut m = speculative();
-        m.programs.get_mut("round").unwrap().batch = Some(Batch { groups: 2, rows: Dim::Const(3) });
+        m.programs.get_mut("round").unwrap().batch = Some(Batch { groups: 2, rows: Dim::Const(3), span: None });
         rejects(&m, "hands back `verify_tokens` of 4 per sequence, but a call has 3 rows");
         // A count needs several tokens per sequence to count.
         let mut m = speculative();

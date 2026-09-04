@@ -182,7 +182,8 @@ fn main() {
             let run = || -> Result<Vec<String>, String> {
                 let topo = Topology::one("tp", rank as u64, n as u64);
                 let e = |e: kern_runtime::Error| e.to_string();
-                let mut rt = Runtime::load(&verified, &kernels, gpu, Some(1), Some(&topo)).map_err(e)?;
+                let mut rt =
+                    Runtime::load(&verified, &kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(&topo)).map_err(e)?;
                 let mine = rt.export_handles().map_err(e)?;
                 posted.lock().unwrap()[rank] = Some(mine);
                 gate.wait();

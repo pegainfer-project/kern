@@ -37,7 +37,7 @@ jobs:
           # fill, program, var or buffer name in their non-test code is the
           # serving contract leaking out of the manifest. Test fixtures
           # (everything from `#[cfg(test)]` on) may spell names out.
-          names='"(token|position|slot|seq_len|cu_seqlens|count|error|prefill|decode|decode_batch|round|seqs|token_ids|next_token|slot_mapping|seq_lens|positions|block_table|cu_seqlens_q|tp_err|nacc|anchor_token|verify_tokens|draft_tokens|line_index)"'
+          names='"(token|position|slot|seq_len|cu_seqlens|span_at|count|error|prefill|decode|decode_batch|decode_span|round|seqs|span|token_ids|next_token|slot_mapping|seq_lens|positions|block_table|cu_seqlens_q|tp_err|nacc|anchor_token|verify_tokens|draft_tokens|line_index)"'
           bad=0
           for f in $(find crates/kern-serve/src crates/kern-run/src -name '*.rs' | sort); do
             if sed '/#\[cfg(test)\]/,$d' "$f" | grep -nE "$names" | sed "s|^|$f:|" | grep .; then bad=1; fi

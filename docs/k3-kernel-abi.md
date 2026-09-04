@@ -149,7 +149,7 @@ extern "C" __global__ void kern_k3_conv_silu(
     const f32*  cw,          // [3][4][INNER]   cw_q | cw_k | cw_v（生成器把三份权重拼成一块）
     void*       kda_base, const int* line_index, long long line_bytes,   // 窗口：line + REC_BYTES + s*73728
     bf16*       conv_q, bf16* conv_k, bf16* conv_v,   // [B, INNER] 各一
-    int B);
+    int B, const int* span_at, int span);   // 行号在 [*span_at, +span) 的 block 直接返回（span 行由 K9 做）
 // 交付：grid (B, 3, 24)（y = 流，z = 512 列一段），block 128，每线程 4 列，smem 0
 ```
 
@@ -179,7 +179,7 @@ extern "C" __global__ void kern_k3_kda_core(
     const f32*  gamma_o,       // [128]
     void*       kda_base, const int* line_index, long long line_bytes,   // rec 在 line 偏移 0
     bf16*       out,           // [B, INNER]
-    int B);
+    int B, const int* span_at, int span);   // 行号在 [*span_at, +span) 的 block 直接返回（span 行由 K8 + K11 做）
 // grid (B, HEADS, 1)，block 128
 ```
 
@@ -218,7 +218,7 @@ Blackwell MLA decode 核（`flashinfer/cute_dsl/attention/monolithic/mla_decode_
 tcgen05 2-CTA MMA + TMA 分页加载 + split-KV 归约），**预编译成 cubin 收进仓库**
 （`tools/kernels-bin/mla_decode_h96_p64.cubin`，构建配方 `tools/build_mla_dsl.py`，README 在同目录），
 runtime 不加任何模型代码：它的 struct 参数 ABI 由 manifest 的 `bytes<n>` + `pack` 铺平，
-五个 TMA 描述符走 `tensormap`（`docs/manifest.md`）。
+五个 TMA 描述符是 `bytes<128>` 里的 `tensormap` 字段（`docs/manifest.md`）。
 
 数学链和旧核一致处：q_abs 在 bf16 落地（f32 累加）、attention 输出 lat 在 bf16 落地、
 o = bf16(W_UV·lat) 后乘 bf16(σ(gate))；不同处：分数/softmax 在核内 f32（scale 取
@@ -256,7 +256,7 @@ split_kv、cache_seqs、block_split_kvs、两个 scale 和 S=1 的 FastDivmod，
 | # | 类型 | 内容 |
 |---|------|------|
 | 0,1 | bytes<64> | TiledMMA 描述（空） |
-| 2,4,6,8,10 | tensormap | q latent / q rope / c latent / c rope / c latent 转置：bf16、swizzle 128B、L2 promotion 128B，box [64,64,1]（转置 [64,32,1]）；q 的 dims [512\|64, 96, tokens_max]，KV 的 dims [512\|64, 64, **0 = 铺满 state**]，页步长 = 全部 MLA 层的一页字节 |
+| 2,4,6,8,10 | bytes<128>（tensormap 字段） | q latent / q rope / c latent / c rope / c latent 转置：bf16、swizzle 128B、L2 promotion 128B，box [64,64,1]（转置 [64,32,1]）；q 的 dims [512\|64, 96, tokens_max]，KV 的 dims [512\|64, 64, **0 = 铺满 state**]，页步长 = 全部 MLA 层的一页字节 |
 | 3,5,7,9,11 | bytes<8/12> | TMA 坐标张量的动态 shape（核不读） |
 | 12 | bytes<24> | 页表 {ptr, max_pages, B, i64 max_pages} |
 | 13,14 | bytes<48/24> | o / lse 张量（split 路径不写） |
@@ -328,6 +328,101 @@ extern "C" __global__ void kern_k3_land(const f32* p, bf16* o, int n, int off, i
 // act[b, i] = bf16( situ( f32(bf16(p[b*2n + i])), f32(bf16(p[b*2n + n + i])) ) )，i < n   （gate 在前 n 列，up 在后 n 列）
 extern "C" __global__ void kern_k3_land_situ(const f32* p, bf16* act, int n, int B);               // grid (B, ceil(n/1024)), block 1024
 ```
+
+### K8 `flash_kda_d128`：span 的 KDA 时间轴（vendored FlashKDA，两个核）
+
+来源 `tools/flash-kda/`（MoonshotAI FlashKDA `7afb9f4`，MIT，`PROVENANCE.md`），cubin
+`tools/kernels-bin/flash_kda_d128.cubin`。ABI 不是读模板推的，是 `tools/kernel-capture` 从 vendored 源码编的
+probe（`tools/flash-kda/probe.cu`）跑一次直接提出来的（`lift.py`，见 `tools/kernel-capture/README.md`）；与
+pegainfer shim 的捕获逐字段一致。数学（q/k L2 norm、β sigmoid、gate = `gate_scale·σ(g + dt_bias)`、
+`a_log`）都在核内，输入是 conv+SiLU 之后的裸 q/k/v 和 `w_f_b` 投影后的 g，输出是 o_norm 之前的 attn；
+状态 f32 `[H][128 v][128 k]`，与 K3 的 rec 同布局，可直接指到 KDA line 的 rec 区。
+
+两个 entry（mangled 名见 cubin 的 `cuobjdump -symbols`，都是 `_Z22_flash_kda_fwd_prepareI…` /
+`_Z25_flash_kda_fwd_recurrenceI…` 一个实例）：
+
+| 核 | grid | block | dyn smem | 作用 |
+|---|---|---|---|---|
+| `_flash_kda_fwd_prepare` | `(tiles, H)`，tiles = ceil(T/16) | 256 | 21248 | 每 16 行 tile：kd/qd/kr、gt、inv、mqk 写 workspace |
+| `_flash_kda_fwd_recurrence` | `(1, H)` | 192 | 98432 | 每 head 串行走 tile：state in → out，写 attn |
+
+参数全是按值的 cute `TiledCopy`（`bytes<256>`：`CUtensorMap` 在 0，动态 stride 的 `int` 在 128，其余是
+host 栈垃圾，pack 置 0）加尾部标量。描述符 dtype/dims/strides/box 如下（dims 内层在前，元素；strides 字节；
+swizzle 0、L2 promotion 128 除注明外；oob none）：
+
+```
+prepare  0 q      bf16 [128, T, H] strides [H·256, 256] box [128,16,1]   +128: i32 1
+         1 k      同 q                                                    +128: i32 1
+         2 beta   bf16 [H·T]        box [32]                              （[H][T]，无动态 int）
+         3 g      同 q                                                    +128: i32 1
+         4 dt_bias f32 [128, H]     strides [512] box [128,1]
+         5 ws_kd  bf16 [128, 16, tiles·H] strides [256, 4096] box [8,16,1]   ws + 0
+         6 ws_qd  同 ws_kd                                                   ws + n·4096
+         7 ws_kr  同 ws_kd                                                   ws + n·8192
+         8 ws_gt  f32 [128, tiles·H] strides [512] box [128,1]               ws + n·12288
+         9 ws_inv bf16 [16, 16, tiles·H] strides [32, 512] box [8,16,1]      ws + n·12800
+        10 ws_mqk 同 ws_inv                                                  ws + n·13312
+        11 f32 scale      12 i32 T      13 i32 H      14 i32 N=1      15 i64 cu_seqlens=0
+        16 i32 tiles      17 ptr a_log  18 f32 gate_scale             19 ptr tile_prefix（varlen=false 不读，0）
+recurrence 0 v    bf16 [128, T, H] strides [H·256, 256] box [8,16,1]     +128: i32 1
+         1 beta   同上
+         2..7     ws_kd, ws_qd, ws_kr, ws_gt, ws_inv, ws_mqk 同 prepare 5..10（box 同）
+         8 state_in  f32 [128, 128, H] strides [512, 65536] box [8,128,1] swizzle 32
+         9 state_out 同 state_in
+        10 out    同 v（TMA store 描述符，box [8,16,1]）                     +128: i32 1
+        11 ptr out（同一块，bf16 [T, H, 128]）  12 i32 T  13 i32 H  14 i32 N=1  15 i64 cu_seqlens=0  16 i32 tiles
+（q 只进 prepare——它落在 ws_qd 里；recurrence 里 out 既是 TMA store 的描述符又是裸指针。这两项最初写反了
+（q/v、v/out），lift 出来的 `@A+0x0` 只是地址字母，是 probe 打印各 buffer 指针后对回去才定的；C2 门禁
+`program_io` 逐位对拍就是抓这个的。）
+```
+
+n = tiles·H；workspace 每 (tile, head) 13824 B，六个数组分开连续（上游 `WS::kPerTile`，
+`fwd_launch.cu`），末尾 128 B 的 tile_prefix 区 varlen=false 用不到。`scale` 乘在 q 上（bf16 相乘，
+`r_qd = q·exp_cumsum·scale`），`gate_scale = lower_bound·log2 e`（K3 lower_bound −5 → −7.2135）。
+
+放进 manifest 时 T 与 tiles 都取 span 上界（描述符装载时定死；核用标量 `T`/`tiles` 决定实际走多少行，
+尾 tile 里 ≥ seq_len 的行核内自己清零——`fwd_kernel1.cuh` `actual_len`，`fwd_kernel2.cuh` 同——不靠 TMA
+OOB 填零），beta 用 `[H][T]` 且行距是**实际** T（核内 `beta_linear = h·T + t`），所以写 beta 的 gather 核要按
+当次 span 的 T 排。描述符维数、offset 全是 span.max 与 H 的算术，生成器写死。
+
+### K9 / K10 / K11：span 的配套小核（`k3_span_gather` / `k3_span_state` / `k3_kda_out_gate`）
+
+span 是 batch 里连续的一段行 `[*span_at, *span_at + span)`（同一序列的连续 token；`span_at` 是 `[1]` 的 i32
+input，因为 tray 批"自己的行在前"，同一个 span 在 owner 上在行 0、在 peer 上在它的 block d），K2/K3 对这些行
+直接返回，由下面三个核加 K8 接手。K8 的描述符基址装载时定死，所以 span 的 q/k/v/out 各有自己的 `[span, INNER]`
+buffer（行 0..span），K9 把 span 行搬进去、K11 把结果搬回 batch 行。
+
+```c
+// K9：K2 逐行作用于 batch 行 at..at+span（tap 先取 line 窗口再取 span 自己的前几行，landing 与 K2 完全一样），
+//     结果落在 span 自己的行 0..span；窗口最后留 span 的末三个输入；顺带写 K8 要的转置 beta 与 f_a 的 flow
+extern "C" __global__ void kern_k3_span_gather(
+    const f32* partial, const f32* cw,                                   // 同 K2，读行 at..at+span
+    void* kda_base, const int* line_index, long long line_bytes,         // 只用 line_index[at] 的 line
+    const f32* wsm_partial,                                              // [B, WSM]，读行 at..at+span
+    bf16* span_q, bf16* span_k, bf16* span_v,                            // [span, INNER]
+    bf16* span_beta,   // [HEADS * span]，h*span + i = bf16(wsm[at + i, h])
+    bf16* span_flow,   // [span, 128]，bf16(wsm[at + i, 96 + j])
+    const int* span_at, int span);
+// grid (INNER/512, 4, ceil(span/8))，block 128；y<3 是流（每线程 4 列 × 8 行），y==3 写 beta/flow。
+// 只有 z==0 的 block 读旧窗口（行 0..2 要），也只有它在读完之后写新窗口，block 之间不碰同一字节。
+
+// K10：行 at 的 rec（line 偏移 0，f32 [HEADS][128][128]）与固定基址的 buf 互拷；K8 的 state 描述符指 buf
+extern "C" __global__ void kern_k3_span_state(
+    void* kda_base, const int* line_index, long long line_bytes, const int* span_at,
+    f32* buf, int to_line);  // 0: buf=rec；1: rec=buf
+// grid (HEADS, 32, 1)，block 128，每线程一个 float4
+
+// K11：K3 的尾巴单独拿出来：K8 把裸 attn（o_norm 之前）写在 attn 的行 0..span，这里做完写进 gated 的行 b = at + i
+//   o = bf16(f32(attn)·rsqrt(mean(attn²)+1e-5)·gamma_o[d])，gated = bf16(f32(o)·f32(bf16(σ(f32(bf16(gate_partial[b, 3·INNER + h·128 + d]))))))
+extern "C" __global__ void kern_k3_kda_out_gate(const bf16* attn, const f32* gate_partial, const f32* gamma_o,
+                                                bf16* gated, const int* span_at, int span);
+// grid (span, HEADS, 1)，block 128（线程 = dv）
+```
+
+g（K8 的 gate 输入）不需要核：`span_flow · w_f_bᵀ` 用 cuBLAS 的 bf16 GEMM 出 bf16 `[span, INNER]`，
+与 K3 核内 f_b 投影的 landing 相同（f32 累加落 bf16 一次）。harness：`tools/k3-harness` 的
+`span_gather`（B = span，对 K2 参考逐行调用）、`span_state`（逐字节）、`kda_out_gate`，三个都把 span 放在
+batch 行 3 起（`SPAN_AT`），前面的行必须原样。
 
 ## 2. 验收（每个核）
 

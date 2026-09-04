@@ -5,7 +5,7 @@
 //       const float* cw,           // [3 stream][4 tap][INNER]
 //       void* kda_base, const int* line_index, long long line_bytes,
 //       __nv_bfloat16* conv_q, __nv_bfloat16* conv_k, __nv_bfloat16* conv_v,  // [B, INNER]
-//       int B);
+//       int B, const int* span_at, int span);  // rows [*span_at, +span) are a span (K9 does them): the block returns
 //
 // For s = 0,1,2 and every column c < INNER = 12288:
 //     x   = bf16(partial[b, s*INNER + c])
@@ -97,8 +97,9 @@ extern "C" __global__ __launch_bounds__(K2_BLOCK) void kern_k3_conv_silu(
     __nv_bfloat16* __restrict__ conv_q,         // [B, 12288]
     __nv_bfloat16* __restrict__ conv_k,
     __nv_bfloat16* __restrict__ conv_v,
-    int B) {
+    int B, const int* __restrict__ span_at, int span) {
   const int b = blockIdx.x;
+  if ((unsigned)(b - span_at[0]) < (unsigned)span) return;
   const int s = blockIdx.y;
   const int c = (int)(blockIdx.z * K2_BLOCK + threadIdx.x) * K2_VEC;
 

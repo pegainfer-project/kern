@@ -48,7 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let unit = kern_runtime::page_unit(&m) as usize;
     let pages = tokens.div_ceil(unit);
     let capacity = ((pages + 1) * unit) as u64;
-    let mut rt = Runtime::load(&m, &kernels, gpu, Some(capacity), None)?;
+    let mut rt =
+        Runtime::load(&m, &kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(capacity), seqs: 4 }), None)?;
     let t = Instant::now();
     rt.reserve_host(host_gib << 30)?;
     println!("host tier {host_gib} GiB reserved in {:.2} s", t.elapsed().as_secs_f64());

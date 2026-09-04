@@ -250,9 +250,11 @@ round 两个 program。
 
 ## 7. 明确不做的
 
-- `rows: "any"`（每组行数各不相同的混批，K5 的 extend 当 filler）。
-  unified 2D causal 实例本来就支持，vLLM 就这么用它。但这是一个新形态，
-  现在加就是为不存在的 caller 留门；K5 做到那一步时加。
+- `rows: "any"`（每组行数各不相同的混批）。unified 2D causal 实例本来就
+  支持，vLLM 就这么用它。但这是一个新形态，现在加就是为不存在的 caller 留
+  门。K5 落地的是它的最小特例：`batch.span`——每组 1 行的 decode 步里**一组**
+  喂一段 run，长度进 `span` var、首行进 `span_at` fill（manifest.md
+  「Serving 协议」）；混批仍不做。
 - tree draft / EAGLE：只要设备端把接受的路径按行序线性化输出，还是
   `tokens + count`。需要 host 在一轮中间做决策的算法才需要角色，目前
   没有。

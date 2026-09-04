@@ -323,18 +323,12 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
 
     // 6. ops: interface + implementation
     // Per op: (interface param, footprint bytes, context) of every tensormap
-    // launch arg, checked against the bound buffer at each call (rule 7).
+    // pack field, checked against the bound buffer at each call (rule 7).
     let mut op_tensormaps: BTreeMap<&str, Vec<(usize, u64, String)>> = BTreeMap::new();
     for (oname, op) in &m.ops {
         let imp = &op.imp;
 
         for (i, p) in op.params.iter().enumerate() {
-            if *p == ParamType::TensorMap {
-                errs.push(format!(
-                    "op `{oname}`: interface param #{i} is a tensormap; tensormaps are launch-private, \
-                     the interface takes the buffer they describe"
-                ));
-            }
             if matches!(p, ParamType::Bytes(_)) {
                 errs.push(format!(
                     "op `{oname}`: interface param #{i} is a byte aggregate; packs are launch-private, \
@@ -445,10 +439,8 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                     }
                 }
             }
-            if launch.is_extern()
-                && launch.params_of(op).iter().any(|p| matches!(p, ParamType::TensorMap | ParamType::Bytes(_)))
-            {
-                errs.push(format!("{ctx}: an extern launch takes pointers and scalars, not a tensormap or a pack"));
+            if launch.is_extern() && launch.params_of(op).iter().any(|p| matches!(p, ParamType::Bytes(_))) {
+                errs.push(format!("{ctx}: an extern launch takes pointers and scalars, not a pack"));
             }
 
             let params = launch.params_of(op);
@@ -531,37 +523,6 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                         }
                         group_ctx(rank, &mut errs, &mut used_groups, &actx);
                     }
-                    LaunchArg::TensorMap { tensormap: t } => {
-                        if *param != ParamType::TensorMap {
-                            errs.push(format!("{actx}: a tensormap binds only to a `tensormap` param, not `{param}`"));
-                        }
-                        let i = t.param;
-                        let Some(iface) = op.params.get(i) else {
-                            errs.push(format!(
-                                "{actx}: interface param #{i} out of range ({} interface params)",
-                                op.params.len()
-                            ));
-                            continue;
-                        };
-                        let (ParamType::Buf { dir, .. } | ParamType::State { dir }) = iface else {
-                            errs.push(format!(
-                                "{actx}: tensormap over interface param #{i} (`{iface}`), which is not a buffer or state"
-                            ));
-                            continue;
-                        };
-                        for e in t.check() {
-                            errs.push(format!("{actx}: {e}"));
-                        }
-                        // The descriptor reads or writes per the interface
-                        // direction; the kernel is trusted not to store
-                        // through an `in` buffer's descriptor.
-                        if matches!(dir, Dir::Out | Dir::InOut) {
-                            iface_written[i] = true;
-                        }
-                        if let Some(fp) = t.footprint() {
-                            op_tensormaps.entry(oname.as_str()).or_default().push((i, fp, actx.clone()));
-                        }
-                    }
                     LaunchArg::Pack { pack } => {
                         match param {
                             ParamType::Bytes(n) if *n == pack.size => {}
@@ -609,6 +570,35 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                                 FieldSrc::Expr { expr } => check_expr(expr, m, &mut used_vars, &mut errs, &fctx),
                                 FieldSrc::Rank { rank } => {
                                     group_ctx(rank, &mut errs, &mut used_groups, &fctx);
+                                }
+                                FieldSrc::TensorMap { tensormap: t } => {
+                                    let i = t.param;
+                                    let Some(iface) = op.params.get(i) else {
+                                        errs.push(format!(
+                                            "{fctx}: interface param #{i} out of range ({} interface params)",
+                                            op.params.len()
+                                        ));
+                                        continue;
+                                    };
+                                    let (ParamType::Buf { dir, .. } | ParamType::State { dir }) = iface else {
+                                        errs.push(format!(
+                                            "{fctx}: tensormap over interface param #{i} (`{iface}`), which is not a buffer or state"
+                                        ));
+                                        continue;
+                                    };
+                                    for e in t.check() {
+                                        errs.push(format!("{fctx}: {e}"));
+                                    }
+                                    // The descriptor reads or writes per the
+                                    // interface direction; the kernel is
+                                    // trusted not to store through an `in`
+                                    // buffer's descriptor.
+                                    if matches!(dir, Dir::Out | Dir::InOut) {
+                                        iface_written[i] = true;
+                                    }
+                                    if let Some(fp) = t.footprint() {
+                                        op_tensormaps.entry(oname.as_str()).or_default().push((i, fp, fctx.clone()));
+                                    }
                                 }
                                 FieldSrc::I32 { .. }
                                 | FieldSrc::I64 { .. }
@@ -674,6 +664,13 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                     } else {
                         errs.push(format!("program `{pname}`: batch.rows names unknown var `{v}`"));
                     }
+                }
+            }
+            if let Some(v) = &batch.span {
+                if m.vars.contains_key(v) {
+                    used_vars.insert(v.clone());
+                } else {
+                    errs.push(format!("program `{pname}`: batch.span names unknown var `{v}`"));
                 }
             }
         }
@@ -1617,10 +1614,12 @@ mod tests {
     fn tensormap_spans_the_buffer() {
         // outermost 0 = as many slices as the buffer holds: no footprint to check against the call
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["dims"] = serde_json::json!([128, 0]);
+        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["pack"]["fields"][0]["tensormap"]["dims"] =
+            serde_json::json!([128, 0]);
         check(v).unwrap();
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["dims"] = serde_json::json!([0, 4]);
+        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["pack"]["fields"][0]["tensormap"]["dims"] =
+            serde_json::json!([0, 4]);
         assert_err(v, "dims[0] is 0; only the outermost dim may span the buffer");
     }
 
@@ -1632,9 +1631,10 @@ mod tests {
             "params": ["out buffer<bf16>", "in buffer<u8>"],
             "impl": { "launches": [
                 { "module": "toy", "entry": "tm_k", "block": [128, 1, 1], "grid": [2, 1, 1], "cluster": [2, 1, 1],
-                  "params": ["out buffer<bf16>", "tensormap"],
-                  "args": [{ "param": 0 }, { "tensormap": { "param": 1, "dtype": "u8", "dims": [128, 4],
-                                                            "strides": [128], "box": [128, 4], "swizzle": 128 } }] }
+                  "params": ["out buffer<bf16>", "bytes<128>"],
+                  "args": [{ "param": 0 }, { "pack": { "size": 128, "fields": [
+                      { "at": 0, "tensormap": { "param": 1, "dtype": "u8", "dims": [128, 4],
+                                                "strides": [128], "box": [128, 4], "swizzle": 128 } }] } }] }
             ] }
         });
         v["programs"]["decode"]["calls"].as_array_mut().unwrap().push(serde_json::json!({
@@ -1655,17 +1655,20 @@ mod tests {
 
     #[test]
     fn tensormap_shape_rules() {
+        fn tm(v: &mut serde_json::Value) -> &mut serde_json::Value {
+            &mut v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["pack"]["fields"][0]["tensormap"]
+        }
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["box"] = serde_json::json!([512, 4]);
+        tm(&mut v)["box"] = serde_json::json!([512, 4]);
         assert_err(v, "box[0] = 512, must be 1..=256");
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["strides"] = serde_json::json!([120]);
+        tm(&mut v)["strides"] = serde_json::json!([120]);
         assert_err(v, "strides[0] = 120 is not a positive multiple of 16");
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["swizzle"] = 64.into();
+        tm(&mut v)["swizzle"] = 64.into();
         assert_err(v, "box[0] spans 128 bytes, more than the 64 byte swizzle span");
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["dims"] = serde_json::json!([128, 5]);
+        tm(&mut v)["dims"] = serde_json::json!([128, 5]);
         assert_err(v, "addresses 640 bytes but buffer `raw` has 512 bytes past offset 0");
         let mut v = tensormap_base();
         v["programs"]["decode"]["calls"][2]["args"][1]["offset"] = 16.into();
@@ -1674,23 +1677,31 @@ mod tests {
 
     #[test]
     fn tensormap_binding_rules() {
-        // only over a buffer param
+        // only over a buffer or state param
         let mut v = tensormap_base();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["tensormap"]["param"] = 0.into();
-        v["ops"]["tm"]["impl"]["launches"][0]["args"][0] =
-            serde_json::json!({ "tensormap": { "param": 1, "dtype": "u8", "dims": [128], "box": [128] } });
-        assert_err(v, "arg #0: a tensormap binds only to a `tensormap` param, not `out buffer<bf16>`");
-        // never on the interface
+        v["ops"]["tm"]["params"][1] = "i32".into();
+        v["programs"]["decode"]["calls"][2]["args"][1] = serde_json::json!({ "i32": 1 });
+        assert_err(v, "field #0: tensormap over interface param #1 (`i32`), which is not a buffer or state");
+        // 128 bytes at a 64-byte aligned offset
+        fn field(v: &mut serde_json::Value) -> &mut serde_json::Value {
+            &mut v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["pack"]["fields"][0]
+        }
         let mut v = tensormap_base();
-        v["ops"]["tm"]["params"][1] = "tensormap".into();
-        assert_err(v, "interface param #1 is a tensormap; tensormaps are launch-private");
+        field(&mut v)["width"] = 64.into();
+        assert_err(v, "field #0: a tensormap field is 128 bytes, not 64");
+        let mut v = tensormap_base();
+        v["ops"]["tm"]["impl"]["launches"][0]["params"][1] = "bytes<192>".into();
+        v["ops"]["tm"]["impl"]["launches"][0]["args"][1]["pack"]["size"] = 192.into();
+        field(&mut v)["at"] = 32.into();
+        assert_err(v, "field #0: tensormap at 32 is not 64-byte aligned");
         // never into an extern
         let mut v = tensormap_base();
         v["ops"]["tm"]["impl"]["launches"][0] = serde_json::json!({
-            "entry": "extern:cublaslt_bf16_tn", "params": ["out buffer<bf16>", "tensormap"],
-            "args": [{ "param": 0 }, { "tensormap": { "param": 1, "dtype": "u8", "dims": [128], "box": [128] } }]
+            "entry": "extern:cublaslt_bf16_tn", "params": ["out buffer<bf16>", "bytes<128>"],
+            "args": [{ "param": 0 }, { "pack": { "size": 128, "fields": [
+                { "at": 0, "tensormap": { "param": 1, "dtype": "u8", "dims": [128], "box": [128] } }] } }]
         });
-        assert_err(v, "an extern launch takes pointers and scalars, not a tensormap");
+        assert_err(v, "an extern launch takes pointers and scalars, not a pack");
     }
 
     #[test]

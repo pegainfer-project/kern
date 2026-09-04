@@ -39,13 +39,14 @@ _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster"
 _CALL = ["label", "op", "args"]
 
 
-def program(calls, groups=None, rows=None, once=False):
+def program(calls, groups=None, rows=None, span=None, once=False):
     """A program object of the wire form: a forward of `groups` sequences of
-    `rows` rows each (rows a constant or the name of the var fed per call),
-    a once-after-load program, or a plain one."""
+    `rows` rows each (rows a constant or the name of the var fed per call;
+    `span` the var one sequence's run of rows is sized by), a
+    once-after-load program, or a plain one."""
     p = {}
     if groups is not None:
-        p["batch"] = {"groups": groups, "rows": rows}
+        p["batch"] = {"groups": groups, "rows": rows, **({"span": span} if span else {})}
     if once:
         p["once"] = True
     p["calls"] = calls
@@ -122,7 +123,10 @@ def fold_constants(m):
         renumber = {old: new for new, old in enumerate(keep)}
         def fold(a, keep_keys=()):
             # a launch arg or a pack field: a folded param becomes the call's literal
-            # (a pack field keeps its offset/width), any other param is renumbered
+            # (a pack field keeps its offset/width), any other param is renumbered;
+            # a tensormap field renumbers the buffer it describes
+            if "tensormap" in a:
+                return {**a, "tensormap": {**a["tensormap"], "param": renumber[a["tensormap"]["param"]]}}
             if "param" not in a:
                 return a
             if a["param"] in folded:
@@ -132,9 +136,7 @@ def fold_constants(m):
         for launch in op["impl"]["launches"]:
             args = []
             for a in launch["args"]:
-                if "tensormap" in a:
-                    a = {"tensormap": {**a["tensormap"], "param": renumber[a["tensormap"]["param"]]}}
-                elif "pack" in a:
+                if "pack" in a:
                     a = {"pack": {**a["pack"], "fields": [fold(f, ("at", "width")) for f in a["pack"]["fields"]]}}
                 else:
                     a = fold(a)

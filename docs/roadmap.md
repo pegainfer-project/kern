@@ -29,7 +29,7 @@ manifest，与 qwen3 同一条流水）。两条线并行，每级带门禁。
 | K3 ✅ | session 睡/醒到本 tray DRAM：`reserve_host` 一次 pin 一块（绑到卡所在 NUMA 节点），`park(checkpoint)` 把页和 slot 拷到 host 链上（同 session 再睡只拷新增的页），`wake` → `Waking` → `awake` 落地了才交出 `Lease`；拷贝走 transfer stream，compute stream 从不等它；`Prefix` 分 resident / parked 两层，纯 KV 链条目按页增长、部分命中只醒需要的页；kern-serve `--host-gib` | **2026-09-03 tray08 通过**：qwen3.8-27b 形状 98k token = 6.12 GiB，park 34 ms / wake 31 ms（180 / 197 GiB/s，逐字节验证；pinned 块落在另一颗 Grace 上时 53 / 52 ms，所以 runtime 自己绑 NUMA）；qwen3-4b 2500 页 5.49 GiB 31 / 28 ms。kern-serve：8 路 decode 下每秒 ~10 个 3.5 GiB 的 wake，token 间隔 p50 3.03 → 3.08 ms（+1.7%），p90/p99 不变；命中后 warm / cold 64 token 逐字一致。AgentX 回放（qwen3.8 形状，单卡 250 GiB + host 512 GiB，并发 32）命中 93.1% → 95.6%，p99 extend 430k → 208k。命中请求本身的 p90 85 ms 是 prefill 尾块在长上下文上的 40 ms（K5 的事） |
 | M1 ✅ | MLA decode attention 换成 FlashInfer 的 CuTe-DSL Blackwell 核（NVIDIA 写，BSD-3），预编译 cubin 入库 `tools/kernels-bin/`；runtime 只加两样通用能力——`bytes<n>` + `pack`（struct 参数从接口铺平）和 tensormap 最外层维 0（铺满 state）——核的 28 参数 ABI 从 DSL 的 launch 里抓出来反解，写在 manifest 里（`k3-kernel-abi.md` K5）；配套自写 absorb / split 规划 / v_up+gate 三个小核，split 数每步在 GPU 上按行定 | 单核：B=1 13k 42 → 16.5 µs/层，200k 58 µs（split 72）、B=16 13k 55 µs；独立 launcher 与 DSL 输出逐位一致。**2026-09-03 tray07**：4 层 EP4×TP4 B=1 35/40 + 4 excused + 1 近平局（3 ulp），mixed4 37/40 + 2 + 1 近平局；**93 层 EP4×TP4 对 12.9k oracle：B=1 114/128（旧核 108）、B=8 mixed 111/128（113）、B=16 112/128（107）**，不一致仍是措辞级近平局；12.9k ctx 步时 **21.1 / 25.7 / 30.2 ms（旧核 23.1 / 35.6 / 47.9）**，短 ctx B=1 20.9、B=16 29.2（旧核 20.8 / 31.9；手头的 93 层 40 步 fixture 与 tray07 权重不是一个 checkpoint，新旧核、EP4/TP4 四种跑法逐 token 相同，短 ctx 只记步时）。每行每步 ~1 ms/12.9k 的斜率没了：B=16 长短 ctx 差 1 ms。配套核 absorb / vup_gate 带宽版 6.5 / 11 µs（B=1），4 层步时 1.195 ms（旧核 1.188） |
 | K4 | DCP：ship q / 回 (O, LSE) 的 partial+merge op，w 按 span 定，flag-in-payload | 真 FlashMLA 复现 B2/B3：decode 税 ≤ 8%，extend W=4 ≥ 2× |
-| K5 | extend 作为 decode superstep 的 filler，chunk 按每步预算与通信项派生 | 130k whale TTFT ≈ 2 s 量级，decode TPOT 不破 |
+| K5 | **2026-09-03 定稿**（设计与 DAG 见下节"K5 规划"）：不做单独的 prefill program，decode 步的行从"一行一 token"变成"一行一 span"，extend 是 n>1 的 span 行与 decode 行同一步、同一张图；每步 span 长 c 由 caller 按稠密预算与 attention 预算派生。KDA 用 MoonshotAI FlashKDA（pegainfer / vLLM 同源，state 布局与 kern 的 rec 相同），MLA v1 用现有 DSL 核按行展开（c 行共用 block_table），物化路径按实验决定 | 4 层：fixture prompt 作一个 span 与逐 token 同口径（37/40）；93 层：12.9k oracle 按 c≈200 分 65 个 span，128 token 与逐 token 同；kern-serve：conc1 与 `kern run` 同，conc8 加冷 12.9k prompt ITL ≤ +25%，TTFT 记进 serve.md |
 
 顺序：E0 + K0 一起先做（同一个分配器改动，K3 的 KDA state 也在关键路径上）；然后
 E1–E2 与 K1–K2 并行；E3、K3；然后 **E5**（每步省 12 ms，先于 E4）与 K5 并行；
@@ -41,6 +41,61 @@ K4 改成按新 token 分段的 extend（待定稿）；E4 最后，其门禁按
 | 级 | 内容 | 门禁 |
 |---|---|---|
 | V4 ✅ | serving 协议进 manifest（schema v4，设计 v4-design.md）：buffer 的 `fill`、program 的 `batch` / `once`，`spec` 块删除；`Verified` newtype + `Protocol::check` 投影，kern-run / kern-serve 不读 JSON、不认名字（CI grep）；投机轮统一成 `round` program（dspark 也补了：splice / 计数 / prefill 收编 head 与 precompute 全在设备上），`--spec` → `--rows`；`kern verify` 打印协议事实 | **2026-09-03 tray03 通过**：`kern test` 位一致；qwen3-4b / qwen3.8-27b / dspark / dflash2 四份 conc1 与 `kern run` 逐字同；dflash2 与 v3 `--spec` 逐字节同；dspark 7 行 round 在一个 0.125 的 bf16 平局上与 v3 的 8 行 verify 分叉（核噪声）；conc32 接受率 34% / 24% 不塌，5930 / 1709 tok/s。记录 v4-design.md §9、serve.md |
+
+## K5 规划（2026-09-03）
+
+**依据**（`~/bench_results/2026-09-03-gb300-power-compute-vs-bw`，含补充 2 的 TP4 形状实测）：
+稠密 GEMM 的 ridge ≈ 峰值算力 / HBM 带宽 ≈ 256 行 bf16，与 TP 切法无关；64→256 行的边际
+0.046 µs/行/GEMM（TP4 切片），256 之上 0.082；2k 行并进 decode 步只省 10% 能量、步时 3 倍。
+TP4 下 tray 是一个 batch，稠密相位只占步时 ~1/4（26 GiB ≈ 158 个 wbig 切片 ≈ 4.8 ms），
+约束从 ridge 变成时间预算：整 tray 行数 64→256 多 1.4 ms、→512 多 5.1 ms、→1024 多 11 ms。
+attention 按 owner rank 算：absorbed 每 (query, ctx) 对 209 kFLOP，P=220k 时 5 ms 预算下 c 只有
+15–50；物化（kv_b 展开 + MHA）61 kFLOP 加每 ctx token 25 MFLOP 展开，交叉点 c≈170。
+
+**判定**：
+1. span 行放 batch 最前，行 0..c 连续，decode 行在后；FlashKDA 的 q/k/v/g 直接指向 conv 输出的行 0。
+2. 每 rank 预留一个固定地址的 span slot（tensormap 基址装载时定死）；extend 开始 `line_copy` 拷入、结束拷回。
+3. 两个 program：`decode` 与 `decode_span`（后者多 conv_span、f_b GEMM、FlashKDA 两核、kda_out_gate）；span 为 0 时不存在 grid 0。
+4. decode 核收 `span_rows` 标量，行号小于它的 block 直接返回；padding 行的 g、beta 写负大数，对 state 是恒等更新。
+5. MLA v1 用现有 DSL 核：span 行各带 `seq_lens = 前缀 + i + 1` 和复制的 block_table，零核工作先闭环正确性。
+
+**调研事实**：FlashKDA（MIT，CUTLASS/CuTe，mma.sync，pegainfer 已在 GB300 编译）state `[H][128 v][128 k]` f32
+与 kern rec 相同；kernel1 grid `(tiles16, H)`，kernel2 grid `(N, H)` 每 (seq, head) 串行走 tile；输入 q/k/v/g
+`[T, H, 128]` bf16、beta `[H, T]`；q/k L2 norm、beta sigmoid、dt_bias / a_log gate 核内做，输出 o_norm 之前的 attn；
+22 个 TMA 描述符作参数（M1 的 tensormap + pack 路）；shim 样板 `pegainfer-kernels/csrc/k3/k3_flash_kda.cu`。
+第三方核进 manifest 的通用路（2026-09-03 沉淀）：vendor + PROVENANCE → 参考 launcher → `tools/kernel-capture`
+捕获（launch 参数字节 + TMA encode 参数）→ `lift.py` 出 manifest 骨架 → 生成器 → 与 launcher dump 逐位对拍
+（`tools/kernel-capture/README.md`）。
+DSL MLA 核 `seq_len_q>1` 是 grid `(cluster, B×S_q, split)`，每个 q token 一个 CTA 各自流 KV，96 头 fold=1。
+FlashMLA SM100 只有 sparse decode 与 dense prefill（MHA）；物化路径 shim `k3_flash_mla_prefill.cu`。
+MegaMoE 协议上限 16896 token/rank。
+
+**DAG**：
+
+| 节点 | 内容 | 依赖 | 门禁 |
+|---|---|---|---|
+| A1 | DSL 核 c 行共用 block_table 的扩展曲线，c ∈ {1, 8, 32, 128, 256}，P ∈ {13k, 50k, 220k} | 无 | 每层时间表，决定 C5 |
+| A2 | FlashKDA T 扫描，H=24 / 96，T=64..2048（pegainfer `k3_flash_kda_bench.rs`） | 无 | 每层时间表，进 D2 公式 |
+| A3 | MegaMoE 256 / 512 token/rank（`k3_moe_ep`） | 无 | 每层时间 |
+| B1 ✅ | manifest 侧不加新类型：`span` 是普通 var，`decode_span` 是普通 program，`span_at` 是 `[1]` 的 i32 input；runtime 新契约——program 的 env 只需带它的 launch 读到的 var（`CompiledProgram.vars`，其余归 MIN），所以 `decode` 不必给 `span` | 无 | 2026-09-03 过：4 层 EP4 / EP4×TP4 / EP1 与 93 层 span manifest verify 通过，runtime 53 单测 |
+| B2 | runtime：span slot 预留成固定地址，bucket 键含 span | B1 | 单测 |
+| B3 ✅ | `gen_k3_decode.py --span-max N`：每个 KDA 层 qkvg/wsm GEMM → conv_silu → span_gather → span_state_load → gemm（span_g）→ flash_kda → span_state_store → kda_core → kda_out_gate；span 的 q/k/v/out 是独立 buffer（TMA 描述符 load 时定死，不能指进批的行），`span_at` 定 span 在批里的位置（tray 批 own rows first，peer 上 span 在第 d 块） | B1 | 2026-09-03 过：`examples/k3-*.json` 全部带 `decode_span`（4 层 span 8、93 层 64） |
+| C1 ✅ | `k3_span_gather`（并行 conv：前三行取 line 窗口、末三行写回，land g 为 bf16、写转置 beta、写 span_flow）+ `k3_span_state`（KDA slot ↔ f32 [h,128,128] 拷入拷出） | B1 | 2026-09-03 过：harness 对 CPU 参考，B ∈ {1,3,8,64}，span 在批中任意位置（`SPAN_AT=3`） |
+| C2 ✅ | FlashKDA vendored 到 `tools/flash-kda/`（`7afb9f4`，MIT，PROVENANCE；只留 `<128,true,true,true,false>` 一个实例），cubin `flash_kda_d128.cubin`（sm_103a，host nvcc 13.1）；ABI 不反解模板，用 `tools/kernel-capture`（新增 `cuTensorMapEncodeTiled` 拦截 + `lift.py`）从 vendored probe 直接提出并与 pegainfer shim 捕获比对一致，记在 k3-kernel-abi.md K8。manifest 侧已消融：`tensormap` 参数类型与 `{"tensormap"}` 实参删除，改为 pack 字段 `{"at": 0, "tensormap": {...}}`（宽 128、偏移 64 对齐；裸描述符 = `bytes<128>` 一个字段，cute `TiledCopy` = `bytes<256>` 描述符 + 动态 stride int），生成器与 9 个 k3 example 同步改写，E1 MoE 门禁 EP4 bit-identical / EP1 rel RMS 1.66e-3 复跑通过（2026-09-03 tray03）。生成器 op 在 `tools/flash_kda_abi.py`（op 即数据：TiledCopy pack、workspace buffer、prepare / recurrence 两个 launch），`program_io` 例子跑通用 manifest 的任一 program 做门禁 | A2, B1 | **2026-09-03 过**：probe（`tools/flash-kda/probe.cu`）的 dump 与 kern op 的 out / state_out 逐位一致（第一次全零：capture 的分配表证明 recurrence p0 是 v、p10 是 out 的 TMA store 描述符，不是 q/v——见 lessons）；FlashKDA 数学对 K3 逐 token 参考（numpy f64）state 布局 = K3 rec，out relRMS 6.5e-3（核内 state 存 bf16） |
+| C3 ✅ | `k3_kda_out_gate`：rms · gamma_o · σ(gate)，行并行，写回 `gated_kda` 的 span 行 | B1 | 2026-09-03 过：harness |
+| C4 ✅ | conv_silu / kda_core 尾参 `const int* span_at, int span`，`(unsigned)(b - span_at[0]) < span` 的行跳过 | B1 | 2026-09-03 过：现有 harness 全过 |
+| C5 | 条件项：kv_b 展开 GEMM + FlashMLA sm100 FMHA cubin | A1 结果差 | 与 DSL 路径逐 token 同 |
+| D1 ✅ | kern-serve `tray.rs`：`Shape.span`（manifest 有 `decode_span` + `span` var + `span_at [1]` 输入）；`Layout` 每 cell 有行数，span cell 排在 owner 块最前，**组里没有这个 cell 的 rank 在块前垫 c 行 pad（`Layout.lead`）**——var 全 tray 一份、批每 rank 一份；行 (cell, j) 的位置 / slot / seq_len 按 `pos + j`；`span_at` = owner 在本 rank 块序里的下标 × b（没有即 0，指向 pad），每 rank 各写；`Capacity` 由 kern-serve 报 `(max_seqs + 1) × t`；tray 先把每个 rank 都 enqueue 再逐个 sync（MoE dispatch 在核里等 peer） | B2 | 2026-09-03：Layout / Shape 单测（含 lead 垫行）；E3 见下 |
+| D2 ◐ | 第一版 policy：c = min(`--chunk`, `span.max`, 待喂 token 数, `seqs.max − (n − 1)`)，每步最老的还在喂 prompt 的序列拿 span，其余各一行；bucket 沿用现有表（span 行计入行数）。按稠密 / attention 预算派生 c 与 A1–A3 的曲线未做 | A1–A3 | 2026-09-03 E3 量到：256 行 span 步 ≈ 90 ms（decode B=8 38 ms，+52），64 行 +23 ms；冷 12.9k 并发者 mean ITL chunk 256 +37%、chunk 64 +60%——门（≤ +25%）要 D2 的预算版才可能过 |
+| D3 ✅ | `Staged::read_i64` 一个 cell 多行时取末行；scheduler 把 span 的前 c−1 个 token 记为 prefill_tokens | D1 | 2026-09-03 单测（Layout 行序） |
+| E1 ✅ | `k3_golden --span c`：行 0 把 fixture 的 token 按 c 个一步喂 `decode_span`（多 span），其余行逐 token；表每步按 cell 重铺 | B3, C1–C4 | **2026-09-03 tray07 过**（4 层 EP4）：逐 token 37/40 + 3 excused；`--span 16`（16/16/8）35/40 + 4 excused + 1 近平局（步 13，3.0 ulp，我们的 token 是参考的 #2）；`--span 40` 35/40 + 5 excused + 0 错；`--span 8 --seqs 4` 混合：行 0 37/40 + 2 + 1 近平局（5.5 ulp），行 1..3 只在步 13 的近平局上离开 fixture——无行间串扰。span 步时 8 行 2.08、16 行 1.95、40 行 2.40 ms（decode B=1 1.67 / B=4 1.80） |
+| E2 ✅ | 93 层 EP4 12.9k oracle 按 c=200 分 65 个 span + 64 步续写 | E1 | **2026-09-03 tray07 过**：**115/128**（逐 token E2b 111/128），13 个不一致全在 scripted prompt 尾段（步 12834–12944），逐个 detokenize 是 `,`↔`;`、` speed`↔` perf`、`uted`↔`used` 一类的措辞近平局；**64 步自回归续写 64/64 与 oracle 逐 token同**。span 步时 **200 行 76.2 ms**（graph 捕获；逐 token 12 897 步 × 31.5 ms ≈ 406 s → 65 × 76 ms ≈ 5 s）。`--seqs 8 --mixed --distinct` 行 0 108/128（近平局带内），但 mixed 的复制批参照与含 span 的批形状不同、随机行第 2 步就翻，有 span 时这个检查不是门（参照批同形状未做）；行不串扰的证据是 k3_golden dump（span 旁的逐 token 行与单跑只差批形状噪声）与 harness `--span` |
+| E3 ✅ | kern-serve conc1 与 `kern run` 同；conc8 加冷 12.9k | D1–D3, E2 | **2026-09-03 tray07**（93 层 EP4，表在 serve.md）：conc1 短 prompt 64 token 逐字同、ITL 32 ms 同；2k TTFT 0.83 s（逐 token 63.9 s），冷 12.9k **4.6 s**（416.8 s）；conc8 × 1k TTFT 0.56–3.2 s（38 s），稳态 ITL p50 38 ms 同；conc7 + 冷 12.9k：并发者 p50 38 / mean 52 / p90 91 ms（**mean +37%，门的 +25% 未达**，见 D2）；多轮命中第二轮 TTFT 112 ms。8 条相同短 prompt 并发的分歧是 0.2 logit 的近平局（k3_golden 倒 logits 证明），不是串扰 |
+
+**风险**：长前缀 extend 的 attention 没有便宜的核，absorbed 每 extend token 对 220k 前缀 1.1 TFLOP，
+任何核都逃不掉，A1 回答 DSL 核能否在 c ≤ 50 下把 KV 只流一遍；FlashKDA kernel2 每 rank 只 24 个 block，
+T=512 时 32 个 tile 串行，A2 可能逼着 D2 把 KDA 项写进预算；FlashKDA 的 q/k norm 走 f32、kern decode 核走
+bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间 PCP gang、单独 prefill program、fp8 权重。
 
 ## 单卡遗留（未做）
 
