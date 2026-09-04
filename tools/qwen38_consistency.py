@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Cross-configuration consistency of kern run outputs: every
-docs/qwen38-compare-<tag>.json given must hold byte-identical generated ids
+docs/qwen38/compare-<tag>.json given must hold byte-identical generated ids
 per prompt (chunk=1 / chunk=512 / chunk=2048 / eager / graph must not change
 the arithmetic).  Also prints the agreement length vs vLLM per prompt.
 
-    tools/qwen38_consistency.py docs/qwen38-compare-{eager-c512,graph-c512,eager-c1,graph-c2048}.json
+    tools/qwen38_consistency.py docs/qwen38/compare-{eager-c512,graph-c512,eager-c1,graph-c2048}.json
 """
 
 import json

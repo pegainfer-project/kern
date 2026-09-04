@@ -43,7 +43,7 @@ PROMPTS = [
 
 
 def main():
-    out_path = sys.argv[1] if len(sys.argv) > 1 else "docs/qwen38-ref.json"
+    out_path = sys.argv[1] if len(sys.argv) > 1 else "docs/qwen38/ref.json"
     max_tokens = int(os.environ.get("MAX_TOKENS", "400"))
     # PROMPTS_FILE: JSON list of prompts instead of the built-in five.
     # MAX_NUM_BATCHED_TOKENS: force vLLM's own chunked prefill (chunk-invariance check).

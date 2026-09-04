@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run kern run on every prompt of docs/qwen38-ref.json and compare the
+"""Run kern run on every prompt of docs/qwen38/ref.json and compare the
 generated token ids with vLLM's, token by token.
 
     tools/qwen38_compare.py --gpu 1 [--chunk 512] [--eager] [--steps 400]
-                            [--out docs/qwen38-compare-<tag>.json]
+                            [--out docs/qwen38/compare-<tag>.json]
 
 Prints one line per prompt (match length / first divergence) and a summary;
 exit status 1 unless every prompt matches to the full length.
@@ -64,7 +64,7 @@ def main():
     ap.add_argument("--capacity", type=int, default=4704)
     ap.add_argument("--only", type=int, default=None, help="run a single prompt index")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--ref", default=str(REPO / "docs/qwen38-ref.json"),
+    ap.add_argument("--ref", default=str(REPO / "docs/qwen38/ref.json"),
                     help="vLLM reference (qwen38_ref.py) or a kern compare JSON (then kern-vs-kern)")
     ap.add_argument("--manifest", default="examples/qwen3.8-27b.json")
     ap.add_argument("--kernels", default="kernels-qwen38")
@@ -76,7 +76,7 @@ def main():
     if "results" in ref and ref["results"] and "generated" in ref["results"][0]:
         # a kern compare JSON as the oracle: greedy spec decode must reproduce
         # plain decode token for token
-        base = json.load(open(REPO / "docs/qwen38-ref.json"))
+        base = json.load(open(REPO / "docs/qwen38/ref.json"))
         ref = {"results": [{"prompt": b["prompt"], "prompt_token_ids": b["prompt_token_ids"],
                             "output_token_ids": r["generated"]}
                            for r, b in zip(ref["results"], base["results"])]}

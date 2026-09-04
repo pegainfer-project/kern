@@ -91,7 +91,7 @@
 - 12:32Z 并行起两件后台事：`tools/export_qwen35.py`（GPU 1，合并导出
   50 GiB safetensors + rope 表 + FLA/conv 常量表）和 `tools/qwen38_ref.py`
   （GPU 0，vLLM eager TRITON_ATTN + triton GDN，5 条散文 prompt × 400 token
-  greedy → `docs/qwen38-ref.json`）。两个都首跑失败：ref 是 flashinfer
+  greedy → `docs/qwen38/ref.json`）。两个都首跑失败：ref 是 flashinfer
   JIT 找不到 `ninja`（venv 的 bin 没进 PATH），export 是 `MRotaryEmbedding`
   作为 CustomOp 要 `set_current_vllm_config` 上下文。各改一行 12:36Z 重跑，
   12:39Z 都完成（ref 5×400 token，全部 length 截止，文本连贯）。
@@ -192,22 +192,22 @@
 - 5 条短 prompt（41–48 token）× 400 token，四种配置并行跑在四张卡上：
   - eager/chunk=512、graph/chunk=512、graph/chunk=2048 三者**逐字节一致**
     （graph 捕获不改算术）；对 vLLM 分别一致到第 66/93/62/255/178 个 token，
-    之后分叉（`docs/qwen38-compare-*.json`）。
+    之后分叉（`docs/qwen38/compare-*.json`）。
   - chunk=1 与 chunk=512 不一致（分别在 66/93/62/91/178 处）。**这是 GDN 的
     固有性质，不是 kern 的缺陷**：chunked FLA 核在 T=1 时对 state 的结合顺序
     和整段处理不同。验证：vLLM 自己把 `max_num_batched_tokens` 设成 16 再跑
-    同样 5 条 prompt（`docs/qwen38-ref-vllm-chunk16.json`），和它自己的
+    同样 5 条 prompt（`docs/qwen38/ref-vllm-chunk16.json`），和它自己的
     单块结果在第 66/11/341/2/339 个 token 处分叉——和 kern-vs-vLLM 是同一
     个量级的差异带。任务书里 "chunk=1 / chunk=512 / eager 三路一致" 对这类
     模型只能在 eager/graph 和 64 的倍数分块之间成立。
-- 长 prompt（1787 token 散文，`docs/qwen38-long-prompt.json`，vLLM 参考单块
+- 长 prompt（1787 token 散文，`docs/qwen38/long-prompt.json`，vLLM 参考单块
   prefill）× 200 token：kern chunk=512（4 块）eager 与 graph **200/200 逐字节
   一致**，prefill 10.0k tok/s（eager）/ 9.1k（graph）；chunk=2048（单块）在第
-  85 个 token 分叉（`docs/qwen38-compare-long-*.json`）。没有再追这条
+  85 个 token 分叉（`docs/qwen38/compare-long-*.json`）。没有再追这条
   （M=1787 与 M=512 的 GEMM 算法选择、或分块边界，二者之一）。
 - `kern-attest --a --b` 自己对自己：DIFF 段遍历了 prefill 1079 / decode 742
   个 dispatch，报 "nothing to attest: the programs are identical"
-  （`docs/qwen38-attest-self.txt`）——harness 能读这份带 `bytes_fixed` state
+  （`docs/qwen38/attest-self.txt`）——harness 能读这份带 `bytes_fixed` state
   的 manifest。
 - 数值残差的最终定性：prefill 路径上 in_proj_qkvz（N=16384）exact、in_proj_ba
   （N=96）1 ulp；decode 路径在 state 精确时每个 op exact；kern 在 4×512 分块
@@ -235,7 +235,7 @@
 - 13:48Z vLLM bs=1 CUDA-graph 参考（Stage 3 性能表用；5 条 prompt ×
   400 token 均值）：普通 decode **95.0 tok/s**（默认后端）/ **96.0 tok/s**
   （TRITON_ATTN + triton GDN）；DFlash2 投机 **149–199 tok/s**
-  （`docs/qwen38-vllm-perf-*.json`）。对照 kern Stage 1 graph decode 80.8 tok/s
+  （`docs/qwen38/vllm-perf-*.json`）。对照 kern Stage 1 graph decode 80.8 tok/s
   （5120-hidden、64 层、bs=1，每步 742 个 dispatch）。
 - 13:50Z runtime 改动一处：`Runtime::load_weights` 接受多份 safetensors
   （target 50 GiB + draft 单独一份，不重复导出 50 GiB）；kern-run / kern-attest
@@ -296,7 +296,7 @@
 
 5 条参考 prompt × 400 token，`tools/qwen38_compare.py --spec`
 （oracle 换成 Stage 1 的 kern decode 输出）。结果文件
-`docs/qwen38-spec-{eager,graph}.json`、`docs/qwen38-spec-manifest-plain-graph.json`。
+`docs/qwen38/spec-{eager,graph}.json`、`docs/qwen38/spec-manifest-plain-graph.json`。
 
 - **eager 与 graph（draft + verify 各一张 CUDA graph）5/5 逐字节一致**——
   投机路径本身是确定的。
@@ -325,7 +325,7 @@
 - 附带发现：spec manifest 的 `decode`（投机核 T=1）对 Stage 1 decode 的一致长度
   89/93/62/185/**12**——prompt 4 在第 12 个 token 多了一个逗号。这个位置在
   其它 9 个配置里全都一致。用 vLLM 的 top-2 logprob 间距核实
-  （`tools/qwen38_margins.py` → `docs/qwen38-margins.json`）：该位置间距
+  （`tools/qwen38_margins.py` → `docs/qwen38/margins.json`）：该位置间距
   **0.125**——正好是 bf16 logit 在这个量级上的一个量子；见 Stage 3。
 
 ## Stage 3 — 统计与结论

@@ -5,7 +5,7 @@ flip from a real numerical bug when two configurations diverge: at a
 position where the top two candidates are within a few hundredths of a nat,
 any 1-ulp difference in the arithmetic picks the other one.
 
-    CUDA_VISIBLE_DEVICES=0 MAX_TOKENS=200 .venv/bin/python tools/qwen38_margins.py docs/qwen38-margins.json
+    CUDA_VISIBLE_DEVICES=0 MAX_TOKENS=200 .venv/bin/python tools/qwen38_margins.py docs/qwen38/margins.json
 """
 import json
 import os
@@ -20,7 +20,7 @@ from vllm.config import AttentionConfig  # noqa: E402
 
 
 def main():
-    out_path = sys.argv[1] if len(sys.argv) > 1 else "docs/qwen38-margins.json"
+    out_path = sys.argv[1] if len(sys.argv) > 1 else "docs/qwen38/margins.json"
     max_tokens = int(os.environ.get("MAX_TOKENS", "200"))
     llm = LLM(model=TARGET, tokenizer=TARGET, dtype="bfloat16", tensor_parallel_size=1, max_model_len=4096,
               gpu_memory_utilization=0.6, enforce_eager=True, limit_mm_per_prompt={"image": 0, "video": 0},

@@ -28,7 +28,7 @@ DRAFT = (os.path.expanduser("~/.cache/huggingface/hub") + "/models--incoai--Qwen
 def main():
     mode = sys.argv[1]
     pinned = "pinned" in sys.argv[2:]
-    out = next((a for a in sys.argv[2:] if a.endswith(".json")), f"docs/qwen38-vllm-perf-{mode}{'-pinned' if pinned else ''}.json")
+    out = next((a for a in sys.argv[2:] if a.endswith(".json")), f"docs/qwen38/vllm-perf-{mode}{'-pinned' if pinned else ''}.json")
     kw = dict(model=TARGET, tokenizer=TARGET, dtype="bfloat16", tensor_parallel_size=1,
               max_model_len=4096, gpu_memory_utilization=0.6, enforce_eager=False,
               limit_mm_per_prompt={"image": 0, "video": 0}, disable_log_stats=False)

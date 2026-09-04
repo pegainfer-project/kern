@@ -90,7 +90,7 @@ def install(model):
 def main():
     idx = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     out = sys.argv[2] if len(sys.argv) > 2 else "dumped-kernels/probe-vllm.pt"
-    ref = json.load(open("docs/qwen38-ref.json"))
+    ref = json.load(open("docs/qwen38/ref.json"))
     prompt = ref["results"][idx]["prompt"]
     llm = LLM(model=TARGET, tokenizer=TARGET, dtype="bfloat16",
               tensor_parallel_size=1, max_model_len=4096,
