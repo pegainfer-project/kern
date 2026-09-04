@@ -262,6 +262,10 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   并发者 mean 52 对 61 ms）。K5 的门"ITL ≤ +25%"按 mean 算是 **+37%**（52 对 38，p50 不变）——
   未达；再往下要 D2 的预算 policy（span 长按稠密 / attention 预算定，或 span 步只带一部分
   decode 行），不是 span 实现的事。
+- **MegaMoE BLOCK_M 96（2026-09-04）**：`k3_moe_bench` 在真实 router 分布下扫 ladder，BLOCK_M 96 在 8–512
+  token/rank 全段最快（真实路由 −12～15%，输出逐位同），`pinned_config` 改钉它后复测：decode 步 ITL p50
+  38.0 → 36.5 ms，12.9k 末尾 200 行 span 步 76.2 → 73.2 ms，冷 12.9k TTFT 4.62 → 4.48 s，conc1 输出 sha 同；
+  门仍未过。数据在 bench_results 2026-09-04-k5-span-profile。
 - **输出**：conc1 短 prompt 64 token 与逐 token 逐字同；2k / 12.9k 的输出与逐 token 在第 8 / 第 1
   个近平局后分道（两条数值路径，cuBLAS 按 m 选核，同 t=1 smoke 的注）；同一路径自己是确定的
   ——冷 12.9k 的 256 token 在 5 次不同并发环境下 sha 全同（ad2eea8cd2f0），2k conc1 重启服务后同。

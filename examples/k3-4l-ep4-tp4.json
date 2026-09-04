@@ -1305,7 +1305,7 @@
   },
   "k3_mega_moe": {
    "source": "k3_mega_moe.cubin",
-   "sha256": "6ef2bc9ceaec10bd2b3d63a2a8d41acaad197e6b7ca75a7129150a1e93b45c92"
+   "sha256": "00c8b01261f1a6bdbe31240618a24a92423a748d3783939354ce1bce231b2bf5"
   },
   "k3_mega_stage": {
    "source": "k3_mega_stage.cubin",
@@ -4497,7 +4497,7 @@
        1,
        1
       ],
-      "shared_mem": 214404,
+      "shared_mem": 212900,
       "cluster": [
        2,
        1,
@@ -4537,7 +4537,7 @@
             ],
             "box": [
              128,
-             96
+             48
             ],
             "l2_promotion": 256,
             "swizzle": 128
@@ -4563,7 +4563,7 @@
              29270016
             ],
             "box": [
-             256,
+             128,
              1
             ],
             "l2_promotion": 256
@@ -4643,7 +4643,7 @@
             ],
             "box": [
              64,
-             32
+             16
             ],
             "l2_promotion": 256,
             "swizzle": 64
@@ -4670,7 +4670,7 @@
             ],
             "box": [
              128,
-             96
+             48
             ],
             "l2_promotion": 256,
             "swizzle": 128
@@ -4696,7 +4696,7 @@
              29270016
             ],
             "box": [
-             256,
+             128,
              1
             ],
             "l2_promotion": 256
@@ -4776,7 +4776,7 @@
             ],
             "box": [
              128,
-             96
+             48
             ],
             "l2_promotion": 256,
             "swizzle": 128
@@ -4802,7 +4802,7 @@
              29270016
             ],
             "box": [
-             256,
+             128,
              1
             ],
             "l2_promotion": 256
@@ -4882,7 +4882,7 @@
             ],
             "box": [
              64,
-             32
+             16
             ],
             "l2_promotion": 256,
             "swizzle": 64
@@ -4909,7 +4909,7 @@
             ],
             "box": [
              128,
-             96
+             48
             ],
             "l2_promotion": 256,
             "swizzle": 128
@@ -4935,7 +4935,7 @@
              29270016
             ],
             "box": [
-             256,
+             128,
              1
             ],
             "l2_promotion": 256
