@@ -501,6 +501,9 @@ impl KernScheduler {
                 break;
             }
             let got = loop {
+                // Room made for a retry may have parked or dropped the
+                // snapshot hit above: look it up again where it is now.
+                let hit = self.prefix.lookup(&ids);
                 let tray = &mut self.tray;
                 let attempt = match hit {
                     Some(h) => match h.tier {
