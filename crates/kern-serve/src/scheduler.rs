@@ -21,9 +21,11 @@
 //! goes through one-row steps, a token at a time — a row feeding its
 //! prompt is a row like any other, whose outputs are dropped until the
 //! last prompt token is in — or, when the manifest takes a run (a
-//! `span`, see `tray.rs`), the oldest sequence still feeding its prompt
-//! feeds a run of up to `--chunk` of its tokens as consecutive rows of
-//! the step, the run's last row handing its token back. That is what a
+//! `span`, see `tray.rs`), in every tray group the oldest sequence still
+//! feeding its prompt feeds a run of up to `--chunk` of its tokens as
+//! consecutive rows of the step, the run's last row handing its token
+//! back; the runs of a step are one length, the shortest any of them can
+//! feed, since the span var is one value for the tray. That is what a
 //! decode-only tray manifest (K3 today) gets: correct, and slow without
 //! the run.
 //!
@@ -104,6 +106,30 @@ fn rows_per_rank(k: usize, cap: usize) -> usize {
     match k > cap {
         true => bucket(k),
         false => bucket(k).min(cap),
+    }
+}
+
+/// A step's runs: in each tray group of `t` of the `n` ranks the oldest
+/// sequence still feeding its prompt feeds one, and every run is as long
+/// as the shortest of them can feed, within `cap`, since the span var is
+/// one value for the tray. `seqs[i] = (rank, tokens it can feed)` in age
+/// order; a rank holds `limit` rows, and a run's rows replace its one
+/// (a group without a run leads with as many padding rows). `(c, the
+/// runners)`: `(1, [])` when nothing is a run.
+fn runs(seqs: &[(usize, usize)], n: usize, t: usize, limit: usize, cap: usize) -> (usize, Vec<usize>) {
+    let runners: Vec<usize> = (0..n / t).filter_map(|g| seqs.iter().position(|&(q, a)| q / t == g && a > 1)).collect();
+    let on = |q: usize| seqs.iter().filter(|&&(r, _)| r == q).count();
+    let owns = |q: usize| runners.iter().any(|&i| seqs[i].0 == q);
+    let leads = |q: usize| q.is_multiple_of(t) && !(q..q + t).any(owns);
+    let room = (0..n).filter_map(|q| match (owns(q), leads(q)) {
+        (true, _) => Some((limit + 1).saturating_sub(on(q))),
+        (_, true) => Some(limit.saturating_sub(on(q))),
+        _ => None,
+    });
+    let c = runners.iter().map(|&i| seqs[i].1).chain(room).chain(std::iter::once(cap)).min().unwrap_or(1);
+    match c > 1 && !runners.is_empty() {
+        true => (c, runners),
+        false => (1, Vec::new()),
     }
 }
 
@@ -721,30 +747,35 @@ impl KernScheduler {
 
     /// One step over every running sequence: `rows` rows per sequence at
     /// its position, the forward the protocol picks for the batch, and
-    /// what it hands each sequence back. Under a span the oldest sequence
-    /// still feeding its prompt feeds a run of up to `--chunk` tokens
-    /// within the rows bound; only the run's last output matters, as with
-    /// a prefill chunk.
+    /// what it hands each sequence back. Under a span each tray group's
+    /// oldest sequence still feeding its prompt feeds a run of up to
+    /// `--chunk` tokens within the rows bound ([`runs`]); only a run's
+    /// last output matters, as with a prefill chunk.
     fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         self.drop_aborted(ledger);
-        let n = self.running.len();
-        if n == 0 {
+        if self.running.is_empty() {
             return Ok(());
         }
         let rows = self.plan.rows;
         let t0 = Instant::now();
-        let room = self.tray.seqs_max() + 1 - n;
-        let cap = self.plan.span.map_or(1, |mx| mx.min(self.policy.chunk).min(room));
-        let runner = (cap > 1).then(|| self.running.iter().position(|s| !s.pending.is_empty())).flatten();
+        let (c, runners) = match self.plan.span {
+            Some(mx) => {
+                let seqs: Vec<(usize, usize)> =
+                    self.running.iter().map(|s| (s.row.owner().index(), 1 + s.pending.len())).collect();
+                let (n, t, limit) = (self.tray.len(), self.tray.group_size(), self.tray.seqs_max());
+                runs(&seqs, n, t, limit, mx.min(self.policy.chunk))
+            }
+            None => (1, Vec::new()),
+        };
         let max_seqs = self.policy.max_seqs;
-        // What each sequence feeds: its next token `rows` times, or the
-        // runner's next and the prompt tokens after it.
+        // What each sequence feeds: its next token `rows` times, or a
+        // runner's next and the `c - 1` prompt tokens after it.
         let fed: Vec<Vec<u32>> = self
             .running
             .iter_mut()
             .enumerate()
-            .map(|(i, s)| match Some(i) == runner {
-                true => std::iter::once(s.next).chain(s.pending.drain(..(cap - 1).min(s.pending.len()))).collect(),
+            .map(|(i, s)| match runners.contains(&i) {
+                true => std::iter::once(s.next).chain(s.pending.drain(..c - 1)).collect(),
                 false => vec![s.next; rows as usize],
             })
             .collect();
@@ -766,7 +797,7 @@ impl KernScheduler {
         for (i, mut s) in running.into_iter().enumerate() {
             let toks: Vec<u32> = out[i].iter().map(|&t| t as u32).collect();
             // The tokens in the state now: the run's, or the one fed.
-            let fed = if Some(i) == runner { fed[i].clone() } else { vec![s.next] };
+            let fed = if runners.contains(&i) { fed[i].clone() } else { vec![s.next] };
             if let Some(c) = &mut self.counters {
                 // The first token is the next input's answer; the rest are
                 // accepted drafts.
@@ -892,6 +923,27 @@ mod tests {
             (rows_per_rank(17, 16), rows_per_rank(160, 16), rows_per_rank(223, 16), rows_per_rank(256, 16)),
             (24, 192, 256, 256)
         );
+    }
+
+    #[test]
+    fn every_group_runs_its_oldest_prompt_at_one_length() {
+        // Four ranks alone (t=1): the oldest prompt of each rank runs,
+        // all as long as the shortest can feed; a rank with none leads
+        // with padding, so its rows bound the length too.
+        let seqs = [(0, 1), (1, 9), (0, 5), (2, 1), (1, 7), (3, 3)];
+        assert_eq!(runs(&seqs, 4, 1, 16, 256), (3, vec![2, 1, 5]));
+        assert_eq!(runs(&seqs, 4, 1, 16, 2), (2, vec![2, 1, 5]));
+        // Room: a runner's rows replace its one (rank 0 holds 2, so 15
+        // more fit), a leading rank's add to its own (rank 2 holds 1).
+        assert_eq!(runs(&[(0, 100), (0, 1), (2, 1)], 4, 1, 16, 256), (15, vec![0]));
+        assert_eq!(runs(&[(0, 100), (2, 1)], 3, 1, 4, 256), (3, vec![0]));
+        // One group of four: one run, the oldest; its peers' rows are not
+        // in the way and no group leads.
+        assert_eq!(runs(&[(3, 1), (1, 9), (0, 5)], 4, 4, 16, 256), (9, vec![1]));
+        // Nothing to run, or no room for a run of two.
+        assert_eq!(runs(&[(0, 1), (1, 1)], 2, 1, 16, 256), (1, vec![]));
+        assert_eq!(runs(&[(0, 9), (1, 1)], 2, 1, 1, 256), (1, vec![]));
+        assert_eq!(runs(&[], 2, 1, 16, 256), (1, vec![]));
     }
 
     /// The plain contract: 8 rows, 4 sequences, a chunk forward that only

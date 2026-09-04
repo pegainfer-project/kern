@@ -233,14 +233,18 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 - **K3 没有 prefill program，prompt 走 span**：`prefill` 可选；没有时 prompt 在 prefix
   命中之外的部分走 decode 步，该行的输出在最后一个 prompt token 进去之前丢掉。manifest 有
   带 `batch.span` 的 program（K5：`"batch": {"groups": …, "rows": 1, "span": "span"}` +
-  `span_at` fill 的 `[1]` i32 输入，`Protocol::spanned(b)` 选它）时一步里**一个** cell 可以是
+  `span_at` fill 的 `[1]` i32 输入，`Protocol::spanned(b)` 选它）时一步里**每个 tp 组一个** cell 可以是
   一段 run——同一序列的 c 个连续 token 各占一行（`Layout` 里每 cell 有行数，run 排在 owner 块
-  的最前面，`span_at` = 该 owner 的块下标 × b，每个 rank 各自算），位置 / slot / seq_len
-  逐行递增，输出取末行；**组里没有这个 cell 的 rank 在自己块最前面垫 c 行 pad**（`Layout.lead`）
+  的最前面，`span_at` = 本组 run 的 owner 块的偏移，每个 rank 各自算），位置 / slot / seq_len
+  逐行递增，输出取末行；**组里没有 run 的 rank 在自己块最前面垫 c 行 pad**（`Layout.lead`）
   ——var 是全 tray 一份，每个 rank 都跑 span program、都跳过 `[span_at, span_at + c)`，
   EP4 下 run 落在 rank 1 时 rank 0 若不垫，它自己的第 0 行就被当 span 跳过、又被 span
-  核当 span 算进那条序列的 state（2026-09-03 E3 第一版：8 条相同 prompt 出 8 种答案）；scheduler 每步挑最老的还在喂 prompt 的序列，
-  c = min(`--chunk`, manifest 的 `span.max`, 待喂 token 数, `seqs.max − (n − 1)`)，
+  核当 span 算进那条序列的 state（2026-09-03 E3 第一版：8 条相同 prompt 出 8 种答案）。scheduler
+  每步在每个 tp 组里挑最老的还在喂 prompt 的序列各喂一段 run（`runs`，纯函数；2026-09-04 之前整个 tray
+  每步只放一条，t=1 的另外三张卡在 span 步里跑的是 pad），所有 run 一样长：
+  c = min(`--chunk`, manifest 的 `span.max`, 各 run 待喂 token 数的最小值, 每个 rank 的余量)——
+  余量按 rank：放 run 的 rank 是 `seqs.max + 1 − 本卡行数`，垫 lead 的 rank 是 `seqs.max − 本卡行数`；
+  一条短 prompt 会把同步别人的 run 拉短一步，换它自己一步内出首 token，不排在别人后面。
   其余序列各一行。每 rank 的行数：k ≤ `--max-seqs` 时 bucket 再钉到 max_seqs（原规则），run 超过它时
   走阶梯（`rows_per_rank`）——同一个 run 不论同步还有什么都落同一个 bucket；cuBLAS 按 m 选核，2k prompt
   的尾块 223 行不垫到 256、12.9k 的尾块 160 不垫到 192，输出就在近平局处与 K5 线分道（2026-09-04 移植第

@@ -52,18 +52,19 @@
 //! an `error` fill declares the collectives' error word; it is read after
 //! every step and a nonzero value is a failed step, never a silent one.
 //!
-//! # A run
+//! # Runs
 //!
 //! A manifest whose protocol has a `span` takes, in a one-row step, one
-//! cell feeding a run of tokens: that many rows of its sequence, each at
-//! its own position with its own slot, length and page-table row, which
-//! the run's program treats as one sequence from the row the `span_at`
-//! fill names. The run heads its owner's block, so `span_at` is a whole
-//! number of blocks on every member of the owner's group; a group without
-//! the run leads its block with as many padding rows ([`Layout::lead`]),
-//! since the var and `span_at` are one value for the whole tray and a
-//! rank whose row 0 was a real sequence would have it taken for the run.
-//! The run's token is its last row's.
+//! cell per tray group feeding a run of tokens: that many rows of its
+//! sequence, each at its own position with its own slot, length and
+//! page-table row, which the run's program treats as one sequence from
+//! the row the `span_at` fill names. The span var is one value for the
+//! whole tray, so every run of a step is the same length. A run heads its
+//! owner's block, so `span_at` is a whole number of blocks on every member
+//! of the owner's group; a group without a run leads its block with as
+//! many padding rows ([`Layout::lead`]), since a rank whose row 0 was a
+//! real sequence would have it taken for the run. A run's token is its
+//! last row's.
 //!
 //! [`Staged`] borrows the tray for as long as the step lives: nothing can
 //! lease, fork or stage again until the outputs are read and it drops,
@@ -208,8 +209,8 @@ struct Layout {
     per: usize,
     /// Rows each cell fills: its run's length, else 1.
     len: Vec<usize>,
-    /// Padding rows leading rank `q`'s block in place of the run: a group
-    /// without the run holds its stand-in once, in its first member's block.
+    /// Padding rows leading rank `q`'s block in place of a run: a group
+    /// without one holds the stand-in once, in its first member's block.
     lead: Vec<usize>,
     /// Rows in rank `q`'s block of the tray batch: `lead`, its cells'
     /// rows, then padding up to the tray's rows.
@@ -219,8 +220,9 @@ struct Layout {
 }
 
 impl Layout {
-    /// `cells[i]` = (owner, rows) of cell `i`; at most one cell has more
-    /// than one row. `bucket` pads a row count up to its graph's.
+    /// `cells[i]` = (owner, rows) of cell `i`; at most one cell per group
+    /// has more than one row, and those all have the same number. `bucket`
+    /// pads a row count up to its graph's.
     fn new(cells: &[(usize, usize)], per: usize, groups: &Groups, bucket: impl Fn(usize) -> usize) -> Layout {
         let mut own = vec![Vec::new(); groups.n];
         for (i, &(q, _)) in cells.iter().enumerate() {
@@ -232,10 +234,11 @@ impl Layout {
         for o in &mut own {
             o.sort_by_key(|&i| std::cmp::Reverse(len[i]));
         }
-        let run = cells.iter().find(|&&(_, l)| l > 1);
+        let run = len.iter().copied().find(|&l| l > 1);
+        let has_run = |q: usize| cells.iter().any(|&(o, l)| l > 1 && groups.members(q).contains(&o));
         let lead: Vec<usize> = (0..groups.n)
             .map(|q| match run {
-                Some(&(owner, l)) if groups.members(q).start == q && !groups.members(q).contains(&owner) => l,
+                Some(l) if groups.members(q).start == q && !has_run(q) => l,
                 _ => 0,
             })
             .collect();
@@ -258,14 +261,14 @@ impl Layout {
         Layout { own, b: bucket(widest).max(widest), per, len, lead, block, tray }
     }
 
-    /// The run's length, when a cell feeds one.
+    /// The runs' length, when a cell feeds one.
     fn run(&self) -> Option<usize> {
         self.len.iter().copied().find(|&l| l > 1)
     }
 
-    /// Rank `q`'s block: the run's stand-in padding when its group has no
-    /// cell of the run, `(cell, row within the cell)` for its own cells'
-    /// rows, then `None` for each padding row.
+    /// Rank `q`'s block: a run's stand-in padding when its group has no
+    /// run, `(cell, row within the cell)` for its own cells' rows, then
+    /// `None` for each padding row.
     fn block_rows(&self, q: usize) -> impl Iterator<Item = Option<(usize, usize)>> + '_ {
         let mine = self.own[q].iter().flat_map(|&i| (0..self.len[i]).map(move |j| (i, j)));
         std::iter::repeat_n(None, self.lead[q]).chain(mine.map(Some)).chain(std::iter::repeat(None)).take(self.block[q])
@@ -621,22 +624,31 @@ impl Tray {
 
     /// Lay a step out on every rank and write its inputs: `per` tokens
     /// per cell, rows per rank `bucket` of the most any rank holds. In a
-    /// one-row step of a manifest with a span, one cell may feed a run of
-    /// more (see the module doc).
+    /// one-row step of a manifest with a span, one cell per tray group may
+    /// feed a run of more, all runs of one length (see the module doc).
     pub fn stage(&mut self, cells: &[Cell<'_>], per: usize, bucket: impl Fn(usize) -> usize) -> Result<Staged<'_>> {
         if per == 0 {
             bail!("a cell feeds at least one token");
         }
-        let runs: Vec<usize> = cells.iter().map(|c| c.ids.len()).filter(|&l| l != per).collect();
+        let runs: Vec<(usize, usize)> =
+            cells.iter().filter(|c| c.ids.len() != per).map(|c| (c.row.owner.0 / self.groups.t, c.ids.len())).collect();
         let run = match (&self.protocol.span, runs.as_slice()) {
             (_, []) => None,
-            (Some(s), &[c]) if per == 1 && c > 1 && c as u64 <= s.max => Some(c),
-            (Some(s), &[c]) if per == 1 && c > 1 => {
+            (None, _) => bail!("every cell of a step feeds {per} tokens; the manifest takes no run"),
+            (Some(_), _) if per != 1 => bail!("a run rides a one-row step; this step feeds {per} tokens per cell"),
+            (Some(_), &[(_, c), ..]) if runs.iter().any(|&(_, l)| l != c) => {
+                bail!(
+                    "every run of a step is the same length, the span var being one value for the tray: {:?}",
+                    runs.iter().map(|&(_, l)| l).collect::<Vec<_>>()
+                )
+            }
+            (Some(_), _) if (1..runs.len()).any(|i| runs[..i].iter().any(|&(g, _)| g == runs[i].0)) => {
+                bail!("one cell per tray group may feed a run of tokens, {} do", runs.len())
+            }
+            (Some(s), &[(_, c), ..]) if (c as u64) > s.max => {
                 bail!("a run of {c} rows, the manifest's `{}` allows {}", s.var, s.max)
             }
-            (Some(_), &[_]) => bail!("a run rides a one-row step; this step feeds {per} tokens per cell"),
-            (Some(_), _) => bail!("one cell per step may feed a run of tokens, {} do", runs.len()),
-            (None, _) => bail!("every cell of a step feeds {per} tokens; the manifest takes no run"),
+            (Some(_), &[(_, c), ..]) => Some(c),
         };
         let placed: Vec<(usize, usize)> =
             cells.iter().map(|c| (c.row.owner.0, if run.is_some() { c.ids.len() } else { 1 })).collect();
@@ -674,16 +686,17 @@ impl Tray {
             c.map_or(vec![0; per], |(i, j)| cells[i].ids[j * per..(j + 1) * per].to_vec())
         };
         let pos_of = |c: Option<(usize, usize)>| -> usize { c.map_or(0, |(i, j)| cells[i].pos + j) };
-        // The run's first row on this rank: where its owner's block starts,
-        // whose cells it heads; where the group's stand-in padding starts
-        // when no block here has it.
-        let span_at = (0..cells.len())
-            .find(|&i| l.len[i] > 1)
-            .and_then(|i| {
-                l.offset_in(&groups, q, cells[i].row.owner.0)
-                    .or_else(|| l.offset_in(&groups, q, groups.members(q).start))
-            })
-            .map_or(0, |o| (o * per) as i64);
+        // The group's run's first row on this rank: where its owner's
+        // block starts, whose cells it heads; where the group's stand-in
+        // padding starts when no block here has one.
+        let span_at = l.run().map_or(0, |_| {
+            let owner = (0..cells.len())
+                .filter(|&i| l.len[i] > 1)
+                .map(|i| cells[i].row.owner.0)
+                .find(|&o| groups.members(q).contains(&o));
+            let o = l.offset_in(&groups, q, owner.unwrap_or(groups.members(q).start));
+            (o.expect("a rank's own group") * per) as i64
+        });
         let mut writes: Vec<(&Filled, Vec<i64>)> = Vec::new();
         for f in &p.fills {
             let v: Vec<i64> = match (f.fill, f.axis) {
@@ -964,5 +977,25 @@ mod tests {
             (l.offset_in(&Groups { n: 4, t: 2 }, 3, 2), l.offset_in(&Groups { n: 4, t: 2 }, 3, 1)),
             (Some(4), None)
         );
+    }
+
+    #[test]
+    fn every_group_may_run_and_none_leads_then() {
+        let bucket = |k: usize| [1usize, 2, 4, 8].into_iter().find(|&b| b >= k).unwrap_or(k);
+        let one = |q: usize| (q, 1);
+        // Two ranks alone, a run each: both head their blocks, no lead.
+        let l = Layout::new(&[(1, 3), (0, 3), one(1)], 1, &Groups { n: 2, t: 1 }, bucket);
+        assert_eq!((l.b, l.lead.clone(), l.run(), l.own.clone()), (4, vec![0, 0], Some(3), vec![vec![1], vec![0, 2]]));
+        assert_eq!(l.rows(1).collect::<Vec<_>>(), [Some((0, 0)), Some((0, 1)), Some((0, 2)), Some((2, 0))]);
+        assert_eq!(l.last_rows(0).collect::<Vec<_>>(), [(2, 1)]);
+        // Two groups of two with a run each: the peers' blocks are the
+        // padding, the run's offset is per group.
+        let g = Groups { n: 4, t: 2 };
+        let l = Layout::new(&[(0, 3), (3, 3), one(2)], 1, &g, bucket);
+        assert_eq!((l.block.clone(), l.tray, l.lead.clone()), (vec![3, 1, 1, 3], 4, vec![0; 4]));
+        assert_eq!((l.offset_in(&g, 2, 3), l.offset_in(&g, 1, 0), l.offsets(&g, 3)), (Some(1), Some(1), vec![0, 1, 4]));
+        // Only one of two groups runs: the other still leads.
+        let l = Layout::new(&[(0, 3), one(2)], 1, &g, bucket);
+        assert_eq!(l.lead, vec![0, 0, 3, 0]);
     }
 }
