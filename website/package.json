@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node ../tools/profile_standalone.mjs --out dist/perf/offline.html",
     "preview": "vite preview"
   },
   "dependencies": {

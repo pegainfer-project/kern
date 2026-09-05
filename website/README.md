@@ -23,6 +23,20 @@ npm run preview
 
 The production output is written to `dist/`.
 
+## Performance explorer
+
+The measured single-GPU explorer lives at `/perf/`. It loads portable evidence
+from `public/perf/data/`; there are no invented benchmark values. See
+[measurement and reproduction notes](../docs/performance-atlas.md) for the
+manifest-driven runner, cache protocol, uncertainty limits, AI quick view
+and standalone offline HTML export.
+
+The page distinguishes measured program/trace data from calibrated op-cost
+estimates and hypothetical savings. Report collection currently loads and
+executes the model; viewing an exported report needs neither the model nor a
+GPU. `npm run build` also produces `dist/perf/offline.html`, containing the
+same explorer and evidence without network dependencies.
+
 ## Cloudflare Pages
 
 The existing Cloudflare Pages project is named `kern`. Publish the current

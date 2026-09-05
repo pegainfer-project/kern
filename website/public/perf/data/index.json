@@ -1,0 +1,28 @@
+[
+  {
+    "model": "qwen3-4b",
+    "file": "qwen3-4b.json.gz",
+    "quick": "qwen3-4b-quick.json",
+    "coverage": {
+      "programs": 3,
+      "scenarios": 31,
+      "call_observations": 13477,
+      "cases": 2609,
+      "distinct_ops": 13,
+      "holdouts": 4
+    }
+  },
+  {
+    "model": "qwen3.8-27b",
+    "file": "qwen3.8-27b.json.gz",
+    "quick": "qwen3.8-27b-quick.json",
+    "coverage": {
+      "programs": 3,
+      "scenarios": 31,
+      "call_observations": 29351,
+      "cases": 5282,
+      "distinct_ops": 31,
+      "holdouts": 4
+    }
+  }
+]
