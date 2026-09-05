@@ -1,0 +1,10 @@
+export type Stats = { n:number; min:number; p10:number; p50:number; p90:number; max:number; mean:number; cv:number; tail_ratio:number; block_medians:number[] };
+export type Series = {stats:Stats; samples_us:number[]};
+export type Case = {id:string; representative_call:number; signature:{op:string; args:{[key:string]:unknown}[]; env:{[key:string]:number}}; cold:Series; warm:Series};
+export type Call = {index:number; label:string|null; op:string; case:number; args:unknown[]; launches:{entry:string;module:string|null}[];in_program:Series};
+export type Op = {name:string;count:number;launches:number;cold_us:number;warm_us:number;attributed_us:number;share:number;estimated_program_us:number;case_indices:number[];calls:number[];max_tail_ratio:number;max_cv:number;variable:boolean;saving_at_2x_us:number};
+export type Record = {scenario:{id:string;kind:string;batch:number;query:number;context:number[];holdout:boolean}; program:string;graph:Series;instrumented:Series;cases:Case[];calls:Call[];ops:Op[];cold_sum_us:number;warm_sum_us:number;instrumentation_ratio:number;output_check:string;prediction?:{us:number;error_pct:number;range_us:number[]};telemetry_before:unknown;telemetry_after:unknown};
+export type Anchor = {name:string;payload_bytes:number;traffic_bytes:number;flops?:number;timing:Series};
+export type Coverage = {programs:number;scenarios:number;call_observations:number;cases:number;distinct_ops:number;holdouts:number};
+export type Dataset = {model:string;manifest_sha256:string;created_unix:number;hardware:{device:string;l2_bytes:number;eviction_bytes:number;sm_count:number;driver_version:number};coverage:Coverage;scenarios:Record[];calibration_before:Anchor[];calibration_after:Anchor[];calibration_drift_pct:{[key:string]:number};eviction_ratio:number;protocol:unknown;composition:{validation:string;range:string};repeat_check?:{scenarios:number;median_abs_delta_pct:number;max_abs_delta_pct:number;token_outputs_match:boolean}};
+export type Catalog = {model:string;file:string;quick:string;coverage:Coverage}[];

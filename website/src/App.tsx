@@ -47,6 +47,7 @@ function Header() {
         <a href="#evidence">EVIDENCE</a>
         <a href="#proof">PROOF</a>
         <a href="/schema/">SCHEMA</a>
+        <a href="/perf/">PERF</a>
         <a href="/qwen38/">+49</a>
         <a
           className="github-link"
