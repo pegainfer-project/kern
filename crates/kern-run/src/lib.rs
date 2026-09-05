@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attest;
+pub mod bench;
 pub mod config;
 pub mod run;
 

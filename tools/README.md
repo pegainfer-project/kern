@@ -1,5 +1,9 @@
 # tools/：从 vLLM 到可执行 manifest 的流水线
 
+单卡算子压测与交互展示另见 [Performance Atlas](../docs/performance-atlas.md)：
+`kern bench` → `profile_trace.py` → `profile_export.py` → `/perf/`。
+`profile_standalone.mjs` 可导出不依赖网络的完整 HTML。
+
 按执行顺序：
 
 | # | 工具 | 输入 → 输出 |

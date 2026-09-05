@@ -31,6 +31,9 @@ jobs:
       - name: Test kern-manifest
         run: cargo test -p kern-manifest
 
+      - name: Performance evidence regression tests
+        run: python3 -m unittest discover -s tools -p test_profile.py
+
       - name: Protocol names stay in the manifest
         run: |
           # kern-run and kern-serve drive the runtime through `Protocol`; a

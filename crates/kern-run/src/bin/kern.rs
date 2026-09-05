@@ -31,6 +31,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Profile every call of single-device workloads and export raw measurements
+    Bench {
+        target: Option<String>,
+        #[command(flatten)]
+        opts: kern_run::bench::BenchOpts,
+    },
     /// Greedy bs=1 generation over a target's manifest
     Run {
         /// Target in kern.toml (needed when it declares several)
@@ -72,6 +78,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::find(cli.config.as_deref())?;
     match cli.cmd {
+        Cmd::Bench { target, opts } => {
+            let t = cfg.as_ref().map(|c| c.one(target.as_deref()).map(|(_, t)| t)).transpose()?;
+            kern_run::bench::run(opts, cfg.as_ref(), t)
+        }
         Cmd::Run { target, opts } => {
             let t = match &cfg {
                 Some(c) if !c.targets.is_empty() => Some(c.one(target.as_deref())?.1),

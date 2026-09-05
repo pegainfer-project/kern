@@ -15,10 +15,10 @@ toml.workspace = true
 tokenizers.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 memmap2 = "0.9"
-sha2.workspace = true
 
 [lib]
 path = "src/lib.rs"

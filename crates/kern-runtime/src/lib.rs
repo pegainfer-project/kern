@@ -45,6 +45,7 @@ mod error;
 mod host;
 mod pages;
 mod prefix;
+pub mod profile;
 pub mod values;
 
 use std::collections::{BTreeMap, BTreeSet};
