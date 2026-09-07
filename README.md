@@ -123,13 +123,14 @@ golden-checked in CI:
 
 ### Named constants (manifest v4)
 
-The optional `constants` table is recommended for readable model dimensions:
+The optional `constants` table is recommended for readable model dimensions.
+Use C-style `UPPER_SNAKE_CASE` names:
 
 ```json
-"constants": {"vocab_size": 151936, "hidden_size": 2560}
+"constants": {"VOCAB_SIZE": 151936, "HIDDEN_SIZE": 2560}
 ```
 
-Use `"shape": ["seqs", "vocab_size"]` or `{"i32": "hidden_size"}`.
+Use `"shape": ["seqs", "VOCAB_SIZE"]` or `{"i32": "HIDDEN_SIZE"}`.
 Names work in numeric fields (including `i64`, `f32`, expressions, capacities
 and byte offsets), except `schema_version`, which remains `4`. Values must be
 numeric literals; aliases and constant expressions are not supported. Names

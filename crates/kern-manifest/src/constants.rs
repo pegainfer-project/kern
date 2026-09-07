@@ -61,7 +61,7 @@ pub fn json_schema() -> Value {
     schema["properties"]["constants"] = json!({
         "type": "object", "additionalProperties": {"type": "number"},
         "propertyNames": {"minLength": 1},
-        "description": "Optional named numeric literals, recommended for readability. For example {\"hidden_size\": 2560}. Reference a name in any numeric position except schema_version, including {\"i32\": \"hidden_size\"}, shapes, expressions, capacities and byte offsets. Names must not overlap vars. Values are numbers, not expressions or aliases. References expand before typed validation; serialization emits resolved literals."
+        "description": "Optional named numeric literals, recommended for readability. Use C-style UPPER_SNAKE_CASE names. For example {\"HIDDEN_SIZE\": 2560}. Reference a name in any numeric position except schema_version, including {\"i32\": \"HIDDEN_SIZE\"}, shapes, expressions, capacities and byte offsets. Names must not overlap vars. Values are numbers, not expressions or aliases. References expand before typed validation; serialization emits resolved literals."
     });
     schema
 }

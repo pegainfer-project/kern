@@ -1,7 +1,7 @@
 """Give Qwen manifest dimensions semantic names after ABI normalization.
 
 This is deliberately context-aware: equal numbers are not necessarily the same
-constant (hidden_size vs block-table capacity, or Q width vs GDN V width).
+constant (HIDDEN_SIZE vs block-table capacity, or Q width vs GDN V width).
 Unclassified kernel tuning parameters stay literal. No kernel or capture is
 needed to reapply this presentation pass.
 """
@@ -16,6 +16,7 @@ def name_constants(manifest):
     constants = {}
 
     def ref(name, value):
+        name = name.upper()
         if isinstance(value, str):
             return value
         assert name not in constants or constants[name] == value, name

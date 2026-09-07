@@ -32,13 +32,13 @@ class QwenConstantsTests(unittest.TestCase):
 
     def test_equal_numbers_keep_distinct_meanings(self):
         qwen3 = json.loads((ROOT / "examples/qwen3-4b.json").read_text())
-        self.assertEqual(qwen3["buffers"]["block_table"]["shape"][-1], "max_blocks_per_seq")
-        self.assertEqual(qwen3["buffers"]["x"]["shape"][-1], "hidden_size")
+        self.assertEqual(qwen3["buffers"]["block_table"]["shape"][-1], "MAX_BLOCKS_PER_SEQ")
+        self.assertEqual(qwen3["buffers"]["x"]["shape"][-1], "HIDDEN_SIZE")
         draft = json.loads((ROOT / "examples/qwen3.8-27b-dflash2.json").read_text())
-        for name, expected in [("q_n", "q_dim"), ("gdn_v", "gdn_v_dim"), ("d_qkv", "draft_qkv_dim")]:
+        for name, expected in [("q_n", "Q_DIM"), ("gdn_v", "GDN_V_DIM"), ("d_qkv", "DRAFT_QKV_DIM")]:
             self.assertEqual(draft["buffers"][name]["shape"][-1], expected)
-        self.assertEqual(draft["buffers"]["hidden_r"]["shape"], ["max_verify_tokens", "selector_rank"])
-        self.assertEqual(draft["buffers"]["model.layers.3.self_attn.q_norm.weight_p1"]["shape"], ["head_dim"])
+        self.assertEqual(draft["buffers"]["hidden_r"]["shape"], ["MAX_VERIFY_TOKENS", "SELECTOR_RANK"])
+        self.assertEqual(draft["buffers"]["model.layers.3.self_attn.q_norm.weight_p1"]["shape"], ["HEAD_DIM"])
 
     def test_reference_names_are_not_substituted(self):
         m = json.loads((ROOT / "examples/minimal.json").read_text())

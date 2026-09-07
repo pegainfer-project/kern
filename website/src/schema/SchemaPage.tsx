@@ -611,19 +611,20 @@ export default function SchemaPage() {
           <h2>Give numbers names</h2>
           <p className="example-note">
             <code>constants</code> is optional and recommended for readability.
-            Declare numeric literals once, then use their names in shapes, scalar
+            Use C-style <code>UPPER_SNAKE_CASE</code> names. Declare numeric
+            literals once, then use their names in shapes, scalar
             arguments, expressions, capacities and byte offsets.
           </p>
           <pre className="example-json"><code>{`"constants": {
-  "vocab_size": 151936,
-  "hidden_size": 2560
+  "VOCAB_SIZE": 151936,
+  "HIDDEN_SIZE": 2560
 }
 
-"shape": ["seqs", "vocab_size"]
+"shape": ["seqs", "VOCAB_SIZE"]
 
 {"label": "lm_head", "op": "gemm", "args": [
   {"buf": "x"}, {"buf": "lm_head.weight"}, {"buf": "logits"},
-  {"var": "seqs"}, {"i32": "vocab_size"}, {"i32": "hidden_size"}
+  {"var": "seqs"}, {"i32": "VOCAB_SIZE"}, {"i32": "HIDDEN_SIZE"}
 ]}`}</code></pre>
           <p className="example-note">
             Names expand at load time; <code>i32</code>, <code>i64</code> and
