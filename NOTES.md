@@ -160,10 +160,11 @@ GDN slots per cut).
    the capture and every later launch fails with EXECUTION_FAILED (the
    harness replica of the same calls ran fine). Take the address once.
 
-## State at the end of session 1 (commit 15f0f84)
+## State at the end of session 1 (commit 982e596)
 
-score 8283 → 7257 ms (step 18.49 → 16.19 ms, extend 72.4 → 67.8 ms), every
-decode op bit-exact with the reference. decode_batch has 646 nodes: gemm
+score 8283 → 7203 ms (step 18.49 → 16.07 ms, extend 72.4 → 67.4 ms), every
+op bit-exact with the reference (kern test: bit-identical at every cut on
+a random and a prose prompt). decode_batch has 646 nodes: gemm
 305, gemma_fused_norm 128, silu_mul 64, gdn_conv 48, gdn_step 48,
 attn_prep 16, attn_batch 16, sigmoid_mul 16, embedding 3, gemma_norm 1,
 argmax 1. Where the 16.2 ms goes now: gemm ~9.3, attention ~5.2,
@@ -174,7 +175,8 @@ gdn ~1.1, the rest ~0.6.
 - Not much on the kernels I own: gdn_step is at 20.9 µs against a 17.7 µs
   copy ceiling (0.15 ms/step at most), gdn_conv 2.6 µs, the norm ~2 µs.
 - GEMMs are 57% of the step and cuBLASLt is at 4.3-6.3 TB/s per shape, but
-  any other algorithm or a custom kernel changes the accumulation order.
+  any other algorithm or a custom kernel changes the accumulation order
+  (the pinned-tile path already takes the bit-identical wins there are).
   The custom mma.sync GEMM (cp.async or TMA producer, 64-row tiles) was
   bit-identical to cuBLASLt on the splitk=1 shapes and at parity in speed
   (qkvz 5.9 vs 6.0 TB/s, gate_up 6.3 vs 6.3, qkv 5.6 vs 5.4, lm_head 6.9
