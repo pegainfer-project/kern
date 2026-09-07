@@ -43,6 +43,7 @@ mod cubin;
 mod device;
 mod error;
 mod host;
+mod layout;
 mod pages;
 mod prefix;
 pub mod profile;
@@ -63,9 +64,8 @@ pub use chunks::{Kind, Remap};
 use compile::{CompiledProgram, Launch, LaunchKind, RVal, Slot};
 pub use device::PeerHandle;
 use device::{
-    BlasLtTile,
-    alloc, alloc_vmm, chunk_granularity, copy_2d, gemm_bf16_tn, gemm_bf16_tn_f32, Arena, Blas, DeviceBuf, Mapper,
-    Physical, Pinned, Share,
+    alloc, alloc_vmm, chunk_granularity, copy_2d, gemm_bf16_tn, gemm_bf16_tn_f32, Arena, Blas, BlasLtTile, DeviceBuf,
+    Mapper, Physical, Pinned, Share,
 };
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
@@ -706,11 +706,12 @@ impl Runtime {
             if b.kind != BufferKind::Weight {
                 continue;
             }
-            let found: Vec<_> = sts.iter().filter_map(|st| st.tensor(name).ok()).collect();
+            let tensor = b.tensor.as_deref().unwrap_or(name);
+            let found: Vec<_> = sts.iter().filter_map(|st| st.tensor(tensor).ok()).collect();
             let t = match found.as_slice() {
                 [t] => t,
-                [] => bail!(WeightArtifact, "weight `{name}` missing from the artifact(s)"),
-                _ => bail!(WeightArtifact, "weight `{name}` present in {} artifacts", found.len()),
+                [] => bail!(WeightArtifact, "weight `{name}`: tensor `{tensor}` missing from the artifact(s)"),
+                _ => bail!(WeightArtifact, "weight `{name}`: tensor `{tensor}` present in {} artifacts", found.len()),
             };
             let dst = self.buffers.get_mut(name).unwrap();
             if t.data().len() as u64 != dst.bytes {
@@ -721,7 +722,22 @@ impl Runtime {
                     dst.bytes
                 );
             }
-            self.stream.memcpy_htod(t.data(), dst)?;
+            // A `layout` is a permutation of the file's row-major bytes;
+            // the verifier has checked the shape is a constant 2-D one the
+            // tile divides.
+            match &b.layout {
+                None => self.stream.memcpy_htod(t.data(), dst)?,
+                Some(l) => {
+                    let dim = |i: usize| match &b.shape[i] {
+                        kern_manifest::types::Dim::Const(c) => *c as usize,
+                        kern_manifest::types::Dim::Var(_) => unreachable!("verified: layout shapes are constant"),
+                    };
+                    let img = layout::tile(t.data(), dim(0), dim(1), b.dtype.bytes() as usize, l);
+                    self.stream.memcpy_htod(&img, dst)?;
+                    // The image is freed on return; the copy must have landed.
+                    self.stream.synchronize()?;
+                }
+            }
         }
         self.stream.synchronize()?;
         Ok(())

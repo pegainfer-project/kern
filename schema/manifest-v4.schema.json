@@ -231,6 +231,17 @@
           "$ref": "#/$defs/BufferKind",
           "description": "Who provides the buffer and how long its contents live."
         },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Layout"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`weight` buffers only: how a 2-D matrix is stored on the device when not row-major, e.g. `{\"tile\": [64, 64], \"swizzle\": 8}`; the runtime permutes the file's row-major bytes at load."
+        },
         "of": {
           "description": "`peer` buffers only: the exported buffer or state whose per-rank base addresses this buffer holds, e.g. `\"flags\"`.",
           "type": [
@@ -244,6 +255,13 @@
             "$ref": "#/$defs/Dim"
           },
           "type": "array"
+        },
+        "tensor": {
+          "description": "`weight` buffers only: the tensor in the weights file to bind when it is not this buffer's own name, e.g. `\"model.layers.0.mlp.gate_up_proj.weight\"` for a second copy of it in another `layout`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -469,7 +487,7 @@
           ]
         },
         "entry": {
-          "description": "`extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ) or `cublaslt_bf16_tn_acc` (C += A·Wᵀ).",
+          "description": "`extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ), `cublaslt_bf16_tn_acc` (C += A·Wᵀ) or\n`cublaslt_bf16_tn_tile` (C = A·Wᵀ with the cublasLt algorithm pinned by tile id and split-K count, two trailing i32 args).",
           "type": "string"
         },
         "params": {
@@ -934,6 +952,33 @@
         }
       ],
       "description": "A launch argument: a forwarded op param, a scratch buffer, a literal, or this rank's index in a group, e.g. `{\"param\": 0}`, `{\"scratch\": \"pmax\"}`, `{\"i32\": 64}`, `{\"rank\": \"ep\"}`."
+    },
+    "Layout": {
+      "additionalProperties": false,
+      "description": "A tiled storage order for a 2-D weight: the `[rows, cols]` matrix is kept as `[rows/tile[0]][cols/tile[1]]` contiguous row-major tiles. With `swizzle` 8 the 16-byte chunk `c` of a tile row `r` sits at chunk `c ^ (r % 8)`, the pattern a 128-byte-pitch `ldmatrix` reads conflict-free.",
+      "properties": {
+        "swizzle": {
+          "description": "`0` for plain tiles or `8` for the chunk-XOR-row swizzle inside each tile.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tile": {
+          "description": "Tile extents in elements, `[rows, cols]`, each dividing the matrix, e.g. `[64, 64]`.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "tile"
+      ],
+      "type": "object"
     },
     "Module": {
       "additionalProperties": false,
