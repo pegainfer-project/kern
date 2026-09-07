@@ -796,8 +796,12 @@ fn restore_state(
 }
 
 fn load_side(m: &Verified, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
-    // The attestation drives the manifest's whole batch of sequences.
-    let seqs = m.seq_slots() - 2;
+    // The attestation drives one sequence (`Caller` leases one and writes
+    // its lines into every table column), so one slot is all the
+    // per-sequence states need. Sizing them for the manifest's whole batch
+    // made every whole-state read of a cut copy 128 slots: on qwen3.8-27b
+    // (154 MB of GDN state per slot) a run grew past 700 GB of host memory.
+    let seqs = 1;
     let mut rt = Runtime::load(m, &o.kernels, o.gpu, Some(Capacity { tokens: Some(o.capacity), seqs }), None)?;
     rt.load_weights(blobs)?;
     Caller::new(rt)
