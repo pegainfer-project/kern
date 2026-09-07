@@ -267,6 +267,8 @@ gdn ~1.1, the rest ~0.6.
   25 µs version would be worth 0.4 ms.
 - Remaining small fusions: sigmoid_mul into o_proj's A load (16 calls,
   ~0.05 ms), gdn_conv + gdn_step (48 launches, ~0.1 ms).
+- Attention splits re-swept under PDL at d25ab02: 12 → 15.208, 16 → 15.126,
+  20 → 15.165, 24 → 15.227 ms. 16 stays.
 - Tried, no gain (session 2): a thread-block-cluster split-K (the CTAs of
   one n-tile in a cluster along grid.y, rank 0 holding the ascending
   running sum, the others single partials in smem, rank 0 reducing over
