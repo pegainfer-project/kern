@@ -27,6 +27,8 @@ GDN_DIM = 10240
 GDN_HV = 48
 QKVZ_WIDTH = 16384
 BA_WIDTH = 96
+MLP_WIDTH = 17408
+ATTN_WIDTH = 6144
 GDN_SCALE = 0.0883883461356163
 GDN_EPS = 9.999999974752427e-07
 
@@ -91,7 +93,26 @@ def fuse_gdn(m):
 
 # Handwritten kernels rewritten since the capture (same entry, same ABI,
 # bit-exact with the pinned build: see the harness notes in NOTES.md).
-REWRITTEN = ["gemma_rms_norm"]
+REWRITTEN = ["gemma_rms_norm", "sigmoid_mul"]
+# Elementwise rewrites take 8 elements per thread: grid.y covers the row.
+ELEM_BLOCK = 256
+
+
+def elementwise(m):
+    """The mined vLLM silu-and-mul becomes the handwritten one; the rewritten
+    elementwise kernels get a grid that covers a row with 8 elements per
+    thread."""
+    silu = m["ops"]["silu_mul"]["impl"]["launches"][0]
+    silu.pop("module")
+    silu.update(handwritten.hw("silu_mul"), entry="kern_silu_mul_bf16",
+                params=["out buffer<bf16>", "in buffer<bf16>", "i32"],
+                args=[{"param": 0}, {"param": 1}, {"i32": MLP_WIDTH}],
+                block=[ELEM_BLOCK, 1, 1], grid=["tokens", -(-MLP_WIDTH // (8 * ELEM_BLOCK)), 1])
+    sig = m["ops"]["sigmoid_mul"]["impl"]["launches"][0]
+    sig.update(block=[ELEM_BLOCK, 1, 1], grid=["tokens", -(-ATTN_WIDTH // (8 * ELEM_BLOCK)), 1])
+    return m
+
+
 def repin_handwritten(m):
     """Point every launch of a rewritten module at the current build of
     its source. The head norms (N = 256, ATen width <= 64) run 64-thread
@@ -119,7 +140,7 @@ def prune(m):
     return m
 
 
-PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten}
+PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "elem": elementwise}
 
 
 def main():

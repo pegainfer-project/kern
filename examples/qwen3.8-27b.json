@@ -5476,15 +5476,15 @@
   },
   "sigmoid_mul": {
    "source": "sigmoid_mul.cubin",
-   "sha256": "c888cc63af14e51dce35d3a7342202668cd4730ed34df96a994eafc359fab23a"
+   "sha256": "e15928a758a714bae2c447969a5d989f20382121474fb0fe23046e289ec3ddd9"
+  },
+  "silu_mul": {
+   "source": "silu_mul.cubin",
+   "sha256": "1ccde8251074745b0c6dc7af1de243ca66f9e3dd8309dd6069b6f265739a2764"
   },
   "solve_tril": {
    "source": "solve_tril.cubin",
    "sha256": "934faeb85ecbb46a5e011e66f961a69641085e2c86c34f4c3d102c8745b6e183"
-  },
-  "vllm_activation": {
-   "source": "vllm_activation.cubin",
-   "sha256": "612f0d4914c05466fc16d70c66beb8cf81a9d17a16a0696c45b455687109ecb7"
   }
  },
  "ops": {
@@ -5843,24 +5843,21 @@
    "impl": {
     "launches": [
      {
-      "module": "vllm_activation",
-      "entry": "_ZN4vllm18act_and_mul_kernelIN3c108BFloat16E14__nv_bfloat162XadL_ZNS_11silu_kernelIS2_EET_RKS5_fEEXadL_ZNS_18packed_silu_kernelIS3_EES5_S7_fEELb1ELb1ELb0ELb1EEEvPS5_PS6_ifff",
+      "module": "silu_mul",
+      "entry": "kern_silu_mul_bf16",
       "params": [
        "out buffer<bf16>",
        "in buffer<bf16>",
-       "i32",
-       "i32",
-       "f32",
        "i32"
       ],
       "block": [
-       1024,
+       256,
        1,
        1
       ],
       "grid": [
        "tokens",
-       1,
+       9,
        1
       ],
       "args": [
@@ -5872,15 +5869,6 @@
        },
        {
         "i32": 17408
-       },
-       {
-        "i32": 0
-       },
-       {
-        "f32": 1.0
-       },
-       {
-        "i32": 0
        }
       ]
      }
@@ -6011,7 +5999,7 @@
       ],
       "grid": [
        "tokens",
-       1,
+       3,
        1
       ],
       "args": [
