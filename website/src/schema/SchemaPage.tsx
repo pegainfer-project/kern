@@ -607,6 +607,35 @@ export default function SchemaPage() {
 
         </section>
 
+        <section className="example" id="constants" aria-label="Named constants">
+          <h2>Give numbers names</h2>
+          <p className="example-note">
+            <code>constants</code> is optional and recommended for readability.
+            Declare numeric literals once, then use their names in shapes, scalar
+            arguments, expressions, capacities and byte offsets.
+          </p>
+          <pre className="example-json"><code>{`"constants": {
+  "vocab_size": 151936,
+  "hidden_size": 2560
+}
+
+"shape": ["seqs", "vocab_size"]
+
+{"label": "lm_head", "op": "gemm", "args": [
+  {"buf": "x"}, {"buf": "lm_head.weight"}, {"buf": "logits"},
+  {"var": "seqs"}, {"i32": "vocab_size"}, {"i32": "hidden_size"}
+]}`}</code></pre>
+          <p className="example-note">
+            Names expand at load time; <code>i32</code>, <code>i64</code> and
+            <code> f32</code> still determine the argument type. The loader checks
+            references and the destination type and range. Constants contain numbers,
+            not aliases or expressions, and must not share names with <code>vars</code>.
+            String references such as <code>buf</code> keep their meaning.
+            <code> schema_version</code> stays the literal <code>4</code>.
+            Serialization writes the resolved numbers.
+          </p>
+        </section>
+
         <MinimalExample />
 
         <Protocol />

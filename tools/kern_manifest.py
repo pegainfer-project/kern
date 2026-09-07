@@ -32,7 +32,7 @@ import subprocess
 SCHEMA_VERSION = 4
 SCALARS = ("i32", "i64", "f32", "u8")
 
-_TOP = ["schema_version", "model", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
+_TOP = ["schema_version", "model", "constants", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
 _BUFFER = ["dtype", "shape", "kind", "fill", "domain"]
 _PROGRAM = ["batch", "once", "calls"]
 _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster", "args"]
@@ -246,3 +246,40 @@ class DumpIndex:
             hits = {sha: mod for sha, mod in hits.items() if self.param_sizes(sha, symbol) == list(sizes)}
         assert len(hits) == 1, f"{symbol} REG={regs} params={sizes}: {len(hits)} dump modules match: {sorted(m.name for m in hits.values())}"
         return next(iter(hits))
+
+
+def resolve_constants(manifest):
+    """Expand named numbers before a generator reuses a manifest's ABI.
+
+    Follow the published schema so a buffer/module/var name that happens to
+    equal a constant stays a name. The Rust parser performs final validation.
+    """
+    import json
+    m = copy.deepcopy(manifest)
+    constants = m.pop("constants", {})
+    if not constants:
+        return m
+    schema = json.loads((pathlib.Path(__file__).resolve().parent.parent /
+                         "schema/manifest-v4.schema.json").read_text())
+
+    def alternatives(s):
+        if "$ref" in s:
+            return [s] + alternatives(schema["$defs"][s["$ref"].rsplit("/", 1)[1]])
+        if "anyOf" in s or "oneOf" in s:
+            return [s] + [a for branch in s.get("anyOf", s.get("oneOf")) for a in alternatives(branch)]
+        return [s]
+
+    def expand(value, schemas):
+        choices = [a for s in schemas for a in alternatives(s)]
+        if isinstance(value, str):
+            return constants.get(value, value) if any(any(t in ("integer", "number") for t in (s["type"] if isinstance(s.get("type"), list) else [s.get("type")])) for s in choices) else value
+        if isinstance(value, dict):
+            return {k: expand(v, [child for s in choices
+                                 if isinstance(child := s.get("properties", {}).get(k, s.get("additionalProperties")), dict)])
+                    for k, v in value.items()}
+        if isinstance(value, list):
+            return [expand(v, [child for s in choices
+                               if isinstance(child := (s["prefixItems"][i] if i < len(s.get("prefixItems", []))
+                                                        else s.get("items")), dict)]) for i, v in enumerate(value)]
+        return value
+    return {k: v if k == "schema_version" else expand(v, [schema["properties"].get(k, {})]) for k, v in m.items()}

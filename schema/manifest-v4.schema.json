@@ -11,10 +11,20 @@
               "type": "string"
             },
             "offset": {
-              "description": "Byte offset added to the base pointer (default `0`), e.g. `4096`.",
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "description": "Byte offset added to the base pointer (default `0`), e.g. `4096`.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ],
+              "description": "Byte offset added to the base pointer (default `0`), e.g. `4096`."
             }
           },
           "required": [
@@ -27,10 +37,20 @@
           "description": "A state plus an optional byte offset into it, e.g. one layer's region of a KV cache.",
           "properties": {
             "offset": {
-              "description": "Byte offset added to the base pointer (default `0`), e.g. `65536`.",
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "description": "Byte offset added to the base pointer (default `0`), e.g. `65536`.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ],
+              "description": "Byte offset added to the base pointer (default `0`), e.g. `65536`."
             },
             "state": {
               "description": "State name, e.g. `\"kv\"`.",
@@ -73,8 +93,17 @@
           "description": "A literal `i32`.",
           "properties": {
             "i32": {
-              "format": "int32",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -87,8 +116,17 @@
           "description": "A literal `i64`.",
           "properties": {
             "i64": {
-              "format": "int64",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -101,8 +139,17 @@
           "description": "A literal `f32`.",
           "properties": {
             "f32": {
-              "format": "float",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -115,10 +162,19 @@
           "description": "A literal `u8`.",
           "properties": {
             "u8": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -147,10 +203,20 @@
       "description": "The shape of one call of a program: up to `groups` sequences, each contributing `rows` rows, e.g. `{\"groups\": 256, \"rows\": 1}` (a decode step over a batch) or `{\"groups\": 1, \"rows\": \"tokens\"}` (a prefill chunk).",
       "properties": {
         "groups": {
-          "description": "Upper bound on the sequences one call covers; a caller with fewer pads up to a bucket, e.g. `256`.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Upper bound on the sequences one call covers; a caller with fewer pads up to a bucket, e.g. `256`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Upper bound on the sequences one call covers; a caller with fewer pads up to a bucket, e.g. `256`."
         },
         "rows": {
           "$ref": "#/$defs/Dim",
@@ -173,12 +239,30 @@
     "Bound": {
       "anyOf": [
         {
-          "format": "int64",
-          "type": "integer"
+          "anyOf": [
+            {
+              "format": "int64",
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
         },
         {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
         },
         {
           "$ref": "#/$defs/Expr"
@@ -335,9 +419,18 @@
     "Dim": {
       "anyOf": [
         {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
         },
         {
           "type": "string"
@@ -383,10 +476,20 @@
           "type": "boolean"
         },
         "stride": {
-          "description": "Rows or token slots per index (default `1`), e.g. `16` for a paged KV block table.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Rows or token slots per index (default `1`), e.g. `16` for a paged KV block table.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Rows or token slots per index (default `1`), e.g. `16` for a paged KV block table."
         }
       },
       "type": "object"
@@ -394,10 +497,20 @@
     "Expr": {
       "anyOf": [
         {
-          "description": "A constant, e.g. `64`.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "A constant, e.g. `64`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "A constant, e.g. `64`."
         },
         {
           "description": "A var by name, e.g. `\"tokens\"`.",
@@ -414,9 +527,18 @@
                   "$ref": "#/$defs/Expr"
                 },
                 {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
+                  "anyOf": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "description": "Name of a numeric constant declared in constants.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  ]
                 }
               ],
               "type": "array"
@@ -438,9 +560,18 @@
                   "$ref": "#/$defs/Expr"
                 },
                 {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
+                  "anyOf": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "description": "Name of a numeric constant declared in constants.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  ]
                 }
               ],
               "type": "array"
@@ -494,9 +625,18 @@
           "description": "The op's interface param: a pointer (with the call's offset) or a scalar.",
           "properties": {
             "param": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -520,8 +660,17 @@
           "description": "A literal `i32`.",
           "properties": {
             "i32": {
-              "format": "int32",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -533,8 +682,17 @@
           "description": "A literal `i64`.",
           "properties": {
             "i64": {
-              "format": "int64",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -546,8 +704,17 @@
           "description": "A literal `f32`.",
           "properties": {
             "f32": {
-              "format": "float",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -559,10 +726,19 @@
           "description": "A literal `u8`.",
           "properties": {
             "u8": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -622,19 +798,39 @@
       "description": "One field of a `pack`: a byte offset plus where the value comes from, e.g. `{\"at\": 8, \"var\": \"tokens\"}`.",
       "properties": {
         "at": {
-          "description": "Byte offset of the field in the image.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Byte offset of the field in the image.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Byte offset of the field in the image."
         },
         "width": {
-          "description": "Field width in bytes; defaults to the source's own width (8 for a\npointer or i64, 4 for i32 / f32 / var / expr, 1 for u8).",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "description": "Field width in bytes; defaults to the source's own width (8 for a\npointer or i64, 4 for i32 / f32 / var / expr, 1 for u8).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Field width in bytes; defaults to the source's own width (8 for a\npointer or i64, 4 for i32 / f32 / var / expr, 1 for u8)."
         }
       },
       "required": [
@@ -738,9 +934,18 @@
         "block": {
           "description": "Threads per block, e.g. `[1024, 1, 1]`.",
           "items": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "maxItems": 3,
           "minItems": 3,
@@ -749,9 +954,18 @@
         "cluster": {
           "description": "Thread-block cluster shape, e.g. `[2, 1, 1]`; the grid must be a multiple of it on every axis. Launched with `cuLaunchKernelEx`.",
           "items": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "maxItems": 3,
           "minItems": 3,
@@ -825,9 +1039,18 @@
           "description": "Forward the op's param at this index.",
           "properties": {
             "param": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -853,8 +1076,17 @@
           "description": "A literal `i32`.",
           "properties": {
             "i32": {
-              "format": "int32",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -867,8 +1099,17 @@
           "description": "A literal `i64`.",
           "properties": {
             "i64": {
-              "format": "int64",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -881,8 +1122,17 @@
           "description": "A literal `f32`.",
           "properties": {
             "f32": {
-              "format": "float",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -895,10 +1145,19 @@
           "description": "A literal `u8`.",
           "properties": {
             "u8": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "description": "Name of a numeric constant declared in constants.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              ]
             }
           },
           "required": [
@@ -988,10 +1247,20 @@
           "type": "array"
         },
         "size": {
-          "description": "Image size in bytes; equals the `bytes<n>` of the param it binds to.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Image size in bytes; equals the `bytes<n>` of the param it binds to.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Image size in bytes; equals the `bytes<n>` of the param it binds to."
         }
       },
       "required": [
@@ -1064,22 +1333,52 @@
       "description": "Opaque persistent memory; the runtime provisions the bytes and hands the base pointer to `inout state` params. Exactly one of the three sizes is non-zero. States are always allocated through the driver's virtual-memory API with a fabric-shareable handle when the device has one, so a `peer` buffer may be `of` a state.",
       "properties": {
         "bytes": {
-          "description": "Fixed byte count independent of capacity and sequences, e.g. `4096`.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Fixed byte count independent of capacity and sequences, e.g. `4096`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Fixed byte count independent of capacity and sequences, e.g. `4096`."
         },
         "bytes_per_seq": {
-          "description": "Bytes per sequence slot, one slot per live sequence — a recurrent conv/SSM state, e.g. `154140672`. The runtime starts with `seqs.max + 2` slots — slot 0 (never leased; kernels may read line index 0 as null), one per sequence, one for a batched caller's padding — and grows them out of the state budget as checkpoints keep the states of sleeping sequences.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Bytes per sequence slot, one slot per live sequence — a recurrent conv/SSM state, e.g. `154140672`. The runtime starts with `seqs.max + 2` slots — slot 0 (never leased; kernels may read line index 0 as null), one per sequence, one for a batched caller's padding — and grows them out of the state budget as checkpoints keep the states of sleeping sequences.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Bytes per sequence slot, one slot per live sequence — a recurrent conv/SSM state, e.g. `154140672`. The runtime starts with `seqs.max + 2` slots — slot 0 (never leased; kernels may read line index 0 as null), one per sequence, one for a batched caller's padding — and grows them out of the state budget as checkpoints keep the states of sleeping sequences."
         },
         "bytes_per_token": {
-          "description": "Bytes per token slot, scaled by the capacity — a paged KV cache, e.g. `147456`.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Bytes per token slot, scaled by the capacity — a paged KV cache, e.g. `147456`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Bytes per token slot, scaled by the capacity — a paged KV cache, e.g. `147456`."
         }
       },
       "type": "object"
@@ -1091,18 +1390,36 @@
         "box": {
           "description": "Box (smem tile) extent per dimension in elements, each 1..=256.",
           "items": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "dims": {
           "description": "Global extent per dimension in elements, innermost first (1 to 5 dims); the outermost may be 0 (span the buffer).",
           "items": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
@@ -1111,35 +1428,74 @@
           "description": "Element type as TMA sees it; `u4` is 16 packed nibbles per 8 bytes (`CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B`)."
         },
         "l2_promotion": {
-          "description": "L2 promotion in bytes: 0 (none), 64, 128 or 256.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "L2 promotion in bytes: 0 (none), 64, 128 or 256.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "L2 promotion in bytes: 0 (none), 64, 128 or 256."
         },
         "oob_nan": {
           "description": "Fill out-of-bounds elements with NaN instead of zero.",
           "type": "boolean"
         },
         "param": {
-          "description": "The interface buffer param the descriptor addresses (the call's offset is honoured).",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "The interface buffer param the descriptor addresses (the call's offset is honoured).",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "The interface buffer param the descriptor addresses (the call's offset is honoured)."
         },
         "strides": {
           "description": "Byte stride of each dimension after the first (`dims.len() - 1` entries, multiples of 16).",
           "items": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "swizzle": {
-          "description": "Shared-memory swizzle span in bytes: 0 (none), 32, 64 or 128.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Shared-memory swizzle span in bytes: 0 (none), 32, 64 or 128.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Shared-memory swizzle span in bytes: 0 (none), 32, 64 or 128."
         }
       },
       "required": [
@@ -1180,9 +1536,18 @@
       "properties": {
         "groups": {
           "additionalProperties": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "description": "Group name to member count, e.g. `{\"ep\": 4}`.",
           "type": "object"
@@ -1198,10 +1563,20 @@
       "description": "A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.",
       "properties": {
         "max": {
-          "description": "Upper bound, e.g. `2048` for the token count of a prefill chunk.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "anyOf": [
+            {
+              "description": "Upper bound, e.g. `2048` for the token count of a prefill chunk.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Upper bound, e.g. `2048` for the token count of a prefill chunk."
         }
       },
       "required": [
@@ -1213,13 +1588,23 @@
   "$id": "https://kern-baa.pages.dev/schema/manifest-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The whole contract a model ships as: one JSON file naming its vars, states, buffers, modules, ops and programs.",
+  "description": "The resolved contract: vars, states, buffers, modules, ops and programs.\nThe wire format also accepts optional `constants`, expanded during\ndeserialization. Use [`crate::json_schema`] for the complete wire schema;\nthis type's derived schema describes the resolved numeric form.",
   "properties": {
     "buffers": {
       "additionalProperties": {
         "$ref": "#/$defs/Buffer"
       },
       "description": "Typed tensors: inputs, outputs, weights, workspace and carries.",
+      "type": "object"
+    },
+    "constants": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Optional named numeric literals, recommended for readability. For example {\"hidden_size\": 2560}. Reference a name in any numeric position except schema_version, including {\"i32\": \"hidden_size\"}, shapes, expressions, capacities and byte offsets. Names must not overlap vars. Values are numbers, not expressions or aliases. References expand before typed validation; serialization emits resolved literals.",
+      "propertyNames": {
+        "minLength": 1
+      },
       "type": "object"
     },
     "model": {

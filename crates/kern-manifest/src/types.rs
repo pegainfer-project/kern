@@ -60,8 +60,11 @@ where
     deserializer.deserialize_map(UniqueMap(PhantomData))
 }
 
-/// The whole contract a model ships as: one JSON file naming its vars, states, buffers, modules, ops and programs.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+/// The resolved contract: vars, states, buffers, modules, ops and programs.
+/// The wire format also accepts optional `constants`, expanded during
+/// deserialization. Use [`crate::json_schema`] for the complete wire schema;
+/// this type's derived schema describes the resolved numeric form.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// Wire-format version; must be `4`.
@@ -129,6 +132,7 @@ impl Manifest {
         serde_json::from_str(s)
     }
 
+    /// Serialize the resolved contract with numeric literals.
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("manifest serialization cannot fail")
     }

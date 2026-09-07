@@ -60,6 +60,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from qwen_constants import name_constants
 from kern_manifest import DumpIndex, normalize, program, SCHEMA_VERSION  # noqa: E402
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -1099,7 +1100,7 @@ def main():
     for spec, silu, name in [(False, "hub", "qwen3-4b.json"),
                              (False, "mined", "qwen3-4b-silu-mined.json"),
                              (True, "mined", "qwen3-4b-dspark.json")]:
-        manifest = build(by, eps, scale, pf, pins, spec=spec, silu=silu)
+        manifest = name_constants(build(by, eps, scale, pf, pins, spec=spec, silu=silu))
         out = repo / "examples" / name
         out.write_text(json.dumps(manifest, indent=1) + "\n")
         counts = {p: len(v["calls"]) for p, v in manifest["programs"].items()}
