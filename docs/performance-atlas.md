@@ -31,10 +31,24 @@ independent validation. Holdout program times are excluded from fitting, but
 holdout microbench costs are still measured. Trace attribution does not enter
 the cost prediction.
 
-The current data stops at 2,048 cached context tokens. Long-context microbench
-coverage, prediction for unmeasured configurations, and kernel-only input/state
-construction without loading the model remain future work. The 2,048-token
-prefill chunk bound is separate from a model's total context capacity.
+The runner has no context bound of its own: a prefix longer than the
+manifest's `tokens` max is built by running the chunk program repeatedly, and
+state capacity is sized from the workload. The checked-in atlas workload
+(`tools/profiles/atlas-2k.json`) stops at 2,048 cached context tokens because
+that is what the published page shows, not because the runner cannot go
+further. `tools/profiles/longctx-32k.json` is the same runner at 8k to 32k
+(Qwen3.8-27B, one GB300, `--program-only`, 2026-09-07):
+
+| Scenario | Program | p50 |
+| --- | --- | ---: |
+| B1, KV 2,048 | decode | 11.67 ms |
+| B1, KV 8,192 | decode | 12.22 ms |
+| B1, KV 32,768 | decode | 14.47 ms |
+| B4, KV 16,384 | decode_batch | 20.24 ms |
+| Q1,024 on KV 16,384 | prefill | 89.55 ms |
+
+Prediction for unmeasured configurations and kernel-only input/state
+construction without loading the model remain future work.
 
 ## Measured snapshot · 2026-09-05
 
@@ -63,7 +77,7 @@ cargo build --release -p kern-run --bin kern
 nsys profile --trace=cuda --cuda-graph-trace=node --sample=none --cpuctxsw=none \
   --output results/sweep \
   target/release/kern bench qwen3-4b --gpu 0 \
-    --workload tools/profiles/single-gpu.json --out results/raw.json
+    --workload tools/profiles/atlas-2k.json --out results/raw.json
 nsys export --type sqlite --output results/sweep.sqlite results/sweep.nsys-rep
 python3 tools/profile_trace.py results/raw.json results/sweep.sqlite \
   --out results/activity.json
