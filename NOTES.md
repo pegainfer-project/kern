@@ -69,6 +69,18 @@ directions), so state-streaming kernels bottom out near there.
    13.0 → 2.3 µs; 1536 tokens 52 → 27 and 28 → 11. silu semantics (from
    the mined vLLM kernel): bf16(silu_f32(g)) then a bf16 multiply.
 
+5. **attn_batch splits**: the manifest fixed 38 splits (2432 CTAs of 1
+   per SM). Sweep at batch 16 / 32k (step ms, all cv ≤ 0.0014):
+   8 → 16.223, 16 → 16.207, 24 → 16.282, 32 → 16.330, 38 → 16.39,
+   48 → 16.502, 64 → 16.871. Extend is unaffected (prefill uses the
+   context kernel). Splits 1 (persistent artifact), 12, 20: see
+   `/tmp/an/extra_results.txt` / the commit.
+6. **in_proj_ba folded into gdn_conv**: the N = 96 GEMM (1 MB, a 6 µs
+   cuBLAS node per GDN layer) is computed by the blocks of gdn_conv with
+   blockIdx.y < 24, two warps per output over half of `hidden` each, f32
+   accumulation in a fixed order, bf16 out. Differs from cuBLAS only by
+   accumulation order (bf16 rounding flips at near-ties).
+
 ## Hazards met
 
 - A rewritten elementwise kernel with a new thread→element mapping needs

@@ -185,6 +185,23 @@ def repin_handwritten(m):
     return m
 
 
+# Decode attention splits. The converted manifest fixed 38 (2432 CTAs, one
+# per SM at 145 KB of smem); a sweep at batch 16 on 32k contexts found the
+# step fastest at 12-16 and 4% slower at 38 (NOTES.md has the table).
+ATTN_SPLITS = 16
+
+
+def attn_splits(m):
+    """Regenerate the decode attention ops with ATTN_SPLITS split-KV CTAs."""
+    import trtllm_attention
+    for name in ("attn", "attn_batch"):
+        if name in m["ops"]:
+            m["ops"][name] = trtllm_attention.op("decode", max_rows=m["vars"]["tokens"]["max"],
+                                                 max_seqs=m["vars"]["seqs"]["max"], max_context=262144,
+                                                 splits=ATTN_SPLITS)
+    return m
+
+
 def prune(m):
     """Drop ops, modules and workspace buffers no program refers to any more."""
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
@@ -196,7 +213,7 @@ def prune(m):
     return m
 
 
-PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise}
+PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits}
 
 
 def main():
