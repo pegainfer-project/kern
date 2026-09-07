@@ -202,3 +202,127 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
 ENTRY(4)
 ENTRY(6)
 ENTRY(8)
+
+// ---- gate_up + silu_mul ------------------------------------------------
+//
+// act[m, i] = bf16(bf16(g / (1 + expf(-g))) * u) with g = C[m, i], u = C[m,
+// d + i], C = A @ W^T the gate_up projection (N = 2d) and the same bf16
+// rounding of C the plain GEMM writes: silu_mul.cu's numerics on the
+// GEMM's own output. One CTA per 64 columns of act: warps 0-3 accumulate
+// the gate tile (n-tile j), warps 4-7 the matching up tile (n-tile j + d/64);
+// the up warps round to bf16 into shared memory and the gate warps finish.
+// Non-split shapes only (gate_up is splitk 1 at every M). grid = [d/64, 1],
+// block = 256, dynamic smem = STAGES * 18 KB + 1 KB.
+constexpr int NT2 = 256, STAGE2 = 2 * TILE_BYTES + A_BYTES;
+
+template <int STAGES>
+__device__ __forceinline__ void gemm16_tiled_silu(const bf16* __restrict__ A, const bf16* __restrict__ W,
+                                                  bf16* __restrict__ act, int M, int N, int K) {
+    extern __shared__ uint8_t smem_raw[];
+    const uint32_t sraw = (uint32_t)__cvta_generic_to_shared(smem_raw);
+    const uint32_t sbase = (sraw + 1023) & ~1023u;
+    const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const int KT = K / BK, d = N / 2, ktn = KT;
+    const int nt = blockIdx.x;                       // act columns [64 nt, 64 nt + 64)
+    const int half = warp >> 2, wr = warp & 3;       // 0: gate rows, 1: up rows
+    auto load_w = [&](int i, int slot) {
+        const uint32_t sw = sbase + slot * STAGE2;
+#pragma unroll
+        for (int t = 0; t < 2; t++) {
+            const bf16* wt = W + ((size_t)(nt + t * (d / BN)) * KT + i) * BN * BK;
+#pragma unroll
+            for (int c = 0; c < 2; c++) {
+                const int q = tid + c * NT2;
+                cp16(sw + t * TILE_BYTES + q * 16, wt + q * 8);
+            }
+        }
+    };
+    auto load_a = [&](int i, int slot) {
+        if (tid < 128) {
+            const uint32_t sa = sbase + slot * STAGE2 + 2 * TILE_BYTES;
+            const int row = tid >> 3, ch = tid & 7;
+            cp16(sa + row * 128 + ((ch ^ (row & 7)) << 4), A + (size_t)row * K + i * BK + ch * 8);
+        }
+    };
+    float acc[2][4];
+#pragma unroll
+    for (int j = 0; j < 2; j++)
+        for (int i = 0; i < 4; i++) acc[j][i] = 0.f;
+#pragma unroll
+    for (int s = 0; s < STAGES - 1; s++) {
+        if (s < ktn) load_w(s, s);
+        commit();
+    }
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+#pragma unroll
+    for (int s = 0; s < STAGES - 1; s++) {
+        if (s < ktn) load_a(s, s);
+        commit();
+    }
+    for (int i = 0; i < ktn; i++) {
+        wait_group<STAGES - 2>();
+        __syncthreads();
+        {
+            const int nk = i + STAGES - 1;
+            if (nk < ktn) {
+                load_w(nk, nk % STAGES);
+                load_a(nk, nk % STAGES);
+            }
+            commit();
+        }
+        const int slot = i % STAGES;
+        const uint32_t sw = sbase + slot * STAGE2 + half * TILE_BYTES, sa = sbase + slot * STAGE2 + 2 * TILE_BYTES;
+#pragma unroll
+        for (int kk = 0; kk < BK / 16; kk++) {
+            uint32_t a[4];
+            {
+                const int row = lane & 15, ch = kk * 2 + (lane >> 4);
+                ldsm4(a[0], a[1], a[2], a[3], sa + row * 128 + ((ch ^ (row & 7)) << 4));
+            }
+            uint32_t b[4];
+            {
+                const int mi = lane >> 3, i8 = lane & 7;
+                const int row = wr * 16 + ((mi >> 1) << 3) + i8, ch = kk * 2 + (mi & 1);
+                ldsm4(b[0], b[1], b[2], b[3], sw + row * 128 + ((ch ^ (row & 7)) << 4));
+            }
+            mma(acc[0], a, b[0], b[1]);
+            mma(acc[1], a, b[2], b[3]);
+        }
+    }
+    wait_group<0>();
+    __syncthreads();  // every warp is done with the ring; slot 0 becomes the exchange
+    const int g = lane >> 2, c2 = (lane & 3) * 2;
+    __nv_bfloat162* xch = reinterpret_cast<__nv_bfloat162*>(smem_raw + (sbase - sraw));  // [16][64] bf16
+    if (half == 1) {
+#pragma unroll
+        for (int j = 0; j < 2; j++) {
+            const int n = wr * 16 + j * 8 + c2;
+            xch[(g * BN + n) / 2] = __floats2bfloat162_rn(acc[j][0], acc[j][1]);
+            xch[((g + 8) * BN + n) / 2] = __floats2bfloat162_rn(acc[j][2], acc[j][3]);
+        }
+    }
+    __syncthreads();
+    if (half == 0) {
+#pragma unroll
+        for (int j = 0; j < 2; j++) {
+            const int n = wr * 16 + j * 8 + c2;
+#pragma unroll
+            for (int h = 0; h < 2; h++) {
+                const int row = g + 8 * h;
+                const __nv_bfloat162 gg = __floats2bfloat162_rn(acc[j][2 * h], acc[j][2 * h + 1]);
+                const float gx = __bfloat162float(gg.x), gy = __bfloat162float(gg.y);
+                const __nv_bfloat162 s = __floats2bfloat162_rn(gx / (1.0f + expf(-gx)), gy / (1.0f + expf(-gy)));
+                const __nv_bfloat162 u = xch[(row * BN + n) / 2];
+                *reinterpret_cast<__nv_bfloat162*>(act + (size_t)row * d + nt * BN + n) = __hmul2(s, u);
+            }
+        }
+    }
+}
+
+#define ENTRY_SILU(ST)                                                                                             \
+    extern "C" __global__ void __launch_bounds__(NT2) kern_gemm16_tiled_silu_s##ST##_bf16(                        \
+        const bf16* A, const bf16* W, bf16* act, int M, int N, int K) {                                            \
+        gemm16_tiled_silu<ST>(A, W, act, M, N, K);                                                                 \
+    }
+ENTRY_SILU(4)

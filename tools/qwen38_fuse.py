@@ -300,6 +300,37 @@ def pdl(m):
     return m
 
 
+def gemm_tiled_silu(m):
+    """decode_batch's gate_up + silu_mul pairs become one launch of the fused
+    kernel (gemm16_tiled.cu, `gemm16_tiled_silu`): the up half is rounded to
+    bf16 in shared memory and the gate warps apply silu_mul's exact ops."""
+    cubin = handwritten.hw("gemm16_tiled")
+    n, k = 2 * MLP_WIDTH, 5120
+    m["ops"]["gemm_tiled_gate_up_silu"] = dict(
+        params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
+        impl=dict(launches=[dict(
+            **cubin, entry="kern_gemm16_tiled_silu_s4_bf16",
+            params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32"],
+            block=[256, 1, 1], grid=[MLP_WIDTH // 64, 1, 1], shared_mem=4 * (2 * 8192 + 2048) + 1024, pdl=True,
+            args=[{"param": 0}, {"param": 1}, {"param": 2}, {"param": 3}, {"i32": n}, {"i32": k}])]))
+    calls = m["programs"]["decode_batch"]["calls"]
+    out = []
+    i = 0
+    while i < len(calls):
+        c = calls[i]
+        if c["op"] == "gemm_tiled_gate_up" and i + 1 < len(calls) and calls[i + 1]["op"] == "silu_mul":
+            gu, si = c, calls[i + 1]
+            assert si["args"][1] == gu["args"][2], (gu["label"], si["label"])
+            out.append(dict(label=gu["label"] + "_silu", op="gemm_tiled_gate_up_silu",
+                            args=[gu["args"][0], gu["args"][1], si["args"][0], gu["args"][3]]))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    m["programs"]["decode_batch"]["calls"] = out
+    return m
+
+
 def prune(m):
     """Drop ops, modules and workspace buffers no program refers to any more."""
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
@@ -312,7 +343,7 @@ def prune(m):
 
 
 PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits,
-          "tiles": gemm_tiles, "tiled": gemm_tiled, "pdl": pdl}
+          "tiles": gemm_tiles, "tiled": gemm_tiled, "silu": gemm_tiled_silu, "pdl": pdl}
 
 
 def main():

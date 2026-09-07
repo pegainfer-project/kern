@@ -265,7 +265,16 @@ gdn ~1.1, the rest ~0.6.
   source). cuBLASLt offers no other bit-identical candidate for down (one
   with 13 splits) and every ba candidate is ~6.3 µs (/tmp/bn/algos.cu).
 - down_proj on the tiled kernel with PDL: step 15.669 vs 15.355 — stays
-  on cuBLAS.
+  on cuBLAS. Ablation (op → zero-row copy_rows): down costs 1.99 ms of the
+  15.36 ms step (31 µs a call, 5.7 TB/s), in_proj_ba 0.17 ms (3.5 µs).
+- Tried, no gain: 128-row CTAs (8 warps, two tiles per stage; down 37.9,
+  out_proj 16.1, qkv 27.6, gate_up 54.0 µs — never better than 64 rows);
+  an L2 prefetch (`cp.async.bulk.prefetch.L2.global`) of the rest of the
+  CTA's item before `griddepcontrol.wait` (/tmp/bn/pdlpair.cu: every cap
+  from 64 KB up made the primary+GEMM pair slower, 15.1 → 15.7-16.7 µs for
+  out_proj after a norm-sized primary — L2 does not keep the lines under
+  the concurrent stream). PDL itself in a plain stream is worth 1.5-2 µs
+  per pair.
 - gdn_step 20.9 µs vs 17.7 copy ceiling (0.15 ms/step at most).
 - The graders' criterion allows bf16 noise; if that ever matters more
   than exactness, 4e68579 (ba fold) is the measured 0.5%.
