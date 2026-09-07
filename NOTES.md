@@ -123,6 +123,11 @@ bit-identical.
   are reproduced from source by `tools/build_kernels.sh` and pinned by sha,
   so only the sources and the manifest are committed.
 
+- `tools/test_trtllm_manifest.py` fails to import at 29dbc9c already
+  (`resolve_constants` is not in kern_manifest.py; `trtllm_attention.convert`
+  has the same dangling import). Untouched; qwen38_fuse.py uses only
+  `trtllm_attention.op`.
+
 ## Tools
 
 `tools/qwen38_fuse.py --passes gdn,repin,attn,elem` regenerates
