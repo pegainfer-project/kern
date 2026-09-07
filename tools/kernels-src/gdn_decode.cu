@@ -2,12 +2,16 @@
 // that replace vLLM's four (causal_conv1d_update, fused_recurrent_gated_
 // delta_rule_packed_decode, the z copy, RMSNormGated):
 //
-//   kern_gdn_conv_bf16   grid [seqs, ceil(dim/256)], block 256
+//   kern_gdn_conv_bf16   grid [seqs, max(ceil(dim/256), nba)], block 256
 //     per channel c of sequence n: state[0..2] are the three previous
 //     inputs, x = qkvz[n, c] the new one;
 //       y = silu(sum_i bf16(s_i * w_i))    (products rounded to bf16 like
 //                                           Triton's bf16 * bf16, sum in f32)
 //       qkvz[n, c] := bf16(y)  (in place)   state := [s_1, s_2, x]
+//     Block y < nba also computes output y of the layer's small projection
+//     ba[n, y] = h[n] . Wba[y]^T (bf16 in, f32 accumulation, bf16 out),
+//     which vLLM runs as its own 1 MB GEMM: each warp an eighth of
+//     `hidden`, the eight partials summed in a fixed order.
 //
 //   kern_gdn_step_bf16   grid [HV, seqs], block 256, dynamic smem V*K*4
 //     per (sequence n, value head hv), q/k head h = hv / (HV/H), state
@@ -47,6 +51,7 @@
 #define GDN_K 128
 #define GDN_V 128
 #define CONV_W 4
+#define BA_BATCH 3    // 16-byte chunks per lane: hidden / 8 / 256 rounded up (5120 -> 2.5)
 #define NT 256
 // Pieces the tile arrives in (each behind its own barrier). Measured on
 // GB300: 1 is fastest (20.9 us/layer at batch 16, against a 17.7 us copy
@@ -83,11 +88,54 @@ __device__ static inline float tri_rsqrt(float x) {
 }
 __device__ static inline float tri_sigmoid(float x) { return tri_div(1.f, 1.f + tri_exp(0.f - x)); }
 
-extern "C" __global__ void kern_gdn_conv_bf16(
+extern "C" __global__ void __launch_bounds__(256) kern_gdn_conv_bf16(
     __nv_bfloat16* __restrict__ qkvz, const __nv_bfloat16* __restrict__ w,
     __nv_bfloat16* __restrict__ state, const int* __restrict__ line,
-    int dim, int row_stride, long long line_stride_bytes) {
+    const __nv_bfloat16* __restrict__ h, const __nv_bfloat16* __restrict__ wba,
+    __nv_bfloat16* __restrict__ ba, int dim, int row_stride, long long line_stride_bytes,
+    int hidden, int nba) {
+  __shared__ float part[8];
   const int n = blockIdx.x;
+  if (blockIdx.y < nba) {
+    // Output o = blockIdx.y: warp w takes hidden/8 elements starting at
+    // w * hidden / 8, a lane three 16-byte chunks; then a fixed-order sum.
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+    const int o = blockIdx.y, span = hidden / 8;
+    const __nv_bfloat16* hp = h + (long long)n * hidden + warp * span;
+    const __nv_bfloat16* wp = wba + (long long)o * hidden + warp * span;
+    uint4 hv[BA_BATCH], wv[BA_BATCH];
+#pragma unroll
+    for (int b = 0; b < BA_BATCH; b++) {
+      const int i = lane * 8 + b * 256;
+      if (i < span) {
+        hv[b] = *reinterpret_cast<const uint4*>(hp + i);
+        wv[b] = *reinterpret_cast<const uint4*>(wp + i);
+      }
+    }
+    float acc = 0.f;
+#pragma unroll
+    for (int b = 0; b < BA_BATCH; b++) {
+      if (lane * 8 + b * 256 < span) {
+        const __nv_bfloat162* h2 = reinterpret_cast<const __nv_bfloat162*>(&hv[b]);
+        const __nv_bfloat162* w2 = reinterpret_cast<const __nv_bfloat162*>(&wv[b]);
+#pragma unroll
+        for (int j = 0; j < 4; j++) {
+          acc = fmaf(bf(h2[j].x), bf(w2[j].x), acc);
+          acc = fmaf(bf(h2[j].y), bf(w2[j].y), acc);
+        }
+      }
+    }
+#pragma unroll
+    for (int off = 16; off > 0; off >>= 1) acc += __shfl_xor_sync(0xffffffffu, acc, off);
+    if (lane == 0) part[warp] = acc;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      float t = 0.f;
+#pragma unroll
+      for (int w = 0; w < 8; w++) t += part[w];
+      ba[(long long)n * nba + o] = tobf(t);
+    }
+  }
   const int c = blockIdx.y * blockDim.x + threadIdx.x;
   if (c >= dim) return;
   const long long idx = line[n];

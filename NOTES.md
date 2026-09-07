@@ -76,10 +76,13 @@ directions), so state-streaming kernels bottom out near there.
    context kernel). Splits 1 (persistent artifact), 12, 20: see
    `/tmp/an/extra_results.txt` / the commit.
 6. **in_proj_ba folded into gdn_conv**: the N = 96 GEMM (1 MB, a 6 µs
-   cuBLAS node per GDN layer) is computed by the blocks of gdn_conv with
-   blockIdx.y < 24, two warps per output over half of `hidden` each, f32
-   accumulation in a fixed order, bf16 out. Differs from cuBLAS only by
-   accumulation order (bf16 rounding flips at near-ties).
+   cuBLAS node per GDN layer) is computed by gdn_conv, one output per
+   block over a 96-wide grid.y, each warp an eighth of `hidden`, partials
+   summed in a fixed order, bf16 out (0 of 1536 values differ from the
+   exactly rounded dot product on the harness). Standalone the conv launch
+   grows 2.6 → 5.3 µs (L2 traffic: 16 seqs × 1 MB + 96 × 10 KB rows);
+   two other layouts (4 outputs per block, 2 warps each; batched loads)
+   cost the same. In-graph: step 16.207 → 16.121 ms, score 7264 → 7226.
 
 ## Hazards met
 
