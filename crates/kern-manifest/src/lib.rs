@@ -13,6 +13,9 @@
 
 #![forbid(unsafe_code)]
 
+mod constants;
+pub use constants::json_schema;
+
 pub mod protocol;
 pub mod types;
 pub mod verify;

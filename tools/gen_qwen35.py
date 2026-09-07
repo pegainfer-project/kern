@@ -69,7 +69,8 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from kern_manifest import normalize, program, SCHEMA_VERSION  # noqa: E402
+from qwen_constants import name_constants
+from kern_manifest import normalize, program, resolve_constants, SCHEMA_VERSION  # noqa: E402
 from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
 
 # --- model geometry (config.json; asserted against the capture below)
@@ -1587,7 +1588,7 @@ def main():
         assert pf(src["recurrent_spec"], 5) == 20.0, "softplus threshold"
         assert pv(src["conv_update_spec"], 9) == pv(src["conv_update_spec"], 10), "conv update not in place"
         assert pf(src["d_rms_norm"], 9) == eps and pf(src["d_fused_norm"], 4) == eps
-        dspark = json.loads((repo / "examples" / "qwen3-4b-dspark.json").read_text())
+        dspark = resolve_constants(json.loads((repo / "examples" / "qwen3-4b-dspark.json").read_text()))
         ad = dict(dspark["ops"]["attn_draft"]["impl"]["launches"][0])
         ad_mod = dspark["modules"][ad["module"]]
         ad["cubin"], ad["sha256"] = ad_mod["source"], ad_mod["sha256"]
@@ -1597,7 +1598,7 @@ def main():
         print(f"  spec pin conv_fwd (page stride rebaked) -> {pins[('conv_fwd', True)][0]}", file=sys.stderr)
         spec = {"src": src, "pins": spins, "attn_draft": ad}
 
-    m = build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec)
+    m = name_constants(build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec))
     out.write_text(json.dumps(m, indent=1) + "\n")
     n_calls = {k: len(v["calls"]) for k, v in m["programs"].items()}
     print(f"wrote {out}: {len(m['buffers'])} buffers, {len(m['ops'])} ops, {len(m['modules'])} modules, "
