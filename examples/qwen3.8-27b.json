@@ -1,6 +1,6 @@
 {
  "schema_version": 4,
- "model": "qwen3.8-27b",
+ "model": "qwen3.8-27b-trtllm-gen",
  "vars": {
   "tokens": {
    "max": 2048
@@ -55,12 +55,12 @@
    "dtype": "i32",
    "shape": [
     "seqs",
-    335
+    4096
    ],
    "kind": "input",
    "domain": {
     "index_into": "kv",
-    "stride": 784
+    "stride": 64
    }
   },
   "seq_lens": {
@@ -5406,10 +5406,6 @@
    "source": "argmax.cubin",
    "sha256": "25374575bd35dbd9fe07f90982d0da0c2d4a72cc6ac88df5ec92cdb62a3beb16"
   },
-  "cache": {
-   "source": "cache.cubin",
-   "sha256": "93d7768f15ce02e252ad208dca2f6803d8ad65296d57f3444dccb9d1e6b88ac5"
-  },
   "chunk_h": {
    "source": "chunk_h.cubin",
    "sha256": "f0b2bd305bc428b03b06f7073efb3c73d0161fc8c1613c1047e169eae423f32c"
@@ -5437,6 +5433,14 @@
   "embedding": {
    "source": "embedding.cubin",
    "sha256": "1c3dd3e591d872aed259d7ef59d44649061f77a4247a5df864a7fbf0ccbde92f"
+  },
+  "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen": {
+   "source": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen.cubin",
+   "sha256": "a5c3300d05153675d2c6c432c50be888f3e0a8bb6c3ffbdaed48fbb25e52f86e"
+  },
+  "fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext": {
+   "source": "fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext.cubin",
+   "sha256": "270e5246cd40181234f075ae4e05e0e53fbe662e46640807b44daf272cd5aed7"
   },
   "gemma_rms_norm": {
    "source": "gemma_rms_norm.cubin",
@@ -5466,6 +5470,10 @@
    "source": "post_conv.cubin",
    "sha256": "f7191a8673409fdb2b84a101a28aa0701447e325152f8a69adf0213cf876c8fc"
   },
+  "qwen38_cache_p64": {
+   "source": "qwen38_cache_p64.cubin",
+   "sha256": "20cdb5819506490f42f51a8d440bbb79876d3bc7d59ea345bc3aff762e9dd58e"
+  },
   "recompute": {
    "source": "recompute.cubin",
    "sha256": "9b0eebd20138198d07f8806dbdba962856b0e8d9c5bbf58d5ce552e2ba52ba40"
@@ -5474,10 +5482,6 @@
    "source": "recurrent.cubin",
    "sha256": "ecc0dc457582a5d0ca3348d366168eb51a68deaaf59de409fb800b2665c903de"
   },
-  "reduce": {
-   "source": "reduce.cubin",
-   "sha256": "b0bb46835a7cc970cab3d22d64ed0795a2ffdbacc553dabe873bf9a0a4ca6339"
-  },
   "sigmoid_mul": {
    "source": "sigmoid_mul.cubin",
    "sha256": "c888cc63af14e51dce35d3a7342202668cd4730ed34df96a994eafc359fab23a"
@@ -5485,14 +5489,6 @@
   "solve_tril": {
    "source": "solve_tril.cubin",
    "sha256": "934faeb85ecbb46a5e011e66f961a69641085e2c86c34f4c3d102c8745b6e183"
-  },
-  "unified": {
-   "source": "unified.cubin",
-   "sha256": "ed9fb4215388f0b61af82e4aa279d61e738d32966a000b4c3cd224dd87411eb4"
-  },
-  "unified-7b29120e": {
-   "source": "unified.cubin",
-   "sha256": "7b29120edbd4c2bd54ac23b46df77d4c594fe2a019996423be70e15ccb3c18d2"
   },
   "vllm_activation": {
    "source": "vllm_activation.cubin",
@@ -7362,7 +7358,7 @@
    "impl": {
     "launches": [
      {
-      "module": "cache",
+      "module": "qwen38_cache_p64",
       "entry": "reshape_and_cache_kernel_flash",
       "params": [
        "in buffer<bf16>",
@@ -7421,7 +7417,7 @@
         "i64": 14336
        },
        {
-        "i64": 25690112
+        "i64": 2097152
        },
        {
         "i64": 512
@@ -7450,52 +7446,25 @@
    "params": [
     "out buffer<bf16>",
     "in buffer<bf16>",
-    "inout state",
-    "inout state",
+    "in state",
+    "in state",
     "in buffer<i32>",
     "in buffer<i32>",
-    "in buffer<f32>",
-    "in buffer<f32>",
     "in buffer<i32>",
-    "in buffer<i32>"
+    "i32",
+    "i32"
    ],
    "impl": {
+    "scratch": {},
     "launches": [
      {
-      "module": "unified",
-      "entry": "kernel_unified_attention",
+      "module": "fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext",
+      "entry": "fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext",
       "params": [
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "inout state",
-       "inout state",
-       "in buffer<i32>",
-       "in buffer<i32>",
-       "f32",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "f32",
-       "f32",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i32",
-       "i64",
-       "i64"
+       "bytes<1280>"
       ],
       "block": [
-       256,
+       384,
        1,
        1
       ],
@@ -7503,97 +7472,244 @@
        {
         "ceil_div": [
          "tokens",
-         5
+         128
         ]
        },
-       4,
-       1
+       24,
+       "seqs"
       ],
-      "shared_mem": 155648,
+      "shared_mem": 197872,
       "args": [
        {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "f32": 0.0625
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "f32": 1.0
-       },
-       {
-        "f32": 0.0
-       },
-       {
-        "i64": 335
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 0
-       },
-       {
-        "param": 8
-       },
-       {
-        "i64": 25690112
-       },
-       {
-        "i64": 2048
-       },
-       {
-        "i64": 512
-       },
-       {
-        "i64": 25690112
-       },
-       {
-        "i64": 2048
-       },
-       {
-        "i64": 512
-       },
-       {
-        "param": 9
-       },
-       {
-        "i32": 1
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
+        "pack": {
+         "size": 1280,
+         "fields": [
+          {
+           "at": 0,
+           "tensormap": {
+            "param": 1,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             1,
+             24,
+             2048
+            ],
+            "strides": [
+             512,
+             512,
+             12288
+            ],
+            "box": [
+             64,
+             1,
+             1,
+             128
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 128,
+           "tensormap": {
+            "param": 2,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             64,
+             4,
+             0
+            ],
+            "strides": [
+             4096,
+             1024,
+             4194304
+            ],
+            "box": [
+             64,
+             64,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 384,
+           "tensormap": {
+            "param": 3,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             64,
+             4,
+             0
+            ],
+            "strides": [
+             4096,
+             1024,
+             4194304
+            ],
+            "box": [
+             64,
+             64,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 512,
+           "tensormap": {
+            "param": 0,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             2048,
+             4,
+             6,
+             1
+            ],
+            "strides": [
+             12288,
+             512,
+             2048,
+             16
+            ],
+            "box": [
+             64,
+             128,
+             1,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 912,
+           "param": 0
+          },
+          {
+           "at": 1000,
+           "param": 4
+          },
+          {
+           "at": 1080,
+           "param": 5
+          },
+          {
+           "at": 1116,
+           "param": 7
+          },
+          {
+           "at": 1244,
+           "param": 8
+          },
+          {
+           "at": 936,
+           "param": 6
+          },
+          {
+           "at": 1144,
+           "param": 8
+          },
+          {
+           "at": 1152,
+           "expr": {
+            "ceil_div": [
+             "tokens",
+             128
+            ]
+           }
+          },
+          {
+           "at": 1112,
+           "i32": 2147483647
+          },
+          {
+           "at": 1148,
+           "i32": 262144
+          },
+          {
+           "at": 1156,
+           "i32": 1
+          },
+          {
+           "at": 1160,
+           "i32": 4096
+          },
+          {
+           "at": 1164,
+           "i32": 4
+          },
+          {
+           "at": 1168,
+           "i32": 24
+          },
+          {
+           "at": 1172,
+           "i32": 6
+          },
+          {
+           "at": 1176,
+           "i32": 6
+          },
+          {
+           "at": 1180,
+           "i32": -1431655765
+          },
+          {
+           "at": 1188,
+           "i32": 2
+          },
+          {
+           "at": 1192,
+           "i32": 6144
+          },
+          {
+           "at": 1200,
+           "i32": 1048576
+          },
+          {
+           "at": 1204,
+           "i32": 128
+          },
+          {
+           "at": 1208,
+           "i32": 6
+          },
+          {
+           "at": 1212,
+           "i32": 1
+          },
+          {
+           "at": 1216,
+           "i32": 1065353216
+          },
+          {
+           "at": 1220,
+           "i32": 1035512379
+          },
+          {
+           "at": 1224,
+           "i32": 1065353216
+          },
+          {
+           "at": 1228,
+           "i32": -1082130432
+          },
+          {
+           "at": 1252,
+           "i32": 256
+          }
+         ]
+        }
        }
       ]
      }
@@ -7604,156 +7720,295 @@
    "params": [
     "out buffer<bf16>",
     "in buffer<bf16>",
-    "inout state",
-    "inout state",
+    "in state",
+    "in state",
     "in buffer<i32>",
     "in buffer<i32>",
-    "in buffer<f32>",
-    "in buffer<f32>",
     "in buffer<i32>",
-    "in buffer<i32>",
+    "i32",
     "i32"
    ],
    "impl": {
+    "scratch": {
+     "counter": {
+      "dtype": "i32",
+      "shape": [
+       3072
+      ]
+     },
+     "stats": {
+      "dtype": "f32",
+      "shape": [
+       128,
+       4,
+       38,
+       8,
+       2
+      ]
+     },
+     "partial": {
+      "dtype": "f32",
+      "shape": [
+       128,
+       4,
+       38,
+       8,
+       256
+      ]
+     }
+    },
     "launches": [
      {
-      "module": "unified",
-      "entry": "kernel_unified_attention",
+      "module": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen",
+      "entry": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen",
       "params": [
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "inout state",
-       "inout state",
-       "in buffer<i32>",
-       "in buffer<i32>",
-       "f32",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "f32",
-       "f32",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i32",
-       "i64",
-       "i64"
+       "bytes<1280>"
       ],
       "block": [
-       256,
+       512,
        1,
        1
       ],
       "grid": [
-       {
-        "ceil_div": [
-         {
-          "mul": [
-           "tokens",
-           6
-          ]
-         },
-         5
-        ]
-       },
+       38,
        4,
-       1
+       "seqs"
       ],
-      "shared_mem": 155648,
+      "shared_mem": 144992,
       "args": [
        {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "f32": 0.0625
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "f32": 1.0
-       },
-       {
-        "f32": 0.0
-       },
-       {
-        "i64": 335
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 0
-       },
-       {
-        "param": 8
-       },
-       {
-        "i64": 25690112
-       },
-       {
-        "i64": 2048
-       },
-       {
-        "i64": 512
-       },
-       {
-        "i64": 25690112
-       },
-       {
-        "i64": 2048
-       },
-       {
-        "i64": 512
-       },
-       {
-        "param": 9
-       },
-       {
-        "param": 10
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
+        "pack": {
+         "size": 1280,
+         "fields": [
+          {
+           "at": 0,
+           "tensormap": {
+            "param": 1,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             6,
+             4,
+             2048
+            ],
+            "strides": [
+             512,
+             3072,
+             12288
+            ],
+            "box": [
+             64,
+             6,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 128,
+           "tensormap": {
+            "param": 2,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             64,
+             4,
+             0
+            ],
+            "strides": [
+             4096,
+             1024,
+             4194304
+            ],
+            "box": [
+             64,
+             64,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 384,
+           "tensormap": {
+            "param": 3,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             64,
+             4,
+             0
+            ],
+            "strides": [
+             4096,
+             1024,
+             4194304
+            ],
+            "box": [
+             64,
+             64,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 512,
+           "tensormap": {
+            "param": 0,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             2048,
+             4,
+             6,
+             1
+            ],
+            "strides": [
+             12288,
+             512,
+             2048,
+             16
+            ],
+            "box": [
+             64,
+             8,
+             1,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 912,
+           "param": 0
+          },
+          {
+           "at": 1000,
+           "param": 4
+          },
+          {
+           "at": 1080,
+           "param": 5
+          },
+          {
+           "at": 1116,
+           "param": 7
+          },
+          {
+           "at": 1244,
+           "param": 8
+          },
+          {
+           "at": 1112,
+           "i32": 2147483647
+          },
+          {
+           "at": 1144,
+           "i32": 1
+          },
+          {
+           "at": 1148,
+           "i32": 262144
+          },
+          {
+           "at": 1152,
+           "i32": 1
+          },
+          {
+           "at": 1156,
+           "i32": 38
+          },
+          {
+           "at": 1160,
+           "i32": 4096
+          },
+          {
+           "at": 1164,
+           "i32": 4
+          },
+          {
+           "at": 1168,
+           "i32": 24
+          },
+          {
+           "at": 1172,
+           "i32": 6
+          },
+          {
+           "at": 1176,
+           "i32": 6
+          },
+          {
+           "at": 1180,
+           "i32": -1431655765
+          },
+          {
+           "at": 1188,
+           "i32": 2
+          },
+          {
+           "at": 1192,
+           "i32": 6144
+          },
+          {
+           "at": 1200,
+           "i32": 1048576
+          },
+          {
+           "at": 1204,
+           "i32": 1
+          },
+          {
+           "at": 1208,
+           "i32": 6
+          },
+          {
+           "at": 1212,
+           "i32": 1
+          },
+          {
+           "at": 1216,
+           "i32": 1065353216
+          },
+          {
+           "at": 1220,
+           "i32": 1035512379
+          },
+          {
+           "at": 1224,
+           "i32": 1065353216
+          },
+          {
+           "at": 1228,
+           "i32": -1082130432
+          },
+          {
+           "at": 1252,
+           "i32": 256
+          },
+          {
+           "at": 984,
+           "scratch": "counter"
+          },
+          {
+           "at": 1008,
+           "scratch": "partial"
+          },
+          {
+           "at": 1016,
+           "scratch": "stats"
+          }
+         ]
+        }
        }
       ]
      }
@@ -7858,251 +8113,295 @@
    "params": [
     "out buffer<bf16>",
     "in buffer<bf16>",
-    "inout state",
-    "inout state",
+    "in state",
+    "in state",
     "in buffer<i32>",
     "in buffer<i32>",
-    "in buffer<f32>",
-    "in buffer<f32>",
     "in buffer<i32>",
-    "in buffer<i32>"
+    "i32",
+    "i32"
    ],
    "impl": {
     "scratch": {
-     "segm_out": {
+     "counter": {
+      "dtype": "i32",
+      "shape": [
+       3072
+      ]
+     },
+     "stats": {
       "dtype": "f32",
       "shape": [
-       1,
-       24,
-       16,
+       128,
+       4,
+       38,
+       8,
+       2
+      ]
+     },
+     "partial": {
+      "dtype": "f32",
+      "shape": [
+       128,
+       4,
+       38,
+       8,
        256
-      ]
-     },
-     "segm_max": {
-      "dtype": "f32",
-      "shape": [
-       1,
-       24,
-       16
-      ]
-     },
-     "segm_expsum": {
-      "dtype": "f32",
-      "shape": [
-       1,
-       24,
-       16
       ]
      }
     },
     "launches": [
      {
-      "module": "unified-7b29120e",
-      "entry": "kernel_unified_attention",
+      "module": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen",
+      "entry": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen",
       "params": [
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "inout state",
-       "inout state",
-       "in buffer<i32>",
-       "in buffer<i32>",
-       "f32",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "f32",
-       "f32",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i32",
-       "out buffer<f32>",
-       "out buffer<f32>",
-       "out buffer<f32>",
-       "i64",
-       "i64"
+       "bytes<1280>"
       ],
       "block": [
-       128,
+       512,
        1,
        1
       ],
       "grid": [
-       1,
+       38,
        4,
-       16
+       "seqs"
       ],
-      "shared_mem": 25216,
+      "shared_mem": 144992,
       "args": [
        {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "f32": 0.0625
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "f32": 1.0
-       },
-       {
-        "f32": 0.0
-       },
-       {
-        "i64": 335
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 0
-       },
-       {
-        "param": 8
-       },
-       {
-        "i64": 25690112
-       },
-       {
-        "i64": 2048
-       },
-       {
-        "i64": 512
-       },
-       {
-        "i64": 25690112
-       },
-       {
-        "i64": 2048
-       },
-       {
-        "i64": 512
-       },
-       {
-        "param": 9
-       },
-       {
-        "i32": 1
-       },
-       {
-        "scratch": "segm_out"
-       },
-       {
-        "scratch": "segm_max"
-       },
-       {
-        "scratch": "segm_expsum"
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
-       }
-      ]
-     },
-     {
-      "module": "reduce",
-      "entry": "reduce_segments",
-      "params": [
-       "out buffer<bf16>",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "in buffer<i32>",
-       "f32",
-       "i64",
-       "i64",
-       "i64",
-       "in buffer<i32>",
-       "i64",
-       "i64"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       1,
-       24,
-       1
-      ],
-      "shared_mem": 2048,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "scratch": "segm_out"
-       },
-       {
-        "scratch": "segm_max"
-       },
-       {
-        "scratch": "segm_expsum"
-       },
-       {
-        "param": 5
-       },
-       {
-        "f32": 1.0
-       },
-       {
-        "i64": 6144
-       },
-       {
-        "i64": 256
-       },
-       {
-        "i64": 335
-       },
-       {
-        "param": 9
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
+        "pack": {
+         "size": 1280,
+         "fields": [
+          {
+           "at": 0,
+           "tensormap": {
+            "param": 1,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             6,
+             4,
+             2048
+            ],
+            "strides": [
+             512,
+             3072,
+             12288
+            ],
+            "box": [
+             64,
+             6,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 128,
+           "tensormap": {
+            "param": 2,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             64,
+             4,
+             0
+            ],
+            "strides": [
+             4096,
+             1024,
+             4194304
+            ],
+            "box": [
+             64,
+             64,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 384,
+           "tensormap": {
+            "param": 3,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             64,
+             4,
+             0
+            ],
+            "strides": [
+             4096,
+             1024,
+             4194304
+            ],
+            "box": [
+             64,
+             64,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 512,
+           "tensormap": {
+            "param": 0,
+            "dtype": "bf16",
+            "dims": [
+             256,
+             2048,
+             4,
+             6,
+             1
+            ],
+            "strides": [
+             12288,
+             512,
+             2048,
+             16
+            ],
+            "box": [
+             64,
+             8,
+             1,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 912,
+           "param": 0
+          },
+          {
+           "at": 1000,
+           "param": 4
+          },
+          {
+           "at": 1080,
+           "param": 5
+          },
+          {
+           "at": 1116,
+           "param": 7
+          },
+          {
+           "at": 1244,
+           "param": 8
+          },
+          {
+           "at": 1112,
+           "i32": 2147483647
+          },
+          {
+           "at": 1144,
+           "i32": 1
+          },
+          {
+           "at": 1148,
+           "i32": 262144
+          },
+          {
+           "at": 1152,
+           "i32": 1
+          },
+          {
+           "at": 1156,
+           "i32": 38
+          },
+          {
+           "at": 1160,
+           "i32": 4096
+          },
+          {
+           "at": 1164,
+           "i32": 4
+          },
+          {
+           "at": 1168,
+           "i32": 24
+          },
+          {
+           "at": 1172,
+           "i32": 6
+          },
+          {
+           "at": 1176,
+           "i32": 6
+          },
+          {
+           "at": 1180,
+           "i32": -1431655765
+          },
+          {
+           "at": 1188,
+           "i32": 2
+          },
+          {
+           "at": 1192,
+           "i32": 6144
+          },
+          {
+           "at": 1200,
+           "i32": 1048576
+          },
+          {
+           "at": 1204,
+           "i32": 1
+          },
+          {
+           "at": 1208,
+           "i32": 6
+          },
+          {
+           "at": 1212,
+           "i32": 1
+          },
+          {
+           "at": 1216,
+           "i32": 1065353216
+          },
+          {
+           "at": 1220,
+           "i32": 1035512379
+          },
+          {
+           "at": 1224,
+           "i32": 1065353216
+          },
+          {
+           "at": 1228,
+           "i32": -1082130432
+          },
+          {
+           "at": 1252,
+           "i32": 256
+          },
+          {
+           "at": 984,
+           "scratch": "counter"
+          },
+          {
+           "at": 1008,
+           "scratch": "partial"
+          },
+          {
+           "at": 1016,
+           "scratch": "stats"
+          }
+         ]
+        }
        }
       ]
      }
@@ -9784,7 +10083,8 @@
        "offset": 26624
       },
       {
-       "state": "kv"
+       "state": "kv",
+       "offset": 0
       },
       {
        "state": "kv",
@@ -9813,7 +10113,8 @@
        "buf": "q_n"
       },
       {
-       "state": "kv"
+       "state": "kv",
+       "offset": 0
       },
       {
        "state": "kv",
@@ -9826,17 +10127,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -11572,11 +11869,11 @@
       },
       {
        "state": "kv",
-       "offset": 3211264
+       "offset": 262144
       },
       {
        "state": "kv",
-       "offset": 3211776
+       "offset": 262656
       },
       {
        "buf": "slot_mapping"
@@ -11602,11 +11899,11 @@
       },
       {
        "state": "kv",
-       "offset": 3211264
+       "offset": 262144
       },
       {
        "state": "kv",
-       "offset": 3211776
+       "offset": 262656
       },
       {
        "buf": "block_table"
@@ -11615,17 +11912,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -13361,11 +13654,11 @@
       },
       {
        "state": "kv",
-       "offset": 6422528
+       "offset": 524288
       },
       {
        "state": "kv",
-       "offset": 6423040
+       "offset": 524800
       },
       {
        "buf": "slot_mapping"
@@ -13391,11 +13684,11 @@
       },
       {
        "state": "kv",
-       "offset": 6422528
+       "offset": 524288
       },
       {
        "state": "kv",
-       "offset": 6423040
+       "offset": 524800
       },
       {
        "buf": "block_table"
@@ -13404,17 +13697,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -15150,11 +15439,11 @@
       },
       {
        "state": "kv",
-       "offset": 9633792
+       "offset": 786432
       },
       {
        "state": "kv",
-       "offset": 9634304
+       "offset": 786944
       },
       {
        "buf": "slot_mapping"
@@ -15180,11 +15469,11 @@
       },
       {
        "state": "kv",
-       "offset": 9633792
+       "offset": 786432
       },
       {
        "state": "kv",
-       "offset": 9634304
+       "offset": 786944
       },
       {
        "buf": "block_table"
@@ -15193,17 +15482,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -16939,11 +17224,11 @@
       },
       {
        "state": "kv",
-       "offset": 12845056
+       "offset": 1048576
       },
       {
        "state": "kv",
-       "offset": 12845568
+       "offset": 1049088
       },
       {
        "buf": "slot_mapping"
@@ -16969,11 +17254,11 @@
       },
       {
        "state": "kv",
-       "offset": 12845056
+       "offset": 1048576
       },
       {
        "state": "kv",
-       "offset": 12845568
+       "offset": 1049088
       },
       {
        "buf": "block_table"
@@ -16982,17 +17267,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -18728,11 +19009,11 @@
       },
       {
        "state": "kv",
-       "offset": 16056320
+       "offset": 1310720
       },
       {
        "state": "kv",
-       "offset": 16056832
+       "offset": 1311232
       },
       {
        "buf": "slot_mapping"
@@ -18758,11 +19039,11 @@
       },
       {
        "state": "kv",
-       "offset": 16056320
+       "offset": 1310720
       },
       {
        "state": "kv",
-       "offset": 16056832
+       "offset": 1311232
       },
       {
        "buf": "block_table"
@@ -18771,17 +19052,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -20517,11 +20794,11 @@
       },
       {
        "state": "kv",
-       "offset": 19267584
+       "offset": 1572864
       },
       {
        "state": "kv",
-       "offset": 19268096
+       "offset": 1573376
       },
       {
        "buf": "slot_mapping"
@@ -20547,11 +20824,11 @@
       },
       {
        "state": "kv",
-       "offset": 19267584
+       "offset": 1572864
       },
       {
        "state": "kv",
-       "offset": 19268096
+       "offset": 1573376
       },
       {
        "buf": "block_table"
@@ -20560,17 +20837,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -22306,11 +22579,11 @@
       },
       {
        "state": "kv",
-       "offset": 22478848
+       "offset": 1835008
       },
       {
        "state": "kv",
-       "offset": 22479360
+       "offset": 1835520
       },
       {
        "buf": "slot_mapping"
@@ -22336,11 +22609,11 @@
       },
       {
        "state": "kv",
-       "offset": 22478848
+       "offset": 1835008
       },
       {
        "state": "kv",
-       "offset": 22479360
+       "offset": 1835520
       },
       {
        "buf": "block_table"
@@ -22349,17 +22622,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -24095,11 +24364,11 @@
       },
       {
        "state": "kv",
-       "offset": 25690112
+       "offset": 2097152
       },
       {
        "state": "kv",
-       "offset": 25690624
+       "offset": 2097664
       },
       {
        "buf": "slot_mapping"
@@ -24125,11 +24394,11 @@
       },
       {
        "state": "kv",
-       "offset": 25690112
+       "offset": 2097152
       },
       {
        "state": "kv",
-       "offset": 25690624
+       "offset": 2097664
       },
       {
        "buf": "block_table"
@@ -24138,17 +24407,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -25884,11 +26149,11 @@
       },
       {
        "state": "kv",
-       "offset": 28901376
+       "offset": 2359296
       },
       {
        "state": "kv",
-       "offset": 28901888
+       "offset": 2359808
       },
       {
        "buf": "slot_mapping"
@@ -25914,11 +26179,11 @@
       },
       {
        "state": "kv",
-       "offset": 28901376
+       "offset": 2359296
       },
       {
        "state": "kv",
-       "offset": 28901888
+       "offset": 2359808
       },
       {
        "buf": "block_table"
@@ -25927,17 +26192,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -27673,11 +27934,11 @@
       },
       {
        "state": "kv",
-       "offset": 32112640
+       "offset": 2621440
       },
       {
        "state": "kv",
-       "offset": 32113152
+       "offset": 2621952
       },
       {
        "buf": "slot_mapping"
@@ -27703,11 +27964,11 @@
       },
       {
        "state": "kv",
-       "offset": 32112640
+       "offset": 2621440
       },
       {
        "state": "kv",
-       "offset": 32113152
+       "offset": 2621952
       },
       {
        "buf": "block_table"
@@ -27716,17 +27977,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -29462,11 +29719,11 @@
       },
       {
        "state": "kv",
-       "offset": 35323904
+       "offset": 2883584
       },
       {
        "state": "kv",
-       "offset": 35324416
+       "offset": 2884096
       },
       {
        "buf": "slot_mapping"
@@ -29492,11 +29749,11 @@
       },
       {
        "state": "kv",
-       "offset": 35323904
+       "offset": 2883584
       },
       {
        "state": "kv",
-       "offset": 35324416
+       "offset": 2884096
       },
       {
        "buf": "block_table"
@@ -29505,17 +29762,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -31251,11 +31504,11 @@
       },
       {
        "state": "kv",
-       "offset": 38535168
+       "offset": 3145728
       },
       {
        "state": "kv",
-       "offset": 38535680
+       "offset": 3146240
       },
       {
        "buf": "slot_mapping"
@@ -31281,11 +31534,11 @@
       },
       {
        "state": "kv",
-       "offset": 38535168
+       "offset": 3145728
       },
       {
        "state": "kv",
-       "offset": 38535680
+       "offset": 3146240
       },
       {
        "buf": "block_table"
@@ -31294,17 +31547,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -33040,11 +33289,11 @@
       },
       {
        "state": "kv",
-       "offset": 41746432
+       "offset": 3407872
       },
       {
        "state": "kv",
-       "offset": 41746944
+       "offset": 3408384
       },
       {
        "buf": "slot_mapping"
@@ -33070,11 +33319,11 @@
       },
       {
        "state": "kv",
-       "offset": 41746432
+       "offset": 3407872
       },
       {
        "state": "kv",
-       "offset": 41746944
+       "offset": 3408384
       },
       {
        "buf": "block_table"
@@ -33083,17 +33332,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -34829,11 +35074,11 @@
       },
       {
        "state": "kv",
-       "offset": 44957696
+       "offset": 3670016
       },
       {
        "state": "kv",
-       "offset": 44958208
+       "offset": 3670528
       },
       {
        "buf": "slot_mapping"
@@ -34859,11 +35104,11 @@
       },
       {
        "state": "kv",
-       "offset": 44957696
+       "offset": 3670016
       },
       {
        "state": "kv",
-       "offset": 44958208
+       "offset": 3670528
       },
       {
        "buf": "block_table"
@@ -34872,17 +35117,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -36618,11 +36859,11 @@
       },
       {
        "state": "kv",
-       "offset": 48168960
+       "offset": 3932160
       },
       {
        "state": "kv",
-       "offset": 48169472
+       "offset": 3932672
       },
       {
        "buf": "slot_mapping"
@@ -36648,11 +36889,11 @@
       },
       {
        "state": "kv",
-       "offset": 48168960
+       "offset": 3932160
       },
       {
        "state": "kv",
-       "offset": 48169472
+       "offset": 3932672
       },
       {
        "buf": "block_table"
@@ -36661,17 +36902,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -37845,7 +38082,8 @@
        "offset": 26624
       },
       {
-       "state": "kv"
+       "state": "kv",
+       "offset": 0
       },
       {
        "state": "kv",
@@ -37874,7 +38112,8 @@
        "buf": "q_n"
       },
       {
-       "state": "kv"
+       "state": "kv",
+       "offset": 0
       },
       {
        "state": "kv",
@@ -37887,17 +38126,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -38934,11 +39169,11 @@
       },
       {
        "state": "kv",
-       "offset": 3211264
+       "offset": 262144
       },
       {
        "state": "kv",
-       "offset": 3211776
+       "offset": 262656
       },
       {
        "buf": "slot_mapping"
@@ -38964,11 +39199,11 @@
       },
       {
        "state": "kv",
-       "offset": 3211264
+       "offset": 262144
       },
       {
        "state": "kv",
-       "offset": 3211776
+       "offset": 262656
       },
       {
        "buf": "block_table"
@@ -38977,17 +39212,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -40024,11 +40255,11 @@
       },
       {
        "state": "kv",
-       "offset": 6422528
+       "offset": 524288
       },
       {
        "state": "kv",
-       "offset": 6423040
+       "offset": 524800
       },
       {
        "buf": "slot_mapping"
@@ -40054,11 +40285,11 @@
       },
       {
        "state": "kv",
-       "offset": 6422528
+       "offset": 524288
       },
       {
        "state": "kv",
-       "offset": 6423040
+       "offset": 524800
       },
       {
        "buf": "block_table"
@@ -40067,17 +40298,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -41114,11 +41341,11 @@
       },
       {
        "state": "kv",
-       "offset": 9633792
+       "offset": 786432
       },
       {
        "state": "kv",
-       "offset": 9634304
+       "offset": 786944
       },
       {
        "buf": "slot_mapping"
@@ -41144,11 +41371,11 @@
       },
       {
        "state": "kv",
-       "offset": 9633792
+       "offset": 786432
       },
       {
        "state": "kv",
-       "offset": 9634304
+       "offset": 786944
       },
       {
        "buf": "block_table"
@@ -41157,17 +41384,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -42204,11 +42427,11 @@
       },
       {
        "state": "kv",
-       "offset": 12845056
+       "offset": 1048576
       },
       {
        "state": "kv",
-       "offset": 12845568
+       "offset": 1049088
       },
       {
        "buf": "slot_mapping"
@@ -42234,11 +42457,11 @@
       },
       {
        "state": "kv",
-       "offset": 12845056
+       "offset": 1048576
       },
       {
        "state": "kv",
-       "offset": 12845568
+       "offset": 1049088
       },
       {
        "buf": "block_table"
@@ -42247,17 +42470,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -43294,11 +43513,11 @@
       },
       {
        "state": "kv",
-       "offset": 16056320
+       "offset": 1310720
       },
       {
        "state": "kv",
-       "offset": 16056832
+       "offset": 1311232
       },
       {
        "buf": "slot_mapping"
@@ -43324,11 +43543,11 @@
       },
       {
        "state": "kv",
-       "offset": 16056320
+       "offset": 1310720
       },
       {
        "state": "kv",
-       "offset": 16056832
+       "offset": 1311232
       },
       {
        "buf": "block_table"
@@ -43337,17 +43556,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -44384,11 +44599,11 @@
       },
       {
        "state": "kv",
-       "offset": 19267584
+       "offset": 1572864
       },
       {
        "state": "kv",
-       "offset": 19268096
+       "offset": 1573376
       },
       {
        "buf": "slot_mapping"
@@ -44414,11 +44629,11 @@
       },
       {
        "state": "kv",
-       "offset": 19267584
+       "offset": 1572864
       },
       {
        "state": "kv",
-       "offset": 19268096
+       "offset": 1573376
       },
       {
        "buf": "block_table"
@@ -44427,17 +44642,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -45474,11 +45685,11 @@
       },
       {
        "state": "kv",
-       "offset": 22478848
+       "offset": 1835008
       },
       {
        "state": "kv",
-       "offset": 22479360
+       "offset": 1835520
       },
       {
        "buf": "slot_mapping"
@@ -45504,11 +45715,11 @@
       },
       {
        "state": "kv",
-       "offset": 22478848
+       "offset": 1835008
       },
       {
        "state": "kv",
-       "offset": 22479360
+       "offset": 1835520
       },
       {
        "buf": "block_table"
@@ -45517,17 +45728,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -46564,11 +46771,11 @@
       },
       {
        "state": "kv",
-       "offset": 25690112
+       "offset": 2097152
       },
       {
        "state": "kv",
-       "offset": 25690624
+       "offset": 2097664
       },
       {
        "buf": "slot_mapping"
@@ -46594,11 +46801,11 @@
       },
       {
        "state": "kv",
-       "offset": 25690112
+       "offset": 2097152
       },
       {
        "state": "kv",
-       "offset": 25690624
+       "offset": 2097664
       },
       {
        "buf": "block_table"
@@ -46607,17 +46814,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -47654,11 +47857,11 @@
       },
       {
        "state": "kv",
-       "offset": 28901376
+       "offset": 2359296
       },
       {
        "state": "kv",
-       "offset": 28901888
+       "offset": 2359808
       },
       {
        "buf": "slot_mapping"
@@ -47684,11 +47887,11 @@
       },
       {
        "state": "kv",
-       "offset": 28901376
+       "offset": 2359296
       },
       {
        "state": "kv",
-       "offset": 28901888
+       "offset": 2359808
       },
       {
        "buf": "block_table"
@@ -47697,17 +47900,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -48744,11 +48943,11 @@
       },
       {
        "state": "kv",
-       "offset": 32112640
+       "offset": 2621440
       },
       {
        "state": "kv",
-       "offset": 32113152
+       "offset": 2621952
       },
       {
        "buf": "slot_mapping"
@@ -48774,11 +48973,11 @@
       },
       {
        "state": "kv",
-       "offset": 32112640
+       "offset": 2621440
       },
       {
        "state": "kv",
-       "offset": 32113152
+       "offset": 2621952
       },
       {
        "buf": "block_table"
@@ -48787,17 +48986,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -49834,11 +50029,11 @@
       },
       {
        "state": "kv",
-       "offset": 35323904
+       "offset": 2883584
       },
       {
        "state": "kv",
-       "offset": 35324416
+       "offset": 2884096
       },
       {
        "buf": "slot_mapping"
@@ -49864,11 +50059,11 @@
       },
       {
        "state": "kv",
-       "offset": 35323904
+       "offset": 2883584
       },
       {
        "state": "kv",
-       "offset": 35324416
+       "offset": 2884096
       },
       {
        "buf": "block_table"
@@ -49877,17 +50072,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -50924,11 +51115,11 @@
       },
       {
        "state": "kv",
-       "offset": 38535168
+       "offset": 3145728
       },
       {
        "state": "kv",
-       "offset": 38535680
+       "offset": 3146240
       },
       {
        "buf": "slot_mapping"
@@ -50954,11 +51145,11 @@
       },
       {
        "state": "kv",
-       "offset": 38535168
+       "offset": 3145728
       },
       {
        "state": "kv",
-       "offset": 38535680
+       "offset": 3146240
       },
       {
        "buf": "block_table"
@@ -50967,17 +51158,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -52014,11 +52201,11 @@
       },
       {
        "state": "kv",
-       "offset": 41746432
+       "offset": 3407872
       },
       {
        "state": "kv",
-       "offset": 41746944
+       "offset": 3408384
       },
       {
        "buf": "slot_mapping"
@@ -52044,11 +52231,11 @@
       },
       {
        "state": "kv",
-       "offset": 41746432
+       "offset": 3407872
       },
       {
        "state": "kv",
-       "offset": 41746944
+       "offset": 3408384
       },
       {
        "buf": "block_table"
@@ -52057,17 +52244,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -53104,11 +53287,11 @@
       },
       {
        "state": "kv",
-       "offset": 44957696
+       "offset": 3670016
       },
       {
        "state": "kv",
-       "offset": 44958208
+       "offset": 3670528
       },
       {
        "buf": "slot_mapping"
@@ -53134,11 +53317,11 @@
       },
       {
        "state": "kv",
-       "offset": 44957696
+       "offset": 3670016
       },
       {
        "state": "kv",
-       "offset": 44958208
+       "offset": 3670528
       },
       {
        "buf": "block_table"
@@ -53147,17 +53330,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -54194,11 +54373,11 @@
       },
       {
        "state": "kv",
-       "offset": 48168960
+       "offset": 3932160
       },
       {
        "state": "kv",
-       "offset": 48169472
+       "offset": 3932672
       },
       {
        "buf": "slot_mapping"
@@ -54224,11 +54403,11 @@
       },
       {
        "state": "kv",
-       "offset": 48168960
+       "offset": 3932160
       },
       {
        "state": "kv",
-       "offset": 48169472
+       "offset": 3932672
       },
       {
        "buf": "block_table"
@@ -54237,17 +54416,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
+      },
+      {
+       "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -55442,7 +55617,8 @@
        "offset": 26624
       },
       {
-       "state": "kv"
+       "state": "kv",
+       "offset": 0
       },
       {
        "state": "kv",
@@ -55471,7 +55647,8 @@
        "buf": "q_n"
       },
       {
-       "state": "kv"
+       "state": "kv",
+       "offset": 0
       },
       {
        "state": "kv",
@@ -55484,20 +55661,13 @@
        "buf": "seq_lens"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
        "buf": "cu_seqlens_q"
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -56570,11 +56740,11 @@
       },
       {
        "state": "kv",
-       "offset": 3211264
+       "offset": 262144
       },
       {
        "state": "kv",
-       "offset": 3211776
+       "offset": 262656
       },
       {
        "buf": "slot_mapping"
@@ -56600,24 +56770,14 @@
       },
       {
        "state": "kv",
-       "offset": 3211264
+       "offset": 262144
       },
       {
        "state": "kv",
-       "offset": 3211776
+       "offset": 262656
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -56627,6 +56787,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -57699,11 +57862,11 @@
       },
       {
        "state": "kv",
-       "offset": 6422528
+       "offset": 524288
       },
       {
        "state": "kv",
-       "offset": 6423040
+       "offset": 524800
       },
       {
        "buf": "slot_mapping"
@@ -57729,24 +57892,14 @@
       },
       {
        "state": "kv",
-       "offset": 6422528
+       "offset": 524288
       },
       {
        "state": "kv",
-       "offset": 6423040
+       "offset": 524800
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -57756,6 +57909,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -58828,11 +58984,11 @@
       },
       {
        "state": "kv",
-       "offset": 9633792
+       "offset": 786432
       },
       {
        "state": "kv",
-       "offset": 9634304
+       "offset": 786944
       },
       {
        "buf": "slot_mapping"
@@ -58858,24 +59014,14 @@
       },
       {
        "state": "kv",
-       "offset": 9633792
+       "offset": 786432
       },
       {
        "state": "kv",
-       "offset": 9634304
+       "offset": 786944
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -58885,6 +59031,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -59957,11 +60106,11 @@
       },
       {
        "state": "kv",
-       "offset": 12845056
+       "offset": 1048576
       },
       {
        "state": "kv",
-       "offset": 12845568
+       "offset": 1049088
       },
       {
        "buf": "slot_mapping"
@@ -59987,24 +60136,14 @@
       },
       {
        "state": "kv",
-       "offset": 12845056
+       "offset": 1048576
       },
       {
        "state": "kv",
-       "offset": 12845568
+       "offset": 1049088
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -60014,6 +60153,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -61086,11 +61228,11 @@
       },
       {
        "state": "kv",
-       "offset": 16056320
+       "offset": 1310720
       },
       {
        "state": "kv",
-       "offset": 16056832
+       "offset": 1311232
       },
       {
        "buf": "slot_mapping"
@@ -61116,24 +61258,14 @@
       },
       {
        "state": "kv",
-       "offset": 16056320
+       "offset": 1310720
       },
       {
        "state": "kv",
-       "offset": 16056832
+       "offset": 1311232
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -61143,6 +61275,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -62215,11 +62350,11 @@
       },
       {
        "state": "kv",
-       "offset": 19267584
+       "offset": 1572864
       },
       {
        "state": "kv",
-       "offset": 19268096
+       "offset": 1573376
       },
       {
        "buf": "slot_mapping"
@@ -62245,24 +62380,14 @@
       },
       {
        "state": "kv",
-       "offset": 19267584
+       "offset": 1572864
       },
       {
        "state": "kv",
-       "offset": 19268096
+       "offset": 1573376
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -62272,6 +62397,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -63344,11 +63472,11 @@
       },
       {
        "state": "kv",
-       "offset": 22478848
+       "offset": 1835008
       },
       {
        "state": "kv",
-       "offset": 22479360
+       "offset": 1835520
       },
       {
        "buf": "slot_mapping"
@@ -63374,24 +63502,14 @@
       },
       {
        "state": "kv",
-       "offset": 22478848
+       "offset": 1835008
       },
       {
        "state": "kv",
-       "offset": 22479360
+       "offset": 1835520
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -63401,6 +63519,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -64473,11 +64594,11 @@
       },
       {
        "state": "kv",
-       "offset": 25690112
+       "offset": 2097152
       },
       {
        "state": "kv",
-       "offset": 25690624
+       "offset": 2097664
       },
       {
        "buf": "slot_mapping"
@@ -64503,24 +64624,14 @@
       },
       {
        "state": "kv",
-       "offset": 25690112
+       "offset": 2097152
       },
       {
        "state": "kv",
-       "offset": 25690624
+       "offset": 2097664
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -64530,6 +64641,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -65602,11 +65716,11 @@
       },
       {
        "state": "kv",
-       "offset": 28901376
+       "offset": 2359296
       },
       {
        "state": "kv",
-       "offset": 28901888
+       "offset": 2359808
       },
       {
        "buf": "slot_mapping"
@@ -65632,24 +65746,14 @@
       },
       {
        "state": "kv",
-       "offset": 28901376
+       "offset": 2359296
       },
       {
        "state": "kv",
-       "offset": 28901888
+       "offset": 2359808
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -65659,6 +65763,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -66731,11 +66838,11 @@
       },
       {
        "state": "kv",
-       "offset": 32112640
+       "offset": 2621440
       },
       {
        "state": "kv",
-       "offset": 32113152
+       "offset": 2621952
       },
       {
        "buf": "slot_mapping"
@@ -66761,24 +66868,14 @@
       },
       {
        "state": "kv",
-       "offset": 32112640
+       "offset": 2621440
       },
       {
        "state": "kv",
-       "offset": 32113152
+       "offset": 2621952
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -66788,6 +66885,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -67860,11 +67960,11 @@
       },
       {
        "state": "kv",
-       "offset": 35323904
+       "offset": 2883584
       },
       {
        "state": "kv",
-       "offset": 35324416
+       "offset": 2884096
       },
       {
        "buf": "slot_mapping"
@@ -67890,24 +67990,14 @@
       },
       {
        "state": "kv",
-       "offset": 35323904
+       "offset": 2883584
       },
       {
        "state": "kv",
-       "offset": 35324416
+       "offset": 2884096
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -67917,6 +68007,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -68989,11 +69082,11 @@
       },
       {
        "state": "kv",
-       "offset": 38535168
+       "offset": 3145728
       },
       {
        "state": "kv",
-       "offset": 38535680
+       "offset": 3146240
       },
       {
        "buf": "slot_mapping"
@@ -69019,24 +69112,14 @@
       },
       {
        "state": "kv",
-       "offset": 38535168
+       "offset": 3145728
       },
       {
        "state": "kv",
-       "offset": 38535680
+       "offset": 3146240
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -69046,6 +69129,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -70118,11 +70204,11 @@
       },
       {
        "state": "kv",
-       "offset": 41746432
+       "offset": 3407872
       },
       {
        "state": "kv",
-       "offset": 41746944
+       "offset": 3408384
       },
       {
        "buf": "slot_mapping"
@@ -70148,24 +70234,14 @@
       },
       {
        "state": "kv",
-       "offset": 41746432
+       "offset": 3407872
       },
       {
        "state": "kv",
-       "offset": 41746944
+       "offset": 3408384
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -70175,6 +70251,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -71247,11 +71326,11 @@
       },
       {
        "state": "kv",
-       "offset": 44957696
+       "offset": 3670016
       },
       {
        "state": "kv",
-       "offset": 44958208
+       "offset": 3670528
       },
       {
        "buf": "slot_mapping"
@@ -71277,24 +71356,14 @@
       },
       {
        "state": "kv",
-       "offset": 44957696
+       "offset": 3670016
       },
       {
        "state": "kv",
-       "offset": 44958208
+       "offset": 3670528
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -71304,6 +71373,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -72376,11 +72448,11 @@
       },
       {
        "state": "kv",
-       "offset": 48168960
+       "offset": 3932160
       },
       {
        "state": "kv",
-       "offset": 48169472
+       "offset": 3932672
       },
       {
        "buf": "slot_mapping"
@@ -72406,24 +72478,14 @@
       },
       {
        "state": "kv",
-       "offset": 48168960
+       "offset": 3932160
       },
       {
        "state": "kv",
-       "offset": 48169472
+       "offset": 3932672
       },
       {
        "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
       },
       {
        "buf": "seq_lens"
@@ -72433,6 +72495,9 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
