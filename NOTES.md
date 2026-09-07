@@ -105,10 +105,14 @@ directions), so state-streaming kernels bottom out near there.
 
 ## Correctness evidence on the final tree
 
-`kern test` vs 29dbc9c: random-token prompt (300 tokens, 16 steps) and the
-prose prompt (docs/runtime.md, 431 tokens, 64 steps) are both
+`kern test` vs 29dbc9c at a7ed500 (session 2's tree): random-token prompt
+(300 tokens, 16 steps: 9701 cuts) and a prose prompt (the first 1700 bytes
+of docs/runtime.md, 503 tokens, 49 steps: 26713 cuts) are both
 "bit-identical at every cut, real and perturbed inputs": every buffer,
-both states and all logits. Earlier trees (GDN with its own reduction
+both states and all logits; decode_batch is driven at M = 1 by the test.
+docs/runtime.md whole is 6514 tokens now and overruns a 4096 lease
+("position past the lease" panic in Caller::stage): cut the prompt, or
+raise --capacity. Session 1's evidence (below) was on its own tree. Earlier trees (GDN with its own reduction
 order, or the folded ba GEMM) passed at 2-3.5 ulp at the row's scale with
 all argmax agreeing; the attention split change alone was already
 bit-identical.
@@ -181,7 +185,18 @@ attn_prep 16, attn_batch 16, sigmoid_mul 16, embedding 3, gemma_norm 1,
 argmax 1. Where the 16.2 ms goes now: gemm ~9.3, attention ~5.2,
 gdn ~1.1, the rest ~0.6.
 
-## Session 2: the GEMMs (commits 229cd91.. )
+## State at the end of session 2 (commit a7ed500)
+
+score 7203 → 6784 ms (step 16.071 → 15.126 ms, extend 67.4 → 67.9), every
+op bit-exact with the reference. decode_batch has 534 nodes; the GEMMs
+except down_proj run the handwritten tiled kernel; every handwritten
+launch and the decode attention are programmatic (PDL). Where the 15.1 ms
+goes now (ablation / standalone): attention ~5.2, down_proj (cuBLAS) 2.0,
+the other GEMMs ~5.0 (gate_up+silu 64 × 54, in_proj 48 × 28, out/o_proj
+64 × 14, qkv 16 × 26, lm_head 0.35), gdn ~1.1, norms and the rest under
+PDL's shadow. The score formula makes the step 99% of it.
+
+## Session 2: the GEMMs (commits 229cd91..a7ed500)
 
 9. **Tiled weight layout + handwritten decode GEMM** (`tools/kernels-src/
    gemm16_tiled.cu`, manifest `layout` + `tensor` on weight buffers, pass
