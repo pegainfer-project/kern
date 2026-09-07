@@ -244,7 +244,7 @@ TILED_GEMMS = {   # label suffix: (op name, N, K, splits at M <= 8, splits at M 
     ".qkv_proj": ("gemm_tiled_qkv", QKV_WIDTH, 5120, 2, 2, 6),
     ".out_proj": ("gemm_tiled_out", 5120, ATTN_WIDTH, 5, 5, 6),
     ".o_proj": ("gemm_tiled_o", 5120, ATTN_WIDTH, 5, 5, 6),
-    ".gate_up": ("gemm_tiled_gate_up", 2 * MLP_WIDTH, 5120, 1, 1, 4),
+    ".gate_up": ("gemm_tiled_gate_up", 2 * MLP_WIDTH, 5120, 1, 1, 8),
     "lm_head": ("gemm_tiled_lm_head", 248320, 5120, 1, 1, 6),
 }
 TILE = {"tile": [64, 64], "swizzle": 8}

@@ -11509,7 +11509,7 @@
     "launches": [
      {
       "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_s4_bf16",
+      "entry": "kern_gemm16_tiled_s8_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -11532,7 +11532,7 @@
        1,
        1
       ],
-      "shared_mem": 41984,
+      "shared_mem": 82944,
       "args": [
        {
         "param": 0
