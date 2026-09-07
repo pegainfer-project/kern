@@ -1572,7 +1572,7 @@ impl Runtime {
             LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
             LaunchKind::GemmTile => self.blt_tile.gemm(&self.blt, &self.stream, &vals),
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
-            LaunchKind::Cubin { func, block, grid, shared_mem, cluster } => {
+            LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(env)? as u32, grid[1].eval(env)? as u32, grid[2].eval(env)? as u32];
                 let smem = match shared_mem {
                     Some(e) => e.eval(env)? as u32,
@@ -1590,19 +1590,27 @@ impl Runtime {
                         None => s as *const u64 as *mut c_void,
                     })
                     .collect();
-                let mut attrs = [sys::CUlaunchAttribute {
+                let blank = sys::CUlaunchAttribute {
                     id: sys::CUlaunchAttributeID::CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION,
                     pad: [0; 4],
                     value: sys::CUlaunchAttributeValue { pad: [0; 64] },
-                }];
-                let num_attrs = match cluster {
-                    Some(c) => {
-                        attrs[0].value.clusterDim =
-                            sys::CUlaunchAttributeValue_union__bindgen_ty_1 { x: c[0], y: c[1], z: c[2] };
-                        1
-                    }
-                    None => 0,
                 };
+                let mut attrs = [blank; 2];
+                let mut num_attrs = 0;
+                if let Some(c) = cluster {
+                    attrs[num_attrs].value.clusterDim =
+                        sys::CUlaunchAttributeValue_union__bindgen_ty_1 { x: c[0], y: c[1], z: c[2] };
+                    num_attrs += 1;
+                }
+                // Under stream capture this becomes a programmatic edge of
+                // the graph: the kernel is launched as its predecessor
+                // drains and does its own `griddepcontrol.wait`.
+                if *pdl {
+                    attrs[num_attrs].id =
+                        sys::CUlaunchAttributeID::CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
+                    attrs[num_attrs].value.programmaticStreamSerializationAllowed = 1;
+                    num_attrs += 1;
+                }
                 let cfg = sys::CUlaunchConfig {
                     gridDimX: grid[0],
                     gridDimY: grid[1],
@@ -1613,7 +1621,7 @@ impl Runtime {
                     sharedMemBytes: smem,
                     hStream: self.stream.cu_stream(),
                     attrs: attrs.as_mut_ptr(),
-                    numAttrs: num_attrs,
+                    numAttrs: num_attrs as u32,
                 };
                 cuda_check(
                     unsafe { sys::cuLaunchKernelEx(&cfg, *func, params.as_mut_ptr(), std::ptr::null_mut()) },

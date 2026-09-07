@@ -114,6 +114,9 @@ pub(crate) enum LaunchKind {
         grid: [CExpr; 3],
         shared_mem: Option<CExpr>,
         cluster: Option<[u32; 3]>,
+        /// Launched with programmatic stream serialization: the kernel
+        /// waits on its predecessor itself (`griddepcontrol.wait`).
+        pdl: bool,
     },
     /// `extern:cublaslt_bf16_tn` / `..._acc` (beta 0.0 / 1.0); 6 args, or
     /// 7 with C's row stride.
@@ -504,6 +507,7 @@ fn compile_call(
                     ],
                     shared_mem: k.shared_mem.as_ref().map(|e| compile_expr(e, vars)).transpose()?,
                     cluster: k.cluster,
+                    pdl: k.pdl,
                 }
             }
         };

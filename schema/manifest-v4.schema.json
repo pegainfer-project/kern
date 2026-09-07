@@ -805,6 +805,10 @@
             "null"
           ]
         },
+        "pdl": {
+          "description": "Programmatic dependent launch, e.g. `true`: the kernel may start before the previous launch on the stream has finished, and it promises to execute `griddepcontrol.wait` before reading or writing anything that launch produces or consumes. Only reads of weights may precede the wait.",
+          "type": "boolean"
+        },
         "shared_mem": {
           "anyOf": [
             {
