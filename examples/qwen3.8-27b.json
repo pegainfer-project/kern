@@ -398,16 +398,6 @@
    ],
    "kind": "weight"
   },
-  "kv_scales": {
-   "dtype": "f32",
-   "shape": [
-    2
-   ],
-   "kind": "weight",
-   "domain": {
-    "min": 0.0
-   }
-  },
   "fla.chunk_indices": {
    "dtype": "i32",
    "shape": [
@@ -5462,17 +5452,9 @@
    "source": "line_copy.cubin",
    "sha256": "873944d688be4c1c182b55bef9b1b80b7aa61ff49f4deb3f9b1c074b5c8b55f0"
   },
-  "mrope": {
-   "source": "mrope.cubin",
-   "sha256": "cc5d7bff4bfd36a94e8e43bfb6651908905734c8314019db41d3e469b3517483"
-  },
   "post_conv": {
    "source": "post_conv.cubin",
    "sha256": "f7191a8673409fdb2b84a101a28aa0701447e325152f8a69adf0213cf876c8fc"
-  },
-  "qwen38_cache_p64": {
-   "source": "qwen38_cache_p64.cubin",
-   "sha256": "20cdb5819506490f42f51a8d440bbb79876d3bc7d59ea345bc3aff762e9dd58e"
   },
   "recompute": {
    "source": "recompute.cubin",
@@ -5602,166 +5584,6 @@
        },
        {
         "i32": 0
-       },
-       {
-        "f32": 9.999999974752427e-07
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemma_norm_qhead": {
-   "params": [
-    "out buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<f32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "gemma_rms_norm",
-      "entry": "kern_gemma_rms_norm_bf16",
-      "params": [
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "in buffer<f32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "f32"
-      ],
-      "block": [
-       64,
-       1,
-       1
-      ],
-      "grid": [
-       {
-        "mul": [
-         "tokens",
-         24
-        ]
-       },
-       1,
-       1
-      ],
-      "shared_mem": 4096,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "i32": 256
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 24
-       },
-       {
-        "i32": 14336
-       },
-       {
-        "i32": 512
-       },
-       {
-        "i32": 6144
-       },
-       {
-        "i32": 256
-       },
-       {
-        "f32": 9.999999974752427e-07
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemma_norm_khead": {
-   "params": [
-    "out buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<f32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "gemma_rms_norm",
-      "entry": "kern_gemma_rms_norm_bf16",
-      "params": [
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "in buffer<f32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "f32"
-      ],
-      "block": [
-       64,
-       1,
-       1
-      ],
-      "grid": [
-       {
-        "mul": [
-         "tokens",
-         4
-        ]
-       },
-       1,
-       1
-      ],
-      "shared_mem": 4096,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "i32": 256
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 4
-       },
-       {
-        "i32": 14336
-       },
-       {
-        "i32": 256
-       },
-       {
-        "i32": 1024
-       },
-       {
-        "i32": 256
        },
        {
         "f32": 9.999999974752427e-07
@@ -7001,161 +6823,6 @@
        },
        {
         "f32": 9.999999974752427e-07
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "mrope": {
-   "params": [
-    "inout buffer<bf16>",
-    "inout buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<bf16>"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "mrope",
-      "entry": "_triton_mrope_forward",
-      "params": [
-       "inout buffer<bf16>",
-       "inout buffer<bf16>",
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "i32",
-       "i64",
-       "i64"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       "tokens",
-       1,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 0
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "reshape_and_cache": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "inout state",
-    "inout state",
-    "in buffer<i64>",
-    "in buffer<f32>",
-    "in buffer<f32>"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "qwen38_cache_p64",
-      "entry": "reshape_and_cache_kernel_flash",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "inout state",
-       "inout state",
-       "in buffer<i64>",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64",
-       "i64"
-      ],
-      "block": [
-       512,
-       1,
-       1
-      ],
-      "grid": [
-       "tokens",
-       1,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "param": 6
-       },
-       {
-        "i64": 1024
-       },
-       {
-        "i64": 14336
-       },
-       {
-        "i64": 2097152
-       },
-       {
-        "i64": 512
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 0
-       },
-       {
-        "i64": 2048
        },
        {
         "i64": 0
@@ -9979,12 +9646,9 @@
      ]
     },
     {
-     "label": "l3.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l3.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -9992,67 +9656,19 @@
        "buf": "model.layers.3.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l3.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.3.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l3.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l3.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -10066,11 +9682,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -11764,12 +11376,9 @@
      ]
     },
     {
-     "label": "l7.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l7.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -11777,67 +11386,19 @@
        "buf": "model.layers.7.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l7.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.7.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l7.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l7.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -11851,11 +11412,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -13549,12 +13106,9 @@
      ]
     },
     {
-     "label": "l11.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l11.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -13562,67 +13116,19 @@
        "buf": "model.layers.11.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l11.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.11.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l11.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l11.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -13636,11 +13142,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -15334,12 +14836,9 @@
      ]
     },
     {
-     "label": "l15.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l15.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -15347,67 +14846,19 @@
        "buf": "model.layers.15.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l15.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.15.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l15.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l15.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -15421,11 +14872,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -17119,12 +16566,9 @@
      ]
     },
     {
-     "label": "l19.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l19.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -17132,67 +16576,19 @@
        "buf": "model.layers.19.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l19.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.19.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l19.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l19.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -17206,11 +16602,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -18904,12 +18296,9 @@
      ]
     },
     {
-     "label": "l23.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l23.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -18917,67 +18306,19 @@
        "buf": "model.layers.23.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l23.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.23.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l23.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l23.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -18991,11 +18332,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -20689,12 +20026,9 @@
      ]
     },
     {
-     "label": "l27.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l27.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -20702,67 +20036,19 @@
        "buf": "model.layers.27.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l27.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.27.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l27.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l27.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -20776,11 +20062,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -22474,12 +21756,9 @@
      ]
     },
     {
-     "label": "l31.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l31.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -22487,67 +21766,19 @@
        "buf": "model.layers.31.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l31.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.31.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l31.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l31.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -22561,11 +21792,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -24259,12 +23486,9 @@
      ]
     },
     {
-     "label": "l35.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l35.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -24272,67 +23496,19 @@
        "buf": "model.layers.35.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l35.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.35.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l35.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l35.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -24346,11 +23522,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -26044,12 +25216,9 @@
      ]
     },
     {
-     "label": "l39.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l39.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -26057,67 +25226,19 @@
        "buf": "model.layers.39.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l39.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.39.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l39.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l39.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -26131,11 +25252,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -27829,12 +26946,9 @@
      ]
     },
     {
-     "label": "l43.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l43.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -27842,67 +26956,19 @@
        "buf": "model.layers.43.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l43.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.43.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l43.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l43.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -27916,11 +26982,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -29614,12 +28676,9 @@
      ]
     },
     {
-     "label": "l47.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l47.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -29627,67 +28686,19 @@
        "buf": "model.layers.47.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l47.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.47.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l47.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l47.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -29701,11 +28712,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -31399,12 +30406,9 @@
      ]
     },
     {
-     "label": "l51.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l51.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -31412,67 +30416,19 @@
        "buf": "model.layers.51.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l51.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.51.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l51.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l51.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -31486,11 +30442,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -33184,12 +32136,9 @@
      ]
     },
     {
-     "label": "l55.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l55.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -33197,67 +32146,19 @@
        "buf": "model.layers.55.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l55.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.55.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l55.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l55.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -33271,11 +32172,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -34969,12 +33866,9 @@
      ]
     },
     {
-     "label": "l59.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l59.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -34982,67 +33876,19 @@
        "buf": "model.layers.59.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l59.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.59.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l59.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l59.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -35056,11 +33902,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },
@@ -36754,12 +35596,9 @@
      ]
     },
     {
-     "label": "l63.q_norm",
-     "op": "gemma_norm_qhead",
+     "label": "l63.attn_prep",
+     "op": "attn_prep",
      "args": [
-      {
-       "buf": "q_n"
-      },
       {
        "buf": "qkv"
       },
@@ -36767,67 +35606,19 @@
        "buf": "model.layers.63.self_attn.q_norm.weight_p1"
       },
       {
-       "expr": {
-        "mul": [
-         "tokens",
-         24
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l63.k_norm",
-     "op": "gemma_norm_khead",
-     "args": [
-      {
-       "buf": "k_n"
-      },
-      {
-       "buf": "qkv",
-       "offset": 24576
-      },
-      {
        "buf": "model.layers.63.self_attn.k_norm.weight_p1"
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         4
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l63.rope",
-     "op": "mrope",
-     "args": [
-      {
-       "buf": "q_n"
-      },
-      {
-       "buf": "k_n"
       },
       {
        "buf": "cos_g"
       },
       {
        "buf": "sin_g"
-      }
-     ]
-    },
-    {
-     "label": "l63.kv_write",
-     "op": "reshape_and_cache",
-     "args": [
-      {
-       "buf": "k_n"
       },
       {
-       "buf": "qkv",
-       "offset": 26624
+       "buf": "q_n"
+      },
+      {
+       "buf": "k_n"
       },
       {
        "state": "kv",
@@ -36841,11 +35632,7 @@
        "buf": "slot_mapping"
       },
       {
-       "buf": "kv_scales"
-      },
-      {
-       "buf": "kv_scales",
-       "offset": 4
+       "var": "tokens"
       }
      ]
     },

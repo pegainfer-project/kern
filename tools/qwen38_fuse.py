@@ -122,7 +122,7 @@ def attn_ops():
 
 
 # Programs whose q_norm + k_norm + rope + kv_write become attn_prep.
-ATTN_PROGRAMS = ("decode", "decode_batch")
+ATTN_PROGRAMS = ("prefill", "decode", "decode_batch")
 
 
 def fuse_attn(m):
