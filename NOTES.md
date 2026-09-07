@@ -148,12 +148,26 @@ GDN slots per cut).
   CTA per SM, 24.8 µs; capped at 128 regs it spilled and was still slower
   than the smem version.
 
-## Next
+## State at the end of session 1 (commit 15f0f84)
 
-- gemma_fused_norm rewrite (vectorized, all loads issued up front, same
-  ATen reduction order so it stays bit-exact): 1.4 → ~0.4 ms.
-- silu_mul, sigmoid_mul rewrites; fuse q_norm + k_norm + rope + kv_write.
-- Attention: sweep `--splits` (38 fixed today; 2432 CTAs at 1 CTA/SM).
-- GEMM at M=16: custom mma.sync kernel or cuBLASLt algo choice; the
-  weak shapes are o_proj (4.3 TB/s), down_proj (5.3), qkv_proj (5.4).
-  in_proj_ba (N=96) is a 6 µs node for 1 MB; fold into something.
+score 8283 → 7257 ms (step 18.49 → 16.19 ms, extend 72.4 → 67.8 ms), every
+decode op bit-exact with the reference. decode_batch has 646 nodes: gemm
+305, gemma_fused_norm 128, silu_mul 64, gdn_conv 48, gdn_step 48,
+attn_prep 16, attn_batch 16, sigmoid_mul 16, embedding 3, gemma_norm 1,
+argmax 1. Where the 16.2 ms goes now: gemm ~9.3, attention ~5.2,
+gdn ~1.1, the rest ~0.6.
+
+## Next (what is left, under the rule that logits stay bit-identical)
+
+- Not much on the kernels I own: gdn_step is at 20.9 µs against a 17.7 µs
+  copy ceiling (0.15 ms/step at most), gdn_conv 2.6 µs, the norm ~2 µs.
+- GEMMs are 57% of the step and cuBLASLt is at 4.3-6.3 TB/s per shape, but
+  any other algorithm or a custom kernel changes the accumulation order.
+  The custom mma.sync GEMM (cp.async or TMA producer, 64-row tiles) was
+  bit-identical to cuBLASLt on the splitk=1 shapes and at parity in speed
+  (qkvz 5.9 vs 6.0 TB/s, gate_up 6.3 vs 6.3, qkv 5.6 vs 5.4, lm_head 6.9
+  vs 7.0); split-K shapes were slower. If a split-K order matching
+  cuBLAS's were found, the ba GEMM could be folded back for 0.086 ms and
+  silu_mul into down_proj's A load; not worth it at 0.5% each.
+- The graders' criterion allows bf16 noise; if that ever matters more
+  than exactness, 4e68579 (ba fold) is the measured 0.5%.
