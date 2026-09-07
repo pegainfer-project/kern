@@ -53,10 +53,17 @@ __device__ __forceinline__ void mma(float* c, const uint32_t* a, uint32_t b0, ui
         : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
 }
 
-template <int STAGES>
+// The body. A CTA owns 64 output columns (n-tile `nt`, rows of W) and the
+// chunks [sp0, sp1): one chunk when the launch has a grid.y per chunk (the
+// partials protocol below), every chunk when grid.y is 1 (the ascending
+// running sum stays in registers, no workspace: the fastest form when the
+// n-tile count alone fills the GPU). TR is the tile height of W's layout:
+// 64, or 32 for a narrow weight whose 64 rows are two 4 KB sub-tiles (the
+// second may lie past N; its outputs are never written).
+template <int STAGES, int TR>
 __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const bf16* __restrict__ W,
                                              bf16* __restrict__ C, float* __restrict__ ws, int* __restrict__ counters,
-                                             int M, int N, int K, int splits_lo, int splits_hi) {
+                                             int M, int N, int K, int splits_lo, int splits_hi, int nt) {
     extern __shared__ uint8_t smem_raw[];
     const uint32_t sbase = (((uint32_t)__cvta_generic_to_shared(smem_raw)) + 1023) & ~1023u;
     __shared__ int s_last;
@@ -65,16 +72,32 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
     const int S = M <= 8 ? splits_lo : splits_hi;
     const int kc = S == 1 ? K : ((K / S + 63) / 64) * 64;
     const int splits = (K + kc - 1) / kc;
-    const int nt = blockIdx.x, sp = blockIdx.y;
-    if (sp >= splits) return;
-    const int k0 = sp * kc, k1 = min(K, k0 + kc), kt0 = k0 / BK, ktn = (k1 - k0) / BK;
+    const bool whole = gridDim.y == 1;
+    const int sp0 = whole ? 0 : (int)blockIdx.y, sp1 = whole ? splits : sp0 + 1;
+    if (sp0 >= splits) return;
+    const int kt0 = sp0 * kc / BK, ktn = min(K, sp1 * kc) / BK - kt0;
     auto load_w = [&](int i, int slot) {
         const uint32_t sw = sbase + slot * STAGE_BYTES;
-        const bf16* wt = W + ((size_t)nt * KT + kt0 + i) * BN * BK;
+        if (TR == 64) {
+            const bf16* wt = W + ((size_t)nt * KT + kt0 + i) * BN * BK;
 #pragma unroll
-        for (int c = 0; c < 4; c++) {
-            const int q = tid + c * NT;
-            cp16(sw + q * 16, wt + q * 8);
+            for (int c = 0; c < 4; c++) {
+                const int q = tid + c * NT;
+                cp16(sw + q * 16, wt + q * 8);
+            }
+        } else {
+            // two 32-row sub-tiles, row r of sub-tile h at smem row 32h + r
+#pragma unroll
+            for (int h = 0; h < 2; h++) {
+                const int st = 2 * nt + h;
+                if (st * TR >= N) break;
+                const bf16* wt = W + ((size_t)st * KT + kt0 + i) * TR * BK;
+#pragma unroll
+                for (int c = 0; c < 2; c++) {
+                    const int q = tid + c * NT;
+                    cp16(sw + h * (TR * BK * 2) + q * 16, wt + q * 8);
+                }
+            }
         }
     };
     auto load_a = [&](int i, int slot) {
@@ -82,10 +105,11 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
         const int row = tid >> 3, ch = tid & 7;
         cp16(sa + row * 128 + ((ch ^ (row & 7)) << 4), A + (size_t)row * K + (kt0 + i) * BK + ch * 8);
     };
-    float acc[2][4];
+    const int g = lane >> 2, c2 = (lane & 3) * 2;
+    float acc[2][4], tot[2][4];
 #pragma unroll
     for (int j = 0; j < 2; j++)
-        for (int i = 0; i < 4; i++) acc[j][i] = 0.f;
+        for (int i = 0; i < 4; i++) acc[j][i] = tot[j][i] = 0.f;
     // Programmatic dependent launch: the weights depend on no earlier
     // kernel, so the first stages' tiles are in flight before the wait;
     // A (the previous kernel's output) is fetched only after it. The
@@ -104,6 +128,7 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
         if (s < ktn) load_a(s, s);
         commit();
     }
+    int sp = sp0, boundary = min(K, (sp + 1) * kc) / BK - kt0;  // stages of this CTA before chunk sp ends
     for (int i = 0; i < ktn; i++) {
         wait_group<STAGES - 2>();
         __syncthreads();
@@ -133,20 +158,32 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
             mma(acc[0], a, b[0], b[1]);
             mma(acc[1], a, b[2], b[3]);
         }
+        if (whole && i + 1 == boundary) {
+            // chunk sp is complete: fold it into the running sum, ascending
+#pragma unroll
+            for (int j = 0; j < 2; j++)
+                for (int q = 0; q < 4; q++) {
+                    tot[j][q] = (sp == 0) ? acc[j][q] : tot[j][q] + acc[j][q];
+                    acc[j][q] = 0.f;
+                }
+            sp++;
+            boundary = min(K, (sp + 1) * kc) / BK - kt0;
+        }
     }
     wait_group<0>();
-    const int g = lane >> 2, c2 = (lane & 3) * 2;
-    if (splits == 1) {
+    if (whole) {
 #pragma unroll
         for (int j = 0; j < 2; j++) {
             const int n = nt * BN + warp * 16 + j * 8 + c2;
-            *reinterpret_cast<__nv_bfloat162*>(C + (size_t)g * N + n) = __floats2bfloat162_rn(acc[j][0], acc[j][1]);
+            if (n >= N) continue;
+            *reinterpret_cast<__nv_bfloat162*>(C + (size_t)g * N + n) = __floats2bfloat162_rn(tot[j][0], tot[j][1]);
             *reinterpret_cast<__nv_bfloat162*>(C + (size_t)(g + 8) * N + n) =
-                __floats2bfloat162_rn(acc[j][2], acc[j][3]);
+                __floats2bfloat162_rn(tot[j][2], tot[j][3]);
         }
         return;
     }
-    float* P = ws + (size_t)sp * 16 * N;
+    // one chunk per CTA: the partials protocol, cuBLASLt's order
+    float* P = ws + (size_t)sp0 * 16 * N;
 #pragma unroll
     for (int j = 0; j < 2; j++) {
         const int n = nt * BN + warp * 16 + j * 8 + c2;
@@ -191,17 +228,34 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
     if (tid == 0) counters[nt] = 0;
 }
 
-// One entry per pipeline depth; the manifest picks by shape (4 for the
-// 544-CTA gate_up, 8 for qkvz, 6 elsewhere: measured in NOTES.md).
+// One entry per pipeline depth; the manifest picks by shape (8 for qkvz,
+// 6 elsewhere: measured in NOTES.md). grid = [N/64, chunks] with the
+// partials protocol, or [N/64, 1] for every chunk in the CTA.
 #define ENTRY(ST)                                                                                                   \
     extern "C" __global__ void __launch_bounds__(NT) kern_gemm16_tiled_s##ST##_bf16(                              \
         const bf16* A, const bf16* W, bf16* C, float* ws, int* counters, int M, int N, int K, int splits_lo,        \
         int splits_hi) {                                                                                            \
-        gemm16_tiled<ST>(A, W, C, ws, counters, M, N, K, splits_lo, splits_hi);                                     \
+        gemm16_tiled<ST, 64>(A, W, C, ws, counters, M, N, K, splits_lo, splits_hi, blockIdx.x);                    \
     }
 ENTRY(4)
 ENTRY(6)
 ENTRY(8)
+
+// Two projections of the same A in one launch: W1 (N1 rows, 64-row tiles,
+// non-split) on CTAs [0, N1/64), then W2 (N2 rows, 32-row tiles, `splits2`
+// chunks all in the CTA) on the next ceil(N2/64). grid = [N1/64 +
+// ceil(N2/64), 1]; no workspace.
+#define ENTRY_DUAL(ST)                                                                                              \
+    extern "C" __global__ void __launch_bounds__(NT) kern_gemm16_tiled_dual_s##ST##_bf16(                         \
+        const bf16* A, const bf16* W1, bf16* C1, const bf16* W2, bf16* C2, int M, int N1, int N2, int K,            \
+        int splits2_lo, int splits2_hi) {                                                                           \
+        const int nt1 = N1 / BN;                                                                                    \
+        if ((int)blockIdx.x < nt1)                                                                                  \
+            gemm16_tiled<ST, 64>(A, W1, C1, nullptr, nullptr, M, N1, K, 1, 1, blockIdx.x);                          \
+        else                                                                                                        \
+            gemm16_tiled<ST, 32>(A, W2, C2, nullptr, nullptr, M, N2, K, splits2_lo, splits2_hi, blockIdx.x - nt1);  \
+    }
+ENTRY_DUAL(8)
 
 // ---- gate_up + silu_mul ------------------------------------------------
 //

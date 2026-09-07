@@ -5390,774 +5390,6 @@
    ],
    "kind": "weight"
   },
-  "model.layers.0.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.0.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.1.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.1.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.2.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.2.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.4.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.4.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.5.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.5.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.6.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.6.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.8.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.8.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.9.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.9.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.10.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.10.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.12.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.12.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.13.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.13.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.14.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.14.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.16.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.16.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.17.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.17.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.18.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.18.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.20.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.20.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.21.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.21.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.22.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.22.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.24.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.24.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.25.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.25.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.26.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.26.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.28.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.28.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.29.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.29.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.30.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.30.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.32.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.32.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.33.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.33.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.34.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.34.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.36.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.36.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.37.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.37.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.38.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.38.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.40.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.40.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.41.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.41.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.42.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.42.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.44.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.44.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.45.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.45.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.46.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.46.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.48.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.48.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.49.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.49.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.50.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.50.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.52.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.52.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.53.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.53.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.54.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.54.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.56.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.56.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.57.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.57.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.58.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.58.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.60.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.60.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.61.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.61.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.62.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.62.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
   "model.layers.3.self_attn.qkv_proj.weight.tiled": {
    "dtype": "bf16",
    "shape": [
@@ -8477,6 +7709,1542 @@
     ],
     "swizzle": 8
    }
+  },
+  "model.layers.0.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.0.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.0.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.0.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.1.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.1.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.1.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.1.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.2.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.2.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.2.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.2.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.4.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.4.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.4.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.4.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.5.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.5.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.5.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.5.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.6.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.6.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.6.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.6.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.8.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.8.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.8.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.8.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.9.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.9.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.9.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.9.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.10.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.10.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.10.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.10.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.12.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.12.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.12.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.12.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.13.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.13.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.13.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.13.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.14.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.14.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.14.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.14.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.16.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.16.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.16.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.16.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.17.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.17.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.17.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.17.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.18.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.18.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.18.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.18.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.20.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.20.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.20.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.20.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.21.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.21.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.21.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.21.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.22.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.22.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.22.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.22.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.24.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.24.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.24.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.24.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.25.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.25.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.25.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.25.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.26.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.26.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.26.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.26.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.28.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.28.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.28.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.28.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.29.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.29.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.29.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.29.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.30.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.30.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.30.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.30.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.32.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.32.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.32.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.32.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.33.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.33.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.33.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.33.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.34.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.34.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.34.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.34.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.36.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.36.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.36.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.36.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.37.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.37.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.37.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.37.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.38.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.38.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.38.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.38.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.40.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.40.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.40.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.40.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.41.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.41.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.41.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.41.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.42.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.42.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.42.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.42.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.44.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.44.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.44.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.44.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.45.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.45.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.45.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.45.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.46.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.46.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.46.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.46.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.48.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.48.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.48.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.48.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.49.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.49.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.49.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.49.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.50.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.50.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.50.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.50.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.52.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.52.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.52.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.52.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.53.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.53.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.53.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.53.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.54.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.54.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.54.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.54.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.56.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.56.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.56.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.56.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.57.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.57.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.57.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.57.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.58.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.58.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.58.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.58.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.60.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.60.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.60.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.60.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.61.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.61.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.61.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.61.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.62.linear_attn.in_proj_qkvz.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    16384,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.62.linear_attn.in_proj_qkvz.weight",
+   "layout": {
+    "tile": [
+     64,
+     64
+    ],
+    "swizzle": 8
+   }
+  },
+  "model.layers.62.linear_attn.in_proj_ba.weight.tiled": {
+   "dtype": "bf16",
+   "shape": [
+    96,
+    5120
+   ],
+   "kind": "weight",
+   "tensor": "model.layers.62.linear_attn.in_proj_ba.weight",
+   "layout": {
+    "tile": [
+     32,
+     64
+    ],
+    "swizzle": 8
+   }
   }
  },
  "modules": {
@@ -8526,7 +9294,7 @@
   },
   "gemm16_tiled": {
    "source": "gemm16_tiled.cubin",
-   "sha256": "07560097e3f009080077cdf9f1e6d767b30fb05467a3548b4185568691c4cea5"
+   "sha256": "0eb626917a7ec4ac44356048c01f78aee19ab11f8af5073bae62a9931fd48544"
   },
   "gemma_rms_norm": {
    "source": "gemma_rms_norm.cubin",
@@ -11147,7 +11915,7 @@
     ]
    }
   },
-  "gemm_tiled_qkvz": {
+  "gemm_tiled_qkv": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -11160,13 +11928,13 @@
       "dtype": "f32",
       "shape": [
        16,
-       16384
+       14336
       ]
      },
      "arrivals": {
       "dtype": "i32",
       "shape": [
-       256
+       224
       ]
      }
     },
@@ -11192,98 +11960,11 @@
        1
       ],
       "grid": [
-       256,
+       224,
        1,
        1
       ],
       "shared_mem": 82944,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "scratch": "partials"
-       },
-       {
-        "scratch": "arrivals"
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 16384
-       },
-       {
-        "i32": 5120
-       },
-       {
-        "i32": 1
-       },
-       {
-        "i32": 1
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm_tiled_qkv": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "scratch": {
-     "partials": {
-      "dtype": "f32",
-      "shape": [
-       32,
-       14336
-      ]
-     },
-     "arrivals": {
-      "dtype": "i32",
-      "shape": [
-       224
-      ]
-     }
-    },
-    "launches": [
-     {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_s6_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "out buffer<f32>",
-       "out buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       224,
-       2,
-       1
-      ],
-      "shared_mem": 62464,
       "pdl": true,
       "args": [
        {
@@ -11576,6 +12257,84 @@
        },
        {
         "i32": 1
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "gemm_tiled_in_proj": {
+   "params": [
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "out buffer<bf16>",
+    "out buffer<bf16>",
+    "i32"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "gemm16_tiled",
+      "entry": "kern_gemm16_tiled_dual_s8_bf16",
+      "params": [
+       "in buffer<bf16>",
+       "in buffer<bf16>",
+       "out buffer<bf16>",
+       "in buffer<bf16>",
+       "out buffer<bf16>",
+       "i32",
+       "i32",
+       "i32",
+       "i32",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       128,
+       1,
+       1
+      ],
+      "grid": [
+       258,
+       1,
+       1
+      ],
+      "shared_mem": 82944,
+      "pdl": true,
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "param": 3
+       },
+       {
+        "param": 2
+       },
+       {
+        "param": 4
+       },
+       {
+        "param": 5
+       },
+       {
+        "i32": 16384
+       },
+       {
+        "i32": 96
+       },
+       {
+        "i32": 5120
+       },
+       {
+        "i32": 5
+       },
+       {
+        "i32": 5
        }
       ]
      }
@@ -54340,8 +55099,8 @@
      ]
     },
     {
-     "label": "l0.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l0.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -54350,34 +55109,16 @@
        "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.0.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l0.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -54533,8 +55274,8 @@
      ]
     },
     {
-     "label": "l1.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l1.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -54543,34 +55284,16 @@
        "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.1.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l1.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -54728,8 +55451,8 @@
      ]
     },
     {
-     "label": "l2.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l2.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -54738,34 +55461,16 @@
        "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.2.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l2.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -55135,8 +55840,8 @@
      ]
     },
     {
-     "label": "l4.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l4.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -55145,34 +55850,16 @@
        "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.4.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l4.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -55330,8 +56017,8 @@
      ]
     },
     {
-     "label": "l5.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l5.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -55340,34 +56027,16 @@
        "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.5.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l5.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -55525,8 +56194,8 @@
      ]
     },
     {
-     "label": "l6.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l6.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -55535,34 +56204,16 @@
        "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.6.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l6.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -55932,8 +56583,8 @@
      ]
     },
     {
-     "label": "l8.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l8.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -55942,34 +56593,16 @@
        "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.8.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l8.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -56127,8 +56760,8 @@
      ]
     },
     {
-     "label": "l9.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l9.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -56137,34 +56770,16 @@
        "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.9.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l9.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -56322,8 +56937,8 @@
      ]
     },
     {
-     "label": "l10.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l10.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -56332,34 +56947,16 @@
        "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.10.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l10.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -56729,8 +57326,8 @@
      ]
     },
     {
-     "label": "l12.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l12.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -56739,34 +57336,16 @@
        "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.12.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l12.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -56924,8 +57503,8 @@
      ]
     },
     {
-     "label": "l13.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l13.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -56934,34 +57513,16 @@
        "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.13.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l13.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -57119,8 +57680,8 @@
      ]
     },
     {
-     "label": "l14.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l14.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -57129,34 +57690,16 @@
        "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.14.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l14.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -57526,8 +58069,8 @@
      ]
     },
     {
-     "label": "l16.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l16.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -57536,34 +58079,16 @@
        "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.16.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l16.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -57721,8 +58246,8 @@
      ]
     },
     {
-     "label": "l17.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l17.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -57731,34 +58256,16 @@
        "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.17.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l17.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -57916,8 +58423,8 @@
      ]
     },
     {
-     "label": "l18.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l18.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -57926,34 +58433,16 @@
        "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.18.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l18.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -58323,8 +58812,8 @@
      ]
     },
     {
-     "label": "l20.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l20.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -58333,34 +58822,16 @@
        "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.20.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l20.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -58518,8 +58989,8 @@
      ]
     },
     {
-     "label": "l21.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l21.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -58528,34 +58999,16 @@
        "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.21.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l21.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -58713,8 +59166,8 @@
      ]
     },
     {
-     "label": "l22.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l22.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -58723,34 +59176,16 @@
        "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.22.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l22.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -59120,8 +59555,8 @@
      ]
     },
     {
-     "label": "l24.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l24.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -59130,34 +59565,16 @@
        "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.24.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l24.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -59315,8 +59732,8 @@
      ]
     },
     {
-     "label": "l25.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l25.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -59325,34 +59742,16 @@
        "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.25.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l25.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -59510,8 +59909,8 @@
      ]
     },
     {
-     "label": "l26.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l26.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -59520,34 +59919,16 @@
        "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.26.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l26.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -59917,8 +60298,8 @@
      ]
     },
     {
-     "label": "l28.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l28.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -59927,34 +60308,16 @@
        "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.28.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l28.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -60112,8 +60475,8 @@
      ]
     },
     {
-     "label": "l29.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l29.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -60122,34 +60485,16 @@
        "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.29.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l29.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -60307,8 +60652,8 @@
      ]
     },
     {
-     "label": "l30.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l30.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -60317,34 +60662,16 @@
        "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.30.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l30.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -60714,8 +61041,8 @@
      ]
     },
     {
-     "label": "l32.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l32.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -60724,34 +61051,16 @@
        "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.32.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l32.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -60909,8 +61218,8 @@
      ]
     },
     {
-     "label": "l33.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l33.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -60919,34 +61228,16 @@
        "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.33.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l33.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -61104,8 +61395,8 @@
      ]
     },
     {
-     "label": "l34.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l34.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -61114,34 +61405,16 @@
        "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.34.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l34.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -61511,8 +61784,8 @@
      ]
     },
     {
-     "label": "l36.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l36.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -61521,34 +61794,16 @@
        "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.36.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l36.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -61706,8 +61961,8 @@
      ]
     },
     {
-     "label": "l37.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l37.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -61716,34 +61971,16 @@
        "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.37.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l37.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -61901,8 +62138,8 @@
      ]
     },
     {
-     "label": "l38.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l38.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -61911,34 +62148,16 @@
        "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.38.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l38.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -62308,8 +62527,8 @@
      ]
     },
     {
-     "label": "l40.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l40.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -62318,34 +62537,16 @@
        "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.40.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l40.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -62503,8 +62704,8 @@
      ]
     },
     {
-     "label": "l41.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l41.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -62513,34 +62714,16 @@
        "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.41.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l41.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -62698,8 +62881,8 @@
      ]
     },
     {
-     "label": "l42.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l42.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -62708,34 +62891,16 @@
        "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.42.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l42.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -63105,8 +63270,8 @@
      ]
     },
     {
-     "label": "l44.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l44.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -63115,34 +63280,16 @@
        "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.44.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l44.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -63300,8 +63447,8 @@
      ]
     },
     {
-     "label": "l45.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l45.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -63310,34 +63457,16 @@
        "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.45.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l45.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -63495,8 +63624,8 @@
      ]
     },
     {
-     "label": "l46.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l46.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -63505,34 +63634,16 @@
        "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.46.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l46.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -63902,8 +64013,8 @@
      ]
     },
     {
-     "label": "l48.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l48.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -63912,34 +64023,16 @@
        "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.48.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l48.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -64097,8 +64190,8 @@
      ]
     },
     {
-     "label": "l49.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l49.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -64107,34 +64200,16 @@
        "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.49.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l49.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -64292,8 +64367,8 @@
      ]
     },
     {
-     "label": "l50.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l50.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -64302,34 +64377,16 @@
        "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.50.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l50.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -64699,8 +64756,8 @@
      ]
     },
     {
-     "label": "l52.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l52.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -64709,34 +64766,16 @@
        "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.52.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l52.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -64894,8 +64933,8 @@
      ]
     },
     {
-     "label": "l53.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l53.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -64904,34 +64943,16 @@
        "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.53.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l53.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -65089,8 +65110,8 @@
      ]
     },
     {
-     "label": "l54.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l54.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -65099,34 +65120,16 @@
        "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.54.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l54.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -65496,8 +65499,8 @@
      ]
     },
     {
-     "label": "l56.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l56.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -65506,34 +65509,16 @@
        "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.56.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l56.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -65691,8 +65676,8 @@
      ]
     },
     {
-     "label": "l57.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l57.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -65701,34 +65686,16 @@
        "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.57.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l57.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -65886,8 +65853,8 @@
      ]
     },
     {
-     "label": "l58.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l58.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -65896,34 +65863,16 @@
        "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.58.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l58.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -66293,8 +66242,8 @@
      ]
     },
     {
-     "label": "l60.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l60.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -66303,34 +66252,16 @@
        "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.60.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l60.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -66488,8 +66419,8 @@
      ]
     },
     {
-     "label": "l61.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l61.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -66498,34 +66429,16 @@
        "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.61.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l61.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
@@ -66683,8 +66596,8 @@
      ]
     },
     {
-     "label": "l62.in_proj_qkvz",
-     "op": "gemm_tiled_qkvz",
+     "label": "l62.in_proj_qkvz_ba",
+     "op": "gemm_tiled_in_proj",
      "args": [
       {
        "buf": "x"
@@ -66693,34 +66606,16 @@
        "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight.tiled"
       },
       {
+       "buf": "model.layers.62.linear_attn.in_proj_ba.weight.tiled"
+      },
+      {
        "buf": "qkvz"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l62.in_proj_ba",
-     "op": "gemm",
-     "args": [
-      {
-       "buf": "x"
-      },
-      {
-       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
-      },
-      {
-       "i32": 96
-      },
-      {
-       "i32": 5120
       }
      ]
     },
