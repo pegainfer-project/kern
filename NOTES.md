@@ -255,8 +255,17 @@ gdn ~1.1, the rest ~0.6.
 - in_proj_ba (48 × ~6 µs, N = 96, cuBLAS 5 splits at M = 1 and 16) is the
   other plain launch; N is not a multiple of 64, so the tiled kernel would
   need a padded last tile (layout semantics) or a 32-row tile variant.
-- A DSMEM (cluster) reduction for the split-K shapes would replace the
-  global fence + atomic + reduce with a cluster barrier.
+- Tried, no gain (session 2): a thread-block-cluster split-K (the CTAs of
+  one n-tile in a cluster along grid.y, rank 0 holding the ascending
+  running sum, the others single partials in smem, rank 0 reducing over
+  DSMEM after a cluster barrier) is bit-exact but no faster than the
+  global protocol — out_proj 15.4 vs 14.5 µs, down 36.6 vs 37.5 (cuBLAS
+  33.3) — so the split-K shapes' cost is a ~10 µs kernel's fill and tail,
+  not the reduce (code in the commit history of this note, dropped from the
+  source). cuBLASLt offers no other bit-identical candidate for down (one
+  with 13 splits) and every ba candidate is ~6.3 µs (/tmp/bn/algos.cu).
+- down_proj on the tiled kernel with PDL: step 15.669 vs 15.355 — stays
+  on cuBLAS.
 - gdn_step 20.9 µs vs 17.7 copy ceiling (0.15 ms/step at most).
 - The graders' criterion allows bf16 noise; if that ever matters more
   than exactness, 4e68579 (ba fold) is the measured 0.5%.
