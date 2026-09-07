@@ -231,6 +231,54 @@ def gemm_tiles(m):
     return m
 
 
+# decode_batch GEMMs on the handwritten tiled-layout kernel
+# (tools/kernels-src/gemm16_tiled.cu). The weight gets a second copy on the
+# device in the kernel's tile order (`layout` on a `weight` buffer bound to
+# the same `tensor`); prefill and the single-sequence decode keep cuBLAS on
+# the row-major original. Per shape: (N, K, split-K count at M <= 8 and at
+# M > 8 — cuBLASLt's own choices, which the kernel reproduces bit for bit —
+# and the pipeline depth measured fastest). down_proj (5120 x 17408, 13 or
+# 17 splits) stays on cuBLAS: 37.3 vs 33.3 µs standalone.
+TILED_GEMMS = {   # label suffix: (op name, N, K, splits at M <= 8, splits at M > 8, stages)
+    ".in_proj_qkvz": ("gemm_tiled_qkvz", QKVZ_WIDTH, 5120, 1, 1, 8),
+    ".qkv_proj": ("gemm_tiled_qkv", QKV_WIDTH, 5120, 2, 2, 6),
+    ".out_proj": ("gemm_tiled_out", 5120, ATTN_WIDTH, 5, 5, 6),
+    ".o_proj": ("gemm_tiled_o", 5120, ATTN_WIDTH, 5, 5, 6),
+    ".gate_up": ("gemm_tiled_gate_up", 2 * MLP_WIDTH, 5120, 1, 1, 4),
+    "lm_head": ("gemm_tiled_lm_head", 248320, 5120, 1, 1, 6),
+}
+TILE = {"tile": [64, 64], "swizzle": 8}
+
+
+def gemm_tiled(m):
+    """decode_batch GEMMs named in TILED_GEMMS run the tiled kernel on a
+    tiled copy of their weight."""
+    cubin = handwritten.hw("gemm16_tiled")
+    for suffix, (name, n, k, lo, hi, stages) in TILED_GEMMS.items():
+        smax = max(lo, hi)
+        m["ops"][name] = dict(
+            params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
+            impl=dict(
+                scratch={"partials": {"dtype": "f32", "shape": [smax * 16, n]},
+                         "arrivals": {"dtype": "i32", "shape": [n // 64]}},
+                launches=[dict(
+                    **cubin, entry=f"kern_gemm16_tiled_s{stages}_bf16",
+                    params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "out buffer<f32>",
+                            "out buffer<i32>", "i32", "i32", "i32", "i32", "i32"],
+                    block=[128, 1, 1], grid=[n // 64, smax, 1], shared_mem=stages * 10240 + 1024,
+                    args=[{"param": 0}, {"param": 1}, {"param": 2}, {"scratch": "partials"}, {"scratch": "arrivals"},
+                          {"param": 3}, {"i32": n}, {"i32": k}, {"i32": lo}, {"i32": hi}])]))
+        for c in m["programs"]["decode_batch"]["calls"]:
+            if not c["op"].startswith("gemm") or not c["label"].endswith(suffix):
+                continue
+            w = c["args"][1]["buf"]
+            assert m["buffers"][w]["shape"] == [n, k], (c["label"], m["buffers"][w]["shape"])
+            m["buffers"][w + ".tiled"] = dict(dtype="bf16", shape=[n, k], kind="weight", tensor=w, layout=dict(TILE))
+            c["op"] = name
+            c["args"] = [c["args"][0], {"buf": w + ".tiled"}, c["args"][2], c["args"][3]]
+    return m
+
+
 def prune(m):
     """Drop ops, modules and workspace buffers no program refers to any more."""
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
@@ -242,7 +290,8 @@ def prune(m):
     return m
 
 
-PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits, "tiles": gemm_tiles}
+PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits,
+          "tiles": gemm_tiles, "tiled": gemm_tiled}
 
 
 def main():
