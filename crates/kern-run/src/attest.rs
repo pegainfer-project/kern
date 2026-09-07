@@ -1894,6 +1894,12 @@ fn execute(o: Opts) -> Result<i32> {
     let mut e2e_states = Vec::new();
     for name in ma.states.keys().filter(|n| mb.states.contains_key(*n)) {
         let (a, b) = (s.a.rt.read_state(name)?, s.b.rt.read_state(name)?);
+        // KERN_TEST_DUMP=<dir>: both sides' final image of every state, for
+        // locating a whole-state difference the cuts do not explain.
+        if let Ok(dir) = std::env::var("KERN_TEST_DUMP") {
+            std::fs::write(format!("{dir}/{name}-a.bin"), &a)?;
+            std::fs::write(format!("{dir}/{name}-b.bin"), &b)?;
+        }
         let d = a.iter().zip(&b).filter(|(p, q)| p != q).count() + a.len().abs_diff(b.len());
         e2e_states.push(StateE2e { name: name.clone(), bytes: a.len(), differ: d });
     }
