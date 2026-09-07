@@ -27,6 +27,12 @@ GDN_DIM = 10240
 GDN_HV = 48
 QKVZ_WIDTH = 16384
 BA_WIDTH = 96
+QKV_K_OFFSET = 24576         # bytes: k heads start after 24 x [q | gate]
+QKV_V_OFFSET = 26624         # bytes: v heads after the 4 k heads
+KV_BLOCK_STRIDE = 2097152    # elements between pages (16 layers x 64 tokens x 4 heads x [k | v] x 256)
+KV_PAGE_STRIDE = 2048        # elements between tokens of a page
+KV_HEAD_STRIDE = 512         # elements between heads ([k | v] x 256)
+QKV_WIDTH = 14336
 MLP_WIDTH = 17408
 ATTN_WIDTH = 6144
 GDN_SCALE = 0.0883883461356163
@@ -98,6 +104,56 @@ REWRITTEN = ["gemma_rms_norm", "sigmoid_mul"]
 ELEM_BLOCK = 256
 
 
+def attn_ops():
+    cubin = handwritten.hw("attn_prep")
+    prep = dict(
+        params=["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>",
+                "out buffer<bf16>", "out buffer<bf16>", "inout state", "inout state", "in buffer<i64>", "i32"],
+        impl=dict(launches=[dict(
+            **cubin, entry="kern_attn_prep_bf16",
+            params=["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>",
+                    "out buffer<bf16>", "out buffer<bf16>", "inout state", "inout state", "in buffer<i64>",
+                    "i32", "f32", "i32", "i64", "i64", "i64"],
+            block=[256, 1, 1], grid=["tokens", 1, 1],
+            args=[{"param": i} for i in range(11)] +
+                 [{"f32": GDN_EPS}, {"i32": QKV_WIDTH},
+                  {"i64": KV_BLOCK_STRIDE}, {"i64": KV_PAGE_STRIDE}, {"i64": KV_HEAD_STRIDE}])]))
+    return {"attn_prep": prep}
+
+
+def fuse_attn(m):
+    """q_norm + k_norm + rope + kv_write -> attn_prep (decode programs)."""
+    m["ops"].update(attn_ops())
+    for name in ("decode", "decode_batch"):
+        calls = m["programs"][name]["calls"]
+        out = []
+        i = 0
+        while i < len(calls):
+            c = calls[i]
+            if c["op"] != "gemma_norm_qhead":
+                out.append(c)
+                i += 1
+                continue
+            layer = c["label"].split(".")[0]
+            run = {}
+            while i < len(calls) and calls[i]["label"].startswith(layer + ".") and \
+                    calls[i]["op"] in ("gemma_norm_qhead", "gemma_norm_khead", "mrope", "reshape_and_cache"):
+                run[calls[i]["op"]] = calls[i]
+                i += 1
+            assert len(run) == 4, (name, layer, run.keys())
+            qn, kn, rope, kv = run["gemma_norm_qhead"], run["gemma_norm_khead"], run["mrope"], run["reshape_and_cache"]
+            qkv = qn["args"][1]
+            assert not qkv.get("offset") and kn["args"][1] == {**qkv, "offset": QKV_K_OFFSET}
+            assert rope["args"][:2] == [qn["args"][0], kn["args"][0]] and kv["args"][0] == kn["args"][0]
+            assert kv["args"][1] == {**qkv, "offset": QKV_V_OFFSET}
+            out.append(dict(label=layer + ".attn_prep", op="attn_prep",
+                            args=[qkv, qn["args"][2], kn["args"][2], rope["args"][2], rope["args"][3],
+                                  qn["args"][0], kn["args"][0], kv["args"][2], kv["args"][3], kv["args"][4],
+                                  {"var": "tokens"}]))
+        m["programs"][name]["calls"] = out
+    return m
+
+
 def elementwise(m):
     """The mined vLLM silu-and-mul becomes the handwritten one; the rewritten
     elementwise kernels get a grid that covers a row with 8 elements per
@@ -140,7 +196,7 @@ def prune(m):
     return m
 
 
-PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "elem": elementwise}
+PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise}
 
 
 def main():
