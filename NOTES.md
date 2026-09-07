@@ -75,14 +75,42 @@ directions), so state-streaming kernels bottom out near there.
    48 → 16.502, 64 → 16.871. Extend is unaffected (prefill uses the
    context kernel). Splits 1 (persistent artifact), 12, 20: see
    `/tmp/an/extra_results.txt` / the commit.
-6. **in_proj_ba folded into gdn_conv**: the N = 96 GEMM (1 MB, a 6 µs
-   cuBLAS node per GDN layer) is computed by gdn_conv, one output per
-   block over a 96-wide grid.y, each warp an eighth of `hidden`, partials
-   summed in a fixed order, bf16 out (0 of 1536 values differ from the
-   exactly rounded dot product on the harness). Standalone the conv launch
-   grows 2.6 → 5.3 µs (L2 traffic: 16 seqs × 1 MB + 96 × 10 KB rows);
-   two other layouts (4 outputs per block, 2 warps each; batched loads)
-   cost the same. In-graph: step 16.207 → 16.121 ms, score 7264 → 7226.
+6. **in_proj_ba folded into gdn_conv — reverted.** Computing the N = 96
+   projection inside gdn_conv (one output per block, fixed-order f32 sum)
+   saved 0.086 ms per step (16.207 → 16.121) but its accumulation order
+   differs from cuBLAS, and once gdn_step was bit-exact it was the only
+   op left moving the logits (2-3.5 ulp at scale, argmax always agreeing).
+   Bit-identical logits are worth more than 0.5% of score, so the ba GEMM
+   is back (commit 4e68579 has the folded version for reference).
+7. **gdn_step made bit-exact**: Triton's PTX for the recurrent kernel
+   (compiled here from vLLM's source with the model's constexprs) shows
+   the reduction of a thread's four elements as mul(e1) then fma(e0),
+   fma(e2), fma(e3), a butterfly xor 16..1, the update as fma(k, u, h·eg),
+   q pre-scaled as scale·(q/sqrt). Mirrored with _rn intrinsics: state and
+   output 0 of 12.6M / 98k values differ. Cost: none once the rows went
+   back to two passes (20.5 µs; the per-row dependent version was 23.6).
+   The gated norm tail is mirrored the same way (a lane owns o[4l..4l+3],
+   var = sum / N, rstd = rsqrt(eps + var), y = (o·rstd)·w, y = y·(z·σ(z)));
+   `__launch_bounds__(256, 3)` keeps it at 80 registers (103 unbounded cost
+   a CTA per SM). Attention splits 38 → 16 were already bit-identical end to
+   end, and the ba fold is reverted, so every decode op is now bit-exact.
+   Before the norm tail was mirrored, a handful of cuts had one value of
+   core_attn_out off by 1 ulp and the whole-state compare reported 22% of
+   the GDN bytes differing (layers 1..47 of the driven slot: the ulp
+   propagates through out_proj into every later layer's state). With it
+   mirrored the attestation is bit-identical at every cut, in both states
+   and in the logits, on the random and the prose prompt. `KERN_TEST_DUMP=
+   <dir>` (added to kern test) writes both sides' final state images.
+
+## Correctness evidence on the final tree
+
+`kern test` vs 29dbc9c: random-token prompt (300 tokens, 16 steps) and the
+prose prompt (docs/runtime.md, 431 tokens, 64 steps) are both
+"bit-identical at every cut, real and perturbed inputs": every buffer,
+both states and all logits. Earlier trees (GDN with its own reduction
+order, or the folded ba GEMM) passed at 2-3.5 ulp at the row's scale with
+all argmax agreeing; the attention split change alone was already
+bit-identical.
 
 ## Hazards met
 

@@ -2,16 +2,12 @@
 // that replace vLLM's four (causal_conv1d_update, fused_recurrent_gated_
 // delta_rule_packed_decode, the z copy, RMSNormGated):
 //
-//   kern_gdn_conv_bf16   grid [seqs, max(ceil(dim/256), nba)], block 256
+//   kern_gdn_conv_bf16   grid [seqs, ceil(dim/256)], block 256
 //     per channel c of sequence n: state[0..2] are the three previous
 //     inputs, x = qkvz[n, c] the new one;
 //       y = silu(sum_i bf16(s_i * w_i))    (products rounded to bf16 like
 //                                           Triton's bf16 * bf16, sum in f32)
 //       qkvz[n, c] := bf16(y)  (in place)   state := [s_1, s_2, x]
-//     Block y < nba also computes output y of the layer's small projection
-//     ba[n, y] = h[n] . Wba[y]^T (bf16 in, f32 accumulation, bf16 out),
-//     which vLLM runs as its own 1 MB GEMM: each warp an eighth of
-//     `hidden`, the eight partials summed in a fixed order.
 //
 //   kern_gdn_step_bf16   grid [HV, seqs], block 256, dynamic smem V*K*4
 //     per (sequence n, value head hv), q/k head h = hv / (HV/H), state
@@ -22,16 +18,20 @@
 //       o = bf16(o)                          (vLLM stores o as bf16 here)
 //       y = (o * rsqrt(mean(o^2) + eps)) * w * silu(z)      -> out bf16
 //     The head's 64 KB state is one contiguous block: one bulk async copy
-//     brings it into shared memory while the block prepares q, k and the
+//     brings it into shared memory while every warp normalizes q and k (a
+//     lane owns elements 4l..4l+3, as Triton's layout does) and the
 //     scalars; each warp then owns rows w, w+8, .. and reads/writes them as
 //     512-byte lines, so shared reads are conflict free and global stores
-//     coalesce.
+//     coalesce. A chunk's rows go in two passes (all S k, then all updates
+//     and S q) so the rows' warp reductions overlap.
 //
-// Numerics follow the vLLM kernels' rounding points (inputs bf16, beta and
-// o rounded to bf16, everything else f32) and Triton's lowering of the
-// transcendentals (ex2.approx, div.full, sqrt/rsqrt.approx.ftz, libdevice
-// logf). Reduction order differs, so the f32 state agrees to a few ulp,
-// not bit for bit.
+// Numerics are bit for bit those of the vLLM kernels (checked on a
+// standalone harness against the pinned cubins): the same rounding points
+// (inputs bf16, beta and o rounded to bf16, everything else f32), Triton's
+// lowering of the transcendentals (ex2.approx, div.full,
+// sqrt/rsqrt.approx.ftz, libdevice logf) and its reduction order (see
+// tri_dot4 / tri_warp_sum). The intrinsics with _rn keep nvcc from
+// contracting or reassociating.
 //
 // The state page for sequence n is `line[n]` lines of `line_stride_bytes`
 // from the state base; line 0 is the null line (skipped, output zero),
@@ -51,7 +51,6 @@
 #define GDN_K 128
 #define GDN_V 128
 #define CONV_W 4
-#define BA_BATCH 3    // 16-byte chunks per lane: hidden / 8 / 256 rounded up (5120 -> 2.5)
 #define NT 256
 // Pieces the tile arrives in (each behind its own barrier). Measured on
 // GB300: 1 is fastest (20.9 us/layer at batch 16, against a 17.7 us copy
@@ -88,54 +87,11 @@ __device__ static inline float tri_rsqrt(float x) {
 }
 __device__ static inline float tri_sigmoid(float x) { return tri_div(1.f, 1.f + tri_exp(0.f - x)); }
 
-extern "C" __global__ void __launch_bounds__(256) kern_gdn_conv_bf16(
+extern "C" __global__ void kern_gdn_conv_bf16(
     __nv_bfloat16* __restrict__ qkvz, const __nv_bfloat16* __restrict__ w,
     __nv_bfloat16* __restrict__ state, const int* __restrict__ line,
-    const __nv_bfloat16* __restrict__ h, const __nv_bfloat16* __restrict__ wba,
-    __nv_bfloat16* __restrict__ ba, int dim, int row_stride, long long line_stride_bytes,
-    int hidden, int nba) {
-  __shared__ float part[8];
+    int dim, int row_stride, long long line_stride_bytes) {
   const int n = blockIdx.x;
-  if (blockIdx.y < nba) {
-    // Output o = blockIdx.y: warp w takes hidden/8 elements starting at
-    // w * hidden / 8, a lane three 16-byte chunks; then a fixed-order sum.
-    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
-    const int o = blockIdx.y, span = hidden / 8;
-    const __nv_bfloat16* hp = h + (long long)n * hidden + warp * span;
-    const __nv_bfloat16* wp = wba + (long long)o * hidden + warp * span;
-    uint4 hv[BA_BATCH], wv[BA_BATCH];
-#pragma unroll
-    for (int b = 0; b < BA_BATCH; b++) {
-      const int i = lane * 8 + b * 256;
-      if (i < span) {
-        hv[b] = *reinterpret_cast<const uint4*>(hp + i);
-        wv[b] = *reinterpret_cast<const uint4*>(wp + i);
-      }
-    }
-    float acc = 0.f;
-#pragma unroll
-    for (int b = 0; b < BA_BATCH; b++) {
-      if (lane * 8 + b * 256 < span) {
-        const __nv_bfloat162* h2 = reinterpret_cast<const __nv_bfloat162*>(&hv[b]);
-        const __nv_bfloat162* w2 = reinterpret_cast<const __nv_bfloat162*>(&wv[b]);
-#pragma unroll
-        for (int j = 0; j < 4; j++) {
-          acc = fmaf(bf(h2[j].x), bf(w2[j].x), acc);
-          acc = fmaf(bf(h2[j].y), bf(w2[j].y), acc);
-        }
-      }
-    }
-#pragma unroll
-    for (int off = 16; off > 0; off >>= 1) acc += __shfl_xor_sync(0xffffffffu, acc, off);
-    if (lane == 0) part[warp] = acc;
-    __syncthreads();
-    if (threadIdx.x == 0) {
-      float t = 0.f;
-#pragma unroll
-      for (int w = 0; w < 8; w++) t += part[w];
-      ba[(long long)n * nba + o] = tobf(t);
-    }
-  }
   const int c = blockIdx.y * blockDim.x + threadIdx.x;
   if (c >= dim) return;
   const long long idx = line[n];
@@ -159,6 +115,22 @@ extern "C" __global__ void __launch_bounds__(256) kern_gdn_conv_bf16(
   s[2 * dim + c] = x;
 }
 
+__device__ static inline void unpack4(const uint2 v, float f[4]) {
+  const __nv_bfloat162* p = reinterpret_cast<const __nv_bfloat162*>(&v);
+  f[0] = __bfloat162float(p[0].x);
+  f[1] = __bfloat162float(p[0].y);
+  f[2] = __bfloat162float(p[1].x);
+  f[3] = __bfloat162float(p[1].y);
+}
+
+__device__ static inline uint2 pack4(const float f[4]) {
+  uint2 v;
+  __nv_bfloat162* p = reinterpret_cast<__nv_bfloat162*>(&v);
+  p[0] = __floats2bfloat162_rn(f[0], f[1]);
+  p[1] = __floats2bfloat162_rn(f[2], f[3]);
+  return v;
+}
+
 __device__ static inline float warp_sum(float v) {
 #pragma unroll
   for (int off = 16; off > 0; off >>= 1) v += __shfl_xor_sync(0xffffffffu, v, off);
@@ -177,14 +149,29 @@ __device__ static inline float sum128(float v, float* red) {
   return r;
 }
 
-extern "C" __global__ void __launch_bounds__(NT) kern_gdn_step_bf16(
+// Triton reduces a thread's four consecutive elements as
+// ((e1*f1 + e0*f0) + e2*f2) + e3*f3 with fma from the first product on,
+// then a butterfly over the warp (xor 16, 8, 4, 2, 1). Mirrored exactly.
+__device__ static inline float tri_dot4(const float e[4], const float f[4]) {
+  float d = __fmul_rn(e[1], f[1]);
+  d = __fmaf_rn(e[0], f[0], d);
+  d = __fmaf_rn(e[2], f[2], d);
+  return __fmaf_rn(e[3], f[3], d);
+}
+__device__ static inline float tri_warp_sum(float v) {
+#pragma unroll
+  for (int off = 16; off > 0; off >>= 1) v = __fadd_rn(v, __shfl_xor_sync(0xffffffffu, v, off));
+  return v;
+}
+
+extern "C" __global__ void __launch_bounds__(NT, 3) kern_gdn_step_bf16(
     const __nv_bfloat16* __restrict__ qkvz, const __nv_bfloat16* __restrict__ ba,
     const float* __restrict__ A_log, const __nv_bfloat16* __restrict__ dt_bias,
     const __nv_bfloat16* __restrict__ norm_w, __nv_bfloat16* __restrict__ out,
     float* __restrict__ state, const int* __restrict__ line, float scale,
     float eps, int row_stride, int ba_stride, long long line_stride_bytes) {
   extern __shared__ __align__(128) float tile[];  // [V][K]
-  __shared__ float sq[GDN_K], sk[GDN_K], so[GDN_V], red[4];
+  __shared__ float so[GDN_V];
   __shared__ __align__(8) unsigned long long mbar[NCHUNK];
   const int hv = blockIdx.x, n = blockIdx.y;
   const int h = hv / (GDN_HV / GDN_H);
@@ -197,9 +184,7 @@ extern "C" __global__ void __launch_bounds__(NT) kern_gdn_step_bf16(
   }
   float* S = reinterpret_cast<float*>(reinterpret_cast<char*>(state) + idx * line_stride_bytes) +
              (long long)hv * GDN_V * GDN_K;
-  // The tile arrives in NCHUNK pieces, each behind its own barrier, so a
-  // warp's early rows are processed and stored while later rows are still
-  // landing.
+  // The tile arrives in NCHUNK pieces, each behind its own barrier.
   const unsigned bytes = GDN_V * GDN_K * 4 / NCHUNK;
   if (t == 0) {
 #pragma unroll
@@ -220,31 +205,28 @@ extern "C" __global__ void __launch_bounds__(NT) kern_gdn_step_bf16(
     }
   }
 
+  // Every warp normalizes q and k itself: a lane owns elements 4l..4l+3.
   const __nv_bfloat16* row = qkvz + (long long)n * row_stride;
-  float qv = 0.f, kv = 0.f;
-  if (t < GDN_K) {
-    qv = bf(row[h * GDN_K + t]);
-    kv = bf(row[GDN_H * GDN_K + h * GDN_K + t]);
-  }
-  const float qs = sum128(qv * qv, red);
-  const float ks = sum128(kv * kv, red);
-  if (t < GDN_K) {
-    sq[t] = tri_div(qv, tri_sqrt(qs + 1e-6f)) * scale;
-    sk[t] = tri_div(kv, tri_sqrt(ks + 1e-6f));
+  float q[4], k[4];
+  unpack4(*reinterpret_cast<const uint2*>(row + h * GDN_K + lane * 4), q);
+  unpack4(*reinterpret_cast<const uint2*>(row + GDN_H * GDN_K + h * GDN_K + lane * 4), k);
+  const float qs = tri_warp_sum(tri_dot4(q, q)), ks = tri_warp_sum(tri_dot4(k, k));
+  const float qr = tri_sqrt(__fadd_rn(qs, 1e-6f)), kr = tri_sqrt(__fadd_rn(ks, 1e-6f));
+#pragma unroll
+  for (int i = 0; i < 4; i++) {
+    q[i] = __fmul_rn(scale, tri_div(q[i], qr));
+    k[i] = tri_div(k[i], kr);
   }
   const float a = bf(ba[(long long)n * ba_stride + GDN_HV + hv]);
   const float b = bf(ba[(long long)n * ba_stride + hv]);
-  const float x = a + bf(dt_bias[hv]);
-  const float sp = x <= 20.f ? logf(1.f + tri_exp(x)) : x;
-  const float eg = tri_exp(-tri_exp(A_log[hv]) * sp);
+  const float x = __fadd_rn(a, bf(dt_bias[hv]));
+  const float sp = x <= 20.f ? logf(__fadd_rn(1.f, tri_exp(x))) : x;
+  const float eg = tri_exp(__fmul_rn(-tri_exp(A_log[hv]), sp));
   const float beta = round_bf(tri_sigmoid(b));
-  // Own columns: lane*4 .. +4 of rows warp + 8*i.
   float vv[16];
 #pragma unroll
   for (int i = 0; i < 16; i++) vv[i] = bf(row[2 * GDN_H * GDN_K + hv * GDN_V + warp + 8 * i]);
   __syncthreads();
-  const float4 kk = *reinterpret_cast<const float4*>(sk + lane * 4);
-  const float4 qq = *reinterpret_cast<const float4*>(sq + lane * 4);
 #pragma unroll
   for (int c = 0; c < NCHUNK; c++) {
     const unsigned mb = (unsigned)__cvta_generic_to_shared(&mbar[c]);
@@ -253,38 +235,46 @@ extern "C" __global__ void __launch_bounds__(NT) kern_gdn_step_bf16(
         "W%=: mbarrier.try_wait.parity.shared::cta.b64 p, [%0], 0;\n"
         " @!p bra W%=;\n}" ::"r"(mb)
         : "memory");
+    // Two passes over the chunk's rows so the warp reductions of different
+    // rows overlap: first every row's S k, then every row's update and S q.
     float u[16 / NCHUNK];
 #pragma unroll
     for (int j = 0; j < 16 / NCHUNK; j++) {
       const int i = c * (16 / NCHUNK) + j;
       const float4 s4 = *reinterpret_cast<const float4*>(tile + (warp + 8 * i) * GDN_K + lane * 4);
-      float d = (s4.x * eg) * kk.x + (s4.y * eg) * kk.y + (s4.z * eg) * kk.z + (s4.w * eg) * kk.w;
-      d = warp_sum(d);
-      u[j] = (vv[i] - d) * beta;
+      const float hd[4] = {__fmul_rn(s4.x, eg), __fmul_rn(s4.y, eg), __fmul_rn(s4.z, eg), __fmul_rn(s4.w, eg)};
+      u[j] = __fmul_rn(__fsub_rn(vv[i], tri_warp_sum(tri_dot4(k, hd))), beta);
     }
 #pragma unroll
     for (int j = 0; j < 16 / NCHUNK; j++) {
       const int i = c * (16 / NCHUNK) + j;
       const int r = warp + 8 * i;
-      float4 s4 = *reinterpret_cast<const float4*>(tile + r * GDN_K + lane * 4);
-      s4.x = s4.x * eg + u[j] * kk.x;
-      s4.y = s4.y * eg + u[j] * kk.y;
-      s4.z = s4.z * eg + u[j] * kk.z;
-      s4.w = s4.w * eg + u[j] * kk.w;
-      *reinterpret_cast<float4*>(S + r * GDN_K + lane * 4) = s4;
-      float o = s4.x * qq.x + s4.y * qq.y + s4.z * qq.z + s4.w * qq.w;
-      o = warp_sum(o);
+      const float4 s4 = *reinterpret_cast<const float4*>(tile + r * GDN_K + lane * 4);
+      const float hd[4] = {__fmul_rn(s4.x, eg), __fmul_rn(s4.y, eg), __fmul_rn(s4.z, eg), __fmul_rn(s4.w, eg)};
+      float hn[4];
+#pragma unroll
+      for (int e = 0; e < 4; e++) hn[e] = __fmaf_rn(k[e], u[j], hd[e]);
+      *reinterpret_cast<float4*>(S + r * GDN_K + lane * 4) = make_float4(hn[0], hn[1], hn[2], hn[3]);
+      const float o = tri_warp_sum(tri_dot4(q, hn));
       if (lane == 0) so[r] = round_bf(o);
     }
   }
   __syncthreads();
-  const float ov = t < GDN_V ? so[t] : 0.f;
-  const float ss = sum128(ov * ov, red);
-  if (t < GDN_V) {
-    const float rstd = tri_rsqrt(tri_div(ss, (float)GDN_V) + eps);
-    const float z = bf(row[2 * GDN_H * GDN_K + GDN_HV * GDN_V + hv * GDN_V + t]);
-    float y = (ov * rstd) * bf(norm_w[t]);
-    y *= z * tri_sigmoid(z);
-    op[t] = tobf(y);
+  // The gated RMS norm, as Triton's layer_norm_fwd_kernel does it with one
+  // warp: a lane owns o[4l..4l+3]; var = sum / N, rstd = rsqrt(eps + var),
+  // y = (o * rstd) * w, y = y * (z * sigmoid(z)).
+  if (warp == 0) {
+    float o[4], wv[4], z[4];
+#pragma unroll
+    for (int i = 0; i < 4; i++) o[i] = so[lane * 4 + i];
+    unpack4(*reinterpret_cast<const uint2*>(norm_w + lane * 4), wv);
+    unpack4(*reinterpret_cast<const uint2*>(row + 2 * GDN_H * GDN_K + GDN_HV * GDN_V + hv * GDN_V + lane * 4), z);
+    const float var = tri_div(tri_warp_sum(tri_dot4(o, o)), (float)GDN_V);
+    const float rstd = tri_rsqrt(__fadd_rn(eps, var));
+    float y[4];
+#pragma unroll
+    for (int i = 0; i < 4; i++)
+      y[i] = __fmul_rn(__fmul_rn(__fmul_rn(o[i], rstd), wv[i]), __fmul_rn(z[i], tri_sigmoid(z[i])));
+    *reinterpret_cast<uint2*>(op + lane * 4) = pack4(y);
   }
 }

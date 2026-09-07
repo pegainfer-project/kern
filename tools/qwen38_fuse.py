@@ -27,7 +27,6 @@ GDN_DIM = 10240
 GDN_HV = 48
 QKVZ_WIDTH = 16384
 BA_WIDTH = 96
-HIDDEN = 5120
 QKV_K_OFFSET = 24576         # bytes: k heads start after 24 x [q | gate]
 QKV_V_OFFSET = 26624         # bytes: v heads after the 4 k heads
 KV_BLOCK_STRIDE = 2097152    # elements between pages (16 layers x 64 tokens x 4 heads x [k | v] x 256)
@@ -43,15 +42,13 @@ GDN_EPS = 9.999999974752427e-07
 def gdn_ops():
     cubin = handwritten.hw("gdn_decode")
     conv = dict(
-        params=["inout buffer<bf16>", "in buffer<bf16>", "inout state", "in buffer<i32>",
-                "in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>"],
+        params=["inout buffer<bf16>", "in buffer<bf16>", "inout state", "in buffer<i32>"],
         impl=dict(launches=[dict(
             **cubin, entry="kern_gdn_conv_bf16",
-            params=["inout buffer<bf16>", "in buffer<bf16>", "inout state", "in buffer<i32>",
-                    "in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i64", "i32", "i32"],
-            block=[256, 1, 1], grid=["seqs", max(GDN_DIM // 256, BA_WIDTH), 1],
-            args=[{"param": i} for i in range(7)] +
-                 [{"i32": GDN_DIM}, {"i32": QKVZ_WIDTH}, {"i64": GDN_LINE_BYTES}, {"i32": HIDDEN}, {"i32": BA_WIDTH}])]))
+            params=["inout buffer<bf16>", "in buffer<bf16>", "inout state", "in buffer<i32>", "i32", "i32", "i64"],
+            block=[256, 1, 1], grid=["seqs", GDN_DIM // 256, 1],
+            args=[{"param": 0}, {"param": 1}, {"param": 2}, {"param": 3},
+                  {"i32": GDN_DIM}, {"i32": QKVZ_WIDTH}, {"i64": GDN_LINE_BYTES}])]))
     step = dict(
         params=["in buffer<bf16>", "in buffer<bf16>", "in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>",
                 "out buffer<bf16>", "inout state", "in buffer<i32>"],
@@ -66,8 +63,7 @@ def gdn_ops():
 
 
 def fuse_gdn(m):
-    """in_proj_ba + conv_update + recurrent (+ z copy) + gated_norm ->
-    gdn_conv (which also computes ba) + gdn_step."""
+    """conv_update + recurrent (+ z copy) + gated_norm -> gdn_conv + gdn_step."""
     m["ops"].update(gdn_ops())
     for name in ("decode", "decode_batch"):
         calls = m["programs"][name]["calls"]
@@ -80,9 +76,6 @@ def fuse_gdn(m):
                 i += 1
                 continue
             layer = c["label"].split(".")[0]
-            ba_gemm = out.pop()
-            assert ba_gemm["label"] == layer + ".in_proj_ba" and ba_gemm["args"][2] == {"buf": "ba"}, ba_gemm
-            assert ba_gemm["args"][4:] == [{"i32": BA_WIDTH}, {"i32": HIDDEN}], ba_gemm
             run = {}
             while i < len(calls) and calls[i]["label"].startswith(layer + ".") and \
                     calls[i]["op"] in ("conv_update", "recurrent", "copy_rows", "gated_norm_decode"):
@@ -96,8 +89,7 @@ def fuse_gdn(m):
             assert a["buf"] == b["buf"] == "ba" and a.get("offset", 0) == BA_WIDTH and not b.get("offset")
             assert rec["args"][6] == rec["args"][7] == {**state, "offset": GDN_REC_OFFSET}
             assert gn["args"][0] == gn["args"][1] == core
-            out.append(dict(label=layer + ".gdn_conv", op="gdn_conv",
-                            args=[qkvz, w, state, line, ba_gemm["args"][0], ba_gemm["args"][1], {"buf": "ba"}]))
+            out.append(dict(label=layer + ".gdn_conv", op="gdn_conv", args=[qkvz, w, state, line]))
             out.append(dict(label=layer + ".gdn_step", op="gdn_step",
                             args=[qkvz, {"buf": "ba"}, a_log, dt_bias, gn["args"][2], core,
                                   {**state, "offset": GDN_REC_OFFSET}, line]))
@@ -129,10 +121,14 @@ def attn_ops():
     return {"attn_prep": prep}
 
 
+# Programs whose q_norm + k_norm + rope + kv_write become attn_prep.
+ATTN_PROGRAMS = ("decode", "decode_batch")
+
+
 def fuse_attn(m):
-    """q_norm + k_norm + rope + kv_write -> attn_prep (decode programs)."""
+    """q_norm + k_norm + rope + kv_write -> attn_prep."""
     m["ops"].update(attn_ops())
-    for name in ("decode", "decode_batch"):
+    for name in ATTN_PROGRAMS:
         calls = m["programs"][name]["calls"]
         out = []
         i = 0
@@ -215,7 +211,7 @@ def prune(m):
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
     m["ops"] = {k: v for k, v in m["ops"].items() if k in used_ops}
     used_bufs = {a["buf"] for p in m["programs"].values() for c in p["calls"] for a in c["args"] if "buf" in a}
-    m["buffers"] = {k: v for k, v in m["buffers"].items() if k in used_bufs or v["kind"] != "workspace"}
+    m["buffers"] = {k: v for k, v in m["buffers"].items() if k in used_bufs or v["kind"] in ("input", "output")}
     used_mods = {l["module"] for o in m["ops"].values() for l in o["impl"]["launches"] if "module" in l}
     m["modules"] = {k: v for k, v in m["modules"].items() if k in used_mods}
     return m
