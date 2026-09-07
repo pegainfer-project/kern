@@ -206,6 +206,31 @@ def attn_splits(m):
     return m
 
 
+# cublasLt algorithms pinned by (tile id, split-K) for decode_batch GEMMs
+# whose default heuristic is not the fastest: every non-split algorithm
+# accumulates in the same order, so a pinned non-split tile keeps the bits
+# (checked in a harness: 0 of 557k / 3.97M values differ) and the runtime
+# refuses a pin it cannot find. Standalone at M = 16: gate_up 56.8 -> 54.3
+# µs (tile 487 -> 312), lm_head 364.7 -> 357.9 (tile 394 -> 312).
+GEMM_TILES = {".gate_up": (312, 1), "lm_head": (312, 1)}
+
+
+def gemm_tiles(m):
+    """decode_batch GEMMs named in GEMM_TILES run the pinned algorithm."""
+    for (suffix, (tile, splitk)) in GEMM_TILES.items():
+        name = f"gemm_tile{tile}_{splitk}"
+        m["ops"][name] = dict(
+            params=list(m["ops"]["gemm"]["params"]),
+            impl=dict(launches=[dict(
+                entry="extern:cublaslt_bf16_tn_tile",
+                params=list(m["ops"]["gemm"]["params"]) + ["i32", "i32"],
+                args=[{"param": i} for i in range(6)] + [{"i32": tile}, {"i32": splitk}])]))
+        for c in m["programs"]["decode_batch"]["calls"]:
+            if c["op"] == "gemm" and c["label"].endswith(suffix):
+                c["op"] = name
+    return m
+
+
 def prune(m):
     """Drop ops, modules and workspace buffers no program refers to any more."""
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
@@ -217,7 +242,7 @@ def prune(m):
     return m
 
 
-PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits}
+PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits, "tiles": gemm_tiles}
 
 
 def main():

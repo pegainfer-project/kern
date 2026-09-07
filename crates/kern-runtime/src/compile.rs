@@ -118,6 +118,9 @@ pub(crate) enum LaunchKind {
     /// `extern:cublaslt_bf16_tn` / `..._acc` (beta 0.0 / 1.0); 6 args, or
     /// 7 with C's row stride.
     Gemm { beta: f32 },
+    /// `extern:cublaslt_bf16_tn_tile`: 8 args, the algorithm pinned by tile
+    /// id and split-K count.
+    GemmTile,
     /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
     GemmF32,
 }
@@ -172,6 +175,8 @@ enum LaunchImpl {
     GemmBf16Tn {
         beta: f32,
     },
+    /// The same GEMM with the cublasLt algorithm pinned (`extern:cublaslt_bf16_tn_tile`).
+    GemmBf16TnTile,
     /// cublasGemmEx with an f32 result (`extern:cublas_bf16_tn_f32`).
     GemmBf16TnF32,
 }
@@ -192,6 +197,7 @@ impl ResolvedOp {
             .map(|s| match s {
                 LaunchImpl::Cubin { module, .. } => module.clone(),
                 LaunchImpl::GemmBf16Tn { .. } => "runtime built-in (cublasLt)".into(),
+                LaunchImpl::GemmBf16TnTile => "runtime built-in (cublasLt, pinned tile)".into(),
                 LaunchImpl::GemmBf16TnF32 => "runtime built-in (cublasGemmEx, f32 out)".into(),
             })
             .collect()
@@ -238,6 +244,7 @@ pub(crate) fn resolve_ops(
                     match ext {
                         "cublaslt_bf16_tn" => launches.push(LaunchImpl::GemmBf16Tn { beta: 0.0 }),
                         "cublaslt_bf16_tn_acc" => launches.push(LaunchImpl::GemmBf16Tn { beta: 1.0 }),
+                        "cublaslt_bf16_tn_tile" => launches.push(LaunchImpl::GemmBf16TnTile),
                         "cublas_bf16_tn_f32" => launches.push(LaunchImpl::GemmBf16TnF32),
                         _ => bail!(Manifest, "op `{name}` launch #{li}: unsupported extern `{ext}`"),
                     }
@@ -442,6 +449,15 @@ fn compile_call(
             });
         }
         let kind = match imp {
+            LaunchImpl::GemmBf16TnTile => {
+                if touches_peer {
+                    bail!(Manifest, "launch #{li}: a peer buffer reaches the extern gemm; runtime built-ins never receive peer memory");
+                }
+                if slots.len() != 8 {
+                    bail!(Manifest, "launch #{li}: extern tiled gemm takes 8 args (a, w, c, m, n, k, tile, splitk), got {}", slots.len());
+                }
+                LaunchKind::GemmTile
+            }
             LaunchImpl::GemmBf16Tn { .. } | LaunchImpl::GemmBf16TnF32 => {
                 if touches_peer {
                     bail!(Manifest, "launch #{li}: a peer buffer reaches the extern gemm; runtime built-ins never receive peer memory");

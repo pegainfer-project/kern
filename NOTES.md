@@ -148,6 +148,18 @@ GDN slots per cut).
   CTA per SM, 24.8 µs; capped at 128 regs it spilled and was still slower
   than the smem version.
 
+8. **cuBLASLt tile pinned for gate_up and lm_head** (decode_batch only):
+   `extern:cublaslt_bf16_tn_tile` takes (tile, splitk) and picks that
+   algorithm from the heuristic list (fallback to the default when a shape
+   is not offered it, e.g. M ≠ 16; debug-logged). Harness at M = 16: every
+   splitk=1 candidate is bit-identical to the default; tile 312 is 54.3 µs
+   vs 56.8 for gate_up and 357.9 vs 364.7 for lm_head. Split-K candidates
+   differ in bits, so o_proj / down_proj / qkv keep their defaults. Pitfall
+   met: cudarc's `device_ptr(stream)` on a `CudaSlice` makes the stream wait
+   on the allocation's write event; inside a graph capture that invalidates
+   the capture and every later launch fails with EXECUTION_FAILED (the
+   harness replica of the same calls ran fine). Take the address once.
+
 ## State at the end of session 1 (commit 15f0f84)
 
 score 8283 → 7257 ms (step 18.49 → 16.19 ms, extend 72.4 → 67.8 ms), every

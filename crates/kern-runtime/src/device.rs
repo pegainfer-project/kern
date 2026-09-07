@@ -6,6 +6,7 @@ use std::os::raw::c_void;
 use std::sync::Arc;
 
 use cudarc::cublas;
+use cudarc::cublaslt::sys as lt;
 use cudarc::cublaslt::{CudaBlasLT, Matmul, MatmulConfig};
 use cudarc::driver::{sys, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice, SyncOnDrop};
 use half::bf16;
@@ -655,6 +656,164 @@ pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[R
             .map_err(|e| Error::Cuda(format!("cublasLt matmul (m={m} n={n} k={k}): {e:?}")))?;
     }
     Ok(())
+}
+
+/// `extern:cublaslt_bf16_tn_tile`: the plain bf16 GEMM (`C = A @ W^T`, args
+/// `[a, w, c, m, n, k, tile, splitk]`) with the cublasLt algorithm pinned by
+/// its tile id and split-K count instead of taken from the top of the
+/// heuristic list. Every non-split algorithm accumulates k in the same
+/// order, so a manifest can pick a faster tile for a shape without moving a
+/// bit of the result (a split count that differs from the default's does
+/// move it). The heuristic list is searched 32 deep for the pair; when the
+/// shape (another M, say) is not offered that algorithm the default one runs,
+/// as the plain extern would, and a debug log says so. Own handle and
+/// workspace, like `Blas`, so nothing is shared with the default path.
+pub(crate) struct BlasLtTile {
+    handle: lt::cublasLtHandle_t,
+    _workspace: CudaSlice<u8>,
+    /// The workspace's address, taken once: `device_ptr` per call would
+    /// make the stream wait on the allocation's event, which invalidates a
+    /// graph capture.
+    ws: sys::CUdeviceptr,
+}
+
+unsafe impl Send for BlasLtTile {}
+unsafe impl Sync for BlasLtTile {}
+
+impl BlasLtTile {
+    const WORKSPACE: usize = 32 << 20;
+
+    pub(crate) fn new(stream: &Arc<CudaStream>) -> Result<BlasLtTile> {
+        let mut handle = std::ptr::null_mut();
+        unsafe { lt::cublasLtCreate(&mut handle).result() }
+            .map_err(|e| Error::Cuda(format!("cublasLtCreate: {e:?}")))?;
+        let workspace: CudaSlice<u8> = stream.alloc_zeros(Self::WORKSPACE)?;
+        stream.synchronize()?;
+        let ws = { workspace.device_ptr(stream).0 };
+        Ok(BlasLtTile { handle, _workspace: workspace, ws })
+    }
+
+    pub(crate) fn gemm(&self, blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[RVal]) -> Result<()> {
+        use cudarc::cublaslt::MatmulShared;
+        let handle = *blt.handle();
+        let [a, w, c, m, n, k, tile, splitk] = args else {
+            bail!(Manifest, "tiled gemm expects 8 args (a, w, c, m, n, k, tile, splitk), got {}", args.len());
+        };
+        let (m, n, k) = (m.val, n.val, k.val);
+        let (tile, splitk) = (tile.val as i32, splitk.val as i32);
+        let e = |what: &str, e: cudarc::cublaslt::result::CublasError| Error::Cuda(format!("cublasLt {what}: {e:?}"));
+        unsafe {
+            // Column-major mapping as `gemm_bf16_tn`: W^T[n, k] x A[k, m] -> C[n, m].
+            let layout = |rows: u64, cols: u64, ld: u64| -> Result<lt::cublasLtMatrixLayout_t> {
+                let mut l = std::ptr::null_mut();
+                lt::cublasLtMatrixLayoutCreate(&mut l, lt::cudaDataType_t::CUDA_R_16BF, rows, cols, ld as i64)
+                    .result()
+                    .map_err(|x| e("layout", x))?;
+                Ok(l)
+            };
+            let (la, lb, lc) = (layout(k, n, k)?, layout(k, m, k)?, layout(n, m, n)?);
+            let mut desc = std::ptr::null_mut();
+            lt::cublasLtMatmulDescCreate(&mut desc, lt::cublasComputeType_t::CUBLAS_COMPUTE_32F, lt::cudaDataType_t::CUDA_R_32F)
+                .result()
+                .map_err(|x| e("desc", x))?;
+            let (ta, tb) = (cublas::sys::cublasOperation_t::CUBLAS_OP_T, cublas::sys::cublasOperation_t::CUBLAS_OP_N);
+            for (attr, v) in [
+                (lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSA, &ta),
+                (lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSB, &tb),
+            ] {
+                lt::cublasLtMatmulDescSetAttribute(desc, attr, v as *const _ as *const c_void, std::mem::size_of_val(v))
+                    .result()
+                    .map_err(|x| e("desc attribute", x))?;
+            }
+            let mut pref = std::ptr::null_mut();
+            lt::cublasLtMatmulPreferenceCreate(&mut pref).result().map_err(|x| e("preference", x))?;
+            let ws = Self::WORKSPACE;
+            lt::cublasLtMatmulPreferenceSetAttribute(
+                pref,
+                lt::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+                &ws as *const _ as *const c_void,
+                std::mem::size_of_val(&ws),
+            )
+            .result()
+            .map_err(|x| e("preference attribute", x))?;
+            const DEPTH: usize = 32;
+            let mut found: [lt::cublasLtMatmulHeuristicResult_t; DEPTH] = std::mem::zeroed();
+            let mut count = 0;
+            lt::cublasLtMatmulAlgoGetHeuristic(handle, desc, la, lb, lc, lc, pref, DEPTH as i32, found.as_mut_ptr(), &mut count)
+                .result()
+                .map_err(|x| e("heuristic", x))?;
+            let mut algo = None;
+            let mut picked = (0usize, 0usize);
+            for (i, h) in found.iter().enumerate().take(count as usize) {
+                if h.state != lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+                    continue;
+                }
+                let get = |attr| {
+                    let mut v: i32 = -1;
+                    let mut written = 0;
+                    lt::cublasLtMatmulAlgoConfigGetAttribute(&h.algo, attr, &mut v as *mut _ as *mut c_void, 4, &mut written);
+                    v
+                };
+                if get(lt::cublasLtMatmulAlgoConfigAttributes_t::CUBLASLT_ALGO_CONFIG_TILE_ID) == tile
+                    && get(lt::cublasLtMatmulAlgoConfigAttributes_t::CUBLASLT_ALGO_CONFIG_SPLITK_NUM) == splitk
+                {
+                    algo = Some(h.algo);
+                    picked = (i, h.workspaceSize);
+                    break;
+                }
+            }
+            if algo.is_none() && count > 0 {
+                tracing::debug!("tiled gemm m={m} n={n} k={k}: tile {tile} splitk {splitk} not offered, default algorithm runs");
+                algo = Some(found[0].algo);
+            }
+            let run = match algo {
+                Some(algo) => {
+                    let (alpha, beta) = (1.0f32, 0.0f32);
+                    let wp = self.ws;
+                    lt::cublasLtMatmul(
+                        handle,
+                        desc,
+                        &alpha as *const _ as *const c_void,
+                        w.val as *const c_void,
+                        la,
+                        a.val as *const c_void,
+                        lb,
+                        &beta as *const _ as *const c_void,
+                        c.val as *const c_void,
+                        lc,
+                        c.val as *mut c_void,
+                        lc,
+                        &algo,
+                        wp as *mut c_void,
+                        ws,
+                        stream.cu_stream() as *mut _,
+                    )
+                    .result()
+                    .map_err(|x| {
+                        Error::Cuda(format!(
+                            "cublasLt matmul tile {tile} splitk {splitk} (heuristic #{} of {count}, {} B workspace; m={m} n={n} k={k}): {x:?}",
+                            picked.0, picked.1
+                        ))
+                    })
+                }
+                None => Err(Error::Cuda(format!("cublasLt offers no algorithm for m={m} n={n} k={k}"))),
+            };
+            lt::cublasLtMatmulPreferenceDestroy(pref);
+            lt::cublasLtMatmulDescDestroy(desc);
+            lt::cublasLtMatrixLayoutDestroy(la);
+            lt::cublasLtMatrixLayoutDestroy(lb);
+            lt::cublasLtMatrixLayoutDestroy(lc);
+            run
+        }
+    }
+}
+
+impl Drop for BlasLtTile {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = lt::cublasLtDestroy(self.handle);
+        }
+    }
 }
 
 /// A cuBLAS handle bound to the runtime's stream with its own workspace, for
