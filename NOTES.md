@@ -263,10 +263,16 @@ gdn ~1.1, the rest ~0.6.
 - down_proj (64 × ~31 µs in-graph, cuBLAS, 13/17 chunks) is the last plain
   launch inside the layer and the biggest single GEMM cost (1.99 ms by
   ablation). Every handwritten form tried is slower (37 chunked, 34
-  persistent, 36.6 cluster); whole-tile is 53 (80 CTAs). A bit-identical
-  25 µs version would be worth 0.4 ms.
+  persistent, 36.6 cluster); whole-tile is 53 (80 CTAs); two CTAs per
+  n-tile in the persistent range walk (G = 160, one publish and one
+  reduce per n-tile) is 34.7 at 8 stages and 51 at 12+ (the 8 doubly
+  loaded SMs fall into a second wave). A bit-identical 25 µs version would
+  be worth 0.4 ms; every form tried is limited by bytes in flight per SM
+  against per-item fill and epilogue idle time, not by the reduce.
 - Remaining small fusions: sigmoid_mul into o_proj's A load (16 calls,
-  ~0.05 ms), gdn_conv + gdn_step (48 launches, ~0.1 ms).
+  ~0.05 ms). gdn_conv + gdn_step cannot fuse per (head, seq) CTA: a q/k
+  head's conv state is shared by three value heads, so the in-place shift
+  would race.
 - Attention splits re-swept under PDL at d25ab02: 12 → 15.208, 16 → 15.126,
   20 → 15.165, 24 → 15.227 ms. 16 stays.
 - Tried, no gain (session 2): a thread-block-cluster split-K (the CTAs of
