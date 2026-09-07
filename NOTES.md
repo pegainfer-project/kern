@@ -69,6 +69,17 @@ directions), so state-streaming kernels bottom out near there.
    13.0 → 2.3 µs; 1536 tokens 52 → 27 and 28 → 11. silu semantics (from
    the mined vLLM kernel): bf16(silu_f32(g)) then a bf16 multiply.
 
+## Hazards met
+
+- A rewritten elementwise kernel with a new thread→element mapping needs
+  its manifest grid changed in the same pass; the `repin` pass alone
+  re-pins the sha and keeps the old grid. That produced a manifest whose
+  sigmoid gate covered a third of each row (the first "m-norm" bench was
+  on it). Keep every kernel's grid next to its `hw()` in the converter.
+- `kernels-qwen38/` is gitignored (derived artifacts); handwritten cubins
+  are reproduced from source by `tools/build_kernels.sh` and pinned by sha,
+  so only the sources and the manifest are committed.
+
 ## Tools
 
 `tools/qwen38_fuse.py --passes gdn,repin,attn,elem` regenerates
@@ -80,8 +91,12 @@ Validation harnesses for each kernel against the pinned cubins live in
 they are not in the repo.
 
 `kern test` with defaults panics on this target ("position past the lease",
-`Caller::stage`); `--capacity 16384 --prefill 1000 --no-perf` runs but is
-CPU-bound for 10+ minutes.
+`Caller::stage`, from the prefill sweep past the 4096-token lease). Working
+invocation (71 s, after the attest fix that leases one sequence's slots):
+`kern test qwen3.8-27b --reference /tmp/an/ref.json --manifest <cand> --gpu 0
+--no-perf --capacity 4096 --prefill 300 --decode-steps 16 --no-sweep --fuzz 0`.
+Before the fix a run grew past 700 GB of host RSS (whole-state reads of 128
+GDN slots per cut).
 
 ## Tried, did not work
 

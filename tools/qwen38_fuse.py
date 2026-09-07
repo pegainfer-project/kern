@@ -89,6 +89,25 @@ def fuse_gdn(m):
     return m
 
 
+# Handwritten kernels rewritten since the capture (same entry, same ABI,
+# bit-exact with the pinned build: see the harness notes in NOTES.md).
+REWRITTEN = ["gemma_rms_norm"]
+def repin_handwritten(m):
+    """Point every launch of a rewritten module at the current build of
+    its source. The head norms (N = 256, ATen width <= 64) run 64-thread
+    blocks: the kernel idles threads past the row's chunks."""
+    for op in m["ops"].values():
+        for launch in op["impl"]["launches"]:
+            mod = m["modules"].get(launch.get("module"))
+            if mod and mod["source"].removesuffix(".cubin") in REWRITTEN:
+                launch.pop("module")
+                launch.update(handwritten.hw(mod["source"].removesuffix(".cubin")))
+    for name in ("gemma_norm_qhead", "gemma_norm_khead"):
+        if name in m["ops"]:
+            m["ops"][name]["impl"]["launches"][0]["block"] = [64, 1, 1]
+    return m
+
+
 def prune(m):
     """Drop ops, modules and workspace buffers no program refers to any more."""
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
@@ -100,7 +119,7 @@ def prune(m):
     return m
 
 
-PASSES = {"gdn": fuse_gdn}
+PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten}
 
 
 def main():

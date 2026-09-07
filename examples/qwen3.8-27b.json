@@ -5444,7 +5444,7 @@
   },
   "gemma_rms_norm": {
    "source": "gemma_rms_norm.cubin",
-   "sha256": "7267301ce33ab56665591e3718bd390d883d13de1d4d9308c59fd89cd83010d0"
+   "sha256": "881a2ae5dbc8526e658583ab3f71037b9cd377eb4401793d87423f07731df916"
   },
   "kkt": {
    "source": "kkt.cubin",
@@ -5633,7 +5633,7 @@
        "f32"
       ],
       "block": [
-       512,
+       64,
        1,
        1
       ],
@@ -5713,7 +5713,7 @@
        "f32"
       ],
       "block": [
-       512,
+       64,
        1,
        1
       ],
