@@ -713,17 +713,26 @@ impl BlasLtTile {
             };
             let (la, lb, lc) = (layout(k, n, k)?, layout(k, m, k)?, layout(n, m, n)?);
             let mut desc = std::ptr::null_mut();
-            lt::cublasLtMatmulDescCreate(&mut desc, lt::cublasComputeType_t::CUBLAS_COMPUTE_32F, lt::cudaDataType_t::CUDA_R_32F)
-                .result()
-                .map_err(|x| e("desc", x))?;
+            lt::cublasLtMatmulDescCreate(
+                &mut desc,
+                lt::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+                lt::cudaDataType_t::CUDA_R_32F,
+            )
+            .result()
+            .map_err(|x| e("desc", x))?;
             let (ta, tb) = (cublas::sys::cublasOperation_t::CUBLAS_OP_T, cublas::sys::cublasOperation_t::CUBLAS_OP_N);
             for (attr, v) in [
                 (lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSA, &ta),
                 (lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSB, &tb),
             ] {
-                lt::cublasLtMatmulDescSetAttribute(desc, attr, v as *const _ as *const c_void, std::mem::size_of_val(v))
-                    .result()
-                    .map_err(|x| e("desc attribute", x))?;
+                lt::cublasLtMatmulDescSetAttribute(
+                    desc,
+                    attr,
+                    v as *const _ as *const c_void,
+                    std::mem::size_of_val(v),
+                )
+                .result()
+                .map_err(|x| e("desc attribute", x))?;
             }
             let mut pref = std::ptr::null_mut();
             lt::cublasLtMatmulPreferenceCreate(&mut pref).result().map_err(|x| e("preference", x))?;
@@ -739,9 +748,20 @@ impl BlasLtTile {
             const DEPTH: usize = 32;
             let mut found: [lt::cublasLtMatmulHeuristicResult_t; DEPTH] = std::mem::zeroed();
             let mut count = 0;
-            lt::cublasLtMatmulAlgoGetHeuristic(handle, desc, la, lb, lc, lc, pref, DEPTH as i32, found.as_mut_ptr(), &mut count)
-                .result()
-                .map_err(|x| e("heuristic", x))?;
+            lt::cublasLtMatmulAlgoGetHeuristic(
+                handle,
+                desc,
+                la,
+                lb,
+                lc,
+                lc,
+                pref,
+                DEPTH as i32,
+                found.as_mut_ptr(),
+                &mut count,
+            )
+            .result()
+            .map_err(|x| e("heuristic", x))?;
             let mut algo = None;
             let mut picked = (0usize, 0usize);
             for (i, h) in found.iter().enumerate().take(count as usize) {
@@ -751,7 +771,13 @@ impl BlasLtTile {
                 let get = |attr| {
                     let mut v: i32 = -1;
                     let mut written = 0;
-                    lt::cublasLtMatmulAlgoConfigGetAttribute(&h.algo, attr, &mut v as *mut _ as *mut c_void, 4, &mut written);
+                    lt::cublasLtMatmulAlgoConfigGetAttribute(
+                        &h.algo,
+                        attr,
+                        &mut v as *mut _ as *mut c_void,
+                        4,
+                        &mut written,
+                    );
                     v
                 };
                 if get(lt::cublasLtMatmulAlgoConfigAttributes_t::CUBLASLT_ALGO_CONFIG_TILE_ID) == tile
@@ -763,7 +789,9 @@ impl BlasLtTile {
                 }
             }
             if algo.is_none() && count > 0 {
-                tracing::debug!("tiled gemm m={m} n={n} k={k}: tile {tile} splitk {splitk} not offered, default algorithm runs");
+                tracing::debug!(
+                    "tiled gemm m={m} n={n} k={k}: tile {tile} splitk {splitk} not offered, default algorithm runs"
+                );
                 algo = Some(found[0].algo);
             }
             let run = match algo {

@@ -454,7 +454,11 @@ fn compile_call(
                     bail!(Manifest, "launch #{li}: a peer buffer reaches the extern gemm; runtime built-ins never receive peer memory");
                 }
                 if slots.len() != 8 {
-                    bail!(Manifest, "launch #{li}: extern tiled gemm takes 8 args (a, w, c, m, n, k, tile, splitk), got {}", slots.len());
+                    bail!(
+                        Manifest,
+                        "launch #{li}: extern tiled gemm takes 8 args (a, w, c, m, n, k, tile, splitk), got {}",
+                        slots.len()
+                    );
                 }
                 LaunchKind::GemmTile
             }
