@@ -3,7 +3,7 @@
 score = T_prefill(1536 new on 32k) + 444 × T_decode_batch(16 seqs at 32k).
 Baseline at 29dbc9c: extend 72.4 ms, step 18.49 ms, score 8283 (my rerun;
 the task sheet says 8261). The step is 99% of the score; extend is noise.
-Session 1 ended at 7203 (982e596); session 2 is at 6885 (3c7ec92).
+Session 1 ended at 7203 (982e596); session 2 is at 6784 (d25ab02).
 
 Measure: `target/release/kern bench qwen3.8-27b --gpu 0 --program-only
 --workload /work/exp/workload.json --out /work/exp/results/<name>.json`
@@ -246,15 +246,27 @@ gdn ~1.1, the rest ~0.6.
     exited), so an early trigger in a multi-wave kernel cannot starve the
     primary of SM slots.
 
+12. **gate_up + silu_mul fused** (2f7da28): 256-thread CTA, gate warps and
+    up warps, up rounded to bf16 through smem, silu_mul's exact ops on the
+    GEMM's own bf16 output. Standalone 54.2 vs 59.6 µs for the pair; in the
+    step only 15.355 → 15.334 (PDL had hidden most of the silu launch).
+13. **in_proj_qkvz + in_proj_ba one launch, qkv whole-tile** (d25ab02): the
+    GEMM body owns a chunk range; with grid.y = 1 a CTA folds every chunk of
+    its n-tile into the ascending running sum in registers (no workspace).
+    qkv runs so (25.6 vs 26.5 µs). The dual entry streams the 96-row ba
+    weight (32-row tiles, `layout {"tile": [32, 64]}`) as two extra CTAs
+    running its 5 chunks in place. Step 15.334 → 15.126, score 6783.9.
+    Bit-identical at every cut (9701).
+
 ## Next
 
-- down_proj (64 × ~33 µs, cuBLAS, 13/17 splits) is the last big plain
-  launch inside the layer: neither it nor the norm after it can start
-  early. On the tiled kernel it is 37.3 vs 33.3 µs standalone but gets the
-  PDL prefetch under silu_mul; variants /tmp/bn/down{6,8}.json.
-- in_proj_ba (48 × ~6 µs, N = 96, cuBLAS 5 splits at M = 1 and 16) is the
-  other plain launch; N is not a multiple of 64, so the tiled kernel would
-  need a padded last tile (layout semantics) or a 32-row tile variant.
+- down_proj (64 × ~31 µs in-graph, cuBLAS, 13/17 chunks) is the last plain
+  launch inside the layer and the biggest single GEMM cost (1.99 ms by
+  ablation). Every handwritten form tried is slower (37 chunked, 34
+  persistent, 36.6 cluster); whole-tile is 53 (80 CTAs). A bit-identical
+  25 µs version would be worth 0.4 ms.
+- Remaining small fusions: sigmoid_mul into o_proj's A load (16 calls,
+  ~0.05 ms), gdn_conv + gdn_step (48 launches, ~0.1 ms).
 - Tried, no gain (session 2): a thread-block-cluster split-K (the CTAs of
   one n-tile in a cluster along grid.y, rank 0 holding the ascending
   running sum, the others single partials in smem, rank 0 reducing over
