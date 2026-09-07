@@ -91,6 +91,10 @@ extern "C" __global__ void kern_gdn_conv_bf16(
     __nv_bfloat16* __restrict__ qkvz, const __nv_bfloat16* __restrict__ w,
     __nv_bfloat16* __restrict__ state, const int* __restrict__ line,
     int dim, int row_stride, long long line_stride_bytes) {
+  // Programmatic dependent launch: wait for the previous kernel's writes
+  // before touching anything, then let the next launch stage itself.
+  asm volatile("griddepcontrol.wait;" ::: "memory");
+  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
   const int n = blockIdx.x;
   const int c = blockIdx.y * blockDim.x + threadIdx.x;
   if (c >= dim) return;
@@ -170,6 +174,10 @@ extern "C" __global__ void __launch_bounds__(NT, 3) kern_gdn_step_bf16(
     const __nv_bfloat16* __restrict__ norm_w, __nv_bfloat16* __restrict__ out,
     float* __restrict__ state, const int* __restrict__ line, float scale,
     float eps, int row_stride, int ba_stride, long long line_stride_bytes) {
+  // Programmatic dependent launch: wait for the previous kernel's writes
+  // before touching anything, then let the next launch stage itself.
+  asm volatile("griddepcontrol.wait;" ::: "memory");
+  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
   extern __shared__ __align__(128) float tile[];  // [V][K]
   __shared__ float so[GDN_V];
   __shared__ __align__(8) unsigned long long mbar[NCHUNK];

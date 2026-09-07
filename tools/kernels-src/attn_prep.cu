@@ -157,6 +157,13 @@ extern "C" __global__ void __launch_bounds__(NW * 32) kern_attn_prep_bf16(
     __nv_bfloat16* __restrict__ v_cache, const long long* __restrict__ slot_mapping,
     int tokens, float eps, int qkv_stride, long long block_stride, long long page_stride,
     long long head_stride) {
+    // Programmatic dependent launch: everything before this line may run
+    // while the previous kernel is still finishing; nothing produced by it
+    // is read or overwritten until the wait returns. The trigger right after
+    // lets the next launch start its own prologue (a GEMM's weight stream).
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+
   const int t = blockIdx.x, lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
   const __nv_bfloat16* row = qkv + (long long)t * qkv_stride;
   const __nv_bfloat16* cos_t = cos_g + t * (RD / 2);

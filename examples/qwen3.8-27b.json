@@ -8486,7 +8486,7 @@
   },
   "attn_prep": {
    "source": "attn_prep.cubin",
-   "sha256": "5c13c65d7531248e4a812661c5b21451e023ed525b06a4d3d9389d13cc84ddc7"
+   "sha256": "e236907223f25b7ea932006111512537f3d279992960b05ae4d469bc7234e0bc"
   },
   "chunk_h": {
    "source": "chunk_h.cubin",
@@ -8522,15 +8522,15 @@
   },
   "gdn_decode": {
    "source": "gdn_decode.cubin",
-   "sha256": "baa9f7acf2bf5ef3cf1314e9a19e32963e1d5fabffcec48f80a9a67002e64003"
+   "sha256": "1b6df2741965395d1e120c0af12e6c29fddfb26079fa2bd783c20f4b332c54ae"
   },
   "gemm16_tiled": {
    "source": "gemm16_tiled.cubin",
-   "sha256": "aa744a705bc35bb64bc007ced12f3b8995487de0f0e7e6dd547c62055e673532"
+   "sha256": "e45833bb2866ec583913effb4123dfaf1a538c9cefb764567a7bee43cced4bba"
   },
   "gemma_rms_norm": {
    "source": "gemma_rms_norm.cubin",
-   "sha256": "881a2ae5dbc8526e658583ab3f71037b9cd377eb4401793d87423f07731df916"
+   "sha256": "92dda85393585c4cf61f05b425e1aa5a6f85204bde3bb2df1b5631d4dde6111f"
   },
   "kkt": {
    "source": "kkt.cubin",
@@ -8554,11 +8554,11 @@
   },
   "sigmoid_mul": {
    "source": "sigmoid_mul.cubin",
-   "sha256": "e15928a758a714bae2c447969a5d989f20382121474fb0fe23046e289ec3ddd9"
+   "sha256": "2b0745de4fc623437cce41fee177d7980239326796dca33d4faa7046f6f10ffa"
   },
   "silu_mul": {
    "source": "silu_mul.cubin",
-   "sha256": "1ccde8251074745b0c6dc7af1de243ca66f9e3dd8309dd6069b6f265739a2764"
+   "sha256": "0127f82a3f4ce347c586a9427f7dd47548ef32e907e57ba21274856cd23cd917"
   },
   "solve_tril": {
    "source": "solve_tril.cubin",
@@ -8646,6 +8646,7 @@
        1
       ],
       "shared_mem": 43008,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -8720,6 +8721,7 @@
        1
       ],
       "shared_mem": 43008,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -8778,6 +8780,7 @@
        9,
        1
       ],
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -8920,6 +8923,7 @@
        3,
        1
       ],
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -10260,6 +10264,7 @@
        "seqs"
       ],
       "shared_mem": 144992,
+      "pdl": true,
       "args": [
        {
         "pack": {
@@ -10924,6 +10929,7 @@
        40,
        1
       ],
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -10993,6 +10999,7 @@
        1
       ],
       "shared_mem": 65536,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11085,6 +11092,7 @@
        1,
        1
       ],
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11189,6 +11197,7 @@
        1
       ],
       "shared_mem": 82944,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11275,6 +11284,7 @@
        1
       ],
       "shared_mem": 62464,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11361,6 +11371,7 @@
        1
       ],
       "shared_mem": 62464,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11447,6 +11458,7 @@
        1
       ],
       "shared_mem": 62464,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11533,6 +11545,7 @@
        1
       ],
       "shared_mem": 82944,
+      "pdl": true,
       "args": [
        {
         "param": 0
@@ -11619,6 +11632,7 @@
        1
       ],
       "shared_mem": 62464,
+      "pdl": true,
       "args": [
        {
         "param": 0

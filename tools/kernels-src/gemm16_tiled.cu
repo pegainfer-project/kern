@@ -68,14 +68,17 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
     const int nt = blockIdx.x, sp = blockIdx.y;
     if (sp >= splits) return;
     const int k0 = sp * kc, k1 = min(K, k0 + kc), kt0 = k0 / BK, ktn = (k1 - k0) / BK;
-    auto load = [&](int i, int slot) {
-        const uint32_t sw = sbase + slot * STAGE_BYTES, sa = sw + TILE_BYTES;
+    auto load_w = [&](int i, int slot) {
+        const uint32_t sw = sbase + slot * STAGE_BYTES;
         const bf16* wt = W + ((size_t)nt * KT + kt0 + i) * BN * BK;
 #pragma unroll
         for (int c = 0; c < 4; c++) {
             const int q = tid + c * NT;
             cp16(sw + q * 16, wt + q * 8);
         }
+    };
+    auto load_a = [&](int i, int slot) {
+        const uint32_t sa = sbase + slot * STAGE_BYTES + TILE_BYTES;
         const int row = tid >> 3, ch = tid & 7;
         cp16(sa + row * 128 + ((ch ^ (row & 7)) << 4), A + (size_t)row * K + (kt0 + i) * BK + ch * 8);
     };
@@ -83,9 +86,22 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
 #pragma unroll
     for (int j = 0; j < 2; j++)
         for (int i = 0; i < 4; i++) acc[j][i] = 0.f;
+    // Programmatic dependent launch: the weights depend on no earlier
+    // kernel, so the first stages' tiles are in flight before the wait;
+    // A (the previous kernel's output) is fetched only after it. The
+    // trigger lets the next launch stage itself while this one streams.
+    // Groups: W0..W_{S-2}, then A0..A_{S-2}, then one W+A group per stage
+    // of the loop, so before stage i at most S-2 groups may be pending.
 #pragma unroll
     for (int s = 0; s < STAGES - 1; s++) {
-        if (s < ktn) load(s, s);
+        if (s < ktn) load_w(s, s);
+        commit();
+    }
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+#pragma unroll
+    for (int s = 0; s < STAGES - 1; s++) {
+        if (s < ktn) load_a(s, s);
         commit();
     }
     for (int i = 0; i < ktn; i++) {
@@ -93,7 +109,10 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
         __syncthreads();
         {
             const int nk = i + STAGES - 1;
-            if (nk < ktn) load(nk, nk % STAGES);
+            if (nk < ktn) {
+                load_w(nk, nk % STAGES);
+                load_a(nk, nk % STAGES);
+            }
             commit();
         }
         const int slot = i % STAGES;

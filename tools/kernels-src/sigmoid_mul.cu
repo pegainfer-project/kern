@@ -15,6 +15,13 @@ extern "C" __global__ void kern_sigmoid_mul_bf16(
     __nv_bfloat16* __restrict__ out, const __nv_bfloat16* __restrict__ attn,
     const __nv_bfloat16* __restrict__ gate, int heads, int head_dim,
     int gate_tstride, int gate_hstride) {
+    // Programmatic dependent launch: everything before this line may run
+    // while the previous kernel is still finishing; nothing produced by it
+    // is read or overwritten until the wait returns. The trigger right after
+    // lets the next launch start its own prologue (a GEMM's weight stream).
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+
   const long long t = blockIdx.x;
   const int n = heads * head_dim;
   const int j = (blockIdx.y * blockDim.x + threadIdx.x) * 8;

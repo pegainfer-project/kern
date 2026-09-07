@@ -181,6 +181,13 @@ extern "C" __global__ void kern_gemma_rms_norm_bf16(
     __nv_bfloat16* __restrict__ out, const __nv_bfloat16* __restrict__ in,
     const float* __restrict__ w1, int N, int rows, int heads, int in_tstride,
     int in_hstride, int out_tstride, int out_hstride, float eps) {
+    // Programmatic dependent launch: everything before this line may run
+    // while the previous kernel is still finishing; nothing produced by it
+    // is read or overwritten until the wait returns. The trigger right after
+    // lets the next launch start its own prologue (a GEMM's weight stream).
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+
   extern __shared__ float smem[];
   const int row = blockIdx.x;
   const int tok = row / heads, head = row % heads;
@@ -196,6 +203,13 @@ extern "C" __global__ void kern_gemma_fused_add_rms_norm_bf16(
     __nv_bfloat16* __restrict__ out, const __nv_bfloat16* __restrict__ in,
     __nv_bfloat16* __restrict__ res, const float* __restrict__ w1, int N,
     int rows, int in_tstride, int out_tstride, float eps) {
+    // Programmatic dependent launch: everything before this line may run
+    // while the previous kernel is still finishing; nothing produced by it
+    // is read or overwritten until the wait returns. The trigger right after
+    // lets the next launch start its own prologue (a GEMM's weight stream).
+    asm volatile("griddepcontrol.wait;" ::: "memory");
+    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+
   extern __shared__ float smem[];
   const int row = blockIdx.x;
   gemma_norm_row<true>(out + (long long)row * out_tstride,

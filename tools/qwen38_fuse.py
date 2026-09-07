@@ -279,6 +279,27 @@ def gemm_tiled(m):
     return m
 
 
+# Every launch of these ops executes griddepcontrol.wait before touching
+# what the previous launch produced (the handwritten sources, and the
+# TRTLLM-GEN decode kernel, whose SASS has ACQBULK + PREEXIT), so the
+# runtime may launch them programmatically early: the GEMMs stream their
+# first weight tiles under the previous kernel's tail, the small kernels
+# skip the launch gap. cuBLAS externs and the captured embedding / argmax
+# stay plain launches.
+PDL_OPS = ("gemma_norm", "gemma_fused_norm", "silu_mul", "sigmoid_mul", "gdn_conv", "gdn_step", "attn_prep",
+           "attn_batch")
+
+
+def pdl(m):
+    """Mark the launches that wait for their predecessor themselves."""
+    for name, op in m["ops"].items():
+        if name in PDL_OPS or name.startswith("gemm_tiled"):
+            for launch in op["impl"]["launches"]:
+                assert "module" in launch or "cubin" in launch, (name, launch)
+                launch["pdl"] = True
+    return m
+
+
 def prune(m):
     """Drop ops, modules and workspace buffers no program refers to any more."""
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
@@ -291,7 +312,7 @@ def prune(m):
 
 
 PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits,
-          "tiles": gemm_tiles, "tiled": gemm_tiled}
+          "tiles": gemm_tiles, "tiled": gemm_tiled, "pdl": pdl}
 
 
 def main():
