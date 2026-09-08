@@ -1,0 +1,22 @@
+{
+  "source": "qwen38_cache_p64.cubin",
+  "sha256": "20cdb5819506490f42f51a8d440bbb79876d3bc7d59ea345bc3aff762e9dd58e",
+  "entry": "reshape_and_cache_kernel_flash",
+  "upstream": "vllm/v1/attention/ops/triton_reshape_and_cache_flash.py",
+  "license": "Apache-2.0",
+  "versions": {
+    "vllm": "0.28.0",
+    "torch": "2.13.0",
+    "triton": "3.7.1"
+  },
+  "disable_line_info": true,
+  "specialization": {
+    "page_size": 64,
+    "num_heads": 4,
+    "head_dim": 256,
+    "layers": 16,
+    "num_warps": 16,
+    "num_stages": 10,
+    "tile_size": 1024
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "samples": 12,
+  "seed": 7,
+  "scenarios": [
+    {"id":"step-b1-l2048","kind":"step","batch":1,"query":1,"context":[2048]},
+    {"id":"step-b1-l8192","kind":"step","batch":1,"query":1,"context":[8192]},
+    {"id":"step-b1-l32768","kind":"step","batch":1,"query":1,"context":[32768]},
+    {"id":"step-b4-l16384","kind":"step","batch":4,"query":1,"context":[16384]},
+    {"id":"extend-q1024-l16384","kind":"prompt","batch":1,"query":1024,"context":[16384]}
+  ]
+}
