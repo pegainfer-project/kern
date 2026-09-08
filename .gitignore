@@ -12,6 +12,8 @@ tools/kernel-capture/libkernelcapture.so
 /kernels-qwen38-dflash2
 /crates/kern-serve/target
 /crates/kern-serve/target-lab*
+/docs/node_modules
+/docs/.vitepress/cache
 # K3 kernel harness: built binary, cubins and sweep log are derived; agents' scratch dirs are not deliverables
 /tools/k3-harness/harness
 /tools/k3-harness/run_all.log

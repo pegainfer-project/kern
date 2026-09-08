@@ -46,6 +46,7 @@ function Header() {
         <a href="#loop">LOOP</a>
         <a href="#evidence">EVIDENCE</a>
         <a href="#proof">PROOF</a>
+        <a href="/docs/">DOCS</a>
         <a href="/schema/">SCHEMA</a>
         <a href="/perf/">PERF</a>
         <a href="/qwen38/">+49</a>
@@ -682,6 +683,7 @@ function Footer() {
       </div>
       <div className="footer-links">
         <a href="https://github.com/pegainfer-project/kern" target="_blank" rel="noreferrer">SOURCE ↗</a>
+        <a href="/docs/">DOCS →</a>
         <a href="/schema/">SCHEMA →</a>
         <a href="#top">BACK TO TOP ↑</a>
       </div>

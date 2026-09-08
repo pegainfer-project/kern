@@ -5,6 +5,11 @@ on:
     branches: [master]
     paths:
       - "website/**"
+      - "docs/.vitepress/**"
+      - "docs/site/**"
+      - "docs/README.md"
+      - "docs/package.json"
+      - "docs/package-lock.json"
       - "schema/**"
       - "examples/minimal.json"
       - ".github/workflows/deploy-website.yml"
@@ -31,10 +36,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: |
+            website/package-lock.json
+            docs/package-lock.json
 
-      - name: Install dependencies
+      - name: Install website dependencies
         run: npm ci
+
+      - name: Install documentation dependencies
+        run: npm --prefix ../docs ci
 
       - name: Build
         run: npm run build

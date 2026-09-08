@@ -23,6 +23,12 @@ npm run preview
 
 The production output is written to `dist/`.
 
+The formal documentation is a VitePress site sourced from `../docs/site/`.
+It is built into `dist/docs/` as part of `npm run build`; other files under
+`../docs/` are engineering records and are not published. Install its
+dependencies once with `npm --prefix ../docs ci`, then run the docs alone with
+`npm run docs:dev`.
+
 ## Performance explorer
 
 The measured single-GPU explorer lives at `/perf/`. It loads portable evidence
@@ -47,10 +53,10 @@ npm run build
 wrangler pages deploy dist --project-name kern --branch master
 ```
 
-Pushes to `master` that change `website/**` deploy through
-`.github/workflows/deploy-website.yml`. The workflow accepts either the
-`CLOUDFLARE_API_TOKEN` or `CF_API_TOKEN` Actions secret and reads the Cloudflare
-account ID from the `CLOUDFLARE_ACCOUNT_ID` Actions variable.
+Pushes to `master` that change the website, public documentation, or schema
+deploy through `.github/workflows/deploy-website.yml`. The workflow accepts
+either the `CLOUDFLARE_API_TOKEN` or `CF_API_TOKEN` Actions secret and reads the
+Cloudflare account ID from the `CLOUDFLARE_ACCOUNT_ID` Actions variable.
 
 The site can also deploy directly from this repository without a Worker or a
 local Wrangler installation. Connect the repository in the Cloudflare
@@ -60,9 +66,9 @@ dashboard with these settings:
 | --- | --- |
 | Repository | `pegainfer-project/kern` |
 | Production branch | `master` |
-| Root directory | `website` |
-| Build command | `npm run build` |
-| Build output directory | `dist` |
+| Root directory | repository root |
+| Build command | `npm --prefix docs ci && npm --prefix website ci && npm --prefix website run build` |
+| Build output directory | `website/dist` |
 
 In the Cloudflare dashboard, create a Pages application, import the GitHub
 repository, and enter the settings above. Pages will build from `website/` and

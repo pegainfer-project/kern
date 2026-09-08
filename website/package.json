@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && node ../tools/profile_standalone.mjs --out dist/perf/offline.html",
-    "preview": "vite preview"
+    "build": "tsc -b && vite build && ../docs/node_modules/.bin/vitepress build ../docs && node ../tools/profile_standalone.mjs --out dist/perf/offline.html",
+    "preview": "vite preview",
+    "docs:dev": "../docs/node_modules/.bin/vitepress dev ../docs",
+    "docs:build": "../docs/node_modules/.bin/vitepress build ../docs",
+    "docs:preview": "../docs/node_modules/.bin/vitepress preview ../docs"
   },
   "dependencies": {
     "react": "^19.1.1",
