@@ -44,7 +44,8 @@ asked=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 install -m 0755 "$bin" "$stage/kern"
+install -m 0644 "$root/LICENSE" "$stage/LICENSE"
 mkdir -p "$out"
-tar -C "$stage" -czf "$out/$asset.tar.gz" kern
+tar -C "$stage" -czf "$out/$asset.tar.gz" kern LICENSE
 (cd "$out" && sha256sum "$asset.tar.gz" >"$asset.tar.gz.sha256")
 echo "$out/$asset.tar.gz"
