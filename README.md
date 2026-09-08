@@ -79,6 +79,19 @@ The loop runs unattended. The engine goes back to being an engine.
 ## Try it
 
 ```bash
+curl -fsSL https://kern-baa.pages.dev/install.sh | sh   # Linux x86_64 / aarch64, one binary
+kern --version                                          # kern 0.1.0 (<commit>, cuda 13.0)
+```
+
+The binary links no CUDA library; it dlopens the driver and cuBLAS at
+first use, so it needs an NVIDIA driver for CUDA 13 (r580+) and cuBLAS 13
+on the loader path, nothing else. `KERN_VERSION=v0.1.0` pins a release,
+`KERN_INSTALL_DIR` picks the directory (default `~/.local/bin`). How a
+release is cut and gated: [docs/release.md](docs/release.md).
+
+Or from source:
+
+```bash
 cargo build --release
 
 # kern.toml at the repo root names the fixture target (manifest, reference,
@@ -116,7 +129,7 @@ golden-checked in CI:
 | `crates/kern-runtime` | The executor: fetch, verify, replay, CUDA graphs |
 | `crates/kern-run` | `kern run` (generation) and `kern test` (A/B evidence) over the example manifests |
 | `examples/` | Generated manifests — the artifact a provider ships (`*-silu-mined.json` is the attest fixture) |
-| `docs/` | [design](docs/design.md) · [manifest](docs/manifest.md) · [kernel mining](docs/kernel-mining.md) · [runtime](docs/runtime.md) · [attest](docs/attest.md) · [spec decode](docs/spec-decode.md) · [roadmap](docs/roadmap.md) |
+| `docs/` | [design](docs/design.md) · [manifest](docs/manifest.md) · [kernel mining](docs/kernel-mining.md) · [runtime](docs/runtime.md) · [attest](docs/attest.md) · [spec decode](docs/spec-decode.md) · [roadmap](docs/roadmap.md) · [release](docs/release.md) |
 
 **Website:** [kern-baa.pages.dev](https://kern-baa.pages.dev/)
 
