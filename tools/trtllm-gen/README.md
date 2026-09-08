@@ -87,5 +87,11 @@ I/O, projections, GDN, KV append and model serving.
 - [FlashInfer prefill API](https://docs.flashinfer.ai/generated/flashinfer.prefill.trtllm_batch_context_with_kv_cache.html)
 - [vLLM KV append source](https://github.com/vllm-project/vllm/blob/main/vllm/v1/attention/ops/triton_reshape_and_cache_flash.py)
 
-NVIDIA artifacts are fetched from upstream and remain subject to upstream
-terms. This recipe does not grant rights to those artifacts.
+The NVIDIA cubins are published under Apache-2.0: the artifactory
+directory they are fetched from (`…/158f6fa1…/fmha/trtllm-gen/`) carries a
+`LICENSE` file with the Apache-2.0 text, TensorRT-LLM (Apache-2.0) checks the
+same kernels into `cpp/tensorrt_llm/kernels/trtllmGenKernels/fmha/cubin/`, and
+FlashInfer redistributes them on PyPI as `flashinfer-cubin` under Apache-2.0
+(checked 2026-09-08). They are therefore hosted in the kern registry
+alongside the other modules, with that license file; `--download` remains the
+way to fetch them straight from NVIDIA and verify the pinned sha256.
