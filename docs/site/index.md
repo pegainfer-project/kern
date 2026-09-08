@@ -31,7 +31,7 @@ A deployable model has three parts:
 ```text
 manifest.json     typed buffers, state, programs, and serving protocol
 kernels/          compiled device modules pinned by digest
-weights           tensors bound by name
+weights           the model's own checkpoint; the manifest says which tensor lands where
 ```
 
 The runtime refuses an invalid manifest before using it. When it loads an

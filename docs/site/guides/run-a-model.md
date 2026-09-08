@@ -15,7 +15,7 @@ gpu = 0
 [targets.demo]
 manifest = "artifacts/demo/manifest.json"
 kernels = "artifacts/demo/kernels"
-weights = ["artifacts/demo/model.safetensors"]
+weights = ["artifacts/demo/checkpoint"]   # HF snapshot dir(s) or .safetensors files
 tokenizer = "artifacts/demo/tokenizer.json"
 
 [run]

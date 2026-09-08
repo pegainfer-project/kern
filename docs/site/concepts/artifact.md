@@ -19,9 +19,13 @@ so changing the bytes changes the artifact identity.
 
 ### Weights
 
-Weight buffers bind tensors by name from one or more Safetensors files. Their
-locations belong in local configuration or command-line flags, not in the
-portable manifest.
+Weights are the model's own checkpoint: a Hugging Face snapshot directory or
+a set of Safetensors files, unmodified. Each weight buffer's `bind` lists the
+checkpoint tensors (or row / column rectangles of them) that fill it end to
+end, so fused projections are declared, not exported. Tables no checkpoint
+holds (rope caches, norm offsets) are `carry` buffers a `once` program
+computes after load. Where the checkpoint lives belongs in local
+configuration or command-line flags, not in the portable manifest.
 
 ## What belongs where
 

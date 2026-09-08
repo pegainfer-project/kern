@@ -10,7 +10,7 @@ after changing a kernel implementation or its manifest wiring.
 reference = "artifacts/reference/manifest.json"
 manifest = "artifacts/candidate/manifest.json"
 kernels = "artifacts/kernels"
-weights = ["artifacts/model.safetensors"]
+weights = ["artifacts/checkpoint"]   # HF snapshot dir(s) or .safetensors files
 
 [test]
 seed = 0x5eed

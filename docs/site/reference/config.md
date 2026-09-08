@@ -16,7 +16,7 @@ capacity = 4096
 manifest = "artifacts/candidate/manifest.json"
 reference = "artifacts/reference/manifest.json"
 kernels = "artifacts/kernels"
-weights = ["artifacts/model.safetensors"]
+weights = ["artifacts/checkpoint"]   # HF snapshot dir(s) or .safetensors files
 tokenizer = "artifacts/tokenizer.json"
 
 [kernels]
