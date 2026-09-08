@@ -42,15 +42,21 @@ shards supply the tokenizer and the stop tokens.
 
 ## Serve
 
+Start the server on one GPU:
+
 ```sh
 kern-serve qwen3.8-27b --model-path <your_qwen38_checkpoint_path> --gpus 0 --port 8000
 ```
+
+Then, from another shell, a completion:
 
 ```sh
 curl -s http://localhost:8000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "qwen3.8-27b", "prompt": "The capital of France is", "max_tokens": 32}'
 ```
+
+A chat turn, answered directly (Qwen3.8 thinks first unless told not to):
 
 ```sh
 curl -s http://localhost:8000/v1/chat/completions \
@@ -59,6 +65,8 @@ curl -s http://localhost:8000/v1/chat/completions \
        "max_tokens": 64, "chat_template_kwargs": {"enable_thinking": false}}'
 ```
 
+The same, streamed:
+
 ```sh
 curl -N http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -66,9 +74,8 @@ curl -N http://localhost:8000/v1/chat/completions \
        "max_tokens": 64, "stream": true}'
 ```
 
-Qwen3.8 thinks by default; its reasoning streams as `reasoning` deltas and
-the answer as `content`. `enable_thinking: false` skips straight to the
-answer. `/v1/models` lists what is served, `/metrics` is Prometheus.
+With thinking on, the reasoning arrives as `reasoning` deltas and the answer
+as `content`. `/v1/models` lists what is served, `/metrics` is Prometheus.
 
 `--model-path` is the checkpoint directory again, read by the front end for
 the chat template. `--gpus 0,1,2,3` drives several GPUs in lockstep when the
