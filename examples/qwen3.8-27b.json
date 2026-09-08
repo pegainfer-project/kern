@@ -5389,3862 +5389,6 @@
     6144
    ],
    "kind": "weight"
-  },
-  "model.layers.3.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.3.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.7.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.7.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.11.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.11.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.15.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.15.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.19.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.19.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.23.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.23.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.27.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.27.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.31.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.31.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.35.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.35.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.39.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.39.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.43.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.43.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.47.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.47.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.51.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.51.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.55.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.55.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.59.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.59.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.63.self_attn.qkv_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    14336,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.63.self_attn.qkv_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.0.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.0.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.1.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.1.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.2.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.2.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.4.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.4.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.5.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.5.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.6.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.6.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.8.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.8.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.9.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.9.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.10.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.10.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.12.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.12.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.13.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.13.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.14.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.14.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.16.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.16.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.17.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.17.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.18.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.18.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.20.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.20.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.21.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.21.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.22.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.22.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.24.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.24.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.25.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.25.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.26.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.26.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.28.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.28.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.29.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.29.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.30.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.30.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.32.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.32.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.33.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.33.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.34.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.34.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.36.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.36.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.37.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.37.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.38.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.38.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.40.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.40.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.41.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.41.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.42.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.42.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.44.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.44.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.45.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.45.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.46.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.46.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.48.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.48.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.49.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.49.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.50.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.50.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.52.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.52.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.53.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.53.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.54.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.54.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.56.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.56.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.57.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.57.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.58.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.58.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.60.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.60.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.61.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.61.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.62.linear_attn.out_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.62.linear_attn.out_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.3.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.3.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.7.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.7.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.11.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.11.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.15.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.15.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.19.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.19.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.23.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.23.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.27.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.27.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.31.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.31.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.35.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.35.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.39.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.39.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.43.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.43.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.47.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.47.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.51.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.51.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.55.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.55.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.59.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.59.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.63.self_attn.o_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    5120,
-    6144
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.63.self_attn.o_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.0.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.0.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.1.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.1.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.2.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.2.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.3.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.3.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.4.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.4.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.5.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.5.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.6.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.6.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.7.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.7.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.8.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.8.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.9.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.9.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.10.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.10.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.11.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.11.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.12.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.12.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.13.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.13.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.14.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.14.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.15.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.15.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.16.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.16.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.17.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.17.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.18.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.18.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.19.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.19.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.20.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.20.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.21.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.21.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.22.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.22.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.23.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.23.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.24.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.24.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.25.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.25.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.26.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.26.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.27.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.27.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.28.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.28.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.29.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.29.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.30.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.30.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.31.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.31.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.32.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.32.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.33.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.33.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.34.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.34.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.35.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.35.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.36.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.36.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.37.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.37.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.38.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.38.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.39.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.39.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.40.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.40.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.41.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.41.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.42.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.42.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.43.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.43.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.44.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.44.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.45.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.45.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.46.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.46.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.47.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.47.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.48.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.48.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.49.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.49.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.50.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.50.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.51.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.51.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.52.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.52.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.53.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.53.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.54.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.54.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.55.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.55.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.56.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.56.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.57.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.57.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.58.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.58.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.59.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.59.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.60.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.60.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.61.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.61.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.62.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.62.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.63.mlp.gate_up_proj.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    34816,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.63.mlp.gate_up_proj.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "lm_head.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    248320,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "lm_head.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.0.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.0.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.0.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.0.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.1.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.1.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.1.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.1.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.2.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.2.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.2.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.2.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.4.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.4.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.4.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.4.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.5.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.5.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.5.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.5.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.6.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.6.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.6.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.6.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.8.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.8.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.8.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.8.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.9.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.9.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.9.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.9.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.10.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.10.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.10.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.10.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.12.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.12.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.12.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.12.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.13.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.13.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.13.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.13.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.14.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.14.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.14.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.14.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.16.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.16.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.16.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.16.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.17.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.17.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.17.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.17.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.18.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.18.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.18.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.18.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.20.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.20.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.20.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.20.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.21.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.21.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.21.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.21.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.22.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.22.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.22.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.22.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.24.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.24.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.24.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.24.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.25.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.25.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.25.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.25.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.26.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.26.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.26.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.26.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.28.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.28.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.28.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.28.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.29.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.29.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.29.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.29.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.30.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.30.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.30.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.30.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.32.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.32.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.32.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.32.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.33.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.33.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.33.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.33.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.34.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.34.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.34.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.34.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.36.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.36.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.36.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.36.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.37.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.37.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.37.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.37.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.38.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.38.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.38.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.38.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.40.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.40.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.40.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.40.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.41.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.41.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.41.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.41.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.42.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.42.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.42.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.42.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.44.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.44.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.44.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.44.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.45.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.45.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.45.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.45.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.46.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.46.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.46.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.46.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.48.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.48.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.48.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.48.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.49.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.49.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.49.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.49.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.50.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.50.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.50.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.50.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.52.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.52.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.52.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.52.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.53.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.53.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.53.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.53.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.54.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.54.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.54.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.54.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.56.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.56.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.56.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.56.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.57.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.57.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.57.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.57.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.58.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.58.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.58.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.58.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.60.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.60.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.60.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.60.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.61.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.61.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.61.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.61.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.62.linear_attn.in_proj_qkvz.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    16384,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.62.linear_attn.in_proj_qkvz.weight",
-   "layout": {
-    "tile": [
-     64,
-     64
-    ],
-    "swizzle": 8
-   }
-  },
-  "model.layers.62.linear_attn.in_proj_ba.weight.tiled": {
-   "dtype": "bf16",
-   "shape": [
-    96,
-    5120
-   ],
-   "kind": "weight",
-   "tensor": "model.layers.62.linear_attn.in_proj_ba.weight",
-   "layout": {
-    "tile": [
-     32,
-     64
-    ],
-    "swizzle": 8
-   }
   }
  },
  "modules": {
@@ -9292,9 +5436,9 @@
    "source": "gdn_decode.cubin",
    "sha256": "1b6df2741965395d1e120c0af12e6c29fddfb26079fa2bd783c20f4b332c54ae"
   },
-  "gemm16_tiled": {
-   "source": "gemm16_tiled.cubin",
-   "sha256": "0eb626917a7ec4ac44356048c01f78aee19ab11f8af5073bae62a9931fd48544"
+  "gemm16": {
+   "source": "gemm16.cubin",
+   "sha256": "01b1c8b227ce191d1f596d055e0f0d5a71666d8ad28cdb12cf7da97d57557f32"
   },
   "gemma_rms_norm": {
    "source": "gemma_rms_norm.cubin",
@@ -11915,7 +8059,7 @@
     ]
    }
   },
-  "gemm_tiled_qkv": {
+  "gemm16_qkv": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -11940,8 +8084,8 @@
     },
     "launches": [
      {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_s8_bf16",
+      "module": "gemm16",
+      "entry": "kern_gemm16_s8_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -12002,7 +8146,7 @@
     ]
    }
   },
-  "gemm_tiled_out": {
+  "gemm16_out": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -12027,8 +8171,8 @@
     },
     "launches": [
      {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_s6_bf16",
+      "module": "gemm16",
+      "entry": "kern_gemm16_s6_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -12089,7 +8233,7 @@
     ]
    }
   },
-  "gemm_tiled_o": {
+  "gemm16_o": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -12114,8 +8258,8 @@
     },
     "launches": [
      {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_s6_bf16",
+      "module": "gemm16",
+      "entry": "kern_gemm16_s6_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -12176,7 +8320,7 @@
     ]
    }
   },
-  "gemm_tiled_lm_head": {
+  "gemm16_lm_head": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -12201,8 +8345,8 @@
     },
     "launches": [
      {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_s6_bf16",
+      "module": "gemm16",
+      "entry": "kern_gemm16_s6_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -12263,7 +8407,7 @@
     ]
    }
   },
-  "gemm_tiled_in_proj": {
+  "gemm16_in_proj": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -12275,8 +8419,8 @@
    "impl": {
     "launches": [
      {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_dual_s8_bf16",
+      "module": "gemm16",
+      "entry": "kern_gemm16_dual_s8_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -12341,7 +8485,7 @@
     ]
    }
   },
-  "gemm_tiled_gate_up_silu": {
+  "gemm16_gate_up_silu": {
    "params": [
     "in buffer<bf16>",
     "in buffer<bf16>",
@@ -12351,8 +8495,8 @@
    "impl": {
     "launches": [
      {
-      "module": "gemm16_tiled",
-      "entry": "kern_gemm16_tiled_silu_s4_bf16",
+      "module": "gemm16",
+      "entry": "kern_gemm16_silu_s4_bf16",
       "params": [
        "in buffer<bf16>",
        "in buffer<bf16>",
@@ -55100,16 +51244,16 @@
     },
     {
      "label": "l0.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.0.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -55173,13 +51317,13 @@
     },
     {
      "label": "l0.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.0.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.0.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -55212,13 +51356,13 @@
     },
     {
      "label": "l0.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.0.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.0.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -55275,16 +51419,16 @@
     },
     {
      "label": "l1.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.1.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -55350,13 +51494,13 @@
     },
     {
      "label": "l1.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.1.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.1.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -55389,13 +51533,13 @@
     },
     {
      "label": "l1.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.1.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.1.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -55452,16 +51596,16 @@
     },
     {
      "label": "l2.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.2.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -55527,13 +51671,13 @@
     },
     {
      "label": "l2.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.2.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.2.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -55566,13 +51710,13 @@
     },
     {
      "label": "l2.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.2.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.2.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -55629,13 +51773,13 @@
     },
     {
      "label": "l3.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.3.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.3.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -55739,13 +51883,13 @@
     },
     {
      "label": "l3.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.3.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.3.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -55778,13 +51922,13 @@
     },
     {
      "label": "l3.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.3.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.3.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -55841,16 +51985,16 @@
     },
     {
      "label": "l4.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.4.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -55916,13 +52060,13 @@
     },
     {
      "label": "l4.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.4.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.4.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -55955,13 +52099,13 @@
     },
     {
      "label": "l4.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.4.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.4.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -56018,16 +52162,16 @@
     },
     {
      "label": "l5.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.5.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -56093,13 +52237,13 @@
     },
     {
      "label": "l5.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.5.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.5.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -56132,13 +52276,13 @@
     },
     {
      "label": "l5.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.5.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.5.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -56195,16 +52339,16 @@
     },
     {
      "label": "l6.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.6.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -56270,13 +52414,13 @@
     },
     {
      "label": "l6.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.6.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.6.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -56309,13 +52453,13 @@
     },
     {
      "label": "l6.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.6.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.6.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -56372,13 +52516,13 @@
     },
     {
      "label": "l7.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.7.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.7.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -56482,13 +52626,13 @@
     },
     {
      "label": "l7.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.7.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.7.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -56521,13 +52665,13 @@
     },
     {
      "label": "l7.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.7.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.7.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -56584,16 +52728,16 @@
     },
     {
      "label": "l8.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.8.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -56659,13 +52803,13 @@
     },
     {
      "label": "l8.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.8.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.8.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -56698,13 +52842,13 @@
     },
     {
      "label": "l8.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.8.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.8.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -56761,16 +52905,16 @@
     },
     {
      "label": "l9.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.9.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -56836,13 +52980,13 @@
     },
     {
      "label": "l9.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.9.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.9.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -56875,13 +53019,13 @@
     },
     {
      "label": "l9.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.9.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.9.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -56938,16 +53082,16 @@
     },
     {
      "label": "l10.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.10.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -57013,13 +53157,13 @@
     },
     {
      "label": "l10.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.10.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.10.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -57052,13 +53196,13 @@
     },
     {
      "label": "l10.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.10.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.10.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -57115,13 +53259,13 @@
     },
     {
      "label": "l11.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.11.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.11.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -57225,13 +53369,13 @@
     },
     {
      "label": "l11.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.11.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.11.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -57264,13 +53408,13 @@
     },
     {
      "label": "l11.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.11.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.11.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -57327,16 +53471,16 @@
     },
     {
      "label": "l12.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.12.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -57402,13 +53546,13 @@
     },
     {
      "label": "l12.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.12.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.12.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -57441,13 +53585,13 @@
     },
     {
      "label": "l12.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.12.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.12.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -57504,16 +53648,16 @@
     },
     {
      "label": "l13.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.13.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -57579,13 +53723,13 @@
     },
     {
      "label": "l13.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.13.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.13.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -57618,13 +53762,13 @@
     },
     {
      "label": "l13.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.13.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.13.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -57681,16 +53825,16 @@
     },
     {
      "label": "l14.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.14.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -57756,13 +53900,13 @@
     },
     {
      "label": "l14.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.14.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.14.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -57795,13 +53939,13 @@
     },
     {
      "label": "l14.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.14.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.14.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -57858,13 +54002,13 @@
     },
     {
      "label": "l15.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.15.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.15.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -57968,13 +54112,13 @@
     },
     {
      "label": "l15.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.15.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.15.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -58007,13 +54151,13 @@
     },
     {
      "label": "l15.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.15.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.15.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -58070,16 +54214,16 @@
     },
     {
      "label": "l16.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.16.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -58145,13 +54289,13 @@
     },
     {
      "label": "l16.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.16.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.16.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -58184,13 +54328,13 @@
     },
     {
      "label": "l16.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.16.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.16.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -58247,16 +54391,16 @@
     },
     {
      "label": "l17.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.17.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -58322,13 +54466,13 @@
     },
     {
      "label": "l17.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.17.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.17.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -58361,13 +54505,13 @@
     },
     {
      "label": "l17.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.17.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.17.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -58424,16 +54568,16 @@
     },
     {
      "label": "l18.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.18.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -58499,13 +54643,13 @@
     },
     {
      "label": "l18.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.18.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.18.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -58538,13 +54682,13 @@
     },
     {
      "label": "l18.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.18.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.18.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -58601,13 +54745,13 @@
     },
     {
      "label": "l19.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.19.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.19.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -58711,13 +54855,13 @@
     },
     {
      "label": "l19.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.19.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.19.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -58750,13 +54894,13 @@
     },
     {
      "label": "l19.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.19.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.19.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -58813,16 +54957,16 @@
     },
     {
      "label": "l20.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.20.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -58888,13 +55032,13 @@
     },
     {
      "label": "l20.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.20.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.20.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -58927,13 +55071,13 @@
     },
     {
      "label": "l20.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.20.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.20.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -58990,16 +55134,16 @@
     },
     {
      "label": "l21.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.21.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -59065,13 +55209,13 @@
     },
     {
      "label": "l21.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.21.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.21.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -59104,13 +55248,13 @@
     },
     {
      "label": "l21.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.21.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.21.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -59167,16 +55311,16 @@
     },
     {
      "label": "l22.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.22.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -59242,13 +55386,13 @@
     },
     {
      "label": "l22.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.22.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.22.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -59281,13 +55425,13 @@
     },
     {
      "label": "l22.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.22.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.22.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -59344,13 +55488,13 @@
     },
     {
      "label": "l23.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.23.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.23.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -59454,13 +55598,13 @@
     },
     {
      "label": "l23.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.23.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.23.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -59493,13 +55637,13 @@
     },
     {
      "label": "l23.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.23.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.23.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -59556,16 +55700,16 @@
     },
     {
      "label": "l24.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.24.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -59631,13 +55775,13 @@
     },
     {
      "label": "l24.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.24.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.24.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -59670,13 +55814,13 @@
     },
     {
      "label": "l24.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.24.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.24.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -59733,16 +55877,16 @@
     },
     {
      "label": "l25.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.25.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -59808,13 +55952,13 @@
     },
     {
      "label": "l25.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.25.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.25.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -59847,13 +55991,13 @@
     },
     {
      "label": "l25.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.25.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.25.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -59910,16 +56054,16 @@
     },
     {
      "label": "l26.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.26.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -59985,13 +56129,13 @@
     },
     {
      "label": "l26.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.26.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.26.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -60024,13 +56168,13 @@
     },
     {
      "label": "l26.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.26.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.26.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -60087,13 +56231,13 @@
     },
     {
      "label": "l27.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.27.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.27.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -60197,13 +56341,13 @@
     },
     {
      "label": "l27.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.27.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.27.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -60236,13 +56380,13 @@
     },
     {
      "label": "l27.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.27.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.27.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -60299,16 +56443,16 @@
     },
     {
      "label": "l28.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.28.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -60374,13 +56518,13 @@
     },
     {
      "label": "l28.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.28.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.28.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -60413,13 +56557,13 @@
     },
     {
      "label": "l28.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.28.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.28.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -60476,16 +56620,16 @@
     },
     {
      "label": "l29.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.29.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -60551,13 +56695,13 @@
     },
     {
      "label": "l29.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.29.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.29.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -60590,13 +56734,13 @@
     },
     {
      "label": "l29.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.29.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.29.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -60653,16 +56797,16 @@
     },
     {
      "label": "l30.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.30.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -60728,13 +56872,13 @@
     },
     {
      "label": "l30.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.30.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.30.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -60767,13 +56911,13 @@
     },
     {
      "label": "l30.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.30.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.30.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -60830,13 +56974,13 @@
     },
     {
      "label": "l31.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.31.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.31.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -60940,13 +57084,13 @@
     },
     {
      "label": "l31.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.31.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.31.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -60979,13 +57123,13 @@
     },
     {
      "label": "l31.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.31.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.31.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -61042,16 +57186,16 @@
     },
     {
      "label": "l32.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.32.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -61117,13 +57261,13 @@
     },
     {
      "label": "l32.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.32.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.32.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -61156,13 +57300,13 @@
     },
     {
      "label": "l32.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.32.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.32.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -61219,16 +57363,16 @@
     },
     {
      "label": "l33.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.33.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -61294,13 +57438,13 @@
     },
     {
      "label": "l33.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.33.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.33.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -61333,13 +57477,13 @@
     },
     {
      "label": "l33.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.33.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.33.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -61396,16 +57540,16 @@
     },
     {
      "label": "l34.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.34.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -61471,13 +57615,13 @@
     },
     {
      "label": "l34.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.34.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.34.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -61510,13 +57654,13 @@
     },
     {
      "label": "l34.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.34.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.34.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -61573,13 +57717,13 @@
     },
     {
      "label": "l35.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.35.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.35.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -61683,13 +57827,13 @@
     },
     {
      "label": "l35.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.35.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.35.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -61722,13 +57866,13 @@
     },
     {
      "label": "l35.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.35.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.35.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -61785,16 +57929,16 @@
     },
     {
      "label": "l36.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.36.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -61860,13 +58004,13 @@
     },
     {
      "label": "l36.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.36.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.36.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -61899,13 +58043,13 @@
     },
     {
      "label": "l36.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.36.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.36.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -61962,16 +58106,16 @@
     },
     {
      "label": "l37.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.37.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -62037,13 +58181,13 @@
     },
     {
      "label": "l37.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.37.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.37.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -62076,13 +58220,13 @@
     },
     {
      "label": "l37.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.37.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.37.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -62139,16 +58283,16 @@
     },
     {
      "label": "l38.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.38.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -62214,13 +58358,13 @@
     },
     {
      "label": "l38.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.38.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.38.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -62253,13 +58397,13 @@
     },
     {
      "label": "l38.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.38.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.38.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -62316,13 +58460,13 @@
     },
     {
      "label": "l39.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.39.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.39.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -62426,13 +58570,13 @@
     },
     {
      "label": "l39.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.39.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.39.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -62465,13 +58609,13 @@
     },
     {
      "label": "l39.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.39.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.39.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -62528,16 +58672,16 @@
     },
     {
      "label": "l40.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.40.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -62603,13 +58747,13 @@
     },
     {
      "label": "l40.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.40.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.40.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -62642,13 +58786,13 @@
     },
     {
      "label": "l40.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.40.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.40.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -62705,16 +58849,16 @@
     },
     {
      "label": "l41.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.41.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -62780,13 +58924,13 @@
     },
     {
      "label": "l41.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.41.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.41.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -62819,13 +58963,13 @@
     },
     {
      "label": "l41.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.41.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.41.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -62882,16 +59026,16 @@
     },
     {
      "label": "l42.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.42.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -62957,13 +59101,13 @@
     },
     {
      "label": "l42.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.42.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.42.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -62996,13 +59140,13 @@
     },
     {
      "label": "l42.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.42.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.42.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -63059,13 +59203,13 @@
     },
     {
      "label": "l43.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.43.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.43.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -63169,13 +59313,13 @@
     },
     {
      "label": "l43.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.43.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.43.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -63208,13 +59352,13 @@
     },
     {
      "label": "l43.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.43.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.43.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -63271,16 +59415,16 @@
     },
     {
      "label": "l44.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.44.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -63346,13 +59490,13 @@
     },
     {
      "label": "l44.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.44.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.44.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -63385,13 +59529,13 @@
     },
     {
      "label": "l44.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.44.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.44.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -63448,16 +59592,16 @@
     },
     {
      "label": "l45.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.45.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -63523,13 +59667,13 @@
     },
     {
      "label": "l45.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.45.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.45.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -63562,13 +59706,13 @@
     },
     {
      "label": "l45.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.45.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.45.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -63625,16 +59769,16 @@
     },
     {
      "label": "l46.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.46.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -63700,13 +59844,13 @@
     },
     {
      "label": "l46.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.46.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.46.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -63739,13 +59883,13 @@
     },
     {
      "label": "l46.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.46.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.46.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -63802,13 +59946,13 @@
     },
     {
      "label": "l47.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.47.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.47.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -63912,13 +60056,13 @@
     },
     {
      "label": "l47.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.47.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.47.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -63951,13 +60095,13 @@
     },
     {
      "label": "l47.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.47.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.47.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -64014,16 +60158,16 @@
     },
     {
      "label": "l48.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.48.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -64089,13 +60233,13 @@
     },
     {
      "label": "l48.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.48.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.48.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -64128,13 +60272,13 @@
     },
     {
      "label": "l48.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.48.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.48.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -64191,16 +60335,16 @@
     },
     {
      "label": "l49.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.49.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -64266,13 +60410,13 @@
     },
     {
      "label": "l49.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.49.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.49.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -64305,13 +60449,13 @@
     },
     {
      "label": "l49.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.49.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.49.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -64368,16 +60512,16 @@
     },
     {
      "label": "l50.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.50.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -64443,13 +60587,13 @@
     },
     {
      "label": "l50.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.50.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.50.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -64482,13 +60626,13 @@
     },
     {
      "label": "l50.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.50.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.50.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -64545,13 +60689,13 @@
     },
     {
      "label": "l51.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.51.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.51.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -64655,13 +60799,13 @@
     },
     {
      "label": "l51.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.51.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.51.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -64694,13 +60838,13 @@
     },
     {
      "label": "l51.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.51.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.51.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -64757,16 +60901,16 @@
     },
     {
      "label": "l52.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.52.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -64832,13 +60976,13 @@
     },
     {
      "label": "l52.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.52.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.52.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -64871,13 +61015,13 @@
     },
     {
      "label": "l52.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.52.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.52.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -64934,16 +61078,16 @@
     },
     {
      "label": "l53.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.53.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -65009,13 +61153,13 @@
     },
     {
      "label": "l53.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.53.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.53.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -65048,13 +61192,13 @@
     },
     {
      "label": "l53.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.53.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.53.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -65111,16 +61255,16 @@
     },
     {
      "label": "l54.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.54.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -65186,13 +61330,13 @@
     },
     {
      "label": "l54.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.54.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.54.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -65225,13 +61369,13 @@
     },
     {
      "label": "l54.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.54.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.54.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -65288,13 +61432,13 @@
     },
     {
      "label": "l55.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.55.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.55.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -65398,13 +61542,13 @@
     },
     {
      "label": "l55.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.55.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.55.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -65437,13 +61581,13 @@
     },
     {
      "label": "l55.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.55.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.55.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -65500,16 +61644,16 @@
     },
     {
      "label": "l56.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.56.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -65575,13 +61719,13 @@
     },
     {
      "label": "l56.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.56.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.56.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -65614,13 +61758,13 @@
     },
     {
      "label": "l56.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.56.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.56.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -65677,16 +61821,16 @@
     },
     {
      "label": "l57.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.57.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -65752,13 +61896,13 @@
     },
     {
      "label": "l57.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.57.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.57.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -65791,13 +61935,13 @@
     },
     {
      "label": "l57.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.57.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.57.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -65854,16 +61998,16 @@
     },
     {
      "label": "l58.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.58.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -65929,13 +62073,13 @@
     },
     {
      "label": "l58.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.58.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.58.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -65968,13 +62112,13 @@
     },
     {
      "label": "l58.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.58.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.58.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -66031,13 +62175,13 @@
     },
     {
      "label": "l59.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.59.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.59.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -66141,13 +62285,13 @@
     },
     {
      "label": "l59.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.59.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.59.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -66180,13 +62324,13 @@
     },
     {
      "label": "l59.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.59.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.59.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -66243,16 +62387,16 @@
     },
     {
      "label": "l60.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.60.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -66318,13 +62462,13 @@
     },
     {
      "label": "l60.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.60.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.60.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -66357,13 +62501,13 @@
     },
     {
      "label": "l60.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.60.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.60.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -66420,16 +62564,16 @@
     },
     {
      "label": "l61.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.61.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -66495,13 +62639,13 @@
     },
     {
      "label": "l61.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.61.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.61.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -66534,13 +62678,13 @@
     },
     {
      "label": "l61.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.61.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.61.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -66597,16 +62741,16 @@
     },
     {
      "label": "l62.in_proj_qkvz_ba",
-     "op": "gemm_tiled_in_proj",
+     "op": "gemm16_in_proj",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight.tiled"
+       "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.62.linear_attn.in_proj_ba.weight.tiled"
+       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "qkvz"
@@ -66672,13 +62816,13 @@
     },
     {
      "label": "l62.out_proj",
-     "op": "gemm_tiled_out",
+     "op": "gemm16_out",
      "args": [
       {
        "buf": "core_attn_out"
       },
       {
-       "buf": "model.layers.62.linear_attn.out_proj.weight.tiled"
+       "buf": "model.layers.62.linear_attn.out_proj.weight"
       },
       {
        "buf": "y"
@@ -66711,13 +62855,13 @@
     },
     {
      "label": "l62.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.62.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.62.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -66774,13 +62918,13 @@
     },
     {
      "label": "l63.qkv_proj",
-     "op": "gemm_tiled_qkv",
+     "op": "gemm16_qkv",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.63.self_attn.qkv_proj.weight.tiled"
+       "buf": "model.layers.63.self_attn.qkv_proj.weight"
       },
       {
        "buf": "qkv"
@@ -66884,13 +63028,13 @@
     },
     {
      "label": "l63.o_proj",
-     "op": "gemm_tiled_o",
+     "op": "gemm16_o",
      "args": [
       {
        "buf": "gated"
       },
       {
-       "buf": "model.layers.63.self_attn.o_proj.weight.tiled"
+       "buf": "model.layers.63.self_attn.o_proj.weight"
       },
       {
        "buf": "y"
@@ -66923,13 +63067,13 @@
     },
     {
      "label": "l63.gate_up_silu",
-     "op": "gemm_tiled_gate_up_silu",
+     "op": "gemm16_gate_up_silu",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "model.layers.63.mlp.gate_up_proj.weight.tiled"
+       "buf": "model.layers.63.mlp.gate_up_proj.weight"
       },
       {
        "buf": "act"
@@ -66986,13 +63130,13 @@
     },
     {
      "label": "lm_head",
-     "op": "gemm_tiled_lm_head",
+     "op": "gemm16_lm_head",
      "args": [
       {
        "buf": "x"
       },
       {
-       "buf": "lm_head.weight.tiled"
+       "buf": "lm_head.weight"
       },
       {
        "buf": "logits"

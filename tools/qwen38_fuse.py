@@ -206,30 +206,26 @@ def attn_splits(m):
     return m
 
 
-# decode_batch GEMMs on the handwritten tiled-layout kernel (in_proj_qkvz +
-# in_proj_ba are the dual launch below)
-# (tools/kernels-src/gemm16_tiled.cu). The weight gets a second copy on the
-# device in the kernel's tile order (`layout` on a `weight` buffer bound to
-# the same `tensor`); prefill and the single-sequence decode keep cuBLAS on
-# the row-major original. Per shape: (N, K, split-K count at M <= 8 and at
-# M > 8 — cuBLASLt's own choices, which the kernel reproduces bit for bit —
-# and the pipeline depth measured fastest). down_proj (5120 x 17408, 13 or
-# 17 splits) stays on cuBLAS: 37.3 vs 33.3 µs standalone.
-TILED_GEMMS = {   # label suffix: (op name, N, K, splits at M <= 8, splits at M > 8, stages, chunks per CTA: "one" or "all")
-    ".qkv_proj": ("gemm_tiled_qkv", QKV_WIDTH, 5120, 2, 2, 8, "all"),
-    ".out_proj": ("gemm_tiled_out", 5120, ATTN_WIDTH, 5, 5, 6, "one"),
-    ".o_proj": ("gemm_tiled_o", 5120, ATTN_WIDTH, 5, 5, 6, "one"),
-    ".gate_up": ("gemm_tiled_gate_up", 2 * MLP_WIDTH, 5120, 1, 1, 8, "one"),
-    "lm_head": ("gemm_tiled_lm_head", 248320, 5120, 1, 1, 6, "one"),
+# decode_batch GEMMs on the handwritten M <= 16 kernel
+# (tools/kernels-src/gemm16.cu), reading the same row-major weight prefill
+# and the single-sequence decode hand to cuBLAS; in_proj_qkvz + in_proj_ba
+# are the dual launch below. Per shape: (N, K, split-K count at M <= 8 and
+# at M > 8 — cuBLASLt's own choices, which the kernel reproduces bit for bit
+# — and the pipeline depth measured fastest). down_proj (5120 x 17408, 13
+# or 17 splits) stays on cuBLAS: 37.3 vs 33.3 µs standalone.
+GEMM16 = {   # label suffix: (op name, N, K, splits at M <= 8, splits at M > 8, stages, chunks per CTA: "one" or "all")
+    ".qkv_proj": ("gemm16_qkv", QKV_WIDTH, 5120, 2, 2, 8, "all"),
+    ".out_proj": ("gemm16_out", 5120, ATTN_WIDTH, 5, 5, 6, "one"),
+    ".o_proj": ("gemm16_o", 5120, ATTN_WIDTH, 5, 5, 6, "one"),
+    ".gate_up": ("gemm16_gate_up", 2 * MLP_WIDTH, 5120, 1, 1, 8, "one"),
+    "lm_head": ("gemm16_lm_head", 248320, 5120, 1, 1, 6, "one"),
 }
-TILE = {"tile": [64, 64], "swizzle": 8}
 
 
-def gemm_tiled(m):
-    """decode_batch GEMMs named in TILED_GEMMS run the tiled kernel on a
-    tiled copy of their weight."""
-    cubin = handwritten.hw("gemm16_tiled")
-    for suffix, (name, n, k, lo, hi, stages, chunks) in TILED_GEMMS.items():
+def gemm16(m):
+    """decode_batch GEMMs named in GEMM16 run the handwritten kernel."""
+    cubin = handwritten.hw("gemm16")
+    for suffix, (name, n, k, lo, hi, stages, chunks) in GEMM16.items():
         smax = max(lo, hi) if chunks == "one" else 1
         m["ops"][name] = dict(
             params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
@@ -237,7 +233,7 @@ def gemm_tiled(m):
                 scratch={"partials": {"dtype": "f32", "shape": [smax * 16, n]},
                          "arrivals": {"dtype": "i32", "shape": [n // 64]}},
                 launches=[dict(
-                    **cubin, entry=f"kern_gemm16_tiled_s{stages}_bf16",
+                    **cubin, entry=f"kern_gemm16_s{stages}_bf16",
                     params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "out buffer<f32>",
                             "out buffer<i32>", "i32", "i32", "i32", "i32", "i32"],
                     block=[128, 1, 1], grid=[n // 64, smax, 1], shared_mem=stages * 10240 + 1024,
@@ -248,9 +244,8 @@ def gemm_tiled(m):
                 continue
             w = c["args"][1]["buf"]
             assert m["buffers"][w]["shape"] == [n, k], (c["label"], m["buffers"][w]["shape"])
-            m["buffers"][w + ".tiled"] = dict(dtype="bf16", shape=[n, k], kind="weight", tensor=w, layout=dict(TILE))
             c["op"] = name
-            c["args"] = [c["args"][0], {"buf": w + ".tiled"}, c["args"][2], c["args"][3]]
+            c["args"] = c["args"][:4]  # a, w, c, m; n and k are the op's constants
     return m
 
 
@@ -268,24 +263,24 @@ PDL_OPS = ("gemma_norm", "gemma_fused_norm", "silu_mul", "sigmoid_mul", "gdn_con
 def pdl(m):
     """Mark the launches that wait for their predecessor themselves."""
     for name, op in m["ops"].items():
-        if name in PDL_OPS or name.startswith("gemm_tiled"):
+        if name in PDL_OPS or name.startswith("gemm16"):
             for launch in op["impl"]["launches"]:
                 assert "module" in launch or "cubin" in launch, (name, launch)
                 launch["pdl"] = True
     return m
 
 
-def gemm_tiled_in_proj(m):
+def gemm16_in_proj(m):
     """decode_batch's in_proj_qkvz + in_proj_ba pairs become one launch of
-    the dual kernel: the 96-row ba weight, stored as 32-row tiles, rides
-    along as two more CTAs that run its 5 chunks in place (cuBLASLt picks 5
-    for ba at M = 1 and M = 16)."""
-    cubin = handwritten.hw("gemm16_tiled")
+    the dual kernel: the 96-row ba weight rides along as two more CTAs of
+    32-row blocks that run its 5 chunks in place (cuBLASLt picks 5 for ba at
+    M = 1 and M = 16)."""
+    cubin = handwritten.hw("gemm16")
     n1, n2, k = QKVZ_WIDTH, BA_WIDTH, 5120
-    m["ops"]["gemm_tiled_in_proj"] = dict(
+    m["ops"]["gemm16_in_proj"] = dict(
         params=["in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>", "i32"],
         impl=dict(launches=[dict(
-            **cubin, entry="kern_gemm16_tiled_dual_s8_bf16",
+            **cubin, entry="kern_gemm16_dual_s8_bf16",
             params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>",
                     "i32", "i32", "i32", "i32", "i32", "i32"],
             block=[128, 1, 1], grid=[n1 // 64 + -(-n2 // 64), 1, 1], shared_mem=8 * 10240 + 1024, pdl=True,
@@ -301,12 +296,8 @@ def gemm_tiled_in_proj(m):
             assert q["args"][0] == b["args"][0] and q["args"][3] == b["args"][3], (q["label"], b["label"])
             w1, w2 = q["args"][1]["buf"], b["args"][1]["buf"]
             assert m["buffers"][w1]["shape"] == [n1, k] and m["buffers"][w2]["shape"] == [n2, k]
-            m["buffers"][w1 + ".tiled"] = dict(dtype="bf16", shape=[n1, k], kind="weight", tensor=w1, layout=dict(TILE))
-            m["buffers"][w2 + ".tiled"] = dict(dtype="bf16", shape=[n2, k], kind="weight", tensor=w2,
-                                               layout={"tile": [32, 64], "swizzle": 8})
-            out.append(dict(label=q["label"].replace("qkvz", "qkvz_ba"), op="gemm_tiled_in_proj",
-                            args=[q["args"][0], {"buf": w1 + ".tiled"}, {"buf": w2 + ".tiled"}, q["args"][2], b["args"][2],
-                                  q["args"][3]]))
+            out.append(dict(label=q["label"].replace("qkvz", "qkvz_ba"), op="gemm16_in_proj",
+                            args=[q["args"][0], q["args"][1], b["args"][1], q["args"][2], b["args"][2], q["args"][3]]))
             i += 2
             continue
         out.append(c)
@@ -315,16 +306,16 @@ def gemm_tiled_in_proj(m):
     return m
 
 
-def gemm_tiled_silu(m):
+def gemm16_silu(m):
     """decode_batch's gate_up + silu_mul pairs become one launch of the fused
-    kernel (gemm16_tiled.cu, `gemm16_tiled_silu`): the up half is rounded to
-    bf16 in shared memory and the gate warps apply silu_mul's exact ops."""
-    cubin = handwritten.hw("gemm16_tiled")
+    kernel (gemm16.cu, `gemm16_silu`): the up half is rounded to bf16 in
+    shared memory and the gate warps apply silu_mul's exact ops."""
+    cubin = handwritten.hw("gemm16")
     n, k = 2 * MLP_WIDTH, 5120
-    m["ops"]["gemm_tiled_gate_up_silu"] = dict(
+    m["ops"]["gemm16_gate_up_silu"] = dict(
         params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
         impl=dict(launches=[dict(
-            **cubin, entry="kern_gemm16_tiled_silu_s4_bf16",
+            **cubin, entry="kern_gemm16_silu_s4_bf16",
             params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32"],
             block=[256, 1, 1], grid=[MLP_WIDTH // 64, 1, 1], shared_mem=4 * (2 * 8192 + 2048) + 1024, pdl=True,
             args=[{"param": 0}, {"param": 1}, {"param": 2}, {"param": 3}, {"i32": n}, {"i32": k}])]))
@@ -333,10 +324,10 @@ def gemm_tiled_silu(m):
     i = 0
     while i < len(calls):
         c = calls[i]
-        if c["op"] == "gemm_tiled_gate_up" and i + 1 < len(calls) and calls[i + 1]["op"] == "silu_mul":
+        if c["op"] == "gemm16_gate_up" and i + 1 < len(calls) and calls[i + 1]["op"] == "silu_mul":
             gu, si = c, calls[i + 1]
             assert si["args"][1] == gu["args"][2], (gu["label"], si["label"])
-            out.append(dict(label=gu["label"] + "_silu", op="gemm_tiled_gate_up_silu",
+            out.append(dict(label=gu["label"] + "_silu", op="gemm16_gate_up_silu",
                             args=[gu["args"][0], gu["args"][1], si["args"][0], gu["args"][3]]))
             i += 2
             continue
@@ -358,7 +349,7 @@ def prune(m):
 
 
 PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits,
-          "tiled": gemm_tiled, "in_proj": gemm_tiled_in_proj, "silu": gemm_tiled_silu,
+          "gemm16": gemm16, "in_proj": gemm16_in_proj, "silu": gemm16_silu,
           "pdl": pdl}
 
 

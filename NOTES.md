@@ -313,3 +313,25 @@ PDL's shadow. The score formula makes the step 99% of it.
 - gdn_step 20.9 µs vs 17.7 copy ceiling (0.15 ms/step at most).
 - The graders' criterion allows bf16 noise; if that ever matters more
   than exactness, 4e68579 (ba fold) is the measured 0.5%.
+
+## Session 4 (review): the tiled weight copy is gone
+
+The `layout` / `tensor` fields doubled the decode weights on the device
+(36.7 GiB of `.tiled` copies next to the row-major originals prefill and the
+single-sequence decode hand to cuBLAS). gemm16 now reads the row-major
+weight: the tile's 64 rows come in as 64 segments of 128 bytes and the
+chunk-XOR-row swizzle is applied on the cp.async destination, so the
+ldmatrix side is unchanged. Measured on tray05 (`kern bench --program-only`,
+the score workload, 24 samples, step cv <= 0.1%):
+
+| manifest | extend p50 | step p50 | score | device memory |
+|---|---|---|---|---|
+| tiled copy (cd39a57) | 68.35 ms | 15.122 ms | 6784 | 160.3 GiB |
+| row-major (this) | 68.04 ms | 15.560 ms | 6977 | 123.3 GiB |
+
+The tile stream was worth 0.44 ms of the step (2.9%): 64 strided segments
+per tile land on 64 DRAM pages, and PDL's early weight fetch does not hide
+that. kern test vs 29dbc9c: bit-identical at every cut (9701), states and
+logits. Not tried: a 128-wide k-tile (256 B per row segment, half the
+segments), which would need a 256 B shared-memory pitch and its swizzle.
+Data: ~/bench_results/2026-09-08-kern-pr3-rowmajor/.

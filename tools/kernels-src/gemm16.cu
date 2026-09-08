@@ -1,14 +1,14 @@
-// Decode GEMM on a tiled weight layout: C[M,N] = A[M,K] @ W[N,K]^T, M <= 16,
-// bf16 in, f32 accumulate, bf16 out. Bit-identical to cuBLASLt's default
-// algorithm for the shape (see the numerics contract below).
+// Decode GEMM: C[M,N] = A[M,K] @ W[N,K]^T, M <= 16, bf16 in, f32
+// accumulate, bf16 out, W row-major as the weights file has it.
+// Bit-identical to cuBLASLt's default algorithm for the shape (see the
+// numerics contract below).
 //
-// W is the manifest `layout {"tile": [64, 64], "swizzle": 8}` image: each
-// 64x64 tile is one contiguous 8 KB block, row-major inside with the
-// 16-byte chunk c of tile row r at chunk c ^ (r & 7). Streaming whole tiles
-// keeps DRAM reads sequential; the swizzle makes the tile, dropped into
-// shared memory as is, conflict-free for ldmatrix. Row-major cuBLAS reads the
-// same bytes as 64 strided 128-byte segments per tile and pays for it on
-// this GPU (5.4 vs 6.4-7.3 TB/s on the big shapes).
+// A CTA streams W as 64x64 tiles, each 64 segments of 128 bytes from
+// consecutive rows, through a cp.async ring; the 16-byte chunk c of tile
+// row r lands in shared memory at chunk c ^ (r & 7), the pattern a
+// 128-byte-pitch ldmatrix reads without bank conflicts. (A copy of W
+// stored as contiguous pre-swizzled tiles streams ~10% faster on this GPU
+// but doubles the weight memory; measured in NOTES.md.)
 //
 // Numerics. cuBLASLt's non-split algorithms accumulate each output as one
 // f32 chain over k in ascending k16 steps (tensor-core order); every tile
@@ -57,18 +57,17 @@ __device__ __forceinline__ void mma(float* c, const uint32_t* a, uint32_t b0, ui
 // chunks [sp0, sp1): one chunk when the launch has a grid.y per chunk (the
 // partials protocol below), every chunk when grid.y is 1 (the ascending
 // running sum stays in registers, no workspace: the fastest form when the
-// n-tile count alone fills the GPU). TR is the tile height of W's layout:
-// 64, or 32 for a narrow weight whose 64 rows are two 4 KB sub-tiles (the
-// second may lie past N; its outputs are never written).
+// n-tile count alone fills the GPU). TR is the row-block height: 64, or 32
+// for a narrow weight whose 64 rows are two 32-row blocks (the second may
+// lie past N; its outputs are never written).
 template <int STAGES, int TR>
-__device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const bf16* __restrict__ W,
+__device__ __forceinline__ void gemm16(const bf16* __restrict__ A, const bf16* __restrict__ W,
                                              bf16* __restrict__ C, float* __restrict__ ws, int* __restrict__ counters,
                                              int M, int N, int K, int splits_lo, int splits_hi, int nt) {
     extern __shared__ uint8_t smem_raw[];
     const uint32_t sbase = (((uint32_t)__cvta_generic_to_shared(smem_raw)) + 1023) & ~1023u;
     __shared__ int s_last;
     const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
-    const int KT = K / BK;
     const int S = M <= 8 ? splits_lo : splits_hi;
     const int kc = S == 1 ? K : ((K / S + 63) / 64) * 64;
     const int splits = (K + kc - 1) / kc;
@@ -76,26 +75,28 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
     const int sp0 = whole ? 0 : (int)blockIdx.y, sp1 = whole ? splits : sp0 + 1;
     if (sp0 >= splits) return;
     const int kt0 = sp0 * kc / BK, ktn = min(K, sp1 * kc) / BK - kt0;
+    // Chunk q of the tile: row q / 8 of W's 64 rows, 16 bytes at column
+    // chunk q % 8; eight consecutive threads read one 128-byte row segment.
     auto load_w = [&](int i, int slot) {
         const uint32_t sw = sbase + slot * STAGE_BYTES;
+        const bf16* wk = W + (size_t)(kt0 + i) * BK;
         if (TR == 64) {
-            const bf16* wt = W + ((size_t)nt * KT + kt0 + i) * BN * BK;
 #pragma unroll
             for (int c = 0; c < 4; c++) {
-                const int q = tid + c * NT;
-                cp16(sw + q * 16, wt + q * 8);
+                const int q = tid + c * NT, r = q >> 3, ch = q & 7;
+                cp16(sw + r * 128 + ((ch ^ (r & 7)) << 4), wk + (size_t)(nt * BN + r) * K + ch * 8);
             }
         } else {
-            // two 32-row sub-tiles, row r of sub-tile h at smem row 32h + r
+            // two 32-row blocks, row r of block h at smem row 32h + r
 #pragma unroll
             for (int h = 0; h < 2; h++) {
                 const int st = 2 * nt + h;
                 if (st * TR >= N) break;
-                const bf16* wt = W + ((size_t)st * KT + kt0 + i) * TR * BK;
 #pragma unroll
                 for (int c = 0; c < 2; c++) {
-                    const int q = tid + c * NT;
-                    cp16(sw + h * (TR * BK * 2) + q * 16, wt + q * 8);
+                    const int q = tid + c * NT, r = q >> 3, ch = q & 7;
+                    cp16(sw + h * (TR * BK * 2) + r * 128 + ((ch ^ (r & 7)) << 4),
+                         wk + (size_t)(st * TR + r) * K + ch * 8);
                 }
             }
         }
@@ -232,28 +233,28 @@ __device__ __forceinline__ void gemm16_tiled(const bf16* __restrict__ A, const b
 // 6 elsewhere: measured in NOTES.md). grid = [N/64, chunks] with the
 // partials protocol, or [N/64, 1] for every chunk in the CTA.
 #define ENTRY(ST)                                                                                                   \
-    extern "C" __global__ void __launch_bounds__(NT) kern_gemm16_tiled_s##ST##_bf16(                              \
+    extern "C" __global__ void __launch_bounds__(NT) kern_gemm16_s##ST##_bf16(                                    \
         const bf16* A, const bf16* W, bf16* C, float* ws, int* counters, int M, int N, int K, int splits_lo,        \
         int splits_hi) {                                                                                            \
-        gemm16_tiled<ST, 64>(A, W, C, ws, counters, M, N, K, splits_lo, splits_hi, blockIdx.x);                    \
+        gemm16<ST, 64>(A, W, C, ws, counters, M, N, K, splits_lo, splits_hi, blockIdx.x);                          \
     }
 ENTRY(4)
 ENTRY(6)
 ENTRY(8)
 
-// Two projections of the same A in one launch: W1 (N1 rows, 64-row tiles,
-// non-split) on CTAs [0, N1/64), then W2 (N2 rows, 32-row tiles, `splits2`
+// Two projections of the same A in one launch: W1 (N1 rows, 64-row blocks,
+// non-split) on CTAs [0, N1/64), then W2 (N2 rows, 32-row blocks, `splits2`
 // chunks all in the CTA) on the next ceil(N2/64). grid = [N1/64 +
 // ceil(N2/64), 1]; no workspace.
 #define ENTRY_DUAL(ST)                                                                                              \
-    extern "C" __global__ void __launch_bounds__(NT) kern_gemm16_tiled_dual_s##ST##_bf16(                         \
+    extern "C" __global__ void __launch_bounds__(NT) kern_gemm16_dual_s##ST##_bf16(                               \
         const bf16* A, const bf16* W1, bf16* C1, const bf16* W2, bf16* C2, int M, int N1, int N2, int K,            \
         int splits2_lo, int splits2_hi) {                                                                           \
         const int nt1 = N1 / BN;                                                                                    \
         if ((int)blockIdx.x < nt1)                                                                                  \
-            gemm16_tiled<ST, 64>(A, W1, C1, nullptr, nullptr, M, N1, K, 1, 1, blockIdx.x);                          \
+            gemm16<ST, 64>(A, W1, C1, nullptr, nullptr, M, N1, K, 1, 1, blockIdx.x);                                \
         else                                                                                                        \
-            gemm16_tiled<ST, 32>(A, W2, C2, nullptr, nullptr, M, N2, K, splits2_lo, splits2_hi, blockIdx.x - nt1);  \
+            gemm16<ST, 32>(A, W2, C2, nullptr, nullptr, M, N2, K, splits2_lo, splits2_hi, blockIdx.x - nt1);        \
     }
 ENTRY_DUAL(8)
 
@@ -270,8 +271,8 @@ ENTRY_DUAL(8)
 constexpr int NT2 = 256, STAGE2 = 2 * TILE_BYTES + A_BYTES;
 
 template <int STAGES>
-__device__ __forceinline__ void gemm16_tiled_silu(const bf16* __restrict__ A, const bf16* __restrict__ W,
-                                                  bf16* __restrict__ act, int M, int N, int K) {
+__device__ __forceinline__ void gemm16_silu(const bf16* __restrict__ A, const bf16* __restrict__ W,
+                                            bf16* __restrict__ act, int M, int N, int K) {
     extern __shared__ uint8_t smem_raw[];
     const uint32_t sraw = (uint32_t)__cvta_generic_to_shared(smem_raw);
     const uint32_t sbase = (sraw + 1023) & ~1023u;
@@ -281,13 +282,14 @@ __device__ __forceinline__ void gemm16_tiled_silu(const bf16* __restrict__ A, co
     const int half = warp >> 2, wr = warp & 3;       // 0: gate rows, 1: up rows
     auto load_w = [&](int i, int slot) {
         const uint32_t sw = sbase + slot * STAGE2;
+        const bf16* wk = W + (size_t)i * BK;
 #pragma unroll
         for (int t = 0; t < 2; t++) {
-            const bf16* wt = W + ((size_t)(nt + t * (d / BN)) * KT + i) * BN * BK;
+            const int n0 = (nt + t * (d / BN)) * BN;
 #pragma unroll
             for (int c = 0; c < 2; c++) {
-                const int q = tid + c * NT2;
-                cp16(sw + t * TILE_BYTES + q * 16, wt + q * 8);
+                const int q = tid + c * NT2, r = q >> 3, ch = q & 7;
+                cp16(sw + t * TILE_BYTES + r * 128 + ((ch ^ (r & 7)) << 4), wk + (size_t)(n0 + r) * K + ch * 8);
             }
         }
     };
@@ -375,8 +377,8 @@ __device__ __forceinline__ void gemm16_tiled_silu(const bf16* __restrict__ A, co
 }
 
 #define ENTRY_SILU(ST)                                                                                             \
-    extern "C" __global__ void __launch_bounds__(NT2) kern_gemm16_tiled_silu_s##ST##_bf16(                        \
+    extern "C" __global__ void __launch_bounds__(NT2) kern_gemm16_silu_s##ST##_bf16(                              \
         const bf16* A, const bf16* W, bf16* act, int M, int N, int K) {                                            \
-        gemm16_tiled_silu<ST>(A, W, act, M, N, K);                                                                 \
+        gemm16_silu<ST>(A, W, act, M, N, K);                                                                       \
     }
 ENTRY_SILU(4)
