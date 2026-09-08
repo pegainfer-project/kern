@@ -86,7 +86,11 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     `params`（该 launch 自己的 ABI；**不写 = 同接口**）、
     `block`/`grid`（grid 用下述表达式集合；可选 `shared_mem`，上限 227KB
     opt-in；可选 `cluster: [x, y, z]` 线程块簇，grid 每轴必须是它的倍数，
-    runtime 走 `cuLaunchKernelEx`）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
+    runtime 走 `cuLaunchKernelEx`；可选 `pdl: true` 程序化依赖启动：runtime
+    给 launch 加 `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`，
+    核可以在前一个 launch 收尾时就上 SM，**manifest 承诺**该核在读写前一个
+    launch 产出或消费的任何东西之前执行 `griddepcontrol.wait`，wait 之前只许
+    读 weight；verifier 不检查也检查不了，extern 不接受）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
     `{"scratch": name}` 接私有工作区 / 字面量标量（impl 私有常量）/
     `{"rank": group}` / `{"pack": {...}}`；**不写 = 按序转发接口参数**。
     **bytes<n> / pack** 是 launch 私有的参数类型：核的 ABI 收 struct
