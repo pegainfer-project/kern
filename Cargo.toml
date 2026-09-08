@@ -14,7 +14,9 @@ kern-manifest = { path = "crates/kern-manifest" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-cudarc = { version = "=0.19.7", features = ["cuda-version-from-build-system", "f16"] }
+# The CUDA API kern binds is a fact about the binary, not about the build
+# machine: `cuda-13000` pins it, and no toolkit is needed to build.
+cudarc = { version = "=0.19.7", features = ["cuda-13000", "f16"] }
 half = "=2.7.1"
 safetensors = "=0.7.0"
 schemars = "1"

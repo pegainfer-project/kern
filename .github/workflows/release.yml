@@ -1,0 +1,132 @@
+name: Release
+
+# A tag `vX.Y.Z` on master builds `kern` for Linux x86_64 and aarch64 in a
+# glibc 2.28 container, proves each binary starts there without a CUDA
+# toolkit, and publishes a GitHub release with the archives, one
+# SHA256SUMS, the installer, and build provenance. A pull request that
+# touches this pipeline runs the build and packaging, never the publish.
+# The GPU gate is manual and comes after: docs/release.md.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # manylinux_2_28: glibc 2.28 and a current gcc, the floor the release
+    # promises (RHEL 8, Ubuntu 20.04 and everything newer).
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'x86_64' || 'aarch64' }}
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(cargo pkgid -p kern-run | sed 's/.*[@#]//')
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --locked -p kern-run
+        env:
+          KERN_COMMIT: ${{ github.sha }}
+
+      - name: Package and check
+        run: scripts/package_release.sh "${{ steps.version.outputs.version }}" "${{ matrix.target }}" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kern-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kern-*
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble assets
+        run: |
+          set -euo pipefail
+          cd dist
+          cat ./*.sha256 >SHA256SUMS
+          rm ./*.sha256
+          cp ../scripts/install.sh install.sh
+          sha256sum -c SHA256SUMS
+          ls -la
+
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $GITHUB_REF_NAME exists; delete it and the tag to republish"
+            exit 1
+          fi
+          cat >notes.md <<EOF
+          Prebuilt \`kern\` for Linux x86_64 and aarch64, glibc 2.28 or newer. Needs an
+          NVIDIA driver that supports CUDA 13 (r580 or newer) and cuBLAS 13 on the loader
+          path; no toolkit, no Python.
+
+          Install the latest release, or this one with \`KERN_VERSION=$GITHUB_REF_NAME\`:
+
+              curl -fsSL https://kern-baa.pages.dev/install.sh | sh
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "kern $VERSION" \
+            --notes-file notes.md \
+            --generate-notes
