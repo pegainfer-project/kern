@@ -14,11 +14,11 @@ run the command:
 ```toml
 gpu = 0
 
-[targets.demo]
-manifest = "artifacts/demo/manifest.json"
-kernels = "artifacts/demo/kernels"
-weights = ["artifacts/demo/checkpoint"]   # HF snapshot dir(s) or .safetensors files
-tokenizer = "artifacts/demo/tokenizer.json"   # optional: defaults to the checkpoint's
+[targets."qwen3.8-27b"]
+manifest = "kern-qwen38/manifests/qwen3.8-27b.json"   # hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
+kernels = "kern-qwen38/cubins"
+weights = ["<your_qwen38_checkpoint_path>"]           # HF checkpoint dir(s) or .safetensors files
+tokenizer = "<your_qwen38_checkpoint_path>/tokenizer.json"   # optional: defaults to the checkpoint's
 
 [run]
 prompt = "The capital of France is"
@@ -31,7 +31,7 @@ Relative paths are resolved from the directory containing `kern.toml`.
 ## Generate
 
 ```sh
-./target/release/kern run demo
+kern run qwen3.8-27b
 ```
 
 Logs describing verification, allocation, and execution go to stderr. Generated
@@ -40,7 +40,7 @@ text goes to stdout, so it can be redirected without mixing it with diagnostics.
 Override an individual setting with a flag:
 
 ```sh
-./target/release/kern run demo \
+kern run qwen3.8-27b \
   --prompt "Write a CUDA kernel for" \
   --steps 64
 ```
@@ -50,7 +50,8 @@ Override an individual setting with a flag:
 - `--chunk N` sets the chunked-prefill size, bounded by the manifest.
 - `--eager` disables CUDA graph capture.
 - `--rows N` selects a declared decode shape. A one-row program is ordinary
-  decode; a wider declared program may represent a speculative round.
+  decode; a wider declared program is a speculative round (the DFlash2
+  manifest's is 8 rows). Default: the widest the manifest declares.
 - `--capacity N` sets state capacity in tokens and is rounded down to the
   manifest's page unit.
 

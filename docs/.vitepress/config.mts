@@ -31,8 +31,8 @@ export default defineConfig({
       {
         text: "Getting started",
         items: [
-          { text: "Overview", link: "/getting-started/" },
-          { text: "Build and verify", link: "/getting-started/build-and-verify" },
+          { text: "Quick start", link: "/getting-started/" },
+          { text: "Install", link: "/getting-started/install" },
         ],
       },
       {

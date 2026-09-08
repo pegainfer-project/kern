@@ -83,6 +83,10 @@ curl -fsSL https://kern-baa.pages.dev/install.sh | sh   # Linux x86_64 / aarch64
 kern --version                                          # kern 0.1.0 (<commit>, cuda 13.0)
 ```
 
+Then the [quick start](https://kern-baa.pages.dev/docs/getting-started/):
+Qwen3.8-27B from the published kernels and the checkpoint you already have,
+plain and with its DFlash2 draft, in four commands.
+
 The binary links no CUDA library; it dlopens the driver and cuBLAS at
 first use, so it needs an NVIDIA driver for CUDA 13 (r580+) and cuBLAS 13
 on the loader path, nothing else. `KERN_VERSION=v0.1.0` pins a release,

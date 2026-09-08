@@ -7,8 +7,8 @@ hero:
   tagline: A small runtime verifies a typed manifest, loads hash-pinned GPU kernels, and executes the program the artifact declares.
   actions:
     - theme: brand
-      text: Build and verify
-      link: /getting-started/build-and-verify
+      text: Quick start
+      link: /getting-started/
     - theme: alt
       text: Understand the artifact
       link: /concepts/artifact
