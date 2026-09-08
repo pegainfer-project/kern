@@ -12,8 +12,8 @@ bare `nvidia/cuda:13.0.1-runtime-ubuntu24.04` container.
   `LD_LIBRARY_PATH`)
 - A GPU the published kernels were built for: the Qwen3.8 registry is
   `sm_103a` (GB300)
-- The Qwen3.8-27B checkpoint: the directory `hf download Qwen/Qwen3.8-27B`
-  produces, or the same snapshot in your Hugging Face cache
+- The Qwen3.8-27B checkpoint (`hf download Qwen/Qwen3.8-27B --local-dir …`,
+  or the snapshot already in your Hugging Face cache)
 :::
 
 ## 1. Install kern
@@ -35,22 +35,9 @@ hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
 
 `kern-qwen38/manifests/` holds the two manifests (plain decode, and decode
 with the DFlash2 draft); `kern-qwen38/cubins/` holds every kernel they pin,
-content-addressed by SHA-256. `hf` is the Hugging Face CLI
-(`pip install -U huggingface_hub`); it is only a downloader, kern itself
-never touches Python.
+content-addressed by SHA-256.
 
-## 3. Point at your checkpoint
-
-The weights are the model's own checkpoint, unmodified. The manifest says
-which tensor lands in which buffer, so nothing is converted or exported.
-The same directory supplies the tokenizer (`tokenizer.json`) and the stop
-tokens (`generation_config.json`).
-
-Below, `<your_qwen38_checkpoint_path>` is that directory: the one
-`hf download Qwen/Qwen3.8-27B --local-dir …` gives you, or
-`~/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/<rev>`.
-
-## 4. Generate
+## 3. Generate
 
 ```sh
 kern run --manifest kern-qwen38/manifests/qwen3.8-27b.json \
@@ -58,6 +45,11 @@ kern run --manifest kern-qwen38/manifests/qwen3.8-27b.json \
          --weights  <your_qwen38_checkpoint_path> \
          --prompt "The capital of France is" --steps 64
 ```
+
+`--weights` is the Qwen/Qwen3.8-27B checkpoint directory as downloaded: the
+manifest says which tensor fills which buffer, and `tokenizer.json` and
+`generation_config.json` beside the shards supply the tokenizer and the stop
+tokens. Nothing is converted.
 
 Diagnostics go to stderr: the manifest verified, every kernel resolved by
 its pinned hash, the weights assembled straight out of the safetensors
@@ -74,7 +66,7 @@ The capital of Italy is Rome.
 `--gpu N` picks the device (default 0). `--prompt` is raw text, no chat
 template; wrap it yourself if you want the instruct format.
 
-## 5. Speculative decoding (optional)
+## 4. Speculative decoding (optional)
 
 Qwen3.8-27B has a DFlash2 draft model. Download it, add it as a second
 `--weights`, switch to the speculative manifest and ask for 8-row rounds:
@@ -100,7 +92,7 @@ Measured on one GB300 with the commands above (2026-09-08):
 | decode | 105 tok/s | 261 tok/s (4.0 tokens accepted per step) |
 | weights | 51.7 GiB mapped, assembled in 0.9 s | plus the 3.7 GiB draft |
 
-## 6. Save the flags as a target
+## 5. Save the flags as a target
 
 Write a `kern.toml` next to where you run, and the commands shrink to a
 name:
@@ -125,7 +117,7 @@ kern run qwen3.8-27b-dflash2 --steps 64      # --rows defaults to the widest dec
 Paths are resolved relative to the `kern.toml`. The full file format is in
 the [`kern.toml` reference](/reference/config).
 
-## 7. Serve over HTTP (optional)
+## 6. Serve over HTTP (optional)
 
 `kern-serve` puts the same manifest behind an OpenAI-compatible endpoint
 with continuous batching and speculative rounds under load. It is a separate
