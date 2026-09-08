@@ -15,12 +15,21 @@ pub mod config;
 pub mod run;
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use anyhow::{ensure, Context, Result};
 use kern_manifest::protocol::{Axis, Forward, Rows};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_runtime::{Lease, Runtime};
+
+/// What `kern --version` prints: the crate version, the commit it was built
+/// from, and the CUDA API the runtime binds; the three facts a bug report
+/// needs. The commit comes from `build.rs`.
+pub static VERSION: LazyLock<String> = LazyLock::new(|| {
+    let (major, minor) = (kern_runtime::CUDA_API / 1000, kern_runtime::CUDA_API % 1000 / 10);
+    format!("{} ({}, cuda {major}.{minor})", env!("CARGO_PKG_VERSION"), env!("KERN_COMMIT"))
+});
 
 /// What a checkpoint directory says besides its tensors: `tokenizer.json`
 /// and the ids that end generation (`generation_config.json`'s

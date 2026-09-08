@@ -18,7 +18,7 @@ use kern_run::run::RunOpts;
 #[derive(Parser)]
 #[command(
     name = "kern",
-    version,
+    version = kern_run::VERSION.as_str(),
     about = "model-agnostic GPU runtime: run a manifest, test a kernel swap, gather cubins, verify a manifest"
 )]
 struct Cli {
