@@ -263,7 +263,7 @@ ln -s /path/to/hf/snapshots/<rev> weights/Qwen3-4B
 ./target/release/kern run            # 一切来自 kern.toml 的 target；flag 覆盖：
 ./target/release/kern run \
   --manifest examples/qwen3-4b.json --kernels kernels \
-  --weights weights/Qwen3-4B --tokenizer weights/Qwen3-4B/tokenizer.json \
+  --weights weights/Qwen3-4B \
   --gpu 3 --capacity 4096 --chunk 512 --prompt "The capital of France is" --steps 320
 ```
 

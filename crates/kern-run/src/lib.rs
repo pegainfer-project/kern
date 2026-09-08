@@ -22,9 +22,55 @@ use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_runtime::{Lease, Runtime};
 
-/// Default stop tokens (Qwen3 <|endoftext|>, <|im_end|>) for raw
-/// (template-free) completion; `kern-run --stop-tokens` overrides.
-pub const STOP_TOKENS: [i64; 2] = [151643, 151645];
+/// What a checkpoint directory says besides its tensors: `tokenizer.json`
+/// and the ids that end generation (`generation_config.json`'s
+/// `eos_token_id`, else `config.json`'s; one id or a list). Over several
+/// `--weights` entries the first tokenizer wins and the eos ids are the
+/// union in order; a bare .safetensors file carries neither.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Checkpoint {
+    pub tokenizer: Option<std::path::PathBuf>,
+    pub stop_tokens: Vec<i64>,
+}
+
+pub fn checkpoint(paths: &[std::path::PathBuf]) -> Checkpoint {
+    let mut c = Checkpoint::default();
+    for d in paths.iter().filter(|p| p.is_dir()) {
+        let t = d.join("tokenizer.json");
+        if c.tokenizer.is_none() && t.is_file() {
+            c.tokenizer = Some(t);
+        }
+        for id in eos_ids(d) {
+            if !c.stop_tokens.contains(&id) {
+                c.stop_tokens.push(id);
+            }
+        }
+    }
+    c
+}
+
+/// The eos ids one HF directory declares: `generation_config.json`'s,
+/// else `config.json`'s, else none.
+pub fn eos_ids(dir: &std::path::Path) -> Vec<i64> {
+    let read = |f: &str| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(dir.join(f)).ok()?).ok()
+    };
+    ["generation_config.json", "config.json"]
+        .iter()
+        .filter_map(|f| read(f))
+        .map(|v| eos_of(&v))
+        .find(|ids| !ids.is_empty())
+        .unwrap_or_default()
+}
+
+/// `eos_token_id` as a list, whether it was written as one id or several.
+fn eos_of(v: &serde_json::Value) -> Vec<i64> {
+    match v.get("eos_token_id") {
+        Some(serde_json::Value::Number(n)) => n.as_i64().into_iter().collect(),
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_i64()).collect(),
+        _ => Vec::new(),
+    }
+}
 
 pub fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
@@ -239,5 +285,39 @@ impl Caller {
         };
         v.truncate(n);
         Ok(Emitted(v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn eos_is_one_id_or_a_list() {
+        assert_eq!(eos_of(&json!({"eos_token_id": 7})), vec![7]);
+        assert_eq!(eos_of(&json!({"eos_token_id": [3, 5]})), vec![3, 5]);
+        assert_eq!(eos_of(&json!({"eos_token_id": [3, "x"]})), vec![3]);
+        assert_eq!(eos_of(&json!({"bos_token_id": 1})), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn a_checkpoint_dir_names_its_tokenizer_and_eos() {
+        let root = std::env::temp_dir().join(format!("kern-checkpoint-{}", std::process::id()));
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(a.join("config.json"), r#"{"eos_token_id": 1}"#).unwrap();
+        std::fs::write(a.join("generation_config.json"), r#"{"eos_token_id": [2, 3]}"#).unwrap();
+        std::fs::write(b.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(b.join("config.json"), r#"{"eos_token_id": [3, 4]}"#).unwrap();
+        let file = root.join("w.safetensors");
+        std::fs::write(&file, "").unwrap();
+        // generation_config beats config; first tokenizer wins; ids union in order; a file adds nothing
+        let ck = checkpoint(&[file, a.clone(), b]);
+        assert_eq!((ck.tokenizer, ck.stop_tokens), (Some(a.join("tokenizer.json")), vec![2, 3, 4]));
+        assert_eq!(checkpoint(&[root.join("missing")]), Checkpoint::default());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

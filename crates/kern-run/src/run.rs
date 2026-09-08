@@ -17,7 +17,7 @@ use anyhow::{bail, ensure, Context, Result};
 use clap::Args;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Env, STOP_TOKENS};
+use crate::{Caller, Env};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, Dim, Dir};
 use kern_manifest::Verified;
@@ -77,8 +77,9 @@ pub struct RunOpts {
     #[arg(long)]
     pub rows: Option<u64>,
 
-    /// Token ids that end generation (comma-separated; default Qwen3's)
-    #[arg(long, value_delimiter = ',', default_values_t = STOP_TOKENS)]
+    /// Extra token ids that end generation (comma-separated); the eos ids
+    /// the checkpoint declares in generation_config.json always apply
+    #[arg(long, value_delimiter = ',')]
     pub stop_tokens: Vec<i64>,
 
     /// Debug: dump activations of the first prefill chunk and `--probe-steps`
@@ -125,17 +126,30 @@ impl RunOpts {
                 cfg.map_or(crate::config::FILE.to_string(), |c| c.path.display().to_string())
             )
         };
+        let weights = if self.weights.is_empty() {
+            t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
+        } else {
+            self.weights
+        };
+        let ck = crate::checkpoint(&weights);
+        let stop_tokens: Vec<i64> = ck.stop_tokens.iter().chain(&self.stop_tokens).fold(Vec::new(), |mut v, &id| {
+            if !v.contains(&id) {
+                v.push(id);
+            }
+            v
+        });
+        anyhow::ensure!(
+            !stop_tokens.is_empty(),
+            "no stop tokens: no eos_token_id in the weights dir(s)' generation_config.json / config.json and no --stop-tokens"
+        );
         Ok(Opts {
             manifest: self.manifest.or_else(|| t.map(|t| t.manifest.clone())).ok_or_else(|| need("manifest"))?,
             kernels: self.kernels.or_else(|| t.map(|t| t.kernels.clone())).ok_or_else(|| need("kernels"))?,
-            weights: if self.weights.is_empty() {
-                t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
-            } else {
-                self.weights
-            },
+            weights,
             tokenizer: self
                 .tokenizer
                 .or_else(|| t.and_then(|t| t.tokenizer.clone()))
+                .or(ck.tokenizer)
                 .ok_or_else(|| need("tokenizer"))?,
             prompt: self
                 .prompt
@@ -147,7 +161,7 @@ impl RunOpts {
             chunk: self.chunk.or_else(|| cfg.and_then(|c| c.run.chunk)).unwrap_or(512),
             eager: self.eager,
             rows: self.rows,
-            stop_tokens: self.stop_tokens,
+            stop_tokens,
             probe_dir: self.probe_dir,
             probe_labels: self.probe_labels,
             probe_steps: self.probe_steps,
@@ -276,6 +290,7 @@ fn execute(o: Opts) -> Result<()> {
     );
 
     let tokenizer = tokenizers::Tokenizer::from_file(&o.tokenizer).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
+    info!("tokenizer {} · stop tokens {:?}", o.tokenizer.display(), o.stop_tokens);
     let prompt_ids: Vec<i64> = tokenizer
         .encode(o.prompt.as_str(), false)
         .map_err(|e| anyhow::anyhow!("encode: {e}"))?

@@ -13,7 +13,6 @@ manifest  = "examples/qwen3-4b-silu-mined.json"
 reference = "examples/qwen3-4b.json"
 kernels   = "kernels"
 weights   = ["weights/Qwen3-4B"]
-tokenizer = "weights/Qwen3-4B/tokenizer.json"
 
 [kernels]
 dumps   = ["dumped-kernels"]
@@ -34,18 +33,15 @@ steps = 32
 manifest  = "examples/qwen3-4b-dspark.json"
 kernels   = "kernels"
 weights   = ["weights/Qwen3-4B", "weights/dspark-qwen3-4b-b7"]
-tokenizer = "weights/Qwen3-4B/tokenizer.json"
 
 # Qwen3.8-27B (hybrid GDN + attention): `kern run qwen3.8-27b`.
 [targets."qwen3.8-27b"]
 manifest  = "examples/qwen3.8-27b.json"
 kernels   = "kernels-qwen38"
 weights   = ["weights/Qwen3.8-27B"]
-tokenizer = "weights/Qwen3.8-27B/tokenizer.json"
 
 # With its DFlash2 draft: `kern run qwen3.8-27b-dflash2` (8-row rounds by default).
 [targets."qwen3.8-27b-dflash2"]
 manifest  = "examples/qwen3.8-27b-dflash2.json"
 kernels   = "kernels-qwen38-dflash2"
 weights   = ["weights/Qwen3.8-27B", "weights/Qwen3.8-27B-DFlash2"]
-tokenizer = "weights/Qwen3.8-27B/tokenizer.json"

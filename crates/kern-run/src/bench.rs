@@ -283,13 +283,15 @@ fn output_fingerprints(rt: &Runtime, p: &Protocol, batch: usize) -> Result<Vec<V
 pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Result<()> {
     let manifest = o.manifest.as_ref().or(target.map(|t| &t.manifest)).context("--manifest or target required")?;
     let kernels = o.kernels.as_ref().or(target.map(|t| &t.kernels)).context("--kernels or target required")?;
+    let weights = if o.weights.is_empty() { target.map(|t| t.weights.as_slice()).unwrap_or(&[]) } else { &o.weights };
+    ensure!(!weights.is_empty(), "weights required");
+    let ck = crate::checkpoint(weights);
     let tokenizer = o
         .tokenizer
         .as_ref()
         .or(target.and_then(|t| t.tokenizer.as_ref()))
+        .or(ck.tokenizer.as_ref())
         .context("tokenizer required for prose workloads")?;
-    let weights = if o.weights.is_empty() { target.map(|t| t.weights.as_slice()).unwrap_or(&[]) } else { &o.weights };
-    ensure!(!weights.is_empty(), "weights required");
     let workload: Workload = serde_json::from_slice(&std::fs::read(&o.workload)?)?;
     ensure!((12..=256).contains(&workload.samples), "samples must be in 12..=256");
     ensure!(!workload.scenarios.is_empty(), "no scenarios");

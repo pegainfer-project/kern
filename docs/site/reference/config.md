@@ -17,7 +17,7 @@ manifest = "artifacts/candidate/manifest.json"
 reference = "artifacts/reference/manifest.json"
 kernels = "artifacts/kernels"
 weights = ["artifacts/checkpoint"]   # HF snapshot dir(s) or .safetensors files
-tokenizer = "artifacts/tokenizer.json"
+tokenizer = "artifacts/tokenizer.json"   # optional: defaults to the checkpoint's tokenizer.json
 
 [kernels]
 dumps = ["captures/framework-run"]
@@ -55,7 +55,7 @@ chunk = 512
 | `reference` | `kern test` | Trusted A-side manifest |
 | `kernels` | Run, test, bench, kernels | Directory containing device modules |
 | `weights` | Run, test, bench | One or more Safetensors files |
-| `tokenizer` | Run; test with a prompt | Hugging Face tokenizer JSON |
+| `tokenizer` | Run; test with a prompt | Hugging Face tokenizer JSON; defaults to `tokenizer.json` in the first weights directory, whose `generation_config.json` also supplies the stop tokens |
 
 Target names have no built-in meaning. If the config contains exactly one
 target, commands may omit its name; otherwise a target must be selected.

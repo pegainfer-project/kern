@@ -168,16 +168,21 @@ impl TestOpts {
             None => anyhow::anyhow!("no --{what}, and no {} found at or above the cwd", crate::config::FILE),
         };
         let test = cfg.map(|c| &c.test);
+        let weights = if self.weights.is_empty() {
+            t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
+        } else {
+            self.weights
+        };
+        let tokenizer = self
+            .tokenizer
+            .or_else(|| t.and_then(|t| t.tokenizer.clone()))
+            .or_else(|| crate::checkpoint(&weights).tokenizer);
         Ok(Opts {
             a: self.reference.or_else(|| t.and_then(|t| t.reference.clone())).ok_or_else(|| need("reference"))?,
             b: self.manifest.or_else(|| t.map(|t| t.manifest.clone())).ok_or_else(|| need("manifest"))?,
             kernels: self.kernels.or_else(|| t.map(|t| t.kernels.clone())).ok_or_else(|| need("kernels"))?,
-            weights: if self.weights.is_empty() {
-                t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
-            } else {
-                self.weights
-            },
-            tokenizer: self.tokenizer.or_else(|| t.and_then(|t| t.tokenizer.clone())),
+            weights,
+            tokenizer,
             prompt: self.prompt.or_else(|| test.and_then(|x| x.prompt.clone())),
             prefill: self.prefill,
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),

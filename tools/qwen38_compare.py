@@ -22,13 +22,12 @@ import sys
 import time
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-STOP = "248046,248044"   # <|im_end|>, <|endoftext|> of the Qwen3.8 tokenizer
 
 
 def run_one(args, prompt, steps):
     cmd = [os.environ.get("KERN_BIN", str(REPO / "target/release/kern")), "run", args.target,
            "--gpu", str(args.gpu), "--capacity", str(args.capacity), "--chunk", str(args.chunk),
-           "--steps", str(steps), "--stop-tokens", STOP, "--prompt", prompt]
+           "--steps", str(steps), "--prompt", prompt]
     if args.spec:
         cmd += ["--rows", "8"]
     if args.eager:

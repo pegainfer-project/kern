@@ -108,26 +108,6 @@ pub struct ServeOpts {
     pub host_gib: f64,
 }
 
-/// Stop tokens from the HF directory: generation_config.json `eos_token_id`
-/// (int or list), else config.json's.
-fn hf_stop_tokens(model_path: &Path) -> Vec<u32> {
-    let read = |f: &str| -> Option<serde_json::Value> {
-        serde_json::from_str(&std::fs::read_to_string(model_path.join(f)).ok()?).ok()
-    };
-    let ids = |v: &serde_json::Value| -> Vec<u32> {
-        match v.get("eos_token_id") {
-            Some(serde_json::Value::Number(n)) => n.as_u64().into_iter().map(|x| x as u32).collect(),
-            Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect(),
-            _ => Vec::new(),
-        }
-    };
-    let mut out = read("generation_config.json").map(|v| ids(&v)).unwrap_or_default();
-    if out.is_empty() {
-        out = read("config.json").map(|v| ids(&v)).unwrap_or_default();
-    }
-    out
-}
-
 /// One rank's weight files from the target's list: every `{group}` in a
 /// path is the rank's index in that topology group (`{ep}`, `{tp}`), and
 /// a `*` in a file name matches that directory's files around it, in name
@@ -167,7 +147,7 @@ fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
 pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     let gpus = if o.gpus.is_empty() { vec![d.gpu.unwrap_or(0)] } else { o.gpus.clone() };
     let chunk = o.chunk.or(d.chunk).unwrap_or(512) as usize;
-    let mut stop_tokens = hf_stop_tokens(&o.model_path);
+    let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&o.model_path).into_iter().map(|x| x as u32).collect();
     stop_tokens.extend(&o.stop_tokens);
     stop_tokens.sort_unstable();
     stop_tokens.dedup();

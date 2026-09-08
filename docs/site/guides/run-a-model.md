@@ -1,8 +1,10 @@
 # Run a model
 
 `kern run` performs greedy generation for one sequence. A complete artifact is
-required: a verified manifest, every referenced kernel module, the weights, and
-a Hugging Face `tokenizer.json`.
+required: a verified manifest, every referenced kernel module, and the weights.
+A checkpoint directory also supplies the tokenizer (`tokenizer.json`) and the
+stop tokens (`generation_config.json`); a bare `.safetensors` file needs
+`tokenizer` in the target and `--stop-tokens`.
 
 ## Define a local target
 
@@ -16,7 +18,7 @@ gpu = 0
 manifest = "artifacts/demo/manifest.json"
 kernels = "artifacts/demo/kernels"
 weights = ["artifacts/demo/checkpoint"]   # HF snapshot dir(s) or .safetensors files
-tokenizer = "artifacts/demo/tokenizer.json"
+tokenizer = "artifacts/demo/tokenizer.json"   # optional: defaults to the checkpoint's
 
 [run]
 prompt = "The capital of France is"
