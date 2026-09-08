@@ -53,7 +53,8 @@ pub struct ServeOpts {
     #[arg(long)]
     pub model_path: PathBuf,
 
-    /// Model id served by the API (default: the manifest's `model`)
+    /// Model id served by the API (default: the kern.toml target's name,
+    /// else the manifest's `model`)
     #[arg(long)]
     pub served_model_name: Option<String>,
 

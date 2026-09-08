@@ -10,9 +10,11 @@ target/release/kern-serve --model-path /mnt/shared/weights/Qwen3-4B --gpus 3 --p
 # /v1/completions、/v1/chat/completions（流式 + chat template）、/v1/models、/metrics
 ```
 
-manifest / kernels / weights 来自 kern.toml 的 target；`--model-path` 是给
-**前端**的 HF 目录（tokenizer、chat template、`generation_config.json` 的
-eos）。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
+manifest / kernels / weights 来自 kern.toml 的 target，或直接 `--manifest`
+`--kernels` `--weights`（与 `kern run` 同一套 flag，没有 kern.toml 也能起）；
+API 里的模型名缺省是 target 名（没有 target 时是 manifest 的 `model`），
+`--served-model-name` 覆盖。`--model-path` 是给**前端**的 HF 目录（tokenizer、
+chat template、`generation_config.json` 的 eos）。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
 ## 分工

@@ -47,6 +47,18 @@ the pinned `cudarc` feature, so no CUDA toolkit is involved in the build.
 The repository's `kern.toml` names fixture targets; with their kernels and
 checkpoints in place, `./target/release/kern run qwen3-4b` works as-is.
 
+## kern-serve
+
+The HTTP server is a separate workspace (it carries the OpenAI front end and
+its dependencies) and is not in the release archive yet. It builds from the
+same checkout and needs `pkg-config`, `libssl-dev` and `protobuf-compiler`
+on Debian/Ubuntu:
+
+```sh
+cd crates/kern-serve && cargo build --release
+target/release/kern-serve --help
+```
+
 ## Verify a manifest without a GPU
 
 The manifest verifier is a pure Rust crate. It is what CI and editors can
