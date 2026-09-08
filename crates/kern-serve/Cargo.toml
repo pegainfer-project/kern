@@ -2,6 +2,7 @@
 name = "kern-serve"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 description = "OpenAI-compatible serving over a kern manifest: a continuous-batching scheduler behind the pegainfer frontend"
 
 # Its own workspace, on purpose: the serving stack (pegainfer frontend, vLLM
