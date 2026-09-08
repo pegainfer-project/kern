@@ -105,7 +105,9 @@ def name_constants(manifest):
                 if k in ("i32", "i64") and isinstance(v, int) and v in dims:
                     value[k] = ref(dims[v], v)
                 elif k == "f32" and isinstance(v, (int, float)):
-                    if "norm" in op and 0 < v < 0.001:
+                    # An epsilon is orders of magnitude below any attention
+                    # scale (1/sqrt(head_dim)), whichever op carries it.
+                    if 0 < v < 0.001:
                         value[k] = ref("rms_norm_eps", v)
                     elif op.startswith("attn") and 0 < v < 1:
                         value[k] = ref("draft_attention_scale" if op == "attn_draft" else "attention_scale", v)

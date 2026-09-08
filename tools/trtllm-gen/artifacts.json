@@ -1,0 +1,46 @@
+{
+  "format_version": 1,
+  "flashinfer_version": "0.6.16.post3",
+  "validated_gpu": "GB300",
+  "kernels": {
+    "decode": {
+      "entry": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ8Kv128PersistentSwapsAbForGen",
+      "source": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ8Kv128PersistentSwapsAbForGen.cubin",
+      "sha256": "0b1f8c15e1407f86e019365e1af79fd5a93e16158dcb072d3a6774a217b92b1e",
+      "url": "https://edge.urm.nvidia.com/artifactory/sw-kernelinferencelibrary-public-generic-local/158f6fa11ef139a098cfddcdddce73ca99d164ad/fmha/trtllm-gen/fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ8Kv128PersistentSwapsAbForGen.cubin",
+      "block": [
+        512,
+        1,
+        1
+      ],
+      "shared_mem": 147216,
+      "param_bytes": 1280
+    },
+    "decode_split": {
+      "entry": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen",
+      "source": "fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen.cubin",
+      "sha256": "a5c3300d05153675d2c6c432c50be888f3e0a8bb6c3ffbdaed48fbb25e52f86e",
+      "url": "https://edge.urm.nvidia.com/artifactory/sw-kernelinferencelibrary-public-generic-local/158f6fa11ef139a098cfddcdddce73ca99d164ad/fmha/trtllm-gen/fmhaSm100fKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64MultiCtasKvVarSeqQ8Kv128StaticSwapsAbForGen.cubin",
+      "block": [
+        512,
+        1,
+        1
+      ],
+      "shared_mem": 144992,
+      "param_bytes": 1280
+    },
+    "prefill": {
+      "entry": "fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext",
+      "source": "fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext.cubin",
+      "sha256": "270e5246cd40181234f075ae4e05e0e53fbe662e46640807b44daf272cd5aed7",
+      "url": "https://edge.urm.nvidia.com/artifactory/sw-kernelinferencelibrary-public-generic-local/158f6fa11ef139a098cfddcdddce73ca99d164ad/fmha/trtllm-gen/fmhaSm103aKernel_QkvBfloat16OBfloat16H256PagedKvCausalP64VarSeqQ128Kv128PersistentContext.cubin",
+      "block": [
+        384,
+        1,
+        1
+      ],
+      "shared_mem": 197872,
+      "param_bytes": 1280
+    }
+  }
+}

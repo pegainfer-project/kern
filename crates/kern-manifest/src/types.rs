@@ -755,6 +755,9 @@ pub struct KernelLaunch {
     /// Thread-block cluster shape, e.g. `[2, 1, 1]`; the grid must be a multiple of it on every axis. Launched with `cuLaunchKernelEx`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<[u32; 3]>,
+    /// Programmatic dependent launch, e.g. `true`: the kernel may start before the previous launch on the stream has finished, and it promises to execute `griddepcontrol.wait` before reading or writing anything that launch produces or consumes. Only reads of weights may precede the wait.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pdl: bool,
     /// Where each launch param comes from (default: the op's params in order), e.g. `[{"param": 0}, {"scratch": "pmax"}, {"i32": 64}]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<LaunchArg>>,
