@@ -359,8 +359,8 @@ verifier 因此只需检查 device-launch 的图约束（全 kernel/memcpy/memse
 
 ### TP
 
-- 权重按 rank 切在导出时做（`tools/export_weights.py` 出 8 份），manifest
-  的 GEMM 形状是切后的；每层两个 `allreduce` call。
+- 权重按 rank 切写在 manifest 里（每个 rank 的 weight buffer `bind` 到
+  checkpoint 张量的一个 `rows` / `cols` 区间），manifest 的 GEMM 形状是切后的；每层两个 `allreduce` call。
 - KV 按 head 切，每 rank 自己的 state；lease 决策只在 leader，block_table
   写给每个 rank。（只对小 dense 模型；K3 的 MLA latent 不能按头切，见"最终形态"。）
 - 图：每 rank 自己的图（不用跨设备图——它不能 device launch，且 fork/join

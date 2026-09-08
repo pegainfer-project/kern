@@ -9,7 +9,7 @@
  },
  "buffers": {
   "x": {"dtype": "bf16", "shape": ["tokens", 64], "kind": "input"},
-  "w": {"dtype": "bf16", "shape": [64], "kind": "weight"},
+  "w": {"dtype": "bf16", "shape": [64], "kind": "weight", "bind": [{"tensor": "w"}]},
   "y": {"dtype": "bf16", "shape": ["tokens", 64], "kind": "output"}
  },
  "modules": {

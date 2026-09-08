@@ -74,10 +74,10 @@ def mega_pieces(ranks, tokens_max, wprefix=""):
         "stats": {"dtype": "i32", "shape": [epr], "kind": "workspace"},
     }
     weights = {
-        "l1_weights": {"dtype": "u8", "shape": [epr * 2 * I * (H // 2)], "kind": "weight"},
-        "l1_weights_sf": {"dtype": "i32", "shape": [epr * (H // 128) * 2 * I], "kind": "weight"},
-        "l2_weights": {"dtype": "u8", "shape": [epr * H * (I // 2)], "kind": "weight"},
-        "l2_weights_sf": {"dtype": "i32", "shape": [epr * (I // 128) * H], "kind": "weight"},
+        "l1_weights": {"dtype": "u8", "shape": [epr * 2 * I * (H // 2)], "kind": "weight", "bind": [{"tensor": "l1_weights"}]},
+        "l1_weights_sf": {"dtype": "i32", "shape": [epr * (H // 128) * 2 * I], "kind": "weight", "bind": [{"tensor": "l1_weights_sf"}]},
+        "l2_weights": {"dtype": "u8", "shape": [epr * H * (I // 2)], "kind": "weight", "bind": [{"tensor": "l2_weights"}]},
+        "l2_weights_sf": {"dtype": "i32", "shape": [epr * (I // 128) * H], "kind": "weight", "bind": [{"tensor": "l2_weights_sf"}]},
     }
 
     slab = lambda name: {"buf": "slab", "offset": off[name]}

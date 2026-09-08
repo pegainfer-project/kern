@@ -3,6 +3,20 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-08，权重改绑 checkpoint（`bind` + `load` once program）
+
+**A/B 共用的 bug，`kern test` 看不见。** rope 表改成设备上由 once program 算，核用
+`blockIdx.y` 取行而 grid 把行放在 x 上，表只有第 0 行对；`kern test qwen3-4b` 报
+PASS——A、B 两份 manifest 读的是同一张错表，逐位一致。`kern run` 出乱码才露馅，
+定位靠 `program_io --dump` 把新路径的 buffer 与旧导出逐字节比。规则：换一条生产
+同一份数据的新路径（导出 → 设备上算、拷贝 → bind），门禁是与旧工件逐字节比，
+`kern test` 只证明 A/B 一致，不证明它们对。
+
+**钉住的 sha 只有一台机器能复现。** master 的手写核 sha 是 kernel-lab 容器的
+nvcc 13.0 编的，host 的 13.1 / 13.4 出来的 cubin 字节不同，改一个核就要把全套
+手写核重钉。规则：手写核在 kernel-lab 里编（`tools/build_kernels.sh`），换 nvcc
+就是换核，换核就是一次门禁。
+
 ## 2026-09-03，K5 span（FlashKDA 接入、k3_golden 多行 span、runtime 容量）
 
 **capture 里的分配字母不是参数名。** FlashKDA recurrence 的 16 个参数按模板签名猜成

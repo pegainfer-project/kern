@@ -15,7 +15,7 @@
 | 3b | `kern_manifest.py` | 生成器共用件。`DumpIndex(dump).pin(symbol, regs, param_sizes)`：按内容索引 dump 的 module，给每个挖矿 launch 钉唯一的 module（寄存器数分不开的 Triton constexpr 实例再按 `.nv.info` 参数布局分）。`normalize()` 后处理：把 launch 内联的 cubin/sha256 提升到 `modules` 表、把每次 call 都相同的接口标量折进 impl 的 launch 字面量、抹掉恒等连线与重复 `params`、规范键序。生成器写长，wire form 写短 |
 | 4 | `build_kernels.sh` + `handwritten.py` | `kernels-src/*.cu` → `target/cubins/`（nvcc，sm_103a）；生成器通过 `**hw("name")` 把当前 build 的 sha256 钉进 launch 的 module——换 nvcc / 换 flag / 改源码就是另一个核 |
 | 5 | `extract_kernels.sh` | manifest + dump 目录 → `kernels/`：`modules` 表里每个 module 按 sha256 在 dump（递归）/ `target/cubins` 里找到文件，落地为 `<module>-<sha12>.cubin`；只增不减，同一目录可放每个版本，A/B 两份 manifest 共用（runtime 只装载各自点名的） |
-| 6 | `export_weights.py` | HF checkpoint（+ draft checkpoint）→ `weights/`：qkv/gate_up 合并、rope cos_sin_cache 预计算、kv_scales 全 1、tied lm_head clone + tokenizer 文件；draft 侧另做 fc 按列切 5 块、融合 KV 权重 cat、markov 头原样 → `qwen3-4b-dspark.safetensors` |
+| 6 | `qwen_weights.py` | 生成器的最后一道（`gen_qwen35.py` / `gen_qwen3_decode.py` 的 build 都以它收尾，也可单跑改写一份 manifest）：给每个 weight buffer 写 `bind`——qkv / gate_up 拼接、tied lm_head 指回 embed、draft 的 fc 按列切 5 块、fused KV 按层 cat——并生成 `load` once program 算 checkpoint 里没有的表：Gemma norm 的 +1、A_log 的 f32、rope cos / sin、kv_scales 全 1、chunk 索引（核在 `kernels-src/weight_prep.cu`）。没有导出这一步：`--weights` 直接给 HF snapshot 目录，runtime 只读 safetensors header |
 
 ## K3（多卡线，E1/E2）
 

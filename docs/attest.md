@@ -8,7 +8,7 @@
 ./target/release/kern test qwen3-4b --out attestation.json   # A/B/kernels/weights 来自 kern.toml 的 target
 ./target/release/kern test \                                 # 或全用 flag（没有 kern.toml 时）
   --reference examples/qwen3-4b.json --manifest examples/qwen3-4b-silu-mined.json \
-  --kernels kernels --weights weights/qwen3-4b-decode.safetensors --out attestation.json
+  --kernels kernels --weights weights/Qwen3-4B --out attestation.json
                                   # --diff-only 只看静态 diff；--no-perf 跳过计时
                                   # --no-graph-step / --no-sweep 关掉 TPOT graph 计时 / prefill 扫描
 ```

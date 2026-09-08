@@ -7,7 +7,7 @@
 //! buffer, a program or a var. `kern run` (generation) and `kern test`
 //! (A/B evidence) both drive the runtime through it.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod attest;
 pub mod bench;
@@ -16,7 +16,7 @@ pub mod run;
 
 use std::collections::BTreeMap;
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use kern_manifest::protocol::{Axis, Forward, Rows};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
@@ -32,6 +32,37 @@ pub fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
 
 /// The var env of one call.
 pub type Env = BTreeMap<String, u64>;
+
+/// The safetensors a `--weights` entry stands for: the file itself, or
+/// every `*.safetensors` under a directory (a checkpoint's shards) in
+/// name order, mapped read-only. Nothing is read up front: the runtime
+/// parses headers and copies each bound segment straight out of the map.
+pub fn map_weights(paths: &[std::path::PathBuf]) -> Result<Vec<memmap2::Mmap>> {
+    let mut files = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            let mut shards: Vec<_> = std::fs::read_dir(p)
+                .with_context(|| format!("weights dir {}", p.display()))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|f| f.extension().is_some_and(|x| x == "safetensors"))
+                .collect();
+            ensure!(!shards.is_empty(), "weights dir {}: no .safetensors in it", p.display());
+            shards.sort();
+            files.extend(shards);
+        } else {
+            files.push(p.clone());
+        }
+    }
+    files.iter().map(|f| map_file(f)).collect()
+}
+
+#[allow(unsafe_code)]
+fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
+    let file = std::fs::File::open(f).with_context(|| format!("weights {}", f.display()))?;
+    // Mapped, not read: a 50 GB checkpoint costs no DRAM of its own and
+    // two runtimes on one host share the page cache.
+    unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("mapping weights {}", f.display()))
+}
 
 /// What one call handed back for the sequence: the tokens it takes, in
 /// order (one for a decode step or a prefill chunk, `count` of `rows` for

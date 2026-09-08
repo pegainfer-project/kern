@@ -23,7 +23,7 @@ A model ships as three files:
 ```
 manifest.json     one typed declaration — buffers, ops, programs
 kernels/          compiled device code, from anywhere
-weights
+weights           the model's own checkpoint; the manifest says which tensor lands where
 ```
 
 **A manifest is one point in that exponential space — declared, verified,
@@ -84,8 +84,7 @@ cargo build --release
 # kern.toml at the repo root names the fixture target (manifest, reference,
 # kernels dir, weights); every flag can still override it.
 ./target/release/kern run --steps 320
-./target/release/kern run --manifest examples/qwen3-4b-dspark.json \
-  --weights weights/qwen3-4b-dspark.safetensors --steps 320   # speculative decoding: the manifest's 7-row round, same runtime
+./target/release/kern run qwen3-4b-dspark --steps 320   # speculative decoding: the manifest's 7-row round, same runtime
 
 # the loop: evidence for a kernel swap — diff, tap a seeded workload once
 # (random tokens, multi-chunk prefill, N decode steps), then per cut: noise

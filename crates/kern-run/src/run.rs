@@ -263,17 +263,13 @@ fn execute(o: Opts) -> Result<()> {
     }
 
     let t0 = Instant::now();
-    let blobs = o
-        .weights
-        .iter()
-        .map(|p| std::fs::read(p).with_context(|| format!("reading weights {}", p.display())))
-        .collect::<Result<Vec<_>>>()?;
-    let blob_len: usize = blobs.iter().map(Vec::len).sum();
-    rt.load_weights(&blobs.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-    drop(blobs);
+    let maps = crate::map_weights(&o.weights)?;
+    let blob_len: usize = maps.iter().map(|m| m.len()).sum();
+    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
+    drop(maps);
     let n_weights = by_kind.get("weight").map_or(0, |e| e.0);
     info!(
-        "weights: {n_weights} tensors bound by name from {} ({}) in {:?}",
+        "weights: {n_weights} buffers assembled from {} ({} mapped) in {:?}",
         o.weights.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" + "),
         human(blob_len as u64),
         t0.elapsed()

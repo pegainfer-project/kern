@@ -251,6 +251,31 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 errs.push(format!("{ctx}: fill `{fill}` needs an i32 or i64 buffer, not {}", b.dtype));
             }
         }
+        // 9c. bind: a weight is its segments, nothing else has any
+        match (b.kind, b.bind.is_empty()) {
+            (BufferKind::Weight, true) => {
+                errs.push(format!("{ctx}: a weight buffer binds at least one checkpoint tensor (`bind`)"))
+            }
+            (BufferKind::Weight, false) => {
+                for (i, s) in b.bind.iter().enumerate() {
+                    let sctx = format!("{ctx}: bind[{i}]");
+                    if s.tensor.is_empty() {
+                        errs.push(format!("{sctx}: empty tensor name"));
+                    }
+                    for (axis, r) in [("rows", s.rows), ("cols", s.cols)] {
+                        if let Some([from, to]) = r {
+                            if from >= to {
+                                errs.push(format!("{sctx}: {axis} [{from}, {to}) is empty"));
+                            }
+                        }
+                    }
+                }
+            }
+            (kind, false) => {
+                errs.push(format!("{ctx}: `bind` names checkpoint tensors for a weight, not a {kind} buffer"))
+            }
+            (_, true) => {}
+        }
         // 10b. export / peer
         if b.kind == BufferKind::Peer {
             if b.export {
@@ -964,7 +989,7 @@ mod tests {
       "states": { "kv": { "bytes_per_token": 4096 } },
       "buffers": {
         "x": { "dtype": "i32", "shape": ["tokens"], "kind": "input" },
-        "w": { "dtype": "bf16", "shape": [64, 64], "kind": "weight" },
+        "w": { "dtype": "bf16", "shape": [64, 64], "kind": "weight", "bind": [{ "tensor": "w" }] },
         "h": { "dtype": "bf16", "shape": ["tokens", 64], "kind": "workspace" },
         "y": { "dtype": "bf16", "shape": ["tokens", 64], "kind": "output" }
       },
@@ -1815,5 +1840,25 @@ mod tests {
         let mut v = base();
         v["buffers"]["x"]["domain"] = serde_json::json!({ "min": 0, "stride": 4 });
         assert_err(v, "`stride` only applies with `index_into`");
+    }
+
+    #[test]
+    fn bind_is_a_weight_s_and_only_a_weight_s() {
+        let mut v = base();
+        v["buffers"]["w"]["bind"] = serde_json::json!([]);
+        assert_err(v, "a weight buffer binds at least one checkpoint tensor");
+        let mut v = base();
+        v["buffers"]["h"]["bind"] = serde_json::json!([{ "tensor": "h" }]);
+        assert_err(v, "not a workspace buffer");
+        let mut v = base();
+        v["buffers"]["w"]["bind"] = serde_json::json!([{ "tensor": "" }]);
+        assert_err(v, "bind[0]: empty tensor name");
+        let mut v = base();
+        v["buffers"]["w"]["bind"] = serde_json::json!([{ "tensor": "a" }, { "tensor": "b", "rows": [4, 4] }]);
+        assert_err(v, "bind[1]: rows [4, 4) is empty");
+        let mut v = base();
+        v["buffers"]["w"]["bind"] = serde_json::json!([{ "tensor": "a", "cols": [0, 32] }, { "tensor": "a", "cols": [32, 64], "rows": [0, 64] }]);
+        let m: Manifest = serde_json::from_value(v).unwrap();
+        assert!(verify(m).is_ok());
     }
 }

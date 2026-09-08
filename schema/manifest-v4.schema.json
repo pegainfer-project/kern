@@ -274,6 +274,13 @@
       "additionalProperties": false,
       "description": "A typed tensor, e.g. `{\"dtype\": \"bf16\", \"shape\": [\"tokens\", 2560], \"kind\": \"workspace\"}`.",
       "properties": {
+        "bind": {
+          "description": "`weight` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{\"tensor\": \"q_proj.weight\"}, {\"tensor\": \"k_proj.weight\"}]`.",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          },
+          "type": "array"
+        },
         "domain": {
           "anyOf": [
             {
@@ -352,7 +359,7 @@
         },
         {
           "const": "weight",
-          "description": "Bound by name from the weights file at load time, e.g. `model.embed_tokens.weight`.",
+          "description": "Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.",
           "type": "string"
         },
         {
@@ -1329,6 +1336,66 @@
       "required": [
         "dtype",
         "shape"
+      ],
+      "type": "object"
+    },
+    "Segment": {
+      "additionalProperties": false,
+      "description": "One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{\"tensor\": \"fc.weight\", \"cols\": [0, 5120]}`.",
+      "properties": {
+        "cols": {
+          "description": "Half-open column range `[from, to)` over the product of the remaining axes; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "rows": {
+          "description": "Half-open row range `[from, to)` of the tensor's first axis; the whole axis when absent, e.g. `[0, 1024]`.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tensor": {
+          "description": "Tensor name in the safetensors header, e.g. `\"model.layers.0.self_attn.q_proj.weight\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tensor"
       ],
       "type": "object"
     },

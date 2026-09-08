@@ -41,6 +41,7 @@ K4 改成按新 token 分段的 extend（待定稿）；E4 最后，其门禁按
 | 级 | 内容 | 门禁 |
 |---|---|---|
 | V4 ✅ | serving 协议进 manifest（schema v4，设计 v4-design.md）：buffer 的 `fill`、program 的 `batch` / `once`，`spec` 块删除；`Verified` newtype + `Protocol::check` 投影，kern-run / kern-serve 不读 JSON、不认名字（CI grep）；投机轮统一成 `round` program（dspark 也补了：splice / 计数 / prefill 收编 head 与 precompute 全在设备上），`--spec` → `--rows`；`kern verify` 打印协议事实 | **2026-09-03 tray03 通过**：`kern test` 位一致；qwen3-4b / qwen3.8-27b / dspark / dflash2 四份 conc1 与 `kern run` 逐字同；dflash2 与 v3 `--spec` 逐字节同；dspark 7 行 round 在一个 0.125 的 bf16 平局上与 v3 的 8 行 verify 分叉（核噪声）；conc32 接受率 34% / 24% 不塌，5930 / 1709 tok/s。记录 v4-design.md §9、serve.md |
+| W1 ✅ | 权重就是 HF checkpoint：weight buffer 的 `bind` 列出拼成它的张量段（qkv / gate_up 拼接、draft fc 列块、tied lm_head），runtime 只读 safetensors header、按段 memcpy / 2D copy；派生表（Gemma +1、A_log f32、rope、kv_scales、chunk 索引）是 `carry`，由 `load` once program 用 `weight_prep.cu` 算；`tools/export_*.py` 与自定义 .safetensors 全删，`--weights` 给 snapshot 目录（K3 的 bind 未写，examples 仍是逐 buffer 同名的平凡 bind） | **2026-09-08 tray03 通过**：qwen3.8-27b / dflash2 / qwen3-4b-dspark 的每种 bind 形态（拼接、列块、按层 cat、tied）与每种派生表的 dump 对旧导出逐字节相同（qwen3-4b 的 rope 表 2078/5.2M 元素差 1 bf16 ulp：旧表是 CPU torch 算的）；`kern test qwen3-4b` 位一致，`kern run` 文本同；qwen3.8-27b plain 与 dflash2 8 行 round（`qwen38_compare.py`，5 条 prompt × 400 token）与旧导出在同一 binary 上逐 token 相同，对 vLLM 参考的分叉点两者一样、全在 margin ≤ 0.125 的近平局上 |
 
 ## K5 规划（2026-09-03）
 

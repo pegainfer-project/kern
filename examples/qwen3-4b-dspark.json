@@ -215,14 +215,24 @@
     "VOCAB_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.embed_tokens.weight"
+    }
+   ]
   },
   "model.norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.norm.weight"
+    }
+   ]
   },
   "lm_head.weight": {
    "dtype": "bf16",
@@ -230,7 +240,12 @@
     "VOCAB_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.embed_tokens.weight"
+    }
+   ]
   },
   "rope.cos_sin_cache": {
    "dtype": "bf16",
@@ -238,14 +253,14 @@
     "MAX_POSITION_EMBEDDINGS",
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "carry"
   },
   "kv_scales": {
    "dtype": "f32",
    "shape": [
     "KV_SCALE_COUNT"
    ],
-   "kind": "weight",
+   "kind": "carry",
    "domain": {
     "min": 0.0
    }
@@ -255,14 +270,24 @@
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.0.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.0.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -270,21 +295,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.0.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.0.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.0.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.0.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.0.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -292,7 +338,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.0.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -300,7 +351,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.0.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.0.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -308,21 +367,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.0.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.1.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.1.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.1.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -330,21 +404,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.1.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.1.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.1.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.1.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.1.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -352,7 +447,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.1.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -360,7 +460,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.1.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.1.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -368,21 +476,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.1.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.2.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.2.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.2.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -390,21 +513,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.2.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.2.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.2.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.2.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.2.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -412,7 +556,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.2.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -420,7 +569,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.2.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.2.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -428,21 +585,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.2.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.3.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.3.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.3.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -450,21 +622,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.3.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.3.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.3.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.3.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.3.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -472,7 +665,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.3.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -480,7 +678,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.3.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.3.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -488,21 +694,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.3.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.4.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.4.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.4.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -510,21 +731,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.4.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.4.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.4.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.4.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.4.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -532,7 +774,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.4.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -540,7 +787,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.4.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.4.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -548,21 +803,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.4.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.5.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.5.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.5.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -570,21 +840,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.5.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.5.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.5.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.5.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.5.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -592,7 +883,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.5.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -600,7 +896,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.5.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.5.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -608,21 +912,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.5.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.6.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.6.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.6.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -630,21 +949,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.6.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.6.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.6.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.6.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.6.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -652,7 +992,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.6.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -660,7 +1005,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.6.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.6.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -668,21 +1021,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.6.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.7.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.7.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.7.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -690,21 +1058,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.7.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.7.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.7.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.7.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.7.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -712,7 +1101,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.7.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -720,7 +1114,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.7.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.7.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -728,21 +1130,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.7.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.8.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.8.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.8.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -750,21 +1167,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.8.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.8.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.8.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.8.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.8.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -772,7 +1210,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.8.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -780,7 +1223,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.8.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.8.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -788,21 +1239,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.8.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.9.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.9.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.9.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -810,21 +1276,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.9.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.9.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.9.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.9.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.9.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -832,7 +1319,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.9.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -840,7 +1332,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.9.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.9.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -848,21 +1348,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.9.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.10.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.10.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.10.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -870,21 +1385,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.10.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.10.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.10.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.10.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.10.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -892,7 +1428,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.10.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -900,7 +1441,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.10.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.10.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -908,21 +1457,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.10.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.11.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.11.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.11.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -930,21 +1494,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.11.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.11.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.11.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.11.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.11.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -952,7 +1537,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.11.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -960,7 +1550,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.11.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.11.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -968,21 +1566,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.11.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.12.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.12.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.12.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -990,21 +1603,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.12.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.12.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.12.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.12.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.12.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1012,7 +1646,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.12.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1020,7 +1659,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.12.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.12.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1028,21 +1675,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.12.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.13.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.13.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.13.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1050,21 +1712,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.13.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.13.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.13.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.13.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.13.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1072,7 +1755,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.13.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1080,7 +1768,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.13.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.13.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1088,21 +1784,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.13.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.14.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.14.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.14.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1110,21 +1821,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.14.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.14.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.14.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.14.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.14.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1132,7 +1864,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.14.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1140,7 +1877,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.14.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.14.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1148,21 +1893,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.14.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.15.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.15.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.15.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1170,21 +1930,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.15.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.15.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.15.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.15.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.15.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1192,7 +1973,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.15.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1200,7 +1986,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.15.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.15.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1208,21 +2002,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.15.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.16.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.16.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.16.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1230,21 +2039,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.16.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.16.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.16.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.16.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.16.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1252,7 +2082,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.16.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1260,7 +2095,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.16.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.16.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1268,21 +2111,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.16.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.17.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.17.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.17.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1290,21 +2148,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.17.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.17.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.17.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.17.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.17.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1312,7 +2191,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.17.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1320,7 +2204,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.17.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.17.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1328,21 +2220,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.17.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.18.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.18.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.18.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1350,21 +2257,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.18.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.18.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.18.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.18.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.18.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1372,7 +2300,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.18.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1380,7 +2313,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.18.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.18.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1388,21 +2329,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.18.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.19.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.19.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.19.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1410,21 +2366,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.19.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.19.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.19.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.19.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.19.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1432,7 +2409,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.19.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1440,7 +2422,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.19.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.19.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1448,21 +2438,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.19.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.20.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.20.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.20.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1470,21 +2475,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.20.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.20.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.20.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.20.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.20.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1492,7 +2518,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.20.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1500,7 +2531,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.20.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.20.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1508,21 +2547,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.20.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.21.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.21.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.21.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1530,21 +2584,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.21.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.21.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.21.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.21.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.21.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1552,7 +2627,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.21.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1560,7 +2640,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.21.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.21.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1568,21 +2656,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.21.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.22.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.22.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.22.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1590,21 +2693,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.22.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.22.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.22.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.22.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.22.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1612,7 +2736,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.22.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1620,7 +2749,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.22.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.22.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1628,21 +2765,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.22.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.23.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.23.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.23.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1650,21 +2802,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.23.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.23.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.23.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.23.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.23.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1672,7 +2845,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.23.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1680,7 +2858,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.23.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.23.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1688,21 +2874,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.23.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.24.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.24.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.24.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1710,21 +2911,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.24.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.24.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.24.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.24.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.24.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1732,7 +2954,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.24.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1740,7 +2967,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.24.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.24.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1748,21 +2983,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.24.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.25.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.25.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.25.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1770,21 +3020,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.25.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.25.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.25.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.25.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.25.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1792,7 +3063,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.25.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1800,7 +3076,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.25.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.25.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1808,21 +3092,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.25.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.26.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.26.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.26.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1830,21 +3129,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.26.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.26.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.26.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.26.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.26.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1852,7 +3172,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.26.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1860,7 +3185,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.26.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.26.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1868,21 +3201,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.26.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.27.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.27.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.27.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1890,21 +3238,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.27.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.27.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.27.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.27.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.27.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1912,7 +3281,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.27.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1920,7 +3294,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.27.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.27.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1928,21 +3310,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.27.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.28.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.28.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.28.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -1950,21 +3347,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.28.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.28.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.28.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.28.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.28.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -1972,7 +3390,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.28.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -1980,7 +3403,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.28.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.28.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -1988,21 +3419,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.28.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.29.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.29.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.29.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2010,21 +3456,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.29.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.29.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.29.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.29.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.29.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2032,7 +3499,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.29.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2040,7 +3512,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.29.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.29.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2048,21 +3528,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.29.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.30.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.30.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.30.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2070,21 +3565,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.30.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.30.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.30.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.30.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.30.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2092,7 +3608,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.30.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2100,7 +3621,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.30.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.30.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2108,21 +3637,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.30.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.31.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.31.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.31.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2130,21 +3674,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.31.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.31.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.31.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.31.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.31.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2152,7 +3717,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.31.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2160,7 +3730,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.31.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.31.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2168,21 +3746,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.31.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.32.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.32.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.32.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2190,21 +3783,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.32.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.32.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.32.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.32.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.32.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2212,7 +3826,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.32.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2220,7 +3839,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.32.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.32.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2228,21 +3855,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.32.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.33.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.33.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.33.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2250,21 +3892,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.33.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.33.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.33.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.33.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.33.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2272,7 +3935,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.33.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2280,7 +3948,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.33.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.33.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2288,21 +3964,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.33.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.34.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.34.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.34.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2310,21 +4001,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.34.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.34.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.34.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.34.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.34.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2332,7 +4044,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.34.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2340,7 +4057,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.34.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.34.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2348,21 +4073,36 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.34.mlp.down_proj.weight"
+    }
+   ]
   },
   "model.layers.35.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.input_layernorm.weight"
+    }
+   ]
   },
   "model.layers.35.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.post_attention_layernorm.weight"
+    }
+   ]
   },
   "model.layers.35.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2370,21 +4110,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "model.layers.35.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "model.layers.35.self_attn.v_proj.weight"
+    }
+   ]
   },
   "model.layers.35.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.self_attn.q_norm.weight"
+    }
+   ]
   },
   "model.layers.35.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.self_attn.k_norm.weight"
+    }
+   ]
   },
   "model.layers.35.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2392,7 +4153,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.self_attn.o_proj.weight"
+    }
+   ]
   },
   "model.layers.35.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2400,7 +4166,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "model.layers.35.mlp.up_proj.weight"
+    }
+   ]
   },
   "model.layers.35.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2408,7 +4182,12 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "model.layers.35.mlp.down_proj.weight"
+    }
+   ]
   },
   "anchor_token": {
    "dtype": "i64",
@@ -2522,7 +4301,12 @@
     "VOCAB_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "embed_tokens.weight"
+    }
+   ]
   },
   "draft.lm_head.weight": {
    "dtype": "bf16",
@@ -2530,21 +4314,36 @@
     "VOCAB_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "lm_head.weight"
+    }
+   ]
   },
   "draft.norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "norm.weight"
+    }
+   ]
   },
   "draft.hidden_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "hidden_norm.weight"
+    }
+   ]
   },
   "draft.fused_kv.weight": {
    "dtype": "bf16",
@@ -2552,7 +4351,39 @@
     "DRAFT_FUSED_KV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.0.self_attn.v_proj.weight"
+    },
+    {
+     "tensor": "layers.1.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.1.self_attn.v_proj.weight"
+    },
+    {
+     "tensor": "layers.2.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.2.self_attn.v_proj.weight"
+    },
+    {
+     "tensor": "layers.3.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.3.self_attn.v_proj.weight"
+    },
+    {
+     "tensor": "layers.4.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.4.self_attn.v_proj.weight"
+    }
+   ]
   },
   "draft.markov_w1": {
    "dtype": "bf16",
@@ -2560,7 +4391,12 @@
     "VOCAB_SIZE",
     "MARKOV_RANK"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "markov_head.markov_w1.weight"
+    }
+   ]
   },
   "draft.markov_w2.weight": {
    "dtype": "bf16",
@@ -2568,14 +4404,19 @@
     "VOCAB_SIZE",
     "MARKOV_RANK"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "markov_head.markov_w2.weight"
+    }
+   ]
   },
   "draft.kv_scales": {
    "dtype": "f32",
    "shape": [
     "DRAFT_KV_SCALE_COUNT"
    ],
-   "kind": "weight"
+   "kind": "carry"
   },
   "draft.fc.0.weight": {
    "dtype": "bf16",
@@ -2583,21 +4424,40 @@
     "HIDDEN_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "fc.weight",
+     "cols": [
+      0,
+      2560
+     ]
+    }
+   ]
   },
   "draft.layers.0.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.input_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.0.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.post_attention_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.0.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2605,21 +4465,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "layers.0.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.0.self_attn.v_proj.weight"
+    }
+   ]
   },
   "draft.layers.0.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.self_attn.q_norm.weight"
+    }
+   ]
   },
   "draft.layers.0.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.self_attn.k_norm.weight"
+    }
+   ]
   },
   "draft.layers.0.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2627,7 +4508,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.self_attn.o_proj.weight"
+    }
+   ]
   },
   "draft.layers.0.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2635,7 +4521,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "layers.0.mlp.up_proj.weight"
+    }
+   ]
   },
   "draft.layers.0.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2643,7 +4537,12 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.mlp.down_proj.weight"
+    }
+   ]
   },
   "draft.fc.1.weight": {
    "dtype": "bf16",
@@ -2651,21 +4550,40 @@
     "HIDDEN_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "fc.weight",
+     "cols": [
+      2560,
+      5120
+     ]
+    }
+   ]
   },
   "draft.layers.1.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.input_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.1.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.post_attention_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.1.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2673,21 +4591,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "layers.1.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.1.self_attn.v_proj.weight"
+    }
+   ]
   },
   "draft.layers.1.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.self_attn.q_norm.weight"
+    }
+   ]
   },
   "draft.layers.1.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.self_attn.k_norm.weight"
+    }
+   ]
   },
   "draft.layers.1.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2695,7 +4634,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.self_attn.o_proj.weight"
+    }
+   ]
   },
   "draft.layers.1.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2703,7 +4647,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "layers.1.mlp.up_proj.weight"
+    }
+   ]
   },
   "draft.layers.1.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2711,7 +4663,12 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.mlp.down_proj.weight"
+    }
+   ]
   },
   "draft.fc.2.weight": {
    "dtype": "bf16",
@@ -2719,21 +4676,40 @@
     "HIDDEN_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "fc.weight",
+     "cols": [
+      5120,
+      7680
+     ]
+    }
+   ]
   },
   "draft.layers.2.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.input_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.2.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.post_attention_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.2.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2741,21 +4717,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "layers.2.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.2.self_attn.v_proj.weight"
+    }
+   ]
   },
   "draft.layers.2.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.self_attn.q_norm.weight"
+    }
+   ]
   },
   "draft.layers.2.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.self_attn.k_norm.weight"
+    }
+   ]
   },
   "draft.layers.2.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2763,7 +4760,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.self_attn.o_proj.weight"
+    }
+   ]
   },
   "draft.layers.2.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2771,7 +4773,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "layers.2.mlp.up_proj.weight"
+    }
+   ]
   },
   "draft.layers.2.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2779,7 +4789,12 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.mlp.down_proj.weight"
+    }
+   ]
   },
   "draft.fc.3.weight": {
    "dtype": "bf16",
@@ -2787,21 +4802,40 @@
     "HIDDEN_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "fc.weight",
+     "cols": [
+      7680,
+      10240
+     ]
+    }
+   ]
   },
   "draft.layers.3.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.input_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.3.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.post_attention_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.3.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2809,21 +4843,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "layers.3.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.3.self_attn.v_proj.weight"
+    }
+   ]
   },
   "draft.layers.3.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.self_attn.q_norm.weight"
+    }
+   ]
   },
   "draft.layers.3.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.self_attn.k_norm.weight"
+    }
+   ]
   },
   "draft.layers.3.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2831,7 +4886,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.self_attn.o_proj.weight"
+    }
+   ]
   },
   "draft.layers.3.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2839,7 +4899,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "layers.3.mlp.up_proj.weight"
+    }
+   ]
   },
   "draft.layers.3.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2847,7 +4915,12 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.mlp.down_proj.weight"
+    }
+   ]
   },
   "draft.fc.4.weight": {
    "dtype": "bf16",
@@ -2855,21 +4928,40 @@
     "HIDDEN_SIZE",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "fc.weight",
+     "cols": [
+      10240,
+      12800
+     ]
+    }
+   ]
   },
   "draft.layers.4.input_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.input_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.4.post_attention_layernorm.weight": {
    "dtype": "bf16",
    "shape": [
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.post_attention_layernorm.weight"
+    }
+   ]
   },
   "draft.layers.4.self_attn.qkv_proj.weight": {
    "dtype": "bf16",
@@ -2877,21 +4969,42 @@
     "QKV_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.self_attn.q_proj.weight"
+    },
+    {
+     "tensor": "layers.4.self_attn.k_proj.weight"
+    },
+    {
+     "tensor": "layers.4.self_attn.v_proj.weight"
+    }
+   ]
   },
   "draft.layers.4.self_attn.q_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.self_attn.q_norm.weight"
+    }
+   ]
   },
   "draft.layers.4.self_attn.k_norm.weight": {
    "dtype": "bf16",
    "shape": [
     "HEAD_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.self_attn.k_norm.weight"
+    }
+   ]
   },
   "draft.layers.4.self_attn.o_proj.weight": {
    "dtype": "bf16",
@@ -2899,7 +5012,12 @@
     "HIDDEN_SIZE",
     "Q_DIM"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.self_attn.o_proj.weight"
+    }
+   ]
   },
   "draft.layers.4.mlp.gate_up_proj.weight": {
    "dtype": "bf16",
@@ -2907,7 +5025,15 @@
     "GATE_UP_DIM",
     "HIDDEN_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.mlp.gate_proj.weight"
+    },
+    {
+     "tensor": "layers.4.mlp.up_proj.weight"
+    }
+   ]
   },
   "draft.layers.4.mlp.down_proj.weight": {
    "dtype": "bf16",
@@ -2915,7 +5041,12 @@
     "HIDDEN_SIZE",
     "INTERMEDIATE_SIZE"
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.4.mlp.down_proj.weight"
+    }
+   ]
   }
  },
  "modules": {
@@ -2970,6 +5101,10 @@
   "vllm_pos_encoding": {
    "source": "vllm_pos_encoding.cubin",
    "sha256": "116de812ac5a3a186f76fa239d4c16abbed6b8b0af06d16e1baec0aefe8fe8fa"
+  },
+  "weight_prep": {
+   "source": "weight_prep.cubin",
+   "sha256": "040f51b01c421b9c69a2090034ff1bc4741e40c02f5ea52bd04a3e62e5c1af4d"
   }
  },
  "ops": {
@@ -5084,6 +7219,98 @@
        },
        {
         "i64": 1063552
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "rope_table": {
+   "params": [
+    "out buffer<bf16>",
+    "out buffer<bf16>"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "weight_prep",
+      "entry": "kern_rope_table_bf16",
+      "params": [
+       "out buffer<bf16>",
+       "out buffer<bf16>",
+       "i32",
+       "i32",
+       "i32",
+       "f32"
+      ],
+      "block": [
+       64,
+       1,
+       1
+      ],
+      "grid": [
+       40960,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "i32": 40960
+       },
+       {
+        "i32": 64
+       },
+       {
+        "i32": 128
+       },
+       {
+        "f32": 1000000.0
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "fill_f32": {
+   "params": [
+    "out buffer<f32>",
+    "i32"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "weight_prep",
+      "entry": "kern_fill_f32",
+      "params": [
+       "out buffer<f32>",
+       "i32",
+       "f32"
+      ],
+      "block": [
+       256,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "f32": 1.0
        }
       ]
      }
@@ -52420,6 +54647,48 @@
       },
       {
        "buf": "nacc"
+      }
+     ]
+    }
+   ]
+  },
+  "load": {
+   "once": true,
+   "calls": [
+    {
+     "label": "load.rope_table.0",
+     "op": "rope_table",
+     "args": [
+      {
+       "buf": "rope.cos_sin_cache"
+      },
+      {
+       "buf": "rope.cos_sin_cache",
+       "offset": 128
+      }
+     ]
+    },
+    {
+     "label": "load.fill_f32.1",
+     "op": "fill_f32",
+     "args": [
+      {
+       "buf": "kv_scales"
+      },
+      {
+       "i32": 72
+      }
+     ]
+    },
+    {
+     "label": "load.fill_f32.2",
+     "op": "fill_f32",
+     "args": [
+      {
+       "buf": "draft.kv_scales"
+      },
+      {
+       "i32": 10
       }
      ]
     }

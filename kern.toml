@@ -1,6 +1,9 @@
 # kern.toml — what the manifest cannot know: where things are, what to
 # compare against. Targets are names you pick; kern does not read meaning
 # into them. Paths are relative to this file. See crates/kern-run/src/config.rs.
+# `weights` entries are Hugging Face snapshot directories (every
+# *.safetensors shard in them) or single files; the manifest's `bind` says
+# which tensors go where. Under weights/ they are symlinks into the hub cache.
 
 gpu = 0
 
@@ -9,8 +12,8 @@ gpu = 0
 manifest  = "examples/qwen3-4b-silu-mined.json"
 reference = "examples/qwen3-4b.json"
 kernels   = "kernels"
-weights   = ["weights/qwen3-4b-decode.safetensors"]
-tokenizer = "weights/tokenizer.json"
+weights   = ["weights/Qwen3-4B"]
+tokenizer = "weights/Qwen3-4B/tokenizer.json"
 
 [kernels]
 dumps   = ["dumped-kernels"]
@@ -30,19 +33,19 @@ steps = 32
 [targets.qwen3-4b-dspark]
 manifest  = "examples/qwen3-4b-dspark.json"
 kernels   = "kernels"
-weights   = ["weights/qwen3-4b-dspark.safetensors"]
-tokenizer = "weights/tokenizer.json"
+weights   = ["weights/Qwen3-4B", "weights/dspark-qwen3-4b-b7"]
+tokenizer = "weights/Qwen3-4B/tokenizer.json"
 
 # Qwen3.8-27B (hybrid GDN + attention): `kern run qwen3.8-27b`.
 [targets."qwen3.8-27b"]
 manifest  = "examples/qwen3.8-27b.json"
 kernels   = "kernels-qwen38"
-weights   = ["/mnt/shared/weights/kern/qwen3.8-27b/qwen3.8-27b.safetensors"]
-tokenizer = "/mnt/shared/weights/kern/qwen3.8-27b/tokenizer.json"
+weights   = ["weights/Qwen3.8-27B"]
+tokenizer = "weights/Qwen3.8-27B/tokenizer.json"
 
 # With its DFlash2 draft: `kern run qwen3.8-27b-dflash2` (8-row rounds by default).
 [targets."qwen3.8-27b-dflash2"]
 manifest  = "examples/qwen3.8-27b-dflash2.json"
 kernels   = "kernels-qwen38-dflash2"
-weights   = ["/mnt/shared/weights/kern/qwen3.8-27b/qwen3.8-27b.safetensors", "/mnt/shared/weights/kern/qwen3.8-27b/qwen3.8-27b-dflash2-draft.safetensors"]
-tokenizer = "/mnt/shared/weights/kern/qwen3.8-27b/tokenizer.json"
+weights   = ["weights/Qwen3.8-27B", "weights/Qwen3.8-27B-DFlash2"]
+tokenizer = "weights/Qwen3.8-27B/tokenizer.json"

@@ -392,19 +392,7 @@ impl Tray {
                         let mut rt = Runtime::load(m, kernels, gpu, Some(capacity), has_topology.then_some(&topo))
                             .with_context(|| format!("rank {q} on gpu {gpu}"))?;
                         let files = weights_of(&topo)?;
-                        let maps = files
-                            .iter()
-                            .map(|f| {
-                                let file =
-                                    std::fs::File::open(f).with_context(|| format!("weights {}", f.display()))?;
-                                // Mapped, not read: the ranks share the page cache and no rank
-                                // holds a copy of its shard in DRAM.
-                                #[allow(unsafe_code)]
-                                let map = unsafe { memmap2::Mmap::map(&file) }
-                                    .with_context(|| format!("mapping weights {}", f.display()))?;
-                                Ok(map)
-                            })
-                            .collect::<Result<Vec<_>>>()?;
+                        let maps = kern_run::map_weights(&files)?;
                         let blobs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
                         rt.load_weights(&blobs).with_context(|| format!("rank {q}: binding weights"))?;
                         Ok(Sent(rt))

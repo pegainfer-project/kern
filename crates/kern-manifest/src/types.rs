@@ -281,6 +281,23 @@ pub struct Buffer {
     /// `peer` buffers only: the topology group the addresses are indexed by, e.g. `"ep"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// `weight` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{"tensor": "q_proj.weight"}, {"tensor": "k_proj.weight"}]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bind: Vec<Segment>,
+}
+
+/// One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{"tensor": "fc.weight", "cols": [0, 5120]}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Segment {
+    /// Tensor name in the safetensors header, e.g. `"model.layers.0.self_attn.q_proj.weight"`.
+    pub tensor: String,
+    /// Half-open row range `[from, to)` of the tensor's first axis; the whole axis when absent, e.g. `[0, 1024]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<[u64; 2]>,
+    /// Half-open column range `[from, to)` over the product of the remaining axes; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<[u64; 2]>,
 }
 
 /// A prior on a buffer's contents: bounds (`{"min": 0, "max": "tokens"}`) or an index into a buffer/state (`{"index_into": "kv", "stride": 16}`).
@@ -418,7 +435,7 @@ pub enum BufferKind {
     Input,
     /// Read back by the runtime after each run, e.g. `next_token`.
     Output,
-    /// Bound by name from the weights file at load time, e.g. `model.embed_tokens.weight`.
+    /// Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.
     Weight,
     /// Runtime-owned scratch, dead between runs, e.g. `hidden`.
     Workspace,

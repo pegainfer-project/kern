@@ -33,7 +33,7 @@ SCHEMA_VERSION = 4
 SCALARS = ("i32", "i64", "f32", "u8")
 
 _TOP = ["schema_version", "model", "constants", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
-_BUFFER = ["dtype", "shape", "kind", "fill", "domain"]
+_BUFFER = ["dtype", "shape", "kind", "fill", "domain", "bind"]
 _PROGRAM = ["batch", "once", "calls"]
 _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster", "pdl", "args"]
 _CALL = ["label", "op", "args"]

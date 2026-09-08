@@ -127,21 +127,36 @@
     163840,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "embed"
+    }
+   ]
   },
   "gamma_final": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "gamma_final"
+    }
+   ]
   },
   "sw_out": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "sw_out"
+    }
+   ]
   },
   "w_lm": {
    "dtype": "bf16",
@@ -149,7 +164,12 @@
     163840,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "w_lm"
+    }
+   ]
   },
   "hidden": {
    "dtype": "bf16",
@@ -571,21 +591,36 @@
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.gamma_in"
+    }
+   ]
   },
   "layers.0.gamma_post": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.gamma_post"
+    }
+   ]
   },
   "layers.0.sw_mlp": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.sw_mlp"
+    }
+   ]
   },
   "layers.0.wbig": {
    "dtype": "bf16",
@@ -593,7 +628,12 @@
     49152,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.wbig"
+    }
+   ]
   },
   "layers.0.wsm": {
    "dtype": "bf16",
@@ -601,7 +641,12 @@
     256,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.wsm"
+    }
+   ]
   },
   "layers.0.w_f_b": {
    "dtype": "bf16",
@@ -609,7 +654,12 @@
     12288,
     128
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.w_f_b"
+    }
+   ]
   },
   "layers.0.cw": {
    "dtype": "f32",
@@ -618,28 +668,48 @@
     4,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.cw"
+    }
+   ]
   },
   "layers.0.dt_bias": {
    "dtype": "f32",
    "shape": [
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.dt_bias"
+    }
+   ]
   },
   "layers.0.a_log": {
    "dtype": "f32",
    "shape": [
     96
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.a_log"
+    }
+   ]
   },
   "layers.0.gamma_o": {
    "dtype": "f32",
    "shape": [
     128
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.gamma_o"
+    }
+   ]
   },
   "layers.0.w_o": {
    "dtype": "bf16",
@@ -647,7 +717,12 @@
     7168,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.w_o"
+    }
+   ]
   },
   "layers.0.wgu": {
    "dtype": "bf16",
@@ -655,7 +730,12 @@
     67584,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.wgu"
+    }
+   ]
   },
   "layers.0.w_dn": {
    "dtype": "bf16",
@@ -663,35 +743,60 @@
     7168,
     33792
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.0.w_dn"
+    }
+   ]
   },
   "layers.1.gamma_in": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.gamma_in"
+    }
+   ]
   },
   "layers.1.gamma_post": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.gamma_post"
+    }
+   ]
   },
   "layers.1.sw_attn": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.sw_attn"
+    }
+   ]
   },
   "layers.1.sw_mlp": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.sw_mlp"
+    }
+   ]
   },
   "layers.1.wbig": {
    "dtype": "bf16",
@@ -699,7 +804,12 @@
     49152,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.wbig"
+    }
+   ]
   },
   "layers.1.wsm": {
    "dtype": "bf16",
@@ -707,7 +817,12 @@
     256,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.wsm"
+    }
+   ]
   },
   "layers.1.w_f_b": {
    "dtype": "bf16",
@@ -715,7 +830,12 @@
     12288,
     128
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.w_f_b"
+    }
+   ]
   },
   "layers.1.cw": {
    "dtype": "f32",
@@ -724,28 +844,48 @@
     4,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.cw"
+    }
+   ]
   },
   "layers.1.dt_bias": {
    "dtype": "f32",
    "shape": [
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.dt_bias"
+    }
+   ]
   },
   "layers.1.a_log": {
    "dtype": "f32",
    "shape": [
     96
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.a_log"
+    }
+   ]
   },
   "layers.1.gamma_o": {
    "dtype": "f32",
    "shape": [
     128
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.gamma_o"
+    }
+   ]
   },
   "layers.1.w_o": {
    "dtype": "bf16",
@@ -753,7 +893,12 @@
     7168,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.w_o"
+    }
+   ]
   },
   "layers.1.w_router": {
    "dtype": "bf16",
@@ -761,21 +906,36 @@
     224,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.w_router"
+    }
+   ]
   },
   "layers.1.bias": {
    "dtype": "f32",
    "shape": [
     224
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.bias"
+    }
+   ]
   },
   "layers.1.rs": {
    "dtype": "bf16",
    "shape": [
     1
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.rs"
+    }
+   ]
   },
   "layers.1.w_lat_down": {
    "dtype": "bf16",
@@ -783,7 +943,12 @@
     3584,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.w_lat_down"
+    }
+   ]
   },
   "layers.1.w_lat_up": {
    "dtype": "bf16",
@@ -791,14 +956,24 @@
     7168,
     3584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.w_lat_up"
+    }
+   ]
   },
   "layers.1.gamma_lat": {
    "dtype": "bf16",
    "shape": [
     3584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.gamma_lat"
+    }
+   ]
   },
   "layers.1.wsh": {
    "dtype": "bf16",
@@ -806,7 +981,12 @@
     12288,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.wsh"
+    }
+   ]
   },
   "layers.1.sh_down": {
    "dtype": "bf16",
@@ -814,63 +994,108 @@
     7168,
     6144
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.sh_down"
+    }
+   ]
   },
   "layers.1.l1_weights": {
    "dtype": "u8",
    "shape": [
     2466250752
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.l1_weights"
+    }
+   ]
   },
   "layers.1.l1_weights_sf": {
    "dtype": "i32",
    "shape": [
     38535168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.l1_weights_sf"
+    }
+   ]
   },
   "layers.1.l2_weights": {
    "dtype": "u8",
    "shape": [
     1233125376
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.l2_weights"
+    }
+   ]
   },
   "layers.1.l2_weights_sf": {
    "dtype": "i32",
    "shape": [
     19267584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.1.l2_weights_sf"
+    }
+   ]
   },
   "layers.2.gamma_in": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.gamma_in"
+    }
+   ]
   },
   "layers.2.gamma_post": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.gamma_post"
+    }
+   ]
   },
   "layers.2.sw_attn": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.sw_attn"
+    }
+   ]
   },
   "layers.2.sw_mlp": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.sw_mlp"
+    }
+   ]
   },
   "layers.2.wbig": {
    "dtype": "bf16",
@@ -878,7 +1103,12 @@
     49152,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.wbig"
+    }
+   ]
   },
   "layers.2.wsm": {
    "dtype": "bf16",
@@ -886,7 +1116,12 @@
     256,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.wsm"
+    }
+   ]
   },
   "layers.2.w_f_b": {
    "dtype": "bf16",
@@ -894,7 +1129,12 @@
     12288,
     128
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.w_f_b"
+    }
+   ]
   },
   "layers.2.cw": {
    "dtype": "f32",
@@ -903,28 +1143,48 @@
     4,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.cw"
+    }
+   ]
   },
   "layers.2.dt_bias": {
    "dtype": "f32",
    "shape": [
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.dt_bias"
+    }
+   ]
   },
   "layers.2.a_log": {
    "dtype": "f32",
    "shape": [
     96
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.a_log"
+    }
+   ]
   },
   "layers.2.gamma_o": {
    "dtype": "f32",
    "shape": [
     128
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.gamma_o"
+    }
+   ]
   },
   "layers.2.w_o": {
    "dtype": "bf16",
@@ -932,7 +1192,12 @@
     7168,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.w_o"
+    }
+   ]
   },
   "layers.2.w_router": {
    "dtype": "bf16",
@@ -940,21 +1205,36 @@
     224,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.w_router"
+    }
+   ]
   },
   "layers.2.bias": {
    "dtype": "f32",
    "shape": [
     224
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.bias"
+    }
+   ]
   },
   "layers.2.rs": {
    "dtype": "bf16",
    "shape": [
     1
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.rs"
+    }
+   ]
   },
   "layers.2.w_lat_down": {
    "dtype": "bf16",
@@ -962,7 +1242,12 @@
     3584,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.w_lat_down"
+    }
+   ]
   },
   "layers.2.w_lat_up": {
    "dtype": "bf16",
@@ -970,14 +1255,24 @@
     7168,
     3584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.w_lat_up"
+    }
+   ]
   },
   "layers.2.gamma_lat": {
    "dtype": "bf16",
    "shape": [
     3584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.gamma_lat"
+    }
+   ]
   },
   "layers.2.wsh": {
    "dtype": "bf16",
@@ -985,7 +1280,12 @@
     12288,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.wsh"
+    }
+   ]
   },
   "layers.2.sh_down": {
    "dtype": "bf16",
@@ -993,63 +1293,108 @@
     7168,
     6144
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.sh_down"
+    }
+   ]
   },
   "layers.2.l1_weights": {
    "dtype": "u8",
    "shape": [
     2466250752
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.l1_weights"
+    }
+   ]
   },
   "layers.2.l1_weights_sf": {
    "dtype": "i32",
    "shape": [
     38535168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.l1_weights_sf"
+    }
+   ]
   },
   "layers.2.l2_weights": {
    "dtype": "u8",
    "shape": [
     1233125376
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.l2_weights"
+    }
+   ]
   },
   "layers.2.l2_weights_sf": {
    "dtype": "i32",
    "shape": [
     19267584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.2.l2_weights_sf"
+    }
+   ]
   },
   "layers.3.gamma_in": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.gamma_in"
+    }
+   ]
   },
   "layers.3.gamma_post": {
    "dtype": "bf16",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.gamma_post"
+    }
+   ]
   },
   "layers.3.sw_attn": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.sw_attn"
+    }
+   ]
   },
   "layers.3.sw_mlp": {
    "dtype": "f32",
    "shape": [
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.sw_mlp"
+    }
+   ]
   },
   "layers.3.wfu": {
    "dtype": "bf16",
@@ -1057,21 +1402,36 @@
     14400,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.wfu"
+    }
+   ]
   },
   "layers.3.gamma_q_a": {
    "dtype": "bf16",
    "shape": [
     1536
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.gamma_q_a"
+    }
+   ]
   },
   "layers.3.gamma_kv_a": {
    "dtype": "bf16",
    "shape": [
     512
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.gamma_kv_a"
+    }
+   ]
   },
   "layers.3.w_q_b": {
    "dtype": "bf16",
@@ -1079,7 +1439,12 @@
     18432,
     1536
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.w_q_b"
+    }
+   ]
   },
   "layers.3.w_kv_b": {
    "dtype": "bf16",
@@ -1087,7 +1452,12 @@
     24576,
     512
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.w_kv_b"
+    }
+   ]
   },
   "layers.3.w_o": {
    "dtype": "bf16",
@@ -1095,7 +1465,12 @@
     7168,
     12288
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.w_o"
+    }
+   ]
   },
   "layers.3.w_router": {
    "dtype": "bf16",
@@ -1103,21 +1478,36 @@
     224,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.w_router"
+    }
+   ]
   },
   "layers.3.bias": {
    "dtype": "f32",
    "shape": [
     224
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.bias"
+    }
+   ]
   },
   "layers.3.rs": {
    "dtype": "bf16",
    "shape": [
     1
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.rs"
+    }
+   ]
   },
   "layers.3.w_lat_down": {
    "dtype": "bf16",
@@ -1125,7 +1515,12 @@
     3584,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.w_lat_down"
+    }
+   ]
   },
   "layers.3.w_lat_up": {
    "dtype": "bf16",
@@ -1133,14 +1528,24 @@
     7168,
     3584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.w_lat_up"
+    }
+   ]
   },
   "layers.3.gamma_lat": {
    "dtype": "bf16",
    "shape": [
     3584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.gamma_lat"
+    }
+   ]
   },
   "layers.3.wsh": {
    "dtype": "bf16",
@@ -1148,7 +1553,12 @@
     12288,
     7168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.wsh"
+    }
+   ]
   },
   "layers.3.sh_down": {
    "dtype": "bf16",
@@ -1156,35 +1566,60 @@
     7168,
     6144
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.sh_down"
+    }
+   ]
   },
   "layers.3.l1_weights": {
    "dtype": "u8",
    "shape": [
     2466250752
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.l1_weights"
+    }
+   ]
   },
   "layers.3.l1_weights_sf": {
    "dtype": "i32",
    "shape": [
     38535168
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.l1_weights_sf"
+    }
+   ]
   },
   "layers.3.l2_weights": {
    "dtype": "u8",
    "shape": [
     1233125376
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.l2_weights"
+    }
+   ]
   },
   "layers.3.l2_weights_sf": {
    "dtype": "i32",
    "shape": [
     19267584
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "layers.3.l2_weights_sf"
+    }
+   ]
   }
  },
  "modules": {

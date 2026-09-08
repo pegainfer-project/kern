@@ -69,28 +69,48 @@
    "shape": [
     616562688
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "l1_weights"
+    }
+   ]
   },
   "l1_weights_sf": {
    "dtype": "i32",
    "shape": [
     9633792
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "l1_weights_sf"
+    }
+   ]
   },
   "l2_weights": {
    "dtype": "u8",
    "shape": [
     308281344
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "l2_weights"
+    }
+   ]
   },
   "l2_weights_sf": {
    "dtype": "i32",
    "shape": [
     4816896
    ],
-   "kind": "weight"
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": "l2_weights_sf"
+    }
+   ]
   },
   "y": {
    "dtype": "bf16",

@@ -469,7 +469,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     }
 
     def weight(name, shape, dtype="bf16"):
-        buffers[name] = {"dtype": dtype, "shape": list(shape), "kind": "weight"}
+        buffers[name] = {"dtype": dtype, "shape": list(shape), "kind": "weight", "bind": [{"tensor": name}]}
 
     b = lambda name, off=0: {"buf": name, "offset": off} if off else {"buf": name}
 

@@ -324,9 +324,9 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         Some(Capacity { tokens: Some(capacity as u64), seqs: max_batch as u64 }),
         None,
     )?;
-    let blobs = weights.iter().map(std::fs::read).collect::<std::io::Result<Vec<_>>>()?;
-    rt.load_weights(&blobs.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-    drop(blobs);
+    let maps = crate::map_weights(weights)?;
+    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
+    drop(maps);
     let corpus = corpus(tokenizer, workload.seed)?;
     let probe = Probe::new(&rt)?;
     eprintln!("calibrating {} · L2 {} MiB", probe.device, probe.l2_bytes >> 20);

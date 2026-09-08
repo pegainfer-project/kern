@@ -69,7 +69,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from qwen_constants import name_constants
+from qwen_weights import qwen38  # noqa: E402
 from kern_manifest import normalize, program, resolve_constants, SCHEMA_VERSION  # noqa: E402
 from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
 
@@ -1598,7 +1598,7 @@ def main():
         print(f"  spec pin conv_fwd (page stride rebaked) -> {pins[('conv_fwd', True)][0]}", file=sys.stderr)
         spec = {"src": src, "pins": spins, "attn_draft": ad}
 
-    m = name_constants(build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec))
+    m = qwen38(build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec))
     out.write_text(json.dumps(m, indent=1) + "\n")
     n_calls = {k: len(v["calls"]) for k, v in m["programs"].items()}
     print(f"wrote {out}: {len(m['buffers'])} buffers, {len(m['ops'])} ops, {len(m['modules'])} modules, "

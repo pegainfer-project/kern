@@ -49,7 +49,7 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
 - `buffers`：`dtype + shape + kind`，可选 `domain`（内容的先验，见下）与
   `fill`（在 serving 循环里的角色，见「Serving 协议」）。shape 维度是常量或 var 名；kind 说
   的是"谁供应、活多久"：`input`（runtime 写入）/ `output`（runtime 读回）
-  / `weight`（按名从权重文件绑定）/ `workspace`（runtime 规划，跨次执行
+  / `weight`（load 时从 checkpoint 的张量拼出来，`bind` 说是哪些，见「权重」）/ `workspace`（runtime 规划，跨次执行
   不保留）/ `carry`（一个 program 写、另一个 program 读的交接棒，跨次
   执行保留；谁先跑是 caller 契约，verifier 只要求它被某个 program 写到
   ——投机解码的 aux 隐状态逼出来的）/ `peer`（runtime 填的地址数组，见
@@ -254,9 +254,42 @@ target+draft 权重同处一份 manifest，多一个 7 行的 `round` program，
 
 **故意留下的重复**：64 层展开成 64×26 个 call（decode 742 个 call 里
 737 个是逐层模板）——加 `repeat` 就是加控制流，attest 按 call 切、
-verifier 按 call 查都靠展开；weight buffer 的 dtype/shape 与 safetensors
-header 重复——没有权重文件也要能 verify。冗余在 manifest 不在 schema，
+verifier 按 call 查都靠展开；weight buffer 的 dtype/shape 与 checkpoint 的
+safetensors header 重复——没有权重文件也要能 verify，load 时再对账。冗余在 manifest 不在 schema，
 "源码"是生成器。
+
+## 权重：`bind`
+
+权重的 ground truth 是模型自己的 HF checkpoint（一堆 safetensors shard），
+kern 没有自己的权重格式。每个 `weight` buffer 声明 `bind`：一列 checkpoint
+张量（或张量的一个矩形），按顺序首尾相接铺满这个 buffer：
+
+```json
+"model.layers.0.self_attn.qkv_proj.weight": {
+  "dtype": "bf16", "shape": [6144, 2560], "kind": "weight",
+  "bind": [{"tensor": "model.layers.0.self_attn.q_proj.weight"},
+           {"tensor": "model.layers.0.self_attn.k_proj.weight"},
+           {"tensor": "model.layers.0.self_attn.v_proj.weight"}]},
+"draft.fc.1.weight": {
+  "dtype": "bf16", "shape": [2560, 2560], "kind": "weight",
+  "bind": [{"tensor": "draft.fc.weight", "cols": [2560, 5120]}]},
+"lm_head.weight": {
+  "dtype": "bf16", "shape": [151936, 2560], "kind": "weight",
+  "bind": [{"tensor": "model.embed_tokens.weight"}]}
+```
+
+张量按 `[dim0, 其余维之积]` 看成矩阵，`rows` / `cols` 是 `[from, to)`，缺省
+全取；连续段一次 memcpy，列块一次 2D copy。runtime 只读 shard 的 header 找
+张量，shard mmap 后按段拷进显存；张量必须在恰好一份 shard 里，dtype 要等于
+buffer 的，各段字节数之和要正好等于 buffer——差一个字节都是 artifact 错误。
+verifier 只查 `bind` 非空、名字非空、区间非空；形状对账要有 checkpoint 才能
+做，留给 load。
+
+checkpoint 里没有的东西——Gemma norm 的 `weight + 1`、A_log 的 f32、rope 的
+cos / sin 表、全 1 的 kv scale、chunk 索引表——不是权重，是 `carry` buffer，
+由 manifest 自己的 `once` program（`load`）在 load 之后算出来（
+`tools/kernels-src/weight_prep.cu` 的几个 elementwise 核）。拼接方式与派生
+表都是模型知识，住在生成器（`tools/qwen_weights.py`），不住在 runtime。
 
 ## Serving 协议：`fill`、`batch`、`once`
 

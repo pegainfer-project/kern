@@ -1556,15 +1556,11 @@ fn execute(o: Opts) -> Result<i32> {
     }
 
     // ---- load A + B
-    let blobs = o
-        .weights
-        .iter()
-        .map(|p| std::fs::read(p).with_context(|| format!("reading {}", p.display())))
-        .collect::<Result<Vec<_>>>()?;
-    let refs: Vec<&[u8]> = blobs.iter().map(Vec::as_slice).collect();
+    let maps = crate::map_weights(&o.weights)?;
+    let refs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
     let t = Instant::now();
     let mut s = Sides { a: load_side(&ma, &o, &refs)?, b: load_side(&mb, &o, &refs)? };
-    drop(blobs);
+    drop(maps);
     let load_t = t.elapsed();
     let prompt_ids = match &o.prompt {
         Some(text) => {

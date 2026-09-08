@@ -47,6 +47,7 @@ mod pages;
 mod prefix;
 pub mod profile;
 pub mod values;
+mod weights;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::raw::c_void;
@@ -688,9 +689,11 @@ impl Runtime {
         self.resolution.clone()
     }
 
-    /// Bind every `weight` buffer by name from one or more safetensors blobs
-    /// (a target and a draft artifact, say); each weight must come from
-    /// exactly one of them.
+    /// Assemble every `weight` buffer from the checkpoint tensors its
+    /// `bind` names, out of one or more safetensors blobs (the model's
+    /// shards, a draft's next to them). Only headers are parsed; each
+    /// segment is one copy straight out of the blob. A tensor name that
+    /// appears in more than one blob is ambiguous and refused.
     pub fn load_weights(&mut self, blobs: &[&[u8]]) -> Result<()> {
         self.ctx.bind_to_thread()?;
         let sts = blobs
@@ -698,26 +701,43 @@ impl Runtime {
             .map(|b| safetensors::SafeTensors::deserialize(b))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| Error::WeightArtifact(format!("unparseable safetensors: {e}")))?;
+        let lookup = |tensor: &str| -> Result<weights::TensorInfo> {
+            let found: Vec<_> =
+                sts.iter().enumerate().filter_map(|(i, st)| st.tensor(tensor).ok().map(|t| (i, t))).collect();
+            let (blob, t) = match found.as_slice() {
+                [one] => one.clone(),
+                [] => bail!(WeightArtifact, "tensor `{tensor}` is in none of the {} artifact(s)", sts.len()),
+                many => bail!(WeightArtifact, "tensor `{tensor}` is in {} artifacts", many.len()),
+            };
+            let Some(dtype) = weights::dtype_of(t.dtype()) else {
+                bail!(WeightArtifact, "tensor `{tensor}`: dtype {:?} has no manifest dtype", t.dtype());
+            };
+            let base = blobs[blob].as_ptr() as usize;
+            let offset = t.data().as_ptr() as usize - base;
+            Ok(weights::TensorInfo { blob, offset, dtype, shape: t.shape().iter().map(|&d| d as u64).collect() })
+        };
         for (name, b) in &self.manifest.buffers {
             if b.kind != BufferKind::Weight {
                 continue;
             }
-            let found: Vec<_> = sts.iter().filter_map(|st| st.tensor(name).ok()).collect();
-            let t = match found.as_slice() {
-                [t] => t,
-                [] => bail!(WeightArtifact, "weight `{name}` missing from the artifact(s)"),
-                _ => bail!(WeightArtifact, "weight `{name}` present in {} artifacts", found.len()),
-            };
-            let dst = self.buffers.get_mut(name).unwrap();
-            if t.data().len() as u64 != dst.bytes {
-                bail!(
-                    WeightArtifact,
-                    "weight `{name}`: artifact has {} bytes, manifest declares {}",
-                    t.data().len(),
-                    dst.bytes
-                );
+            let dst = &self.buffers[name];
+            for c in weights::plan(name, b, dst.bytes, lookup)? {
+                let src = &blobs[c.blob][c.src..c.src + (c.pitch * (c.rows - 1) + c.width) as usize];
+                if c.pitch == c.width {
+                    let mut view = dst.view(c.dst as usize..(c.dst + c.width * c.rows) as usize)?;
+                    self.stream.memcpy_htod(src, &mut view)?;
+                } else {
+                    let stream = self.stream.cu_stream();
+                    copy_2d(
+                        stream,
+                        (dst.ptr + c.dst, c.width),
+                        (src.as_ptr() as u64, c.pitch),
+                        c.width,
+                        c.rows,
+                        false,
+                    )?;
+                }
             }
-            self.stream.memcpy_htod(t.data(), dst)?;
         }
         self.stream.synchronize()?;
         Ok(())

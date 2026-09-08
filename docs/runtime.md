@@ -22,7 +22,9 @@ cubin 算 sha256，**只装载 manifest `modules` 表点名的哈希**（其余�
 `cuFuncGetParamInfo` 参数布局与 manifest params 比对来消歧**（phase-2
 ABI 校验兼做实例选择，绕开了 capture 缺 launch→module 映射的坑）→ 按
 var max 分配全部 buffer / 分配 state（分页与 per-seq 的走下面的块池）→
-safetensors 按名绑权重（scratch 按 impl 声明另行私有分配）→ 顺序重放
+按每个 weight buffer 的 `bind` 从 checkpoint shard 里拷张量段拼出 buffer
+（只读 safetensors header，shard mmap；scratch 按 impl 声明另行私有分配）
+→ 跑 `once` program 算派生表 → 顺序重放
 call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scratch/
 填字面量后 raw `cuLaunchKernel`（实参 staging 成小端 u64 slot；>48KB
 动态 shmem 自动 `cuFuncSetAttribute`）。
@@ -188,9 +190,10 @@ stderr，`RUST_LOG` 控制级别，stdout 只出生成文本）：**chunked pref
 连调 `prefill`（每块填 token_ids/positions/slot_mapping 前缀 + seq_lens=
 已见数 + cu_seqlens_q=[0,块长]；`write_input` 支持前缀写，尾部 stale 字节
 grid 界内永不被读），最后一个 prompt token 走 decode 出首个 logits；此后
-每 step 填四个小 input（=pos），block_table 恒等；greedy argmax。权重由
-`tools/export_weights.py` 从 HF checkpoint 导出（qkv/gate_up 合并、
-cos_sin_cache 预计算、kv_scales 全 1、tied lm_head clone）。
+每 step 填四个小 input（=pos），block_table 恒等；greedy argmax。权重就是
+HF checkpoint（`--weights` 给 snapshot 目录或若干 .safetensors）：qkv /
+gate_up 的拼接写在 buffer 的 `bind` 里，rope 表 / kv_scales / tied lm_head
+这类派生物由 manifest 的 `load` once program 在设备上算（manifest.md「权重」）。
 
 **CUDA graph（默认开，`--eager` 回退）**：tokens=1 下 436 个 call 的
 grid/标量实参全是常量，每步只有 4 个小 input buffer 的**内容**变、指针不变
@@ -252,14 +255,15 @@ CUDA_VISIBLE_DEVICES=0 tools/capture_qwen3.sh        # -> dumped-kernels/pid<N>/
 tools/extract_kernels.sh examples/qwen3-4b.json dumped-kernels/pid<N>   # -> kernels/
 # 或 `kern kernels`：按 kern.toml 的 [kernels].dumps/.sources 给每个 target 的 manifest 与 reference 落 cubin
 
-# 5) 权重：HF checkpoint 合并导出（qkv/gate_up 合并、rope cache 预计算）
-.venv/bin/python tools/export_weights.py             # -> weights/
+# 5) 权重：就是 HF checkpoint 目录，不导出（拼接在 `bind`、派生表在 `load`
+#    once program，都由生成器写进 manifest；见 manifest.md「权重」）
+ln -s /path/to/hf/snapshots/<rev> weights/Qwen3-4B
 
 # 6) 跑（构建在 kernel-lab 容器里做；binary 宿主机 dlopen CUDA 直接跑）
 ./target/release/kern run            # 一切来自 kern.toml 的 target；flag 覆盖：
 ./target/release/kern run \
   --manifest examples/qwen3-4b.json --kernels kernels \
-  --weights weights/qwen3-4b-decode.safetensors --tokenizer weights/tokenizer.json \
+  --weights weights/Qwen3-4B --tokenizer weights/Qwen3-4B/tokenizer.json \
   --gpu 3 --capacity 4096 --chunk 512 --prompt "The capital of France is" --steps 320
 ```
 

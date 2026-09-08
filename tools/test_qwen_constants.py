@@ -8,14 +8,15 @@ from kern_manifest import resolve_constants
 from qwen_constants import name_constants
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# Canonical JSON hashes before the named-constant migration. Changes to kernel
-# wiring, capacities, float literals or even artifact pins require review.
+# Canonical JSON hashes of the checked-in examples (last: weights bound to the
+# HF checkpoints, 2026-09-08). Changes to kernel wiring, capacities, float
+# literals or even artifact pins require review.
 BASELINES = {
-    "qwen3-4b-dspark.json": "5e30e2dcc5afbe6c04b6ad7ebdb2098ae947b53af424721ed110baaeee2ce276",
-    "qwen3-4b-silu-mined.json": "cc10e2f95754c3e367dbce3a6d00a33a2694215c5a5218667254a1c4de7a0f51",
-    "qwen3-4b.json": "d180ee3072bd901f1ca538b27079c97796502e622079386945d52e82619baf40",
-    "qwen3.8-27b-dflash2.json": "42bc3f2b23cc470babf1e69014811d01e79e7e195edd14e061888e608b01c968",
-    "qwen3.8-27b.json": "d0d415a97ae1e6f4be85f01c307b692d750067fb85a8b81af2ce14cec916739b"
+    "qwen3-4b-dspark.json": "70d8b0988712159356b3dc787a1dc747b15328f68b2ce3a0b25ca8ff1f6e4941",
+    "qwen3-4b-silu-mined.json": "e232fc7b61b77ff136c759846d559864accbf33edce4ce93e6fa24e2a1ffee25",
+    "qwen3-4b.json": "8bf5550de3239be2db4f240df8e75361dc5352c1d36068a35eb7a3de63f90e7b",
+    "qwen3.8-27b-dflash2.json": "e1394ee1dc58a6ac94adb76e62e012332e729e80bd7821f89dc15c3d28d30a76",
+    "qwen3.8-27b.json": "1e3d176e6727b1419d5354c2359153e3916bc6fdb2eaae049c68d993a1dd5fb3"
 }
 
 

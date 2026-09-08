@@ -3,7 +3,10 @@
 generated token ids with vLLM's, token by token.
 
     tools/qwen38_compare.py --gpu 1 [--chunk 512] [--eager] [--steps 400]
+                            [--target qwen3.8-27b-dflash2 --spec]
                             [--out docs/qwen38/compare-<tag>.json]
+
+`KERN_BIN` overrides the binary (default target/release/kern).
 
 Prints one line per prompt (match length / first divergence) and a summary;
 exit status 1 unless every prompt matches to the full length.
@@ -19,20 +22,13 @@ import sys
 import time
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-WEIGHTS = pathlib.Path(os.environ.get("KERN_WEIGHTS", REPO / "weights")) / "qwen3.8-27b"
 STOP = "248046,248044"   # <|im_end|>, <|endoftext|> of the Qwen3.8 tokenizer
 
 
 def run_one(args, prompt, steps):
-    cmd = [str(REPO / "target/release/kern"), "run", args.target,
-           "--manifest", str(REPO / args.manifest),
-           "--kernels", str(REPO / args.kernels),
-           "--weights", str(WEIGHTS / "qwen3.8-27b.safetensors"),
-           "--tokenizer", str(WEIGHTS / "tokenizer.json"),
+    cmd = [os.environ.get("KERN_BIN", str(REPO / "target/release/kern")), "run", args.target,
            "--gpu", str(args.gpu), "--capacity", str(args.capacity), "--chunk", str(args.chunk),
            "--steps", str(steps), "--stop-tokens", STOP, "--prompt", prompt]
-    if args.draft:
-        cmd += ["--weights", str(WEIGHTS / "qwen3.8-27b-dflash2-draft.safetensors")]
     if args.spec:
         cmd += ["--rows", "8"]
     if args.eager:
@@ -58,7 +54,8 @@ def run_one(args, prompt, steps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gpu", type=int, required=True)
-    ap.add_argument("--target", default="qwen3.8-27b", help="named kern.toml target")
+    ap.add_argument("--target", default="qwen3.8-27b",
+                    help="kern.toml target: manifest, kernels, the HF checkpoint dirs and tokenizer come from it")
     ap.add_argument("--chunk", type=int, default=512)
     ap.add_argument("--eager", action="store_true")
     ap.add_argument("--steps", type=int, default=400)
@@ -67,9 +64,6 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--ref", default=str(REPO / "docs/qwen38/ref.json"),
                     help="vLLM reference (qwen38_ref.py) or a kern compare JSON (then kern-vs-kern)")
-    ap.add_argument("--manifest", default="examples/qwen3.8-27b.json")
-    ap.add_argument("--kernels", default="kernels-qwen38")
-    ap.add_argument("--draft", action="store_true", help="also load the DFlash2 draft artifact")
     ap.add_argument("--spec", action="store_true", help="kern run --rows 8 (draft/verify rounds)")
     args = ap.parse_args()
 

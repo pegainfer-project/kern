@@ -5,11 +5,12 @@
 //!
 //!   program_io --manifest m.json [--cubins target/cubins] [--gpu 0] [--program p]
 //!              --env var=value ... --in name=path ... --out name=path ...
-//!              [--graph] [--iters 9]
+//!              [--dump name=path ...] [--graph] [--iters 9]
 //!
 //! Inputs are written whole (`write_input`; a shorter file fills a prefix),
-//! outputs are read whole. A manifest with weight buffers gets `--weights`
-//! blobs, in order. `--graph` captures after one eager run and writes outputs
+//! outputs are read whole; `--dump` reads any buffer whole (a weight as
+//! bound, a carry a `once` program computed). A manifest with weight buffers gets `--weights`
+//! checkpoints (a safetensors file or a directory of shards), in order. `--graph` captures after one eager run and writes outputs
 //! after repeated replay; its median timing excludes capture and file I/O.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,7 @@ fn main() -> anyhow::Result<()> {
     let mut env = BTreeMap::new();
     let mut ins: Vec<(String, String)> = Vec::new();
     let mut outs: Vec<(String, String)> = Vec::new();
+    let mut dumps: Vec<(String, String)> = Vec::new();
     let mut weights: Vec<PathBuf> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -61,6 +63,7 @@ fn main() -> anyhow::Result<()> {
             }
             "--in" => ins.push(pair(&v())),
             "--out" => outs.push(pair(&v())),
+            "--dump" => dumps.push(pair(&v())),
             "--weights" => weights.push(PathBuf::from(v())),
             _ => anyhow::bail!("unknown arg {a}"),
         }
@@ -75,9 +78,8 @@ fn main() -> anyhow::Result<()> {
     let kernels = std::env::temp_dir().join(format!("kern-program-io-{}", std::process::id()));
     stage_cubins(&cubins, &kernels);
     let mut rt = Runtime::load(&m, &kernels, gpu, None, Some(&Topology::default()))?;
-    let blobs: Vec<Vec<u8>> = weights.iter().map(std::fs::read).collect::<Result<_, _>>()?;
-    let blobs: Vec<&[u8]> = blobs.iter().map(|b| &b[..]).collect();
-    rt.load_weights(&blobs)?;
+    let maps = kern_run::map_weights(&weights)?;
+    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
     for (name, path) in &ins {
         rt.write_input(name, &std::fs::read(path)?)?;
     }
@@ -93,6 +95,11 @@ fn main() -> anyhow::Result<()> {
     }
     for (name, path) in &outs {
         std::fs::write(path, rt.read_output(name)?)?;
+    }
+    for (name, path) in &dumps {
+        let bytes = rt.buffer_sizes().into_iter().find(|(n, _, _)| n == name).map(|(_, _, b)| b);
+        let bytes = bytes.ok_or_else(|| anyhow::anyhow!("no buffer `{name}`"))?;
+        std::fs::write(path, rt.read_buffer_prefix(name, bytes as usize)?)?;
     }
     println!("`{program}` ran with {env:?}; {} inputs in, {} outputs out", ins.len(), outs.len());
     Ok(())

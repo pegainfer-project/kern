@@ -80,9 +80,8 @@ CUDA_VISIBLE_DEVICES=0 tools/capture_qwen3_spec.sh   # -> dumped-kernels/pid<M>/
 # 生成两份 manifest（gen 会顺带把 non-causal cubin 拷进 kernels/ 并钉哈希）
 .venv/bin/python tools/gen_qwen3_decode.py \
   dumped-kernels/pid<N>/launches.jsonl dumped-kernels/pid<M>
-# 合并权重（target + draft.*，fc 按列切块、markov 头原样）
-.venv/bin/python tools/export_weights.py             # -> weights/qwen3-4b-dspark.safetensors
-./target/release/kern run --manifest examples/qwen3-4b-dspark.json \
-  --weights weights/qwen3-4b-dspark.safetensors --steps 320   # 缺省 7 行 round；--rows 1 是 plain
+# 权重是两个 HF checkpoint 目录（target + draft），fc 按列切块、fused KV
+# 的 cat 都是 manifest 里的 `bind`（tools/qwen_weights.py 写的）
+./target/release/kern run qwen3-4b-dspark --steps 320   # 缺省 7 行 round；--rows 1 是 plain
 ./target/release/kern verify examples/qwen3-4b-dspark.json    # 打印协议：fill、forward 形状、emits / count
 ```
