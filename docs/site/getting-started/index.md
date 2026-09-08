@@ -24,7 +24,7 @@ curl -fsSL https://kern-baa.pages.dev/install.sh | sh      # kern: run, test, be
 
 ```sh
 hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38     # kernels + manifests
-hf download Qwen/Qwen3.8-27B --local-dir models/Qwen3.8-27B         # or point at a checkpoint you already have
+hf download Qwen/Qwen3.8-27B                                        # prints the checkpoint path, if you don't have one yet
 ```
 
 Name the pieces once in a `kern.toml`:
@@ -33,7 +33,7 @@ Name the pieces once in a `kern.toml`:
 [targets."qwen3.8-27b"]
 manifest = "kern-qwen38/manifests/qwen3.8-27b.json"
 kernels  = "kern-qwen38/cubins"
-weights  = ["models/Qwen3.8-27B"]
+weights  = ["<your_qwen38_checkpoint_path>"]
 ```
 
 The checkpoint is used as published: the manifest says which tensor fills
@@ -43,7 +43,7 @@ shards supply the tokenizer and the stop tokens.
 ## Serve
 
 ```sh
-kern-serve qwen3.8-27b --model-path models/Qwen3.8-27B --gpus 0 --port 8000
+kern-serve qwen3.8-27b --model-path <your_qwen38_checkpoint_path> --gpus 0 --port 8000
 ```
 
 ```sh
@@ -91,18 +91,18 @@ same three things on either command.
 Qwen3.8-27B has a DFlash2 draft. One more download and one more target:
 
 ```sh
-hf download incoai/Qwen3.8-27B-DFlash2 --local-dir models/Qwen3.8-27B-DFlash2
+hf download incoai/Qwen3.8-27B-DFlash2
 ```
 
 ```toml
 [targets."qwen3.8-27b-dflash2"]
 manifest = "kern-qwen38/manifests/qwen3.8-27b-dflash2.json"
 kernels  = "kern-qwen38/cubins"
-weights  = ["models/Qwen3.8-27B", "models/Qwen3.8-27B-DFlash2"]
+weights  = ["<your_qwen38_checkpoint_path>", "<your_dflash2_checkpoint_path>"]
 ```
 
 ```sh
-kern-serve qwen3.8-27b-dflash2 --model-path models/Qwen3.8-27B --gpus 0 --port 8000
+kern-serve qwen3.8-27b-dflash2 --model-path <your_qwen38_checkpoint_path> --gpus 0 --port 8000
 kern run   qwen3.8-27b-dflash2 --prompt "The capital of France is" --steps 64
 ```
 
