@@ -487,7 +487,7 @@
           ]
         },
         "entry": {
-          "description": "`extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ), `cublaslt_bf16_tn_acc` (C += A·Wᵀ) or\n`cublaslt_bf16_tn_tile` (C = A·Wᵀ with the cublasLt algorithm pinned by tile id and split-K count, two trailing i32 args).",
+          "description": "`extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ) or `cublaslt_bf16_tn_acc` (C += A·Wᵀ).",
           "type": "string"
         },
         "params": {

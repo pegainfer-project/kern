@@ -780,8 +780,7 @@ pub struct KernelLaunch {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExternLaunch {
-    /// `extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ), `cublaslt_bf16_tn_acc` (C += A·Wᵀ) or
-    /// `cublaslt_bf16_tn_tile` (C = A·Wᵀ with the cublasLt algorithm pinned by tile id and split-K count, two trailing i32 args).
+    /// `extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ) or `cublaslt_bf16_tn_acc` (C += A·Wᵀ).
     pub entry: String,
     /// This launch's own ABI when it differs from the op's params.
     #[serde(default, skip_serializing_if = "Option::is_none")]

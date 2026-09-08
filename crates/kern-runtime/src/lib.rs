@@ -64,8 +64,8 @@ pub use chunks::{Kind, Remap};
 use compile::{CompiledProgram, Launch, LaunchKind, RVal, Slot};
 pub use device::PeerHandle;
 use device::{
-    alloc, alloc_vmm, chunk_granularity, copy_2d, gemm_bf16_tn, gemm_bf16_tn_f32, Arena, Blas, BlasLtTile, DeviceBuf,
-    Mapper, Physical, Pinned, Share,
+    alloc, alloc_vmm, chunk_granularity, copy_2d, gemm_bf16_tn, gemm_bf16_tn_f32, Arena, Blas, DeviceBuf, Mapper,
+    Physical, Pinned, Share,
 };
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
@@ -127,7 +127,6 @@ pub struct Runtime {
     /// their pages and slots stay out of the pool until the copy lands.
     parking: Vec<(Checkpoint, sys::CUevent)>,
     blt: CudaBlasLT,
-    blt_tile: BlasLtTile,
     /// cuBLAS handle (with its own workspace) for the f32-result GEMM built-in.
     blas: Blas,
     /// What every `index_into` domain resolves against: the token slots a
@@ -388,7 +387,6 @@ impl Runtime {
         let stream = ctx.new_stream()?;
         let xfer = ctx.new_stream()?;
         let blt = CudaBlasLT::new(stream.clone())?;
-        let blt_tile = BlasLtTile::new(&stream)?;
         let blas = Blas::new(&stream)?;
         ctx.bind_to_thread()?;
 
@@ -540,7 +538,6 @@ impl Runtime {
             host: None,
             parking: Vec::new(),
             blt,
-            blt_tile,
             blas,
             provision,
             pool: Arc::new(pool),
@@ -1570,7 +1567,6 @@ impl Runtime {
         }
         match &l.kind {
             LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
-            LaunchKind::GemmTile => self.blt_tile.gemm(&self.blt, &self.stream, &vals),
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(env)? as u32, grid[1].eval(env)? as u32, grid[2].eval(env)? as u32];
