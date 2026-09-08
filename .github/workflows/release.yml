@@ -56,9 +56,7 @@ jobs:
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
       - name: Build
-        run: cargo build --release --locked -p kern-run
-        env:
-          KERN_COMMIT: ${{ github.sha }}
+        run: KERN_COMMIT=${GITHUB_SHA::7} cargo build --release --locked -p kern-run
 
       - name: Package and check
         run: scripts/package_release.sh "${{ steps.version.outputs.version }}" "${{ matrix.target }}" dist
