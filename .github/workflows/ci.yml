@@ -37,6 +37,9 @@ jobs:
       - name: Qwen constant migration regression tests
         run: python3 -m unittest discover -s tools -p test_qwen_constants.py
 
+      - name: TRTLLM manifest conversion regression tests
+        run: python3 -m unittest discover -s tools -p test_trtllm_manifest.py
+
       - name: Protocol names stay in the manifest
         run: |
           # kern-run and kern-serve drive the runtime through `Protocol`; a

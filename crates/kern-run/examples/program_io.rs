@@ -5,10 +5,12 @@
 //!
 //!   program_io --manifest m.json [--cubins target/cubins] [--gpu 0] [--program p]
 //!              --env var=value ... --in name=path ... --out name=path ...
+//!              [--graph] [--iters 9]
 //!
 //! Inputs are written whole (`write_input`; a shorter file fills a prefix),
 //! outputs are read whole. A manifest with weight buffers gets `--weights`
-//! blobs, in order.
+//! blobs, in order. `--graph` captures after one eager run and writes outputs
+//! after repeated replay; its median timing excludes capture and file I/O.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +39,8 @@ fn main() -> anyhow::Result<()> {
     let mut cubins = PathBuf::from("target/cubins");
     let mut gpu = 0usize;
     let mut program = String::new();
+    let mut graph = false;
+    let mut iters = 1usize;
     let mut env = BTreeMap::new();
     let mut ins: Vec<(String, String)> = Vec::new();
     let mut outs: Vec<(String, String)> = Vec::new();
@@ -45,6 +49,8 @@ fn main() -> anyhow::Result<()> {
     while let Some(a) = args.next() {
         let mut v = || args.next().expect("value");
         match a.as_str() {
+            "--graph" => graph = true,
+            "--iters" => iters = v().parse()?,
             "--manifest" => manifest = PathBuf::from(v()),
             "--cubins" => cubins = PathBuf::from(v()),
             "--gpu" => gpu = v().parse()?,
@@ -59,6 +65,7 @@ fn main() -> anyhow::Result<()> {
             _ => anyhow::bail!("unknown arg {a}"),
         }
     }
+    anyhow::ensure!(iters > 0, "--iters must be positive");
     let json = std::fs::read_to_string(&manifest)?;
     let m = kern_manifest::Verified::from_json(&json)?;
     if program.is_empty() {
@@ -75,6 +82,15 @@ fn main() -> anyhow::Result<()> {
         rt.write_input(name, &std::fs::read(path)?)?;
     }
     rt.run(&program, &env)?;
+    if graph {
+        rt.capture(&program, &env)?;
+        rt.run_captured(&program, &env)?;
+        println!("graph_median_ms={}", rt.time_captured(&program, &env, iters)?);
+    } else {
+        for _ in 1..iters {
+            rt.run(&program, &env)?;
+        }
+    }
     for (name, path) in &outs {
         std::fs::write(path, rt.read_output(name)?)?;
     }
