@@ -73,6 +73,11 @@ pub use host::{Host, Parked};
 pub use pages::{page_unit, Checkpoint, Copies, Denied, Lease, Pool, Pooled};
 pub use prefix::{Chain, Hit, Kept, Prefix, Tier};
 
+/// The CUDA API this binary binds (`13000` is 13.0): fixed by the `cudarc`
+/// feature at build time, so a driver older than it fails to load the
+/// libraries rather than at a random symbol later.
+pub const CUDA_API: u32 = sys::CUDA_VERSION;
+
 /// The host tier's block is handed out in these units.
 const HOST_GRAIN: u64 = 1 << 16;
 
