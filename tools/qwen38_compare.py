@@ -24,7 +24,7 @@ STOP = "248046,248044"   # <|im_end|>, <|endoftext|> of the Qwen3.8 tokenizer
 
 
 def run_one(args, prompt, steps):
-    cmd = [str(REPO / "target/release/kern"), "run",
+    cmd = [str(REPO / "target/release/kern"), "run", args.target,
            "--manifest", str(REPO / args.manifest),
            "--kernels", str(REPO / args.kernels),
            "--weights", str(WEIGHTS / "qwen3.8-27b.safetensors"),
@@ -34,7 +34,7 @@ def run_one(args, prompt, steps):
     if args.draft:
         cmd += ["--weights", str(WEIGHTS / "qwen3.8-27b-dflash2-draft.safetensors")]
     if args.spec:
-        cmd.append("--spec")
+        cmd += ["--rows", "8"]
     if args.eager:
         cmd.append("--eager")
     t0 = time.time()
@@ -48,7 +48,7 @@ def run_one(args, prompt, steps):
         "prompt_ids": ids("prompt"),
         "generated": ids("generated ids"),
         "prefill": re.search(r"prefill: .*", err).group(0) if "prefill:" in err else "",
-        "decode": re.search(r"\d+ tokens generated, .*|spec: .*", err).group(0),
+        "decode": re.search(r"\d+ tokens generated(?: in .*|, .*)|spec: .*", err).group(0),
         "wall_s": round(wall, 1),
         "stdout": p.stdout,
     }
@@ -58,6 +58,7 @@ def run_one(args, prompt, steps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gpu", type=int, required=True)
+    ap.add_argument("--target", default="qwen3.8-27b", help="named kern.toml target")
     ap.add_argument("--chunk", type=int, default=512)
     ap.add_argument("--eager", action="store_true")
     ap.add_argument("--steps", type=int, default=400)
@@ -69,7 +70,7 @@ def main():
     ap.add_argument("--manifest", default="examples/qwen3.8-27b.json")
     ap.add_argument("--kernels", default="kernels-qwen38")
     ap.add_argument("--draft", action="store_true", help="also load the DFlash2 draft artifact")
-    ap.add_argument("--spec", action="store_true", help="kern run --spec (draft/verify rounds)")
+    ap.add_argument("--spec", action="store_true", help="kern run --rows 8 (draft/verify rounds)")
     args = ap.parse_args()
 
     ref = json.load(open(args.ref))
@@ -86,7 +87,7 @@ def main():
         if args.only is not None and i != args.only:
             continue
         info = run_one(args, r["prompt"], min(args.steps, len(r["output_token_ids"])))
-        want = r["output_token_ids"][:len(info["generated"])] if len(info["generated"]) < len(r["output_token_ids"]) else r["output_token_ids"]
+        want = r["output_token_ids"][:args.steps]
         got = info["generated"]
         n = 0
         while n < min(len(got), len(want)) and got[n] == want[n]:
