@@ -305,23 +305,6 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 errs.push(format!("{ctx}: `group` only applies to peer buffers"));
             }
         }
-        // 10c. tensor / layout: a weight bound from another tensor name, or stored tiled
-        if b.kind != BufferKind::Weight {
-            if b.tensor.is_some() {
-                errs.push(format!("{ctx}: `tensor` only applies to weight buffers"));
-            }
-            if b.layout.is_some() {
-                errs.push(format!("{ctx}: `layout` only applies to weight buffers"));
-            }
-        }
-        if let Some(t) = &b.tensor {
-            if t.is_empty() {
-                errs.push(format!("{ctx}: `tensor` must name a tensor in the weights file"));
-            }
-        }
-        if let Some(l) = &b.layout {
-            check_layout(&ctx, b, l, &mut errs);
-        }
     }
 
     // 5. modules
@@ -870,35 +853,6 @@ fn scalar_fits(st: ScalarType, v: u64) -> bool {
     }
 }
 
-/// A tiled layout needs a constant 2-D shape the tile divides, 16-byte chunks
-/// along a tile row, and eight of them for the swizzle to permute.
-fn check_layout(ctx: &str, b: &Buffer, l: &Layout, errs: &mut Vec<String>) {
-    let dims: Option<Vec<u64>> = b.shape.iter().map(|d| if let Dim::Const(c) = d { Some(*c) } else { None }).collect();
-    let Some([rows, cols]) = dims.as_deref() else {
-        errs.push(format!("{ctx}: a `layout` needs a constant 2-D shape, got {:?}", b.shape));
-        return;
-    };
-    let [tr, tc] = l.tile;
-    if tr == 0 || tc == 0 || rows % tr != 0 || cols % tc != 0 {
-        errs.push(format!("{ctx}: layout tile [{tr}, {tc}] does not divide the shape [{rows}, {cols}]"));
-    }
-    let row_bytes = tc * b.dtype.bytes();
-    if !row_bytes.is_multiple_of(16) {
-        errs.push(format!("{ctx}: a layout tile row is {row_bytes} bytes, not a multiple of 16"));
-    }
-    match l.swizzle {
-        0 => {}
-        8 => {
-            if !row_bytes.is_multiple_of(128) || !tr.is_multiple_of(8) {
-                errs.push(format!(
-                    "{ctx}: swizzle 8 permutes 8 chunks of 16 bytes over 8 rows: the tile row needs a multiple of 128 bytes (got {row_bytes}) and the tile a multiple of 8 rows (got {tr})"
-                ));
-            }
-        }
-        s => errs.push(format!("{ctx}: layout swizzle {s} is not 0 or 8")),
-    }
-}
-
 /// A domain is a prior on contents; the verifier only proves it is
 /// well-formed against the declaration it decorates (never that any kernel
 /// honours it).
@@ -1236,34 +1190,6 @@ mod tests {
         let mut v = base();
         v["programs"]["decode"]["calls"][0]["args"][2] = serde_json::json!({ "buf": "w" });
         assert_err(v, "writes to read-only weight buffer `w`");
-    }
-
-    #[test]
-    fn tiled_weight_layout() {
-        let mut v = base();
-        v["buffers"]["w"]["layout"] = serde_json::json!({ "tile": [64, 64], "swizzle": 8 });
-        v["buffers"]["w"]["tensor"] = serde_json::json!("w_in_file");
-        assert!(verify(serde_json::from_value(v).unwrap()).is_ok());
-
-        let mut v = base();
-        v["buffers"]["w"]["layout"] = serde_json::json!({ "tile": [64, 48] });
-        assert_err(v, "layout tile [64, 48] does not divide the shape [64, 64]");
-
-        let mut v = base();
-        v["buffers"]["w"]["layout"] = serde_json::json!({ "tile": [64, 32], "swizzle": 8 });
-        assert_err(v, "the tile row needs a multiple of 128 bytes (got 64)");
-
-        let mut v = base();
-        v["buffers"]["w"]["layout"] = serde_json::json!({ "tile": [64, 64], "swizzle": 4 });
-        assert_err(v, "layout swizzle 4 is not 0 or 8");
-
-        let mut v = base();
-        v["buffers"]["h"]["layout"] = serde_json::json!({ "tile": [64, 64] });
-        assert_err(v, "`layout` only applies to weight buffers");
-
-        let mut v = base();
-        v["buffers"]["x"]["tensor"] = serde_json::json!("w");
-        assert_err(v, "`tensor` only applies to weight buffers");
     }
 
     #[test]

@@ -277,23 +277,6 @@ pub struct Buffer {
     /// `peer` buffers only: the topology group the addresses are indexed by, e.g. `"ep"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// `weight` buffers only: the tensor in the weights file to bind when it is not this buffer's own name, e.g. `"model.layers.0.mlp.gate_up_proj.weight"` for a second copy of it in another `layout`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tensor: Option<String>,
-    /// `weight` buffers only: how a 2-D matrix is stored on the device when not row-major, e.g. `{"tile": [64, 64], "swizzle": 8}`; the runtime permutes the file's row-major bytes at load.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layout: Option<Layout>,
-}
-
-/// A tiled storage order for a 2-D weight: the `[rows, cols]` matrix is kept as `[rows/tile[0]][cols/tile[1]]` contiguous row-major tiles. With `swizzle` 8 the 16-byte chunk `c` of a tile row `r` sits at chunk `c ^ (r % 8)`, the pattern a 128-byte-pitch `ldmatrix` reads conflict-free.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Layout {
-    /// Tile extents in elements, `[rows, cols]`, each dividing the matrix, e.g. `[64, 64]`.
-    pub tile: [u64; 2],
-    /// `0` for plain tiles or `8` for the chunk-XOR-row swizzle inside each tile.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub swizzle: u64,
 }
 
 /// A prior on a buffer's contents: bounds (`{"min": 0, "max": "tokens"}`) or an index into a buffer/state (`{"index_into": "kv", "stride": 16}`).

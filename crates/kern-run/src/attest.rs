@@ -1617,12 +1617,9 @@ fn execute(o: Opts) -> Result<i32> {
                 .union(&frontier_inputs(&mb, pname, seg.b.0, seg.b.1))
                 .cloned()
                 .collect();
-            // Weights are bound from the file on both sides, and a buffer
-            // only B declares (a weight's re-laid-out copy) has nothing on
-            // A to copy from.
             let mut inputs = Vec::new();
             for n in &input_names {
-                if ma.buffers.get(n).is_some_and(|b| b.kind != BufferKind::Weight) {
+                if ma.buffers[n].kind != BufferKind::Weight {
                     inputs.push((n.clone(), s.a.rt.read_buffer_prefix(n, live_bytes(&ma, n, e))?));
                 }
             }
