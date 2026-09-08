@@ -85,7 +85,7 @@ Each step drafts 7 tokens and verifies them in one pass; greedy decoding
 means the text is the same as plain decode. No extra runtime code is
 involved: the draft, verify and accept logic is a program in the manifest.
 
-Measured on one GB300 with the commands above (2026-09-08):
+On one GB300:
 
 | | plain | DFlash2, `--rows 8` |
 | --- | --- | --- |
