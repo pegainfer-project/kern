@@ -69,7 +69,7 @@ impl Runtime {
     /// waiting. Ranks whose kernels wait on each other (an EP dispatch, a
     /// tray collective) must all be issued before any is waited for:
     /// `enqueue` each, then [`Runtime::synchronize`] each.
-    pub fn enqueue(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+    fn enqueue(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
@@ -167,7 +167,7 @@ impl Runtime {
 
     /// Launch a previously captured program's graph without waiting (see
     /// [`Runtime::enqueue`]).
-    pub fn enqueue_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+    fn enqueue_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         let exec = self.graph(program, vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")

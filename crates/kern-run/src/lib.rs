@@ -38,11 +38,11 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| {
 /// union in order; a bare .safetensors file carries neither.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
-    pub tokenizer: Option<std::path::PathBuf>,
-    pub stop_tokens: Vec<i64>,
+    tokenizer: Option<std::path::PathBuf>,
+    stop_tokens: Vec<i64>,
 }
 
-pub fn checkpoint(paths: &[std::path::PathBuf]) -> Checkpoint {
+fn checkpoint(paths: &[std::path::PathBuf]) -> Checkpoint {
     let mut c = Checkpoint::default();
     for d in paths.iter().filter(|p| p.is_dir()) {
         let t = d.join("tokenizer.json");
@@ -86,7 +86,7 @@ pub fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
 }
 
 /// The var vars of one call.
-pub type Vars = BTreeMap<String, u64>;
+pub(crate) type Vars = BTreeMap<String, u64>;
 
 /// The safetensors a `--weights` entry stands for: the file itself, or
 /// every `*.safetensors` under a directory (a checkpoint's shards) in
@@ -123,17 +123,17 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
 /// order (one for a decode step or a prefill chunk, `count` of `rows` for
 /// a speculative round).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Emitted(pub Vec<i64>);
+pub struct Emitted(Vec<i64>);
 
 /// A runtime plus the single sequence: its token slots and position cursor.
-pub struct Caller {
-    pub rt: Runtime,
-    pub protocol: Protocol,
+pub(crate) struct Caller {
+    rt: Runtime,
+    protocol: Protocol,
     /// The sequence's slots: as many as one page-table row (or the whole
     /// state) holds, leased once for the caller's life.
     lease: Lease,
     /// Tokens already in the state (next slot to fill).
-    pub pos: i64,
+    pos: i64,
 }
 
 impl Caller {
@@ -142,7 +142,7 @@ impl Caller {
     /// caller is sequence 0, but every row must hold valid page ids. Line
     /// tables of a per-sequence state likewise get this sequence's lines
     /// in every column, in entry 0 of a wide cell.
-    pub fn new(mut rt: Runtime) -> Result<Caller> {
+    fn new(mut rt: Runtime) -> Result<Caller> {
         let protocol = Protocol::check(&rt.manifest)?;
         let lease = rt.lease(rt.max_seq_tokens().min(rt.capacity() as usize))?;
         for t in &protocol.page_tables {
@@ -171,14 +171,14 @@ impl Caller {
     }
 
     /// Token slots the sequence can hold.
-    pub fn limit(&self) -> usize {
+    fn limit(&self) -> usize {
         self.lease.tokens()
     }
 
     /// Stage one call's rows at the cursor: `ids` as consecutive positions
     /// of this one sequence, in every fill the manifest declares. Does not
     /// advance. Returns the call's var vars.
-    pub fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
+    fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
         let c = ids.len();
         let pos = self.pos as usize;
         let e = self.protocol.vars(1, c as u64, c as u64);
@@ -204,21 +204,21 @@ impl Caller {
     /// token, in row 0 and again in every other row. A program that
     /// drafts its own rows (a speculative round) overwrites rows 1.. on
     /// the device; a one-row step reads only row 0.
-    pub fn stage_rows(&mut self, tok: i64, rows: u64) -> Result<Vars> {
+    fn stage_rows(&mut self, tok: i64, rows: u64) -> Result<Vars> {
         self.stage(&vec![tok; rows as usize])
     }
 
     /// Reset the cursor (a new prompt reuses the slots from position 0).
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.pos = 0;
     }
 
-    pub fn advance(&mut self, n: u64) {
+    fn advance(&mut self, n: u64) {
         self.pos += n as i64;
     }
 
     /// The forward for one sequence of `rows` rows per call.
-    pub fn forward(&self, rows: Rows) -> Result<Forward> {
+    fn forward(&self, rows: Rows) -> Result<Forward> {
         self.protocol.forward(1, rows).cloned().ok_or_else(|| {
             anyhow::anyhow!(
                 "no program takes one sequence of {} rows; the manifest declares rows {:?}{}",
@@ -233,7 +233,7 @@ impl Caller {
     }
 
     /// The program a chunk of the prompt goes through.
-    pub fn chunk_forward(&self) -> Result<Forward> {
+    fn chunk_forward(&self) -> Result<Forward> {
         self.forward(Rows::Var)
     }
 
@@ -241,7 +241,7 @@ impl Caller {
     /// advancing the cursor past them. Returns the token the last chunk
     /// handed back, if the chunk program emits one, and whether a graph
     /// was captured.
-    pub fn prefill(&mut self, ids: &[i64], chunk: u64) -> Result<Option<i64>> {
+    fn prefill(&mut self, ids: &[i64], chunk: u64) -> Result<Option<i64>> {
         let f = self.chunk_forward()?;
         let mut last = None;
         let mut i = 0usize;
@@ -258,7 +258,7 @@ impl Caller {
     }
 
     /// Vocabulary size as declared by the token fill's domain (1000 if none).
-    pub fn vocab(&self) -> u64 {
+    fn vocab(&self) -> u64 {
         let m = &self.rt.manifest;
         m.buffers[&self.protocol.token_rows().name]
             .domain
@@ -270,7 +270,7 @@ impl Caller {
 
     /// What the last run of `f` handed back for this sequence: its `tokens`
     /// output's first cell, cut to its `count` (one without a count).
-    pub fn emitted(&self, f: &Forward) -> Result<Emitted> {
+    fn emitted(&self, f: &Forward) -> Result<Emitted> {
         let Some(i) = f.emits else { return Ok(Emitted(Vec::new())) };
         let t = &self.protocol.fills[i];
         let mut v = t.decode(&self.rt.read_output(&t.name)?);

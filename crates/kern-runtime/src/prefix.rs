@@ -180,7 +180,7 @@ pub struct Chain {
 }
 
 impl Chain {
-    pub fn new(unit: usize) -> Chain {
+    fn new(unit: usize) -> Chain {
         assert!(unit >= 1);
         Chain { unit, heads: vec![SEED], tail: SEED, len: 0 }
     }
@@ -202,10 +202,6 @@ impl Chain {
 
     pub fn extend(&mut self, tokens: impl IntoIterator<Item = i64>) {
         tokens.into_iter().for_each(|t| self.push(t));
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
     }
 
     pub fn is_empty(&self) -> bool {
@@ -452,7 +448,7 @@ mod tests {
                 assert_eq!(grown, Chain::over(unit, &tokens[..i]));
                 grown.push(t);
             }
-            assert_eq!((grown.len(), &grown), (n, &Chain::over(unit, &tokens)));
+            assert_eq!((grown.len, &grown), (n, &Chain::over(unit, &tokens)));
             for len in 0..=n {
                 let short = Chain::over(unit, &tokens[..len]);
                 let expected = (len.is_multiple_of(unit) || len == n).then(|| short.key(len).unwrap());

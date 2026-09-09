@@ -22,47 +22,47 @@ use crate::{le_bytes_i32, Vars};
 pub struct BenchOpts {
     /// Only time whole programs, for low-cost checks without an activity tracer
     #[arg(long)]
-    pub program_only: bool,
+    program_only: bool,
     /// Only run hardware probes (useful for independent profiler validation)
     #[arg(long)]
-    pub calibrate_only: bool,
+    calibrate_only: bool,
     #[arg(long)]
-    pub manifest: Option<PathBuf>,
+    manifest: Option<PathBuf>,
     #[arg(long)]
-    pub kernels: Option<PathBuf>,
+    kernels: Option<PathBuf>,
     #[arg(long)]
-    pub weights: Vec<PathBuf>,
+    weights: Vec<PathBuf>,
     #[arg(long)]
-    pub tokenizer: Option<PathBuf>,
+    tokenizer: Option<PathBuf>,
     #[arg(long)]
-    pub gpu: Option<usize>,
+    gpu: Option<usize>,
     /// Scenario list, sample count and seed; independent of the model ABI
     #[arg(long)]
-    pub workload: PathBuf,
+    workload: PathBuf,
     /// Portable JSON with raw samples and all call locations; no machine paths
     #[arg(long)]
-    pub out: PathBuf,
+    out: PathBuf,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
-    pub id: String,
-    pub kind: String,
-    pub batch: usize,
-    pub query: usize,
+    id: String,
+    kind: String,
+    batch: usize,
+    query: usize,
     /// One previous-context length per sequence, or one broadcast length
-    pub context: Vec<usize>,
+    context: Vec<usize>,
     #[serde(default)]
-    pub holdout: bool,
+    holdout: bool,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workload {
-    pub samples: usize,
-    pub seed: u64,
-    pub scenarios: Vec<Scenario>,
+    samples: usize,
+    seed: u64,
+    scenarios: Vec<Scenario>,
 }
 
 impl Scenario {
@@ -81,19 +81,19 @@ impl Scenario {
 
 #[derive(Serialize, Debug)]
 pub struct Stats {
-    pub n: usize,
-    pub min: f64,
-    pub p10: f64,
-    pub p50: f64,
-    pub p90: f64,
-    pub max: f64,
-    pub mean: f64,
-    pub cv: f64,
-    pub tail_ratio: f64,
-    pub block_medians: Vec<f64>,
+    n: usize,
+    min: f64,
+    p10: f64,
+    p50: f64,
+    p90: f64,
+    max: f64,
+    mean: f64,
+    cv: f64,
+    tail_ratio: f64,
+    block_medians: Vec<f64>,
 }
 
-pub fn stats(samples: &[f64]) -> Stats {
+fn stats(samples: &[f64]) -> Stats {
     assert!(!samples.is_empty() && samples.iter().all(|x| x.is_finite() && *x >= 0.));
     let mut v = samples.to_vec();
     v.sort_by(f64::total_cmp);

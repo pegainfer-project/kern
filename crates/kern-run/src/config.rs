@@ -41,16 +41,16 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub gpu: Option<usize>,
-    pub capacity: Option<u64>,
+    pub(crate) gpu: Option<usize>,
+    pub(crate) capacity: Option<u64>,
     #[serde(default)]
     pub targets: BTreeMap<String, Target>,
     #[serde(default)]
     pub kernels: Kernels,
     #[serde(default)]
-    pub test: Test,
+    pub(crate) test: Test,
     #[serde(default)]
-    pub run: Run,
+    pub(crate) run: Run,
     /// Where the file was found.
     #[serde(skip)]
     pub path: PathBuf,
@@ -63,8 +63,8 @@ pub struct Target {
     pub reference: Option<PathBuf>,
     pub kernels: PathBuf,
     #[serde(default)]
-    pub weights: Vec<PathBuf>,
-    pub tokenizer: Option<PathBuf>,
+    pub(crate) weights: Vec<PathBuf>,
+    pub(crate) tokenizer: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -78,22 +78,22 @@ pub struct Kernels {
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
-    pub seed: Option<u64>,
-    pub decode_steps: Option<u64>,
-    pub logit_ulp: Option<u64>,
-    pub fuzz: Option<usize>,
-    pub prompt: Option<String>,
+    pub(crate) seed: Option<u64>,
+    pub(crate) decode_steps: Option<u64>,
+    pub(crate) logit_ulp: Option<u64>,
+    pub(crate) fuzz: Option<usize>,
+    pub(crate) prompt: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Run {
-    pub prompt: Option<String>,
-    pub steps: Option<usize>,
-    pub chunk: Option<u64>,
+    pub(crate) prompt: Option<String>,
+    pub(crate) steps: Option<usize>,
+    pub(crate) chunk: Option<u64>,
 }
 
-pub const FILE: &str = "kern.toml";
+pub(crate) const FILE: &str = "kern.toml";
 
 impl Config {
     /// The nearest `kern.toml` at or above the cwd, or the one given.
@@ -113,7 +113,7 @@ impl Config {
         }
     }
 
-    pub fn load(path: &Path) -> Result<Config> {
+    fn load(path: &Path) -> Result<Config> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut c: Config = toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
         c.path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());

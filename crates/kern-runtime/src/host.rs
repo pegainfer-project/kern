@@ -199,7 +199,7 @@ impl Parked {
     }
 
     /// Whether any page is held (a slot-only checkpoint parks its slot alone).
-    pub fn paged(&self) -> bool {
+    pub(crate) fn paged(&self) -> bool {
         self.chain.is_some()
     }
 

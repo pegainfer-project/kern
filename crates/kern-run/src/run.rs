@@ -30,58 +30,58 @@ use tracing::info;
 pub struct RunOpts {
     /// Manifest JSON (must pass verification)
     #[arg(long)]
-    pub manifest: Option<PathBuf>,
+    manifest: Option<PathBuf>,
 
     /// Directory of cubins; steps resolve by their pinned sha256, so one dir
     /// holds every version (file names are labels)
     #[arg(long)]
-    pub kernels: Option<PathBuf>,
+    kernels: Option<PathBuf>,
 
     /// Safetensors artifact(s), tensors bound by name across all of them
     #[arg(long)]
-    pub weights: Vec<PathBuf>,
+    weights: Vec<PathBuf>,
 
     /// HF tokenizer.json
     #[arg(long)]
-    pub tokenizer: Option<PathBuf>,
+    tokenizer: Option<PathBuf>,
 
     /// Raw (template-free) prompt
     #[arg(long)]
-    pub prompt: Option<String>,
+    prompt: Option<String>,
 
     /// Max new tokens to generate
     #[arg(long)]
-    pub steps: Option<usize>,
+    steps: Option<usize>,
 
     /// CUDA device ordinal
     #[arg(long)]
-    pub gpu: Option<usize>,
+    gpu: Option<usize>,
 
     /// State capacity in tokens (KV pages etc.); rounded down to the
     /// manifest's page unit. Default: what one sequence can reach (the
     /// manifest's page-table row)
     #[arg(long)]
-    pub capacity: Option<u64>,
+    capacity: Option<u64>,
 
     /// Prefill chunk in tokens: the manifest's `tokens` bound unless a
     /// smaller one is asked for
     #[arg(long)]
-    pub chunk: Option<u64>,
+    chunk: Option<u64>,
 
     /// Debug: launch every program eagerly, ignoring the manifest's `graph`
     #[arg(long)]
-    pub eager: bool,
+    eager: bool,
 
     /// Rows per sequence of a decode step: a shape some program of the
     /// manifest declares (1 for a plain step, its block for a speculative
     /// round). Default: the widest declared
     #[arg(long)]
-    pub rows: Option<u64>,
+    rows: Option<u64>,
 
     /// Extra token ids that end generation (comma-separated); the eos ids
     /// the checkpoint declares in generation_config.json always apply
     #[arg(long, value_delimiter = ',')]
-    pub stop_tokens: Vec<i64>,
+    stop_tokens: Vec<i64>,
 
     /// Debug: dump activations of the first prefill chunk and `--probe-steps`
     /// decode steps into this directory, then exit: after every call whose
@@ -89,15 +89,15 @@ pub struct RunOpts {
     /// plus the logits the step's tokens are taken from and the tokens.
     /// Programs run call-range by call-range so nothing executes twice.
     #[arg(long)]
-    pub probe_dir: Option<PathBuf>,
+    probe_dir: Option<PathBuf>,
     /// Call labels `--probe-dir` dumps after: comma-separated, a label
     /// matches one it equals or ends with (the file is named by the label
     /// minus its last `.part`)
     #[arg(long, default_value = "embed,.down_proj")]
-    pub probe_labels: String,
+    probe_labels: String,
     /// Decode steps `--probe-dir` dumps
     #[arg(long, default_value_t = 2)]
-    pub probe_steps: usize,
+    probe_steps: usize,
 }
 
 /// Resolved options: flag, else kern.toml, else default.
