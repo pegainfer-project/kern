@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use cudarc::driver::{sys, CudaFunction, LaunchConfig, PushKernelArg};
 use kern_manifest::types::{Arg, BufferKind, Dir};
 
-use crate::{alloc, cuda_check, DeviceBuf, Events, Result, Runtime};
+use crate::device::Events;
+use crate::{alloc, cuda_check, DeviceBuf, Result, Runtime};
 
 impl Events {
     fn captured_record(&self, i: usize, rt: &Runtime) -> Result<()> {

@@ -754,3 +754,36 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
     }
     Ok(())
 }
+
+/// A pool of timing events, for attestation and profiling.
+pub(crate) struct Events(pub(crate) Vec<sys::CUevent>);
+
+impl Events {
+    pub(crate) fn new(n: usize) -> Result<Events> {
+        let mut evs = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut ev: sys::CUevent = std::ptr::null_mut();
+            cuda_check(unsafe { sys::cuEventCreate(&mut ev, 0) }, "cuEventCreate")?;
+            evs.push(ev);
+        }
+        Ok(Events(evs))
+    }
+
+    pub(crate) fn record(&self, i: usize, stream: &CudaStream) -> Result<()> {
+        cuda_check(unsafe { sys::cuEventRecord(self.0[i], stream.cu_stream()) }, "cuEventRecord")
+    }
+
+    pub(crate) fn elapsed_ms(&self, a: usize, b: usize) -> Result<f32> {
+        let mut ms = 0f32;
+        cuda_check(unsafe { sys::cuEventElapsedTime_v2(&mut ms, self.0[a], self.0[b]) }, "cuEventElapsedTime")?;
+        Ok(ms)
+    }
+}
+
+impl Drop for Events {
+    fn drop(&mut self) {
+        for ev in &self.0 {
+            unsafe { sys::cuEventDestroy_v2(*ev) };
+        }
+    }
+}
