@@ -82,3 +82,38 @@ jobs:
             echo "::error::schema/manifest-v4.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v4.schema.json"
             exit 1
           fi
+
+  hawk:
+    # Workspace-wide visibility lint. Only `unnecessary_restricted_visibility`
+    # is enforced: kern-serve lives outside this workspace and is the main
+    # consumer of the runtime's public API, so hawk's closed world would call
+    # that API dead. A `pub(crate)` cannot cross a crate boundary, so that
+    # class is exact. The other two lints are an audit tool; see the
+    # `hawk` skill. Hawk is built against one exact rustc; bump both together.
+    runs-on: ubuntu-latest
+    env:
+      HAWK_VERSION: "0.1.14"
+      HAWK_RUST: "1.98.1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - name: Install cargo-hawk
+        run: |
+          set -euo pipefail
+          base="https://github.com/astral-sh/hawk/releases/download/$HAWK_VERSION"
+          curl -fsSL "$base/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz" -o hawk.tar.gz
+          curl -fsSL "$base/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz.sha256" -o hawk.sha256
+          echo "$(cut -d' ' -f1 hawk.sha256)  hawk.tar.gz" | sha256sum -c
+          tar -xzf hawk.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" \
+            --wildcards "*/cargo-hawk" "*/cargo-hawk-driver"
+          cargo hawk --version
+
+      - name: Restricted visibility is the tightest that compiles
+        run: |
+          cargo +"$HAWK_RUST" hawk check --color always \
+            -A hawk::dead_public -A hawk::unnecessary_public \
+            -D hawk::unnecessary_restricted_visibility

@@ -347,7 +347,7 @@ fn find_cuobjdump() -> Option<PathBuf> {
 /// opcode carries `.MULTICAST`. Every `Function : <sym>` block is a
 /// function; a symbol appearing in several containers (same-name Triton
 /// instances) accumulates, so one bad instance taints the name.
-pub(crate) fn multicast_by_function(text: &str) -> BTreeMap<String, Vec<String>> {
+fn multicast_by_function(text: &str) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut cur: Option<String> = None;
     for line in text.lines() {

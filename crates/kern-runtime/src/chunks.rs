@@ -91,7 +91,7 @@ impl Chunks {
 
     /// Positions of each arena.
     #[cfg(test)]
-    pub(crate) fn positions(&self) -> Vec<usize> {
+    fn positions(&self) -> Vec<usize> {
         self.arenas.iter().map(|a| a.chunk.len()).collect()
     }
 

@@ -79,7 +79,7 @@ impl CExpr {
     }
 
     /// Mark the vars this expression reads.
-    pub(crate) fn mark(&self, used: &mut [bool]) {
+    fn mark(&self, used: &mut [bool]) {
         match self {
             CExpr::Const(_) => {}
             CExpr::Var(i) => used[*i] = true,
@@ -117,9 +117,9 @@ pub(crate) enum Slot {
 /// literals and descriptors are finished at load; var-dependent fields are
 /// evaluated per run.
 pub(crate) struct PackPlan {
-    pub(crate) size: usize,
-    pub(crate) fields: Vec<(usize, usize, Slot)>,
-    pub(crate) maps: Vec<(usize, TmaBlob)>,
+    size: usize,
+    fields: Vec<(usize, usize, Slot)>,
+    maps: Vec<(usize, TmaBlob)>,
 }
 
 impl PackPlan {
@@ -142,7 +142,7 @@ impl PackPlan {
 }
 
 /// A `CUtensorMap` image, copied into a pack image at its (64-byte aligned) field offset.
-pub(crate) struct TmaBlob(pub(crate) [u8; 128]);
+pub(crate) struct TmaBlob([u8; 128]);
 
 pub(crate) enum LaunchKind {
     Cubin {
