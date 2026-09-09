@@ -204,7 +204,7 @@ impl Parked {
     }
 
     /// Host offsets of the first `n` pages, root first.
-    pub(crate) fn pages(&self, n: usize) -> Vec<u64> {
+    pub fn pages(&self, n: usize) -> Vec<u64> {
         let mut out = Vec::new();
         let mut cur = self.chain.as_ref();
         while let Some(node) = cur {
@@ -218,7 +218,7 @@ impl Parked {
     }
 
     /// Host offset of the slot's bytes.
-    pub(crate) fn slot(&self) -> Option<u64> {
+    pub fn slot(&self) -> Option<u64> {
         self.slot.as_ref().map(|r| r.start)
     }
 }
@@ -253,126 +253,14 @@ pub fn runs(pairs: &[(i32, u64)], page_bytes: u64) -> Vec<(i32, u64, usize)> {
 
 #[cfg(test)]
 mod tests {
+    //! `runs` is used by the transfer stream, not by callers: the copies
+    //! it folds are observable only as bytes on the host.
+
     use super::*;
 
-    fn host(units: u64) -> Arc<Host> {
-        Arc::new(Host::new(units * 8, 8))
-    }
-
     #[test]
-    fn pages_low_slots_high_and_runs_coalesce() {
-        let h = host(16);
-        // 3 pages of 8 bytes at the low end, one slot of 20 (3 units) at the high end.
-        let (p, plan) = h.park(&[(1, 10), (2, 11), (3, 12)], 8, Some((5, 20)), 40).unwrap();
-        assert_eq!(plan, Park { pages: vec![(10, 0), (11, 8), (12, 16)], slot: Some((5, 104)) });
-        assert_eq!((p.tokens(), p.has_slot(), p.pages(3), p.slot()), (40, true, vec![0, 8, 16], Some(104)));
-        assert_eq!((h.used(), h.pages()), (48, 3));
-        assert_eq!(runs(&plan.pages, 8), [(10, 0, 3)]);
+    fn consecutive_pages_fold_into_one_run() {
+        assert_eq!(runs(&[(10, 0), (11, 8), (12, 16)], 8), [(10, 0, 3)]);
         assert_eq!(runs(&[(10, 0), (11, 8), (13, 16), (14, 32)], 8), [(10, 0, 2), (13, 16, 1), (14, 32, 1)]);
-        drop(p);
-        assert_eq!((h.used(), h.pages()), (0, 0));
-    }
-
-    #[test]
-    fn a_page_parked_already_is_shared_not_copied() {
-        let h = host(16);
-        let (a, _) = h.park(&[(1, 10), (2, 11)], 8, None, 32).unwrap();
-        // The next turn of the session: two pages more, the first two on the host already.
-        let (b, plan) = h.park(&[(1, 10), (2, 11), (3, 12), (4, 13)], 8, None, 64).unwrap();
-        assert_eq!(plan.pages, [(12, 16), (13, 24)]);
-        assert_eq!((h.pages(), b.pages(4), a.pages(2)), (4, vec![0, 8, 16, 24], vec![0, 8]));
-        drop(a);
-        // b holds every page; nothing came back.
-        assert_eq!((h.used(), h.pages()), (32, 4));
-        drop(b);
-        assert_eq!((h.used(), h.pages()), (0, 0));
-        // Gone from the registry: parking node 1 again copies again.
-        let (_, plan) = h.park(&[(1, 10)], 8, None, 16).unwrap();
-        assert_eq!(plan.pages, [(10, 0)]);
-    }
-
-    #[test]
-    fn full_keeps_nothing() {
-        let h = host(4);
-        let (a, _) = h.park(&[(1, 0), (2, 1)], 8, None, 32).unwrap();
-        // Node 3's page fits, a two-unit slot does not.
-        assert_eq!(h.park(&[(1, 0), (2, 1), (3, 2)], 8, Some((1, 16)), 48).unwrap_err(), Denied::HostFull);
-        // Node 3's page went back; a and its two pages are untouched.
-        assert_eq!((h.used(), h.pages()), (16, 2));
-        drop(a);
-        assert_eq!(h.park(&[(7, 0)], 40, None, 16).unwrap_err(), Denied::HostFull);
-        assert_eq!(h.used(), 0);
-    }
-
-    #[test]
-    fn frees_coalesce_from_both_sides() {
-        let h = host(8);
-        let (a, _) = h.park(&[(1, 0)], 8, None, 16).unwrap();
-        let (b, _) = h.park(&[(2, 1)], 8, None, 16).unwrap();
-        let (c, _) = h.park(&[(3, 2)], 8, None, 16).unwrap();
-        drop(a);
-        drop(c);
-        drop(b);
-        assert_eq!(lock(&h.inner).free, BTreeMap::from([(0, 8)]));
-        // Bytes are rounded up to the grain.
-        let (d, plan) = h.park(&[(4, 0)], 9, None, 16).unwrap();
-        assert_eq!((plan.pages, h.used()), (vec![(0, 0)], 16));
-        drop(d);
-    }
-
-    /// Random parks and drops against a model that only tracks which
-    /// nodes are alive: used bytes are exactly the live pages and slots,
-    /// free runs never touch, and every live node's range is disjoint.
-    #[test]
-    fn accounting_partitions_the_block() {
-        let h = host(64);
-        let mut live: Vec<Parked> = Vec::new();
-        let mut x = 0x2545_F491_4F6C_DD1Du64;
-        let mut rand = move |n: u64| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            (x >> 33) % n
-        };
-        for _ in 0..3000 {
-            if rand(3) > 0 || live.is_empty() {
-                // A chain of up to 6 nodes out of ids 1..12 (shared prefixes), maybe a slot.
-                let n = 1 + rand(6) as usize;
-                let nodes: Vec<(u64, i32)> = (0..n).map(|i| (i as u64 + 1 + rand(2), i as i32)).collect();
-                let slot = (rand(2) == 0).then(|| (0, 8 + rand(3) * 8));
-                if let Ok((p, plan)) = h.park(&nodes, 8, slot, n * 4) {
-                    assert!(plan.pages.len() <= n);
-                    live.push(p);
-                }
-            } else {
-                live.swap_remove(rand(live.len() as u64) as usize);
-            }
-            let g = lock(&h.inner);
-            let mut ranges: Vec<Range<u64>> = Vec::new();
-            for p in &live {
-                let mut cur = p.chain.as_ref();
-                while let Some(n) = cur {
-                    ranges.push(n.range.clone());
-                    cur = n.parent.as_ref();
-                }
-                ranges.extend(p.slot.clone());
-            }
-            ranges.sort_by_key(|r| r.start);
-            ranges.dedup();
-            let held: u64 = ranges.iter().map(|r| r.end - r.start).sum();
-            for w in ranges.windows(2) {
-                assert!(w[0].end <= w[1].start, "overlap {:?} {:?}", w[0], w[1]);
-            }
-            let free: u64 = g.free.values().sum::<u64>() * 8;
-            assert_eq!(held + free, 64 * 8);
-            let mut prev: Option<(u64, u64)> = None;
-            for (&s, &l) in &g.free {
-                if let Some((ps, pl)) = prev {
-                    assert!(ps + pl < s, "adjacent free runs");
-                }
-                prev = Some((s, l));
-            }
-            assert_eq!(g.nodes.len(), ranges.len() - live.iter().filter(|p| p.slot.is_some()).count());
-        }
     }
 }

@@ -55,7 +55,7 @@ pub use device::PeerHandle;
 use device::{alloc, Blas, DeviceBuf, Pinned};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
-pub use host::{Host, Parked};
+pub use host::{Host, Park, Parked};
 use lease::Remaps;
 pub use pages::{page_unit, Checkpoint, Copies, Denied, Lease, Pool, Pooled};
 pub use park::{Room, Waking};
