@@ -48,7 +48,7 @@ fn read_inputs(path: &Path) -> Inputs {
     let (_, meta) = safetensors::SafeTensors::read_metadata(&bytes).unwrap();
     let md = meta.metadata().clone().unwrap_or_default();
     let t = |n: &str| st.tensor(n).unwrap_or_else(|_| panic!("tensor {n}")).data().to_vec();
-    let y_ref: Vec<f32> = t("y_ref").chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+    let y_ref: Vec<f32> = t("y_ref").as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
     Inputs {
         x: t("x"),
         topk_idx: t("topk_idx"),
@@ -60,7 +60,7 @@ fn read_inputs(path: &Path) -> Inputs {
 }
 
 fn bf16_to_f32(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(2).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect()
+    b.as_chunks::<2>().0.iter().map(|c| f32::from_bits((u16::from_le_bytes(*c) as u32) << 16)).collect()
 }
 
 /// Load, stage inputs for rows [row0, row0 + rows), run once, return y rows
