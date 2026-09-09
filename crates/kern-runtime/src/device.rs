@@ -122,7 +122,7 @@ fn none_handle_type() -> sys::CUmemAllocationHandleType {
 
 /// Whether the device can hand out fabric handles (`cuMemCreate` with
 /// `CU_MEM_HANDLE_TYPE_FABRIC`).
-pub(crate) fn fabric_supported(dev: i32) -> Result<bool> {
+fn fabric_supported(dev: i32) -> Result<bool> {
     let mut v: i32 = 0;
     cuda_check(
         unsafe {
@@ -507,7 +507,7 @@ impl Drop for Physical {
 /// The shell of the pool's remaps: arenas in the pool's order over one set
 /// of physical chunks. Arenas drop first, then the chunks.
 pub(crate) struct Mapper {
-    pub(crate) arenas: Vec<Arena>,
+    arenas: Vec<Arena>,
     #[allow(dead_code)]
     physical: Physical,
 }
