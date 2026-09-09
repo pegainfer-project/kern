@@ -104,8 +104,12 @@ LN_ROWS_PER_BLOCK = 4                    # prefill layer_norm instance
 BF16 = 2
 ATTN_LAYERS = [i for i in range(LAYERS) if (i + 1) % 4 == 0]
 GDN_LAYERS = [i for i in range(LAYERS) if (i + 1) % 4 != 0]
-CHUNK_MAX = 2048
-NT_MAX = CHUNK_MAX // FLA_CHUNK          # 32 chunks
+# prefill chunk bound (`tokens.max`): sizes the FLA chunk-state workspace
+# `h` (3 MiB per chunk), the conv index tables and, downstream, the
+# TRTLLM-GEN Q / O tensormaps; 8192 prefills ~7% faster than 2048 on a 36k
+# prompt (GB300, 2026-09-09) and is where the per-chunk gain flattens
+CHUNK_MAX = 8192
+NT_MAX = CHUNK_MAX // FLA_CHUNK          # 128 chunks
 # attention
 BLOCK_SIZE = 784                         # vLLM block_size (constexpr in the kernels)
 BLOCK_Q = 5                              # unified 2D: query rows per block

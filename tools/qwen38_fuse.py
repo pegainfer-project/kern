@@ -339,7 +339,14 @@ def gemm16_silu(m):
 
 
 def prune(m):
-    """Drop ops, modules and workspace buffers no program refers to any more."""
+    """Drop ops, modules and workspace buffers no program refers to any more,
+    and the `load` calls that fill a carry no step reads (the kv scales of
+    the replaced KV append); labels stay positional, as `Once` numbers them."""
+    read = {a["buf"] for n, p in m["programs"].items() if n != "load"
+            for c in p["calls"] for a in c["args"] if "buf" in a}
+    if "load" in m["programs"]:
+        live = [c for c in m["programs"]["load"]["calls"] if any(a.get("buf") in read for a in c["args"])]
+        m["programs"]["load"]["calls"] = [{**c, "label": f"load.{c['op']}.{i}"} for i, c in enumerate(live)]
     used_ops = {c["op"] for p in m["programs"].values() for c in p["calls"]}
     m["ops"] = {k: v for k, v in m["ops"].items() if k in used_ops}
     used_bufs = {a["buf"] for p in m["programs"].values() for c in p["calls"] for a in c["args"] if "buf" in a}

@@ -63,7 +63,7 @@ def name_constants(manifest):
         elif name in ("gdn.line_index", "line_adv"):
             dims = {48: "gdn_num_layers", 8: "verify_tokens_per_round"}
         elif name.startswith("fla.chunk_"):
-            dims = {32: "max_fla_chunks"}
+            dims = {manifest["buffers"]["h"]["shape"][0]: "max_fla_chunks"}
         elif name in ("conv.batch_ptr", "conv.token_chunk_offset", "gdn.has_initial"):
             dims = {}  # capture/kernel metadata capacity, not a head dimension
         if hybrid and name in ("cand_ids", "cand_vals", "hidden_r", "succ_g", "pred_g", "pred_anchor"):
@@ -82,7 +82,7 @@ def name_constants(manifest):
             if name in ("a_save", "b_save"):
                 b["shape"][2] = ref("gdn_num_v_heads", 48)
         if hybrid and name == "h":
-            b["shape"][0] = ref("max_fla_chunks", 32)
+            b["shape"][0] = ref("max_fla_chunks", manifest["buffers"][name]["shape"][0])
         if hybrid and name == "logits_blk":
             b["shape"][0] = ref("max_verify_tokens", manifest["buffers"][name]["shape"][0])
         if "stride" in b.get("domain", {}) and name in ("block_table", "draft_block_table"):

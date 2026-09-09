@@ -15,8 +15,8 @@ BASELINES = {
     "qwen3-4b-dspark.json": "ab9b2a4c94b21f23d58740b585896e189b759f5141615f8a782b7713ae2f6abb",
     "qwen3-4b-silu-mined.json": "e481ceb9d6f2f96b0f86979d8aad346b59696a711d2b363ccb86afb1295b6a58",
     "qwen3-4b.json": "59846f84ecee0ddea921e597a307fe824f5388e9ae04d4c7f79fffb84459a1e8",
-    "qwen3.8-27b-dflash2.json": "18f00850edb17a7ef0fbd633457d29f73e9ad8875a27fd3a79cc5e9c3114b043",
-    "qwen3.8-27b.json": "8252c0a0e363095d979e3d2c2878971b7b813d6b2f02a2792c98a4e6b7e8a866"
+    "qwen3.8-27b-dflash2.json": "3d69d2ef7360bb08552d28aa95a25cf7bebc70d63a382180ac070fcb0fa71af3",
+    "qwen3.8-27b.json": "a3a5c16fb460b6c0e9ac37742c2aed55a5a0e030fccc7c05586cc9c063cc8e05"
 }
 
 

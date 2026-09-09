@@ -15,7 +15,7 @@
   "GDN_NUM_V_HEADS": 48,
   "FLA_CHUNK_SIZE": 64,
   "GDN_HEAD_DIM": 128,
-  "MAX_FLA_CHUNKS": 32,
+  "MAX_FLA_CHUNKS": 128,
   "QKV_DIM": 14336,
   "Q_DIM": 6144,
   "KV_DIM": 1024,
@@ -40,7 +40,7 @@
   "MAX_CANDIDATE_ROWS": 16384,
   "DRAFT_HEAD_DIM": 128,
   "DRAFT_KV_SCALE_COUNT": 10,
-  "MAX_TOKENS": 2048,
+  "MAX_TOKENS": 8192,
   "MAX_SEQS": 128,
   "KV_BYTES_PER_TOKEN": 65536,
   "GDN_BYTES_PER_SEQ": 163577856,
@@ -492,14 +492,14 @@
   "conv.batch_ptr": {
    "dtype": "i32",
    "shape": [
-    256
+    1024
    ],
    "kind": "carry"
   },
   "conv.token_chunk_offset": {
    "dtype": "i32",
    "shape": [
-    256
+    1024
    ],
    "kind": "carry"
   },
@@ -16198,7 +16198,7 @@
        1
       ],
       "grid": [
-       1,
+       4,
        1,
        1
       ],
@@ -16241,7 +16241,7 @@
        1
       ],
       "grid": [
-       1,
+       4,
        1,
        1
       ],
@@ -102345,7 +102345,7 @@
        "buf": "fla.chunk_indices"
       },
       {
-       "i32": 64
+       "i32": 256
       }
      ]
     },
@@ -102358,7 +102358,7 @@
        "offset": 4
       },
       {
-       "i32": 32
+       "i32": 128
       },
       {
        "i32": 2
@@ -102382,7 +102382,7 @@
        "buf": "conv.batch_ptr"
       },
       {
-       "i32": 256
+       "i32": 1024
       }
      ]
     },
@@ -102394,7 +102394,7 @@
        "buf": "conv.token_chunk_offset"
       },
       {
-       "i32": 256
+       "i32": 1024
       }
      ]
     },
@@ -102406,7 +102406,7 @@
        "buf": "conv.token_chunk_offset"
       },
       {
-       "i32": 256
+       "i32": 1024
       },
       {
        "i32": 1
