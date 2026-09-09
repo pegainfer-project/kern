@@ -78,7 +78,7 @@ MegaMoE 协议上限 16896 token/rank。
 | A1 | DSL 核 c 行共用 block_table 的扩展曲线，c ∈ {1, 8, 32, 128, 256}，P ∈ {13k, 50k, 220k} | 无 | 每层时间表，决定 C5 |
 | A2 | FlashKDA T 扫描，H=24 / 96，T=64..2048（pegainfer `k3_flash_kda_bench.rs`） | 无 | 每层时间表，进 D2 公式 |
 | A3 | MegaMoE 256 / 512 token/rank（`k3_moe_ep`） | 无 | 每层时间 |
-| B1 ✅ | manifest 侧不加新类型：`span` 是普通 var，`decode_span` 是普通 program，`span_at` 是 `[1]` 的 i32 input；runtime 新契约——program 的 env 只需带它的 launch 读到的 var（`CompiledProgram.vars`，其余归 MIN），所以 `decode` 不必给 `span` | 无 | 2026-09-03 过：4 层 EP4 / EP4×TP4 / EP1 与 93 层 span manifest verify 通过，runtime 53 单测 |
+| B1 ✅ | manifest 侧不加新类型：`span` 是普通 var，`decode_span` 是普通 program，`span_at` 是 `[1]` 的 i32 input；runtime 新契约——program 的 vars 只需带它的 launch 读到的 var（`CompiledProgram.vars`，其余归 MIN），所以 `decode` 不必给 `span` | 无 | 2026-09-03 过：4 层 EP4 / EP4×TP4 / EP1 与 93 层 span manifest verify 通过，runtime 53 单测 |
 | B2 | runtime：span slot 预留成固定地址，bucket 键含 span | B1 | 单测 |
 | B3 ✅ | `gen_k3_decode.py --span-max N`：每个 KDA 层 qkvg/wsm GEMM → conv_silu → span_gather → span_state_load → gemm（span_g）→ flash_kda → span_state_store → kda_core → kda_out_gate；span 的 q/k/v/out 是独立 buffer（TMA 描述符 load 时定死，不能指进批的行），`span_at` 定 span 在批里的位置（tray 批 own rows first，peer 上 span 在第 d 块） | B1 | 2026-09-03 过：`examples/k3-*.json` 全部带 `decode_span`（4 层 span 8、93 层 64） |
 | C1 ✅ | `k3_span_gather`（并行 conv：前三行取 line 窗口、末三行写回，land g 为 bf16、写转置 beta、写 span_flow）+ `k3_span_state`（KDA slot ↔ f32 [h,128,128] 拷入拷出） | B1 | 2026-09-03 过：harness 对 CPU 参考，B ∈ {1,3,8,64}，span 在批中任意位置（`SPAN_AT=3`） |

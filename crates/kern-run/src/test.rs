@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Env};
+use crate::{Caller, Vars};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::protocol::{Forward, Rows};
@@ -236,7 +236,7 @@ fn sample_workload(
     let vocab = m.buffers[tokens]
         .domain
         .as_ref()
-        .map(|d| d.resolve(m, &pr.env(1, 1, 1), &p))
+        .map(|d| d.resolve(m, &pr.vars(1, 1, 1), &p))
         .transpose()?
         .and_then(|r| r.hi)
         .map(|hi| hi as u64 + 1)
@@ -733,7 +733,7 @@ struct Sides {
 struct Snap {
     program: String,
     seg: Segment,
-    env: BTreeMap<String, u64>,
+    vars: BTreeMap<String, u64>,
     inputs: Vec<(String, Vec<u8>)>,
     ref_out: BTreeMap<String, Vec<u8>>,
     ref_states: BTreeMap<String, Vec<u8>>,
@@ -1445,7 +1445,7 @@ fn execute(o: Opts) -> Result<i32> {
         Rows::Const(r) => r,
         Rows::Var => 1,
     };
-    let env_of = |f: &Forward| pa.env(1, rows_of(f), rows_of(f));
+    let vars_of = |f: &Forward| pa.vars(1, rows_of(f), rows_of(f));
     let out = Out { json: o.json };
     let mut sum = Summary { a: o.a.display().to_string(), b: o.b.display().to_string(), ..Default::default() };
     out.show(vec![row("kern test", format!("A {} → B {}", sum.a, sum.b), None)]);
@@ -1716,7 +1716,7 @@ fn execute(o: Opts) -> Result<i32> {
                 snaps.push(Snap {
                     program: pname.into(),
                     seg: seg.clone(),
-                    env: e.clone(),
+                    vars: e.clone(),
                     inputs,
                     ref_out,
                     ref_states: a_post,
@@ -1745,8 +1745,8 @@ fn execute(o: Opts) -> Result<i32> {
             .filter(|n| n.starts_with("logits") && mb.buffers.contains_key(n))
             .collect()
     };
-    // (run label, buffer, env, bytes)
-    let read_logits = |c: &Caller, prog: &str, e: &Env, label: &str| -> Result<Vec<(String, String, Env, Vec<u8>)>> {
+    // (run label, buffer, vars, bytes)
+    let read_logits = |c: &Caller, prog: &str, e: &Vars, label: &str| -> Result<Vec<(String, String, Vars, Vec<u8>)>> {
         logits_of(prog)
             .into_iter()
             .map(|n| {
@@ -1782,7 +1782,7 @@ fn execute(o: Opts) -> Result<i32> {
         shared_states.iter().map(|n| Ok((n.clone(), s.a.rt.read_state(n)?))).collect::<Result<_>>()?;
     for (k, &tok) in wl.decode.iter().enumerate() {
         let f = prog_of(k);
-        let e = env_of(f);
+        let e = vars_of(f);
         stage_step(&mut s.a, f, tok)?;
         stage_step(&mut s.b, f, tok)?;
         sync_b(&mut s)?;
@@ -1811,7 +1811,7 @@ fn execute(o: Opts) -> Result<i32> {
     }
     for (k, &tok) in wl.decode.iter().enumerate() {
         let f = prog_of(k);
-        let e = env_of(f);
+        let e = vars_of(f);
         stage_step(&mut s.b, f, tok)?;
         s.b.rt.run(&f.name, &e)?;
         b_logits.extend(read_logits(&s.b, &f.name, &e, &format!("step {k}"))?);
@@ -1880,8 +1880,8 @@ fn execute(o: Opts) -> Result<i32> {
     let mut e2e_differs: Vec<String> = Vec::new();
     for (name, b) in &ma.buffers {
         if b.kind == BufferKind::Output && mb.buffers.contains_key(name) {
-            // The last step's env: what its outputs are live over.
-            let e_last = env_of(prog_of(n_steps.saturating_sub(1)));
+            // The last step's vars: what its outputs are live over.
+            let e_last = vars_of(prog_of(n_steps.saturating_sub(1)));
             let bytes = live_bytes(&ma, name, &e_last);
             let c =
                 compare(b.dtype, &s.a.rt.read_buffer_prefix(name, bytes)?, &s.b.rt.read_buffer_prefix(name, bytes)?);
@@ -1998,12 +1998,12 @@ fn execute(o: Opts) -> Result<i32> {
             c.rt.write_buffer(n, bytes)?;
         }
         let r = if side_b { sn.seg.b } else { sn.seg.a };
-        let run = c.rt.run_range(&sn.program, &sn.env, r.0, r.1);
+        let run = c.rt.run_range(&sn.program, &sn.vars, r.0, r.1);
         let mut out = BTreeMap::new();
         let mut st = BTreeMap::new();
         if run.is_ok() {
             for n in sn.ref_out.keys() {
-                out.insert(n.clone(), c.rt.read_buffer_prefix(n, live_bytes(m, n, &sn.env))?);
+                out.insert(n.clone(), c.rt.read_buffer_prefix(n, live_bytes(m, n, &sn.vars))?);
             }
             for n in sn.ref_states.keys() {
                 st.insert(n.clone(), c.rt.read_state(n)?);
@@ -2115,7 +2115,8 @@ fn execute(o: Opts) -> Result<i32> {
                         continue;
                     }
                     let base = values::to_f64(decl.dtype, tapped);
-                    let vals = perturb(&mut rng, round % MODES.len(), &base, row_elems(&ma, name, &sn.env), decl.dtype);
+                    let vals =
+                        perturb(&mut rng, round % MODES.len(), &base, row_elems(&ma, name, &sn.vars), decl.dtype);
                     inputs.push((name.clone(), values::from_f64(decl.dtype, &vals)));
                 }
                 let at = format!("{} cut {}", sn.program, seg_label(&sn.seg));
@@ -2151,7 +2152,7 @@ fn execute(o: Opts) -> Result<i32> {
                     // buffer's declared domain (A is checked too — a
                     // violation there is the reference misbehaving).
                     if let Some(d) = &mb.buffers[name].domain {
-                        let r = d.resolve(&mb, &sn.env, &s.b.rt.provision())?;
+                        let r = d.resolve(&mb, &sn.vars, &s.b.rt.provision())?;
                         for (side, bytes) in [("A", &out_a[name]), ("B", b)] {
                             let v = values::to_f64(mb.buffers[name].dtype, bytes);
                             if let Some(i) = v.iter().position(|x| !r.contains(*x)) {
@@ -2234,7 +2235,7 @@ fn execute(o: Opts) -> Result<i32> {
             if n_cuts(p) == 0 || undriven.iter().any(|u| u == p) {
                 continue;
             }
-            let e1 = env_of(f);
+            let e1 = vars_of(f);
             stage_step(&mut s.a, f, *wl.decode.last().unwrap())?;
             stage_step(&mut s.b, f, *wl.decode.last().unwrap())?;
             let st = step(&mut s, p, &e1, o.iters, true)?;

@@ -330,7 +330,7 @@ impl Batch {
     /// contributing `toks[r]` (one token, or a span of them: consecutive
     /// positions of that row, its tables repeated), then rank (me + d)'s
     /// rows at block d from `peer(q, row)` (docs/multi-gpu.md "own rows
-    /// first"). Returns the env and the program it selects, and moves the
+    /// first"). Returns the vars and the program it selects, and moves the
     /// rows' positions.
     fn stage(
         &mut self,
@@ -429,8 +429,8 @@ fn run_batch(
     anyhow::ensure!(span <= 1 || fork.is_none(), "--span and --fork together are not run here");
     let mut batch = Batch::new(rt, tp, me, rows, tokens_per_row)?;
     let mut out: Vec<Vec<Vec<i64>>> = vec![vec![Vec::with_capacity(steps + free); rows]; tp];
-    let mut env = BTreeMap::new();
-    let mut span_env = None;
+    let mut vars = BTreeMap::new();
+    let mut span_vars = None;
     // After the scripted feed, `free` more steps run each row on its own
     // argmax (a greedy continuation, for reading the text back). A row's
     // k-th token is its feed's, then its own (k-1)-th output.
@@ -471,9 +471,9 @@ fn run_batch(
             rt.run(program, &e)?;
         }
         if program == "decode_span" {
-            span_env = Some(e.clone());
+            span_vars = Some(e.clone());
         } else {
-            env = e;
+            vars = e;
         }
         let bytes = rt.read_output("next_token")?;
         let b = out[me].len();
@@ -506,8 +506,8 @@ fn run_batch(
         Ok(rt.time_captured(program, e, iters)? as f64)
     };
     // no decode step ran when the span covered the whole feed
-    let ms = if iters > 0 && !env.is_empty() { Some(time(rt, "decode", &env)?) } else { None };
-    let span_ms = match (&span_env, iters) {
+    let ms = if iters > 0 && !vars.is_empty() { Some(time(rt, "decode", &vars)?) } else { None };
+    let span_ms = match (&span_vars, iters) {
         (Some(e), 1..) => Some(time(rt, "decode_span", e)?),
         _ => None,
     };
@@ -616,11 +616,11 @@ fn run_rank(
     rendezvous(&mut rt)?;
     // A tray manifest's one-time setup after the peers are mapped (the
     // allreduce's Lamport stages are poisoned, not zeroed).
-    let env =
+    let vars =
         BTreeMap::from([("tokens".to_string(), 1u64), ("seqs".to_string(), 1u64), ("rows".to_string(), tp as u64)]);
     for (name, p) in &manifest.programs {
         if p.once {
-            rt.run(name, &env)?;
+            rt.run(name, &vars)?;
         }
     }
 

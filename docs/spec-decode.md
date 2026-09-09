@@ -10,7 +10,7 @@ decode 路径原有的；v4 把 host 的拼接与前缀匹配搬进设备，多�
 `tools/kernels-src/spec_round.cu` 的五个几十行的小核：splice_draft /
 splice_verify / spec_count / spec_lines / ones_i32，与模型无关）——draft
 与 target 几何完全同构，grid 是 tokens 的表达式，5 层 forward 与 verify
-都以 env tokens=7 复用同一批 op；新增 op 全是布线/常量差异。
+都以 vars tokens=7 复用同一批 op；新增 op 全是布线/常量差异。
 
 Markov 头怎么落到既有核上（`membed=markov_w1[prev]`、
 `logits_i = base_logits[i] + markov_w2 @ membed`、`argmax`，
@@ -47,7 +47,7 @@ elementwise add 由 β=1 一次做完**（`C[1,V] += membed@markov_w2^T`，C 直
 - **Markov 头展开成 7 步链**（都在 manifest 里，可整图捕获）：
   embedding_row 取 `markov_w1[prev]` → gemm_acc 把 markov_w2 偏置累进该行
   base logits → argmax_row 出 draft token 喂下一步。argmax 核天然多行
-  （grid.x=行号），verify 的 8 行 argmax 就是既有 kernel 换 env。
+  （grid.x=行号），verify 的 8 行 argmax 就是既有 kernel 换 vars。
 - 一轮 = `round` program（v4）：`splice_draft`（anchor + mask×6 →
   `draft_ids`）→ draft（7 行非因果）→ `splice_verify`（anchor + d0..d5 →
   `verify_ids`）→ verify（7 行因果）→ precompute 在 verify 的 7 行上 →

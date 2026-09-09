@@ -195,7 +195,7 @@ fn main() {
                 let mut lines = Vec::new();
                 for &(b, rb) in &configs {
                     let rows = n * b;
-                    let env = BTreeMap::from([
+                    let vars = BTreeMap::from([
                         ("tokens".to_string(), b as u64),
                         ("rows".to_string(), rows as u64),
                         ("rb".to_string(), rb as u64),
@@ -203,9 +203,9 @@ fn main() {
                     // Local row j is tray row (rank*b + j) mod rows.
                     let tray = |j: usize| (rank * b + j) % rows;
                     let gx: Vec<u8> = (0..b).flat_map(|j| (0..rb).map(move |k| ag_byte(rank, j, k))).collect();
-                    rt.write_input_at("ag_x", &gx, &env).map_err(e)?;
+                    rt.write_input_at("ag_x", &gx, &vars).map_err(e)?;
                     gate.wait();
-                    rt.run("allgather", &env).map_err(e)?;
+                    rt.run("allgather", &vars).map_err(e)?;
                     let err = i32::from_le_bytes(rt.read_output("err").map_err(e)?[..4].try_into().unwrap());
                     if err != 0 { return Err(format!("B={b}: a slot from rank {} never arrived", err - 1)); }
                     // `off` shifts every input so each program's sum differs from
@@ -232,9 +232,9 @@ fn main() {
                         let x: Vec<u8> = (0..rows)
                             .flat_map(|j| (0..H).flat_map(move |i| (ar_value(rank, tray(j), i) + off).to_le_bytes()))
                             .collect();
-                        rt.write_input_at("ar_x", &x, &env).map_err(e)?;
+                        rt.write_input_at("ar_x", &x, &vars).map_err(e)?;
                         gate.wait();
-                        rt.run(prog, &env).map_err(e)?;
+                        rt.run(prog, &vars).map_err(e)?;
                         let err = i32::from_le_bytes(rt.read_output("err").map_err(e)?[..4].try_into().unwrap());
                         if err != 0 { return Err(format!("B={b}: {what}: rank {} never arrived", err - 1)); }
                         check_ar(&rt, what, off)?;
@@ -255,15 +255,15 @@ fn main() {
                         }
                     }
                     if bad != 0 { return Err(format!("B={b} rb={rb}: {bad} wrong allgather bytes")); }
-                    rt.capture("ag_burst", &env).map_err(e)?;
+                    rt.capture("ag_burst", &vars).map_err(e)?;
                     gate.wait();
-                    let ag_us = rt.time_captured("ag_burst", &env, iters).map_err(e)? as f64 * 1e3 / burst as f64;
-                    rt.capture("tr1_burst", &env).map_err(e)?;
-                    rt.capture("tr2_burst", &env).map_err(e)?;
+                    let ag_us = rt.time_captured("ag_burst", &vars, iters).map_err(e)? as f64 * 1e3 / burst as f64;
+                    rt.capture("tr1_burst", &vars).map_err(e)?;
+                    rt.capture("tr2_burst", &vars).map_err(e)?;
                     gate.wait();
-                    let tr1_us = rt.time_captured("tr1_burst", &env, iters).map_err(e)? as f64 * 1e3 / burst as f64;
+                    let tr1_us = rt.time_captured("tr1_burst", &vars, iters).map_err(e)? as f64 * 1e3 / burst as f64;
                     gate.wait();
-                    let tr2_us = rt.time_captured("tr2_burst", &env, iters).map_err(e)? as f64 * 1e3 / burst as f64;
+                    let tr2_us = rt.time_captured("tr2_burst", &vars, iters).map_err(e)? as f64 * 1e3 / burst as f64;
                     let err = i32::from_le_bytes(rt.read_output("err").map_err(e)?[..4].try_into().unwrap());
                     if err != 0 { return Err(format!("B={b}: burst: a slot from rank {} never arrived", err - 1)); }
                     lines.push(format!(

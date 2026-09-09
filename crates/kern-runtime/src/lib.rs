@@ -375,7 +375,7 @@ impl Runtime {
         // many tokens", not for that page. (A per-sequence state's stride
         // is bytes per line, not tokens: not a page.)
         let page = page_unit(&manifest);
-        let max_env: BTreeMap<_, _> = manifest.vars.iter().map(|(s, v)| (s.clone(), v.max)).collect();
+        let vars_max: BTreeMap<_, _> = manifest.vars.iter().map(|(s, v)| (s.clone(), v.max)).collect();
 
         // Buffer sizes are static: shapes only reference vars, sized at max.
         // Exported buffers come from the virtual-memory API with a fabric
@@ -384,7 +384,7 @@ impl Runtime {
         let mut buffers = BTreeMap::new();
         let mut peers = BTreeMap::new();
         for (name, b) in &manifest.buffers {
-            let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), &max_env)?;
+            let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), &vars_max)?;
             let buf = if b.export {
                 alloc_vmm(&stream, dev, bytes, Share::Required, &format!("buffer `{name}`"))?
             } else {
@@ -413,7 +413,7 @@ impl Runtime {
         }
 
         // Op scratch is allocated here, at var max, like the buffers.
-        let resolved = compile::resolve_ops(&manifest, &modules, kernels_dir, &stream, &max_env)?;
+        let resolved = compile::resolve_ops(&manifest, &modules, kernels_dir, &stream, &vars_max)?;
 
         // Everything but the states is on the device now: what is left is
         // the states' to take (weights are bound into buffers already
@@ -489,8 +489,8 @@ impl Runtime {
         }
         let resolution = resolved.iter().map(|(n, rk)| (n.clone(), rk.launch_modules())).collect();
         let peer_names: BTreeSet<String> = peers.keys().cloned().collect();
-        let rank_env = compile::RankEnv { ranks: &ranks, peer_buffers: &peer_names };
-        let programs = compile::compile_programs(&manifest, &resolved, &buffers, &states, &rank_env)?;
+        let place = compile::Ranks { ranks: &ranks, peer_buffers: &peer_names };
+        let programs = compile::compile_programs(&manifest, &resolved, &buffers, &states, &place)?;
         let scratch = resolved.into_values().flat_map(|rk| rk.scratch.into_values()).collect();
 
         let provision = Provision { tokens: pool.pages_max() as u64 * page, seq_slots: pool.slots_max() as u64 };
@@ -719,14 +719,14 @@ impl Runtime {
 
     /// Check `data` (a prefix of buffer `name`) against the buffer's declared
     /// domain, if any, at the given var values. Symbol-dependent bounds
-    /// need `env`; pass the values the next run will use.
-    pub fn check_domain(&self, name: &str, data: &[u8], env: &BTreeMap<String, u64>) -> Result<()> {
+    /// need `vars`; pass the values the next run will use.
+    pub fn check_domain(&self, name: &str, data: &[u8], vars: &BTreeMap<String, u64>) -> Result<()> {
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
         let Some(d) = &b.domain else { return Ok(()) };
         let r = d
-            .resolve(&self.manifest, env, &self.provision)
+            .resolve(&self.manifest, vars, &self.provision)
             .map_err(|e| Error::Domain(format!("buffer `{name}`: {e}")))?;
         let vals = values::to_f64(b.dtype, data);
         let fmt_bound = |v: Option<f64>| v.map_or("∞".to_string(), |x| format!("{x}"));
@@ -745,11 +745,11 @@ impl Runtime {
     /// next run will use; `write_input` checks against var upper bounds
     /// (the loosest valid reading), `write_input_at` against exact values.
     pub fn write_input(&mut self, name: &str, data: &[u8]) -> Result<()> {
-        let max_env: BTreeMap<_, _> = self.manifest.vars.iter().map(|(s, v)| (s.clone(), v.max)).collect();
-        self.write_input_at(name, data, &max_env)
+        let vars_max: BTreeMap<_, _> = self.manifest.vars.iter().map(|(s, v)| (s.clone(), v.max)).collect();
+        self.write_input_at(name, data, &vars_max)
     }
 
-    pub fn write_input_at(&mut self, name: &str, data: &[u8], env: &BTreeMap<String, u64>) -> Result<()> {
+    pub fn write_input_at(&mut self, name: &str, data: &[u8], vars: &BTreeMap<String, u64>) -> Result<()> {
         self.ctx.bind_to_thread()?;
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
@@ -760,7 +760,7 @@ impl Runtime {
         if data.len() as u64 > self.buffers[name].bytes {
             bail!(Api, "input `{name}`: got {} bytes, buffer is {}", data.len(), self.buffers[name].bytes);
         }
-        self.check_domain(name, data, env)?;
+        self.check_domain(name, data, vars)?;
         let dst = self.buffers.get_mut(name).unwrap();
         let pinned = self.staging.get_mut(name).unwrap();
         // Waits on the pinned slice's event: the previous step's DMA from

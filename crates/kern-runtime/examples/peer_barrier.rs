@@ -101,12 +101,12 @@ fn main() {
                 gate.wait();
                 let members: Vec<_> = posted.lock().unwrap().iter().map(|m| m.clone().unwrap()).collect();
                 rt.import_peers("ep", &members)?;
-                let env = BTreeMap::new();
+                let vars = BTreeMap::new();
                 // Everyone must be past import before the first barrier.
                 gate.wait();
                 let mut err = 0;
                 if drop != Some(rank) {
-                    rt.run("barrier", &env)?;
+                    rt.run("barrier", &vars)?;
                     err = i32::from_le_bytes(rt.read_output("err")?[..4].try_into().unwrap());
                 }
                 gate.wait();
@@ -117,13 +117,13 @@ fn main() {
                 gate.wait();
                 let t0 = Instant::now();
                 for _ in 0..iters {
-                    rt.run("barrier", &env)?;
+                    rt.run("barrier", &vars)?;
                 }
                 let eager_us = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
                 // Captured burst: GPU-side time per barrier.
-                rt.capture("burst", &env)?;
+                rt.capture("burst", &vars)?;
                 gate.wait();
-                let ms = rt.time_captured("burst", &env, iters)?;
+                let ms = rt.time_captured("burst", &vars, iters)?;
                 let err = i32::from_le_bytes(rt.read_output("err")?[..4].try_into().unwrap());
                 Ok((eager_us, ms as f64 * 1e3 / burst as f64, err))
             };

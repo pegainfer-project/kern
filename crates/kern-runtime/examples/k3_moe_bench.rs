@@ -174,22 +174,22 @@ fn run_rank(
         // Every rank draws the whole tray's routing from the same seed and takes its own rows.
         let idx = c.routing.draw(t * ranks, ranks, 0x9e37_79b9 + i as u64);
         let mine = &idx[rank * t * TOPK..(rank + 1) * t * TOPK];
-        let env: BTreeMap<String, u64> = [("tokens".to_string(), t as u64)].into();
+        let vars: BTreeMap<String, u64> = [("tokens".to_string(), t as u64)].into();
         let x = bf16_random(t * HIDDEN, 7 + rank as u64);
         let idx_bytes: Vec<u8> = mine.iter().flat_map(|e| e.to_le_bytes()).collect();
         let w_bytes: Vec<u8> = (0..t * TOPK).flat_map(|_| (1.0f32 / TOPK as f32).to_le_bytes()).collect();
-        rt.write_input_at("x", &x, &env)?;
-        rt.write_input_at("topk_idx", &idx_bytes, &env)?;
-        rt.write_input_at("topk_weight", &w_bytes, &env)?;
+        rt.write_input_at("x", &x, &vars)?;
+        rt.write_input_at("topk_idx", &idx_bytes, &vars)?;
+        rt.write_input_at("topk_weight", &w_bytes, &vars)?;
         sync();
-        rt.run("moe", &env)?;
+        rt.run("moe", &vars)?;
         if let Some(dir) = y_out {
             let y = rt.read_output("y")?;
             std::fs::write(dir.join(format!("y-{i}-r{rank}.bin")), &y[..t * HIDDEN * 2]).expect("y-out");
         }
-        rt.capture("moe", &env)?;
+        rt.capture("moe", &vars)?;
         sync();
-        let ms = rt.time_captured("moe", &env, iters)?;
+        let ms = rt.time_captured("moe", &vars, iters)?;
         out.push(ms as f64 * 1e3);
     }
     Ok(out)

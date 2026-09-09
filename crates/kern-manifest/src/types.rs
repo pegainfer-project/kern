@@ -344,11 +344,11 @@ pub enum Bound {
 }
 
 impl Bound {
-    pub fn eval(&self, env: &BTreeMap<String, u64>) -> Result<f64, EvalError> {
+    pub fn eval(&self, vars: &BTreeMap<String, u64>) -> Result<f64, EvalError> {
         Ok(match self {
             Bound::Int(v) => *v as f64,
             Bound::Float(v) => *v,
-            Bound::Expr(e) => e.eval(env)? as f64,
+            Bound::Expr(e) => e.eval(vars)? as f64,
         })
     }
 }
@@ -372,14 +372,14 @@ impl ResolvedDomain {
 }
 
 impl Domain {
-    /// Row count of `index_into`'s target at `env`, or what the runtime
+    /// Row count of `index_into`'s target at `vars`, or what the runtime
     /// provisioned for a state; `None` when the name resolves to nothing.
-    fn target_rows(&self, m: &Manifest, env: &BTreeMap<String, u64>, p: &Provision) -> Result<Option<u64>, EvalError> {
+    fn target_rows(&self, m: &Manifest, vars: &BTreeMap<String, u64>, p: &Provision) -> Result<Option<u64>, EvalError> {
         let Some(t) = &self.index_into else { return Ok(None) };
         if let Some(b) = m.buffers.get(t) {
             return Ok(Some(match b.shape.first() {
                 Some(Dim::Const(c)) => *c,
-                Some(Dim::Var(s)) => *env.get(s).ok_or_else(|| EvalError::UnknownVar(s.clone()))?,
+                Some(Dim::Var(s)) => *vars.get(s).ok_or_else(|| EvalError::UnknownVar(s.clone()))?,
                 None => 0,
             }));
         }
@@ -397,17 +397,17 @@ impl Domain {
     pub fn resolve(
         &self,
         m: &Manifest,
-        env: &BTreeMap<String, u64>,
+        vars: &BTreeMap<String, u64>,
         p: &Provision,
     ) -> Result<ResolvedDomain, EvalError> {
         if self.index_into.is_some() {
-            let rows = self.target_rows(m, env, p)?;
+            let rows = self.target_rows(m, vars, p)?;
             let hi = rows.map(|r| (r / self.stride.max(1)).saturating_sub(1) as f64);
             return Ok(ResolvedDomain { lo: Some(0.0), hi, monotone: self.monotone });
         }
         Ok(ResolvedDomain {
-            lo: self.min.as_ref().map(|b| b.eval(env)).transpose()?,
-            hi: self.max.as_ref().map(|b| b.eval(env)).transpose()?,
+            lo: self.min.as_ref().map(|b| b.eval(vars)).transpose()?,
+            hi: self.max.as_ref().map(|b| b.eval(vars)).transpose()?,
             monotone: self.monotone,
         })
     }
@@ -1196,18 +1196,18 @@ pub enum EvalError {
 }
 
 impl Expr {
-    pub fn eval(&self, env: &BTreeMap<String, u64>) -> Result<u64, EvalError> {
+    pub fn eval(&self, vars: &BTreeMap<String, u64>) -> Result<u64, EvalError> {
         match self {
             Expr::Const(c) => Ok(*c),
-            Expr::Var(var) => env.get(var).copied().ok_or_else(|| EvalError::UnknownVar(var.clone())),
+            Expr::Var(var) => vars.get(var).copied().ok_or_else(|| EvalError::UnknownVar(var.clone())),
             Expr::CeilDiv { ceil_div: (inner, c) } => {
                 if *c == 0 {
                     return Err(EvalError::DivByZero);
                 }
-                let x = inner.eval(env)?;
+                let x = inner.eval(vars)?;
                 Ok(x.checked_add(c - 1).ok_or(EvalError::Overflow)? / c)
             }
-            Expr::Mul { mul: (inner, c) } => inner.eval(env)?.checked_mul(*c).ok_or(EvalError::Overflow),
+            Expr::Mul { mul: (inner, c) } => inner.eval(vars)?.checked_mul(*c).ok_or(EvalError::Overflow),
         }
     }
 }

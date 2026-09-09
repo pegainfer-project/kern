@@ -4,7 +4,7 @@
 //! The names died at load (`compile`); what runs here is a flat launch
 //! list whose slots are constants or var-indexed expressions, so a launch
 //! is evaluation and `cuLaunchKernelEx`, no lookup and nothing left to
-//! panic on. The caller's env is densified once per call into manifest
+//! panic on. The caller's vars are densified once per call into manifest
 //! var order, the index space every compiled expression uses; vars the
 //! program does not read densify to the minimum, so a graph is keyed by
 //! the values that shaped it.
@@ -36,7 +36,7 @@ impl Runtime {
     /// needs the vars it reads (`used`); the rest are no part of it and
     /// densify to the minimum whatever the caller passed, so a graph is
     /// keyed by the values that shaped it.
-    pub(crate) fn dense_env(&self, env: &BTreeMap<String, u64>, used: &[bool]) -> Result<Vec<u64>> {
+    pub(crate) fn dense_vars(&self, vars: &BTreeMap<String, u64>, used: &[bool]) -> Result<Vec<u64>> {
         self.manifest
             .vars
             .iter()
@@ -45,7 +45,7 @@ impl Runtime {
                 if !used {
                     return Ok(kern_manifest::types::Var::MIN);
                 }
-                let Some(&v) = env.get(var) else {
+                let Some(&v) = vars.get(var) else {
                     bail!(Api, "var `{var}` not provided");
                 };
                 if v < kern_manifest::types::Var::MIN || v > decl.max {
@@ -57,13 +57,13 @@ impl Runtime {
     }
 
     /// `var=value` in manifest var order, for error messages.
-    fn fmt_env(&self, env: &[u64]) -> String {
-        self.manifest.vars.keys().zip(env).map(|(s, v)| format!("{s}={v}")).collect::<Vec<_>>().join(", ")
+    fn fmt_vars(&self, vars: &[u64]) -> String {
+        self.manifest.vars.keys().zip(vars).map(|(s, v)| format!("{s}={v}")).collect::<Vec<_>>().join(", ")
     }
 
     /// Execute one program with the given var values, then synchronize.
-    pub fn run(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
-        self.enqueue(program, env)?;
+    pub fn run(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+        self.enqueue(program, vars)?;
         self.ctx.bind_to_thread()?;
         self.stream.synchronize()?;
         Ok(())
@@ -79,34 +79,34 @@ impl Runtime {
     /// `graph` program through its CUDA graph, captured at these var
     /// values on first use; any other launch by launch (see
     /// [`Runtime::enqueue`] for the ordering ranks need).
-    pub fn issue(&mut self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
+    pub fn issue(&mut self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
         if !prog.graph || self.eager {
-            return self.enqueue(program, env);
+            return self.enqueue(program, vars);
         }
-        if !self.is_captured(program, env) {
+        if !self.is_captured(program, vars) {
             let t = std::time::Instant::now();
             let calls = prog.call_ranges.len();
-            self.capture(program, env)?;
-            tracing::info!(program, env = ?env, calls, capture_ms = t.elapsed().as_millis() as u64, "graph captured");
+            self.capture(program, vars)?;
+            tracing::info!(program, vars = ?vars, calls, capture_ms = t.elapsed().as_millis() as u64, "graph captured");
         }
-        self.enqueue_captured(program, env)
+        self.enqueue_captured(program, vars)
     }
 
     /// Issue one program's launches onto the stream and return without
     /// waiting. Ranks whose kernels wait on each other (an EP dispatch, a
     /// tray collective) must all be issued before any is waited for:
     /// `enqueue` each, then [`Runtime::synchronize`] each.
-    pub fn enqueue(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
+    pub fn enqueue(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
-        let env = self.dense_env(env, &prog.vars)?;
+        let vars = self.dense_vars(vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
-        self.replay(prog, &env)
+        self.replay(prog, &vars)
     }
 
     /// Capture one program into an instantiated CUDA graph. Grid dims and
@@ -114,12 +114,12 @@ impl Runtime {
     /// buffer *contents* are read at replay, so per-step H2D writes stay
     /// outside the graph and `run_captured` replays the whole call list
     /// with one launch.
-    pub fn capture(&mut self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
+    pub fn capture(&mut self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
-        let env = self.dense_env(env, &prog.vars)?;
+        let vars = self.dense_vars(vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(
             unsafe {
@@ -130,7 +130,7 @@ impl Runtime {
             },
             "cuStreamBeginCapture",
         )?;
-        let replayed = self.replay(prog, &env);
+        let replayed = self.replay(prog, &vars);
         // Always end the capture, even on error — a stream stuck in capture
         // mode poisons every later operation on it.
         let mut graph: sys::CUgraph = std::ptr::null_mut();
@@ -146,63 +146,72 @@ impl Runtime {
         let r = unsafe { sys::cuGraphInstantiateWithFlags(&mut exec, graph, 0) };
         unsafe { sys::cuGraphDestroy(graph) };
         cuda_check(r, "cuGraphInstantiateWithFlags")?;
-        if let Some(old) = self.graphs.insert((program.to_string(), env), exec) {
+        if let Some(old) = self.graphs.insert((program.to_string(), vars), exec) {
             unsafe { sys::cuGraphExecDestroy(old) };
         }
         Ok(())
     }
 
-    /// Whether `capture(program, env)` has been done for exactly these var
+    /// Whether `capture(program, vars)` has been done for exactly these var
     /// values.
-    pub fn is_captured(&self, program: &str, env: &BTreeMap<String, u64>) -> bool {
+    pub fn is_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> bool {
         self.programs
             .get(program)
-            .and_then(|prog| self.dense_env(env, &prog.vars).ok())
-            .is_some_and(|env| self.graphs.contains_key(&(program.to_string(), env)))
+            .and_then(|prog| self.dense_vars(vars, &prog.vars).ok())
+            .is_some_and(|vars| self.graphs.contains_key(&(program.to_string(), vars)))
     }
 
-    /// The graph captured for (program, env), or an `Api` error naming the
+    /// The graph captured for (program, vars), or an `Api` error naming the
     /// var values that were captured instead.
-    pub(crate) fn graph(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<sys::CUgraphExec> {
+    pub(crate) fn graph(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<sys::CUgraphExec> {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
-        let dense = self.dense_env(env, &prog.vars)?;
+        let dense = self.dense_vars(vars, &prog.vars)?;
         if let Some(exec) = self.graphs.get(&(program.to_string(), dense.clone())) {
             return Ok(*exec);
         }
-        let others: Vec<String> =
-            self.graphs.keys().filter(|(p, _)| p == program).map(|(_, e)| format!("{{{}}}", self.fmt_env(e))).collect();
+        let others: Vec<String> = self
+            .graphs
+            .keys()
+            .filter(|(p, _)| p == program)
+            .map(|(_, e)| format!("{{{}}}", self.fmt_vars(e)))
+            .collect();
         if others.is_empty() {
             bail!(Api, "program `{program}` has not been captured");
         }
-        bail!(Api, "program `{program}` called with {{{}}} but captured at {}", self.fmt_env(&dense), others.join(", "))
+        bail!(
+            Api,
+            "program `{program}` called with {{{}}} but captured at {}",
+            self.fmt_vars(&dense),
+            others.join(", ")
+        )
     }
 
     /// Replay a previously captured program, then synchronize.
-    pub fn run_captured(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
-        self.enqueue_captured(program, env)?;
+    pub fn run_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+        self.enqueue_captured(program, vars)?;
         self.stream.synchronize()?;
         Ok(())
     }
 
     /// Launch a previously captured program's graph without waiting (see
     /// [`Runtime::enqueue`]).
-    pub fn enqueue_captured(&self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
-        let exec = self.graph(program, env)?;
+    pub fn enqueue_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+        let exec = self.graph(program, vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")
     }
 
     /// Issue every launch of a compiled program onto the stream (no sync).
-    pub(crate) fn replay(&self, prog: &CompiledProgram, env: &[u64]) -> Result<()> {
+    pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &[u64]) -> Result<()> {
         for l in &prog.launches {
-            self.launch(l, env).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
+            self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
         }
         Ok(())
     }
 
-    pub(crate) fn launch(&self, l: &Launch, env: &[u64]) -> Result<()> {
+    pub(crate) fn launch(&self, l: &Launch, vars: &[u64]) -> Result<()> {
         // Materialize the slots; only var-dependent scalars are left to
         // compute, everything else was finished at load. Packs (and the
         // tensor maps inside them) ride along as pointers to their images.
@@ -211,8 +220,8 @@ impl Runtime {
         for s in &l.slots {
             let (v, m) = match s {
                 Slot::Const(rv) => (*rv, None),
-                Slot::Expr(e) => (RVal { val: e.eval(env)?, bytes: 0 }, None),
-                Slot::Pack(p) => (RVal { val: 0, bytes: 0 }, Some(p.image(env)?)),
+                Slot::Expr(e) => (RVal { val: e.eval(vars)?, bytes: 0 }, None),
+                Slot::Pack(p) => (RVal { val: 0, bytes: 0 }, Some(p.image(vars)?)),
             };
             vals.push(v);
             images.push(m);
@@ -221,9 +230,9 @@ impl Runtime {
             LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
-                let grid = [grid[0].eval(env)? as u32, grid[1].eval(env)? as u32, grid[2].eval(env)? as u32];
+                let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];
                 let smem = match shared_mem {
-                    Some(e) => e.eval(env)? as u32,
+                    Some(e) => e.eval(vars)? as u32,
                     None => 0,
                 };
                 // Every scalar/pointer slot staged as a little-endian u64;

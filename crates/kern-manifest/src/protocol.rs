@@ -592,15 +592,15 @@ impl Protocol {
         self.forwards.iter().filter(|f| !f.span && f.rows == rows).map(|f| f.groups).max().unwrap_or(0)
     }
 
-    /// The var env of a call: `b` sequences of `per` rows on this rank,
+    /// The var vars of a call: `b` sequences of `per` rows on this rank,
     /// `tray` rows in the whole tray batch (the sum of its members' blocks;
     /// this rank's `b * per` when it is alone).
-    pub fn env(&self, b: u64, per: u64, tray: u64) -> BTreeMap<String, u64> {
-        let mut env = BTreeMap::from([(self.rows.var.clone(), b * per), (self.groups.var.clone(), b)]);
+    pub fn vars(&self, b: u64, per: u64, tray: u64) -> BTreeMap<String, u64> {
+        let mut vars = BTreeMap::from([(self.rows.var.clone(), b * per), (self.groups.var.clone(), b)]);
         if let Some(t) = &self.tray {
-            env.insert(t.var.clone(), tray);
+            vars.insert(t.var.clone(), tray);
         }
-        env
+        vars
     }
 
     /// The buffer carrying `fill` over `axis`, if any.

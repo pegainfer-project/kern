@@ -311,7 +311,7 @@ impl Probe {
         &self,
         rt: &Runtime,
         program: &str,
-        env: &BTreeMap<String, u64>,
+        vars: &BTreeMap<String, u64>,
         index: usize,
         samples: usize,
     ) -> Result<CallSamples> {
@@ -334,7 +334,7 @@ impl Probe {
         }
         let snapshot = Snapshot::new(rt, buffers, states)?;
         let prog = &rt.programs[program];
-        let dense = rt.dense_env(env, &prog.vars)?;
+        let dense = rt.dense_vars(vars, &prog.vars)?;
         let (lo, hi) = prog.call_ranges[index];
         let run = || prog.launches[lo..hi].iter().try_for_each(|l| rt.launch(l, &dense));
         // Prime libraries and kernel code before capture, then undo the write.
@@ -385,14 +385,14 @@ impl Probe {
         &self,
         rt: &Runtime,
         program: &str,
-        env: &BTreeMap<String, u64>,
+        vars: &BTreeMap<String, u64>,
         samples: usize,
     ) -> Result<ProgramSamples> {
         let carries =
             rt.manifest.buffers.iter().filter(|(_, b)| b.kind == BufferKind::Carry).map(|(n, _)| n.clone()).collect();
         let snapshot = Snapshot::new(rt, carries, rt.states.keys().cloned().collect())?;
         let prog = &rt.programs[program];
-        let dense = rt.dense_env(env, &prog.vars)?;
+        let dense = rt.dense_vars(vars, &prog.vars)?;
         let n = prog.call_ranges.len();
         let instrumented = Events::new(n + 1)?;
         let whole = Events::new(2)?;

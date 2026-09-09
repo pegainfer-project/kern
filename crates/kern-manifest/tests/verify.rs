@@ -817,12 +817,12 @@ fn domain_resolves() {
     let mut v = base();
     v["buffers"]["x"]["domain"] = serde_json::json!({ "index_into": "kv", "stride": 16 });
     let m: Manifest = serde_json::from_value(v).unwrap();
-    let env = BTreeMap::from([("tokens".to_string(), 4u64)]);
+    let vars = BTreeMap::from([("tokens".to_string(), 4u64)]);
     let r = m.buffers["x"]
         .domain
         .as_ref()
         .unwrap()
-        .resolve(&m, &env, &Provision { tokens: 4096, seq_slots: m.seq_slots() })
+        .resolve(&m, &vars, &Provision { tokens: 4096, seq_slots: m.seq_slots() })
         .unwrap();
     assert_eq!(r, ResolvedDomain { lo: Some(0.0), hi: Some(255.0), monotone: false });
     assert!(r.contains(255.0) && !r.contains(256.0) && !r.contains(-1.0));
@@ -834,7 +834,7 @@ fn domain_resolves() {
         .domain
         .as_ref()
         .unwrap()
-        .resolve(&m, &env, &Provision { tokens: 0, seq_slots: m.seq_slots() })
+        .resolve(&m, &vars, &Provision { tokens: 0, seq_slots: m.seq_slots() })
         .unwrap();
     assert_eq!(r.hi, Some(63.0));
 
@@ -845,7 +845,7 @@ fn domain_resolves() {
         .domain
         .as_ref()
         .unwrap()
-        .resolve(&m, &env, &Provision { tokens: 0, seq_slots: m.seq_slots() })
+        .resolve(&m, &vars, &Provision { tokens: 0, seq_slots: m.seq_slots() })
         .unwrap();
     assert_eq!((r.lo, r.hi), (Some(1.0), Some(4.0)));
 }

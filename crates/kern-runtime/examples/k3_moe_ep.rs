@@ -83,17 +83,17 @@ fn run_world(
         Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(topo))?;
     rt.load_weights(&[weights])?;
     rendezvous(&mut rt)?;
-    let env: BTreeMap<String, u64> = [("tokens".to_string(), rows as u64)].into();
-    rt.write_input_at("x", &inp.x[row0 * HIDDEN * 2..(row0 + rows) * HIDDEN * 2], &env)?;
-    rt.write_input_at("topk_idx", &inp.topk_idx[row0 * TOPK * 4..(row0 + rows) * TOPK * 4], &env)?;
-    rt.write_input_at("topk_weight", &inp.topk_weight[row0 * TOPK * 4..(row0 + rows) * TOPK * 4], &env)?;
+    let vars: BTreeMap<String, u64> = [("tokens".to_string(), rows as u64)].into();
+    rt.write_input_at("x", &inp.x[row0 * HIDDEN * 2..(row0 + rows) * HIDDEN * 2], &vars)?;
+    rt.write_input_at("topk_idx", &inp.topk_idx[row0 * TOPK * 4..(row0 + rows) * TOPK * 4], &vars)?;
+    rt.write_input_at("topk_weight", &inp.topk_weight[row0 * TOPK * 4..(row0 + rows) * TOPK * 4], &vars)?;
     sync();
-    rt.run("moe", &env)?;
+    rt.run("moe", &vars)?;
     let y = rt.read_output("y")?[..rows * HIDDEN * 2].to_vec();
     // Timing: every rank replays the captured program in lockstep.
-    rt.capture("moe", &env)?;
+    rt.capture("moe", &vars)?;
     sync();
-    let ms = rt.time_captured("moe", &env, iters)?;
+    let ms = rt.time_captured("moe", &vars, iters)?;
     let y2 = rt.read_output("y")?[..rows * HIDDEN * 2].to_vec();
     if y2 != y {
         eprintln!("gpu {gpu}: output changed across captured replays");

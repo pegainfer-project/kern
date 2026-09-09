@@ -112,7 +112,7 @@ fn plain_contract() {
     assert_eq!(p.forward(5, Rows::Const(1)), None);
     assert_eq!(p.chunk().map(|f| f.name.as_str()), Some("prefill"));
     assert_eq!((p.row_shapes(), p.max_groups(Rows::Const(1))), (vec![1], 4));
-    assert_eq!(p.env(3, 2, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
+    assert_eq!(p.vars(3, 2, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn tray_contract() {
     assert_eq!(p.line_tables[0].axis, Axis::Tray);
     assert_eq!(p.any(Fill::Error).map(|f| f.name.as_str()), Some("tp_err"));
     assert_eq!(p.once, vec!["tp_init".to_string()]);
-    assert_eq!(p.env(2, 1, 8), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
+    assert_eq!(p.vars(2, 1, 8), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
 }
 
 #[test]

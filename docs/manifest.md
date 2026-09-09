@@ -343,7 +343,7 @@ var 且 `span.max ≤ tokens.max`、有 span 就得有 `span_at` fill、至少�
 `batch` program。得到的 `Protocol` 是只读投影：`forward(groups, rows)`
 选形状包含 `(b, r)` 的 program 里 `groups` 上界最紧的那个，`chunk()` 是
 接受 `(1, var)` 的那个，`spanned(b)` 是接受 b 组、其中一组带 run 的那个，
-`env(b, per, t)` 是一次调用的 var 表（run 的 `span` 由 caller 加），每个
+`vars(b, per, t)` 是一次调用的 var 表（run 的 `span` 由 caller 加），每个
 `Filled` 带 dtype 与轴，每个 `Forward` 知道自己 emit 不 emit token、按哪
 个 `count` 取。`kern verify <manifest>` 打印这层事实；kern-run 与
 kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证它们

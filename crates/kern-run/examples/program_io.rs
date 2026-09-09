@@ -4,7 +4,7 @@
 //! go in, what comes out is diffed against its dumps.
 //!
 //!   program_io --manifest m.json [--cubins target/cubins] [--gpu 0] [--program p]
-//!              --env var=value ... --in name=path ... --out name=path ...
+//!              --vars var=value ... --in name=path ... --out name=path ...
 //!              [--dump name=path ...] [--graph] [--iters 9]
 //!
 //! Inputs are written whole (`write_input`; a shorter file fills a prefix),
@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
     let mut program = String::new();
     let mut graph = false;
     let mut iters = 1usize;
-    let mut env = BTreeMap::new();
+    let mut vars = BTreeMap::new();
     let mut ins: Vec<(String, String)> = Vec::new();
     let mut outs: Vec<(String, String)> = Vec::new();
     let mut dumps: Vec<(String, String)> = Vec::new();
@@ -57,9 +57,9 @@ fn main() -> anyhow::Result<()> {
             "--cubins" => cubins = PathBuf::from(v()),
             "--gpu" => gpu = v().parse()?,
             "--program" => program = v(),
-            "--env" => {
+            "--vars" => {
                 let (k, val) = pair(&v());
-                env.insert(k, val.parse::<u64>()?);
+                vars.insert(k, val.parse::<u64>()?);
             }
             "--in" => ins.push(pair(&v())),
             "--out" => outs.push(pair(&v())),
@@ -83,14 +83,14 @@ fn main() -> anyhow::Result<()> {
     for (name, path) in &ins {
         rt.write_input(name, &std::fs::read(path)?)?;
     }
-    rt.run(&program, &env)?;
+    rt.run(&program, &vars)?;
     if graph {
-        rt.capture(&program, &env)?;
-        rt.run_captured(&program, &env)?;
-        println!("graph_median_ms={}", rt.time_captured(&program, &env, iters)?);
+        rt.capture(&program, &vars)?;
+        rt.run_captured(&program, &vars)?;
+        println!("graph_median_ms={}", rt.time_captured(&program, &vars, iters)?);
     } else {
         for _ in 1..iters {
-            rt.run(&program, &env)?;
+            rt.run(&program, &vars)?;
         }
     }
     for (name, path) in &outs {
@@ -101,6 +101,6 @@ fn main() -> anyhow::Result<()> {
         let bytes = bytes.ok_or_else(|| anyhow::anyhow!("no buffer `{name}`"))?;
         std::fs::write(path, rt.read_buffer_prefix(name, bytes as usize)?)?;
     }
-    println!("`{program}` ran with {env:?}; {} inputs in, {} outputs out", ins.len(), outs.len());
+    println!("`{program}` ran with {vars:?}; {} inputs in, {} outputs out", ins.len(), outs.len());
     Ok(())
 }

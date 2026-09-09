@@ -17,7 +17,7 @@ use anyhow::{bail, ensure, Context, Result};
 use clap::Args;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Env};
+use crate::{Caller, Vars};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, Dim, Dir};
 use kern_manifest::Verified;
@@ -361,7 +361,7 @@ fn execute(o: Opts) -> Result<()> {
         }
     }
 
-    let env = caller.protocol.env(1, rows, rows);
+    let vars = caller.protocol.vars(1, rows, rows);
     let mut decode_ns: u128 = 0;
     let mut steps = 0u32;
     let mut taken = 0usize;
@@ -371,7 +371,7 @@ fn execute(o: Opts) -> Result<()> {
         let tok = if pos < prompt_ids.len() { prompt_ids[pos] } else { *generated.last().unwrap() };
         caller.stage_rows(tok, rows)?;
         let t = Instant::now();
-        caller.rt.issue(&step.name, &env)?;
+        caller.rt.issue(&step.name, &vars)?;
         caller.rt.synchronize()?;
         let out = caller.emitted(&step)?.0;
         decode_ns += t.elapsed().as_nanos();
@@ -464,7 +464,7 @@ fn probe(
             _ => None,
         })
     };
-    let run_probed = |caller: &Caller, f: &Forward, env: &Env, rows: usize, tag: &str| -> Result<()> {
+    let run_probed = |caller: &Caller, f: &Forward, vars: &Vars, rows: usize, tag: &str| -> Result<()> {
         let rt = &caller.rt;
         let calls = &rt.manifest.programs[&f.name].calls;
         let mut lo = 0;
@@ -474,7 +474,7 @@ fn probe(
                 continue;
             }
             let Some(bufname) = param_buf(rt, c, &[Dir::Out, Dir::InOut]) else { continue };
-            rt.run_range(&f.name, env, lo, i + 1)?;
+            rt.run_range(&f.name, vars, lo, i + 1)?;
             lo = i + 1;
             let n = match rt.manifest.buffers[&bufname].shape[0] {
                 Dim::Const(c) => c as usize,
@@ -484,7 +484,7 @@ fn probe(
             let data = rt.read_buffer_prefix(&bufname, n * row_bytes(rt, &bufname))?;
             std::fs::write(dir.join(format!("{tag}.{point}.bin")), data)?;
         }
-        rt.run_range(&f.name, env, lo, calls.len())?;
+        rt.run_range(&f.name, vars, lo, calls.len())?;
         if let Some(i) = f.emits {
             let tokens = &caller.protocol.fills[i];
             if let Some(logits) = calls

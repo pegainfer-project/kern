@@ -63,7 +63,7 @@ fn shaped_size(
     what: &str,
     dtype: DType,
     shape: &[Dim],
-    env_max: &BTreeMap<String, u64>,
+    vars_max: &BTreeMap<String, u64>,
     used_vars: &mut BTreeSet<String>,
     errs: &mut Vec<String>,
 ) -> Option<u64> {
@@ -81,7 +81,7 @@ fn shaped_size(
                 None
             }
             Dim::Const(c) => Some(*c),
-            Dim::Var(s) => match env_max.get(s) {
+            Dim::Var(s) => match vars_max.get(s) {
                 Some(mx) => {
                     used_vars.insert(s.clone());
                     Some(*mx)
@@ -182,8 +182,8 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             errs.push(format!("var `{name}`: max must be >= {}", Var::MIN));
         }
     }
-    let env_max: BTreeMap<String, u64> = m.vars.iter().map(|(k, v)| (k.clone(), v.max)).collect();
-    let env_min: BTreeMap<String, u64> = m.vars.keys().map(|k| (k.clone(), Var::MIN)).collect();
+    let vars_max: BTreeMap<String, u64> = m.vars.iter().map(|(k, v)| (k.clone(), v.max)).collect();
+    let vars_min: BTreeMap<String, u64> = m.vars.keys().map(|k| (k.clone(), Var::MIN)).collect();
 
     // 10a. topology
     if let Some(t) = &m.topology {
@@ -223,12 +223,12 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
     let mut buf_sizes: BTreeMap<&str, u64> = BTreeMap::new();
     for (name, b) in &m.buffers {
         if let Some(sz) =
-            shaped_size(&format!("buffer `{name}`"), b.dtype, &b.shape, &env_max, &mut used_vars, &mut errs)
+            shaped_size(&format!("buffer `{name}`"), b.dtype, &b.shape, &vars_max, &mut used_vars, &mut errs)
         {
             buf_sizes.insert(name, sz);
         }
         if let Some(d) = &b.domain {
-            check_domain(name, b, d, m, &env_max, &env_min, &mut used_vars, &mut errs);
+            check_domain(name, b, d, m, &vars_max, &vars_min, &mut used_vars, &mut errs);
         }
         let ctx = format!("buffer `{name}`");
         // 9b. fill
@@ -363,7 +363,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 &format!("op `{oname}` scratch `{sname}`"),
                 s.dtype,
                 &s.shape,
-                &env_max,
+                &vars_max,
                 &mut used_vars,
                 &mut errs,
             );
@@ -414,7 +414,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                     for (axis, e) in ["x", "y", "z"].iter().zip(&k.grid) {
                         let ectx = format!("{ctx}: grid.{axis}");
                         check_expr(e, m, &mut used_vars, &mut errs, &ectx);
-                        match e.eval(&env_max) {
+                        match e.eval(&vars_max) {
                             Ok(v) => {
                                 let limit = if *axis == "x" { MAX_GRID_X } else { MAX_GRID_YZ };
                                 if v > limit {
@@ -423,14 +423,14 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             }
                             Err(err) => errs.push(format!("{ectx}: {err}")),
                         }
-                        if let Ok(0) = e.eval(&env_min) {
+                        if let Ok(0) = e.eval(&vars_min) {
                             errs.push(format!("{ectx}: evaluates to 0 at var lower bounds"));
                         }
                     }
                     if let Some(e) = &k.shared_mem {
                         let ectx = format!("{ctx}: shared_mem");
                         check_expr(e, m, &mut used_vars, &mut errs, &ectx);
-                        if let Ok(v) = e.eval(&env_max) {
+                        if let Ok(v) = e.eval(&vars_max) {
                             if v > MAX_DYN_SHARED_MEM {
                                 errs.push(format!(
                                     "{ectx}: {v} bytes exceeds opt-in limit {MAX_DYN_SHARED_MEM} at var upper bounds"
@@ -446,8 +446,8 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             ));
                         } else {
                             for (axis, (e, &c)) in ["x", "y", "z"].iter().zip(k.grid.iter().zip(cl)) {
-                                for (env, at) in [(&env_max, "upper"), (&env_min, "lower")] {
-                                    if let Ok(v) = e.eval(env) {
+                                for (vars, at) in [(&vars_max, "upper"), (&vars_min, "lower")] {
+                                    if let Ok(v) = e.eval(vars) {
                                         if v % c as u64 != 0 {
                                             errs.push(format!(
                                                 "{ctx}: grid.{axis} = {v} at var {at} bounds is not a multiple of cluster.{axis} = {c}"
@@ -800,7 +800,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                         check_expr(expr, m, &mut used_vars, &mut errs, &actx);
                         if *st == ScalarType::F32 {
                             errs.push(format!("{actx}: an expression cannot bind to an f32 param"));
-                        } else if let Ok(v) = expr.eval(&env_max) {
+                        } else if let Ok(v) = expr.eval(&vars_max) {
                             if !scalar_fits(*st, v) {
                                 errs.push(format!(
                                     "{actx}: expression reaches {v} at var upper bounds, exceeding {st} range"
@@ -886,8 +886,8 @@ fn check_domain(
     b: &Buffer,
     d: &Domain,
     m: &Manifest,
-    env_max: &BTreeMap<String, u64>,
-    env_min: &BTreeMap<String, u64>,
+    vars_max: &BTreeMap<String, u64>,
+    vars_min: &BTreeMap<String, u64>,
     used_vars: &mut BTreeSet<String>,
     errs: &mut Vec<String>,
 ) {
@@ -938,8 +938,8 @@ fn check_domain(
     if let (Some(lo), Some(hi)) = (&d.min, &d.max) {
         // Must hold at every var value the bounds can take; both corners
         // suffice for the monotone expression set.
-        for env in [env_min, env_max] {
-            if let (Ok(lo), Ok(hi)) = (lo.eval(env), hi.eval(env)) {
+        for vars in [vars_min, vars_max] {
+            if let (Ok(lo), Ok(hi)) = (lo.eval(vars), hi.eval(vars)) {
                 if lo > hi {
                     errs.push(format!("{ctx}: min {lo} > max {hi}"));
                     break;

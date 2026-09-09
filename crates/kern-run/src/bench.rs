@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Config, Target};
-use crate::{le_bytes_i32, Env};
+use crate::{le_bytes_i32, Vars};
 
 #[derive(clap::Args, Debug)]
 pub struct BenchOpts {
@@ -162,7 +162,7 @@ fn telemetry(gpu: usize) -> Value {
 
 /// Conservative grouping: retain state offsets, scalar args, ABI and all
 /// buffer shapes/offsets and alias relationships. Weight names can vary.
-fn signature(m: &Manifest, program: &str, index: usize, env: &Env) -> Value {
+fn signature(m: &Manifest, program: &str, index: usize, vars: &Vars) -> Value {
     let c = &m.programs[program].calls[index];
     let mut aliases: BTreeMap<&str, usize> = BTreeMap::new();
     let args: Vec<Value> = c
@@ -178,20 +178,20 @@ fn signature(m: &Manifest, program: &str, index: usize, env: &Env) -> Value {
                     .iter()
                     .map(|d| match d {
                         Dim::Const(n) => *n,
-                        Dim::Var(v) => env[v],
+                        Dim::Var(v) => vars[v],
                     })
                     .collect();
                 json!({"alias":alias,"dtype":b.dtype,"shape":shape,"kind":b.kind,"offset":offset})
             }
             Arg::State { state, offset } => json!({"state":state,"offset":offset}),
-            Arg::Var { var } => json!({"scalar":env[var]}),
-            Arg::Expr { expr } => json!({"scalar":expr.eval(env).expect("verified expression")}),
+            Arg::Var { var } => json!({"scalar":vars[var]}),
+            Arg::Expr { expr } => json!({"scalar":expr.eval(vars).expect("verified expression")}),
             _ => serde_json::to_value(a).unwrap(),
         })
         .collect();
-    // Env remains in the key because impl-private geometry may read vars
+    // Vars remains in the key because impl-private geometry may read vars
     // not forwarded by the call's public interface.
-    json!({"op":c.op,"args":args,"env":env})
+    json!({"op":c.op,"args":args,"vars":vars})
 }
 
 fn stage(
@@ -201,9 +201,9 @@ fn stage(
     positions: &[usize],
     rows: usize,
     ids: &[i64],
-) -> Result<Env> {
+) -> Result<Vars> {
     let b = leases.len();
-    let env = p.env(b as u64, rows as u64, (b * rows) as u64);
+    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64);
     for f in &p.fills {
         let vals: Vec<i64> = match f.fill {
             Fill::Token => match f.axis {
@@ -218,14 +218,14 @@ fn stage(
             Fill::Blocks => anyhow::bail!("multi-device workload is outside this profiler"),
             _ => continue,
         };
-        rt.write_input_at(&f.name, &f.encode(&vals), &env)?;
+        rt.write_input_at(&f.name, &f.encode(&vals), &vars)?;
     }
     for t in &p.page_tables {
         let mut vals = Vec::new();
         for lease in leases {
             lease.extend_row(&t.name, &mut vals)?;
         }
-        rt.write_input_at(&t.name, &le_bytes_i32(&vals), &env)?;
+        rt.write_input_at(&t.name, &le_bytes_i32(&vals), &vars)?;
     }
     for t in &p.line_tables {
         let mut vals = Vec::new();
@@ -237,9 +237,9 @@ fn stage(
                 vals.extend(std::iter::repeat_n(0, t.width - 1));
             }
         }
-        rt.write_input_at(&t.name, &le_bytes_i32(&vals), &env)?;
+        rt.write_input_at(&t.name, &le_bytes_i32(&vals), &vars)?;
     }
-    Ok(env)
+    Ok(vars)
 }
 
 fn corpus(tokenizer: &PathBuf, seed: u64) -> Result<Vec<i64>> {
@@ -342,7 +342,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
             "program_entry_cache":"cold_l2; natural reuse between calls","restore":"declared writes before each sample",
             "samples_per_mode":workload.samples,"tail_policy":"all measured samples retained; no outlier filtering",
             "warmup": "3 call executions; 4 whole-program executions",
-            "grouping":"same op, resolved arguments, buffer shape, aliasing, offsets and env; weight names omitted",
+            "grouping":"same op, resolved arguments, buffer shape, aliasing, offsets and vars; weight names omitted",
             "context_data":"deterministic diverse prose, actual model prefix execution",
             "units":"microseconds; bandwidth GB/s uses read+write traffic"},
         "modules":m.modules.iter().map(|(n,x)|json!({"name":n,"sha256":x.sha256})).collect::<Vec<_>>(),
@@ -370,22 +370,22 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
             while pos < length {
                 let q = (length - pos).min(p.rows.max as usize);
                 let prefix = p.chunk().context("prefix workload needs a variable-row program")?;
-                let env = stage(&mut rt, &p, &leases[i..i + 1], &[pos], q, &ids(&corpus, i * 173 + pos, q))?;
-                if !rt.is_captured(&prefix.name, &env) {
-                    rt.capture(&prefix.name, &env)?;
+                let vars = stage(&mut rt, &p, &leases[i..i + 1], &[pos], q, &ids(&corpus, i * 173 + pos, q))?;
+                if !rt.is_captured(&prefix.name, &vars) {
+                    rt.capture(&prefix.name, &vars)?;
                 }
-                rt.run_captured(&prefix.name, &env)?;
+                rt.run_captured(&prefix.name, &vars)?;
                 pos += q;
             }
         }
         let input: Vec<i64> =
             lengths.iter().enumerate().flat_map(|(i, pos)| ids(&corpus, i * 173 + pos, s.query)).collect();
-        let env = stage(&mut rt, &p, &leases, &lengths, s.query, &input)?;
-        let program_samples = probe.program(&rt, &f.name, &env, workload.samples)?;
+        let vars = stage(&mut rt, &p, &leases, &lengths, s.query, &input)?;
+        let program_samples = probe.program(&rt, &f.name, &vars, workload.samples)?;
         let reference_outputs = output_fingerprints(&rt, &p, s.batch)?;
         if o.program_only {
             report["scenarios"].as_array_mut().unwrap().push(json!({
-                "scenario":s,"program":f.name,"env":env,"graph":series(program_samples.graph_us),
+                "scenario":s,"program":f.name,"vars":vars,"graph":series(program_samples.graph_us),
                 "instrumented":series(program_samples.instrumented_us),"outputs":reference_outputs,
                 "telemetry_before":telemetry_before,"telemetry_after":telemetry(gpu),
                 "elapsed_s":started.elapsed().as_secs_f64()}));
@@ -402,13 +402,13 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         let mut cases = Vec::new();
         let mut calls = Vec::new();
         for (i, c) in m.programs[&f.name].calls.iter().enumerate() {
-            let sig = signature(&m, &f.name, i, &env);
+            let sig = signature(&m, &f.name, i, &vars);
             let key = digest(&serde_json::to_vec(&sig)?);
             let case = if let Some(&case) = groups.get(&key) {
                 case
             } else {
                 let sample = probe
-                    .call(&rt, &f.name, &env, i, workload.samples)
+                    .call(&rt, &f.name, &vars, i, workload.samples)
                     .with_context(|| format!("{} call {i} ({})", s.id, c.op))?;
                 let case = cases.len();
                 groups.insert(key.clone(), case);
@@ -419,11 +419,11 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
             calls.push(json!({"index":i,"label":c.label,"op":c.op,"case":case,"args":c.args,
                 "launches":m.ops[&c.op].imp.launches.iter().map(|l|json!({"entry":l.entry(),"module":l.module()})).collect::<Vec<_>>(),
                 "in_program":series(program_samples.attributed_us[i].clone())}));
-            rt.run_range(&f.name, &env, i, i + 1)?;
+            rt.run_range(&f.name, &vars, i, i + 1)?;
         }
         let outputs = output_fingerprints(&rt, &p, s.batch)?;
         ensure!(outputs == reference_outputs, "{}: profiled trajectory differs from whole program output", s.id);
-        let record = json!({"scenario":s,"program":f.name,"env":env,"graph":series(program_samples.graph_us),
+        let record = json!({"scenario":s,"program":f.name,"vars":vars,"graph":series(program_samples.graph_us),
             "instrumented":series(program_samples.instrumented_us),"cases":cases,"calls":calls,"outputs":outputs,
             "output_check":"matches whole-program token outputs",
             "telemetry_before":telemetry_before,"telemetry_after":telemetry(gpu),"elapsed_s":started.elapsed().as_secs_f64()});

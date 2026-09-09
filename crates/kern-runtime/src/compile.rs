@@ -1,7 +1,7 @@
 //! Load-time lowering. Everything name-shaped in a program dies here:
 //! op launches resolve to CUDA functions, buffer/state/scratch references
 //! to device addresses (static once allocated), var names to indices into
-//! the dense env. What execution replays is a flat launch list whose slots
+//! the dense vars. What execution replays is a flat launch list whose slots
 //! are either finished values or var-indexed expressions — no name lookups,
 //! no wiring, and no panics left for the hot path.
 
@@ -21,7 +21,7 @@ use crate::device::{alloc, DeviceBuf};
 use crate::error::{bail, cuda_check, Error, Result};
 
 /// A scalar expression with var names resolved to indices into the dense
-/// env (manifest var order). Division by zero is rejected at compile
+/// vars (manifest var order). Division by zero is rejected at compile
 /// time; overflow stays a runtime error (value-dependent).
 #[derive(Clone)]
 pub(crate) enum CExpr {
@@ -32,12 +32,12 @@ pub(crate) enum CExpr {
 }
 
 impl CExpr {
-    pub(crate) fn eval(&self, env: &[u64]) -> Result<u64> {
+    pub(crate) fn eval(&self, vars: &[u64]) -> Result<u64> {
         match self {
             CExpr::Const(c) => Ok(*c),
-            CExpr::Var(i) => Ok(env[*i]),
-            CExpr::CeilDiv(e, c) => Ok(e.eval(env)?.checked_add(c - 1).ok_or_else(overflow)? / c),
-            CExpr::Mul(e, c) => e.eval(env)?.checked_mul(*c).ok_or_else(overflow),
+            CExpr::Var(i) => Ok(vars[*i]),
+            CExpr::CeilDiv(e, c) => Ok(e.eval(vars)?.checked_add(c - 1).ok_or_else(overflow)? / c),
+            CExpr::Mul(e, c) => e.eval(vars)?.checked_mul(*c).ok_or_else(overflow),
         }
     }
 
@@ -69,7 +69,7 @@ pub(crate) struct RVal {
 pub(crate) enum Slot {
     /// Known at load time: a device pointer (base + offset) or a literal.
     Const(RVal),
-    /// Var-dependent scalar, evaluated against the dense env per run.
+    /// Var-dependent scalar, evaluated against the dense vars per run.
     Expr(CExpr),
     /// A byte aggregate assembled per run from its fields.
     Pack(Arc<PackPlan>),
@@ -87,7 +87,7 @@ pub(crate) struct PackPlan {
 
 impl PackPlan {
     /// The image for one run: every field's low `width` bytes, little-endian, at its offset.
-    pub(crate) fn image(&self, env: &[u64]) -> Result<Vec<u8>> {
+    pub(crate) fn image(&self, vars: &[u64]) -> Result<Vec<u8>> {
         let mut out = vec![0u8; self.size];
         for (at, blob) in &self.maps {
             out[*at..*at + 128].copy_from_slice(&blob.0);
@@ -95,7 +95,7 @@ impl PackPlan {
         for (at, width, slot) in &self.fields {
             let v = match slot {
                 Slot::Const(rv) => rv.val,
-                Slot::Expr(e) => e.eval(env)?,
+                Slot::Expr(e) => e.eval(vars)?,
                 Slot::Pack(_) => bail!(Manifest, "a pack field cannot be a pack"),
             };
             out[*at..*at + *width].copy_from_slice(&v.to_le_bytes()[..*width]);
@@ -139,7 +139,7 @@ pub(crate) struct CompiledProgram {
     /// Launch index range `[lo, hi)` of every call, in call order (a
     /// multi-launch impl contributes several launches).
     pub(crate) call_ranges: Vec<(usize, usize)>,
-    /// Per manifest var, whether any launch reads it: a run's env must
+    /// Per manifest var, whether any launch reads it: a run's vars must
     /// carry exactly these; the others are no part of the program.
     pub(crate) vars: Vec<bool>,
 }
@@ -208,14 +208,14 @@ pub(crate) fn shaped_bytes(
     what: &str,
     shape: &[Dim],
     dtype_bytes: u64,
-    max_env: &BTreeMap<String, u64>,
+    vars_max: &BTreeMap<String, u64>,
 ) -> Result<u64> {
     let mut elems = 1u64;
     for d in shape {
         let n = match d {
             Dim::Const(c) => *c,
             Dim::Var(s) => {
-                *max_env.get(s).ok_or_else(|| Error::Manifest(format!("{what}: unknown var `{s}` in shape")))?
+                *vars_max.get(s).ok_or_else(|| Error::Manifest(format!("{what}: unknown var `{s}` in shape")))?
             }
         };
         elems = elems.checked_mul(n).ok_or_else(|| Error::Manifest(format!("{what}: size overflow")))?;
@@ -231,7 +231,7 @@ pub(crate) fn resolve_ops(
     modules: &[LoadedModule],
     kernels_dir: &Path,
     stream: &Arc<CudaStream>,
-    max_env: &BTreeMap<String, u64>,
+    vars_max: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, ResolvedOp>> {
     let mut ops = BTreeMap::new();
     for (name, op) in &manifest.ops {
@@ -302,7 +302,7 @@ pub(crate) fn resolve_ops(
             };
             // Opt in to >48KB dynamic shared memory where the launch needs it.
             if let (LaunchImpl::Cubin { func, .. }, Some(sm)) = (&r, &k.shared_mem) {
-                let bytes = sm.eval(max_env).map_err(|e| Error::Manifest(format!("op `{name}`: {e}")))?;
+                let bytes = sm.eval(vars_max).map_err(|e| Error::Manifest(format!("op `{name}`: {e}")))?;
                 if bytes > 48 * 1024 {
                     cuda_check(
                         unsafe {
@@ -320,7 +320,7 @@ pub(crate) fn resolve_ops(
         }
         let mut scratch = BTreeMap::new();
         for (sname, sd) in &op.imp.scratch {
-            let bytes = shaped_bytes(&format!("op `{name}` scratch `{sname}`"), &sd.shape, sd.dtype.bytes(), max_env)?;
+            let bytes = shaped_bytes(&format!("op `{name}` scratch `{sname}`"), &sd.shape, sd.dtype.bytes(), vars_max)?;
             scratch.insert(sname.clone(), alloc(stream, bytes)?);
         }
         ops.insert(name.clone(), ResolvedOp { launches, scratch });
@@ -330,7 +330,7 @@ pub(crate) fn resolve_ops(
 
 /// What a call binds that a plain single-GPU manifest has none of: this
 /// rank's index per group, and which buffers hold peer addresses.
-pub(crate) struct RankEnv<'a> {
+pub(crate) struct Ranks<'a> {
     pub(crate) ranks: &'a BTreeMap<String, u64>,
     pub(crate) peer_buffers: &'a BTreeSet<String>,
 }
@@ -342,7 +342,7 @@ pub(crate) fn compile_programs(
     ops: &BTreeMap<String, ResolvedOp>,
     buffers: &BTreeMap<String, DeviceBuf>,
     states: &BTreeMap<String, DeviceBuf>,
-    rank_env: &RankEnv,
+    ranks: &Ranks,
 ) -> Result<BTreeMap<String, CompiledProgram>> {
     let vars: BTreeMap<&str, usize> = manifest.vars.keys().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
     let mut scan = MulticastScan::new();
@@ -357,7 +357,7 @@ pub(crate) fn compile_programs(
                 bail!(Manifest, "program `{pname}` {cctx}: unknown op");
             };
             let lo = launches.len();
-            compile_call(c, op, rop, &cctx, buffers, states, &vars, rank_env, &mut scan, &mut launches)
+            compile_call(c, op, rop, &cctx, buffers, states, &vars, ranks, &mut scan, &mut launches)
                 .map_err(|e| Error::Call { context: format!("program `{pname}` {cctx}"), source: Box::new(e) })?;
             call_ranges.push((lo, launches.len()));
         }
@@ -385,7 +385,7 @@ fn compile_call(
     buffers: &BTreeMap<String, DeviceBuf>,
     states: &BTreeMap<String, DeviceBuf>,
     vars: &BTreeMap<&str, usize>,
-    rank_env: &RankEnv,
+    ranks: &Ranks,
     scan: &mut MulticastScan,
     launches: &mut Vec<Launch>,
 ) -> Result<()> {
@@ -400,10 +400,10 @@ fn compile_call(
     for (arg, pty) in c.args.iter().zip(&op.params) {
         vals.push(match pty {
             ParamType::Buf { .. } | ParamType::State { .. } => Slot::Const(pointer_arg(arg, buffers, states)?),
-            ParamType::Scalar(_) => scalar_arg(arg, vars, rank_env.ranks)?,
+            ParamType::Scalar(_) => scalar_arg(arg, vars, ranks.ranks)?,
             ParamType::Bytes(_) => bail!(Manifest, "interface params cannot be byte aggregates"),
         });
-        peer.push(matches!(arg, Arg::Buf { buf, .. } if rank_env.peer_buffers.contains(buf)));
+        peer.push(matches!(arg, Arg::Buf { buf, .. } if ranks.peer_buffers.contains(buf)));
     }
     for (li, (l, imp)) in op.imp.launches.iter().zip(&rop.launches).enumerate() {
         let wiring = l.args_of(op);
@@ -440,9 +440,9 @@ fn compile_call(
                 LaunchArg::I64 { i64: v } => lit(*v as u64),
                 LaunchArg::U8 { u8: v } => lit(*v as u64),
                 LaunchArg::F32 { f32: v } => lit(v.to_bits() as u64),
-                LaunchArg::Rank { rank } => lit(rank_index(rank_env.ranks, rank)?),
+                LaunchArg::Rank { rank } => lit(rank_index(ranks.ranks, rank)?),
                 LaunchArg::Pack { pack } => {
-                    Slot::Pack(Arc::new(pack_plan(pack, &vals, c, op, rop, rank_env.ranks, vars, li)?))
+                    Slot::Pack(Arc::new(pack_plan(pack, &vals, c, op, rop, ranks.ranks, vars, li)?))
                 }
             });
         }

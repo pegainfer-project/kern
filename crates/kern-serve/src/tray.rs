@@ -427,10 +427,10 @@ impl Tray {
         }
         // Once after load, the peers mapped: a tray manifest's setup (the
         // allreduce's Lamport stages are poisoned, not zeroed).
-        let env = protocol.env(1, 1, t as u64);
+        let vars = protocol.vars(1, 1, t as u64);
         for p in &protocol.once {
             for (q, rt) in ranks.iter().enumerate() {
-                rt.run(p, &env).with_context(|| format!("rank {q}: `{p}`"))?;
+                rt.run(p, &vars).with_context(|| format!("rank {q}: `{p}`"))?;
             }
         }
         if host_bytes > 0 {
@@ -656,19 +656,19 @@ impl Tray {
                 bail!("{} rows in the tray batch, the manifest allows {}", layout.tray * per, t.max);
             }
         }
-        let mut env = self.protocol.env(b as u64, per as u64, (layout.tray * per) as u64);
+        let mut vars = self.protocol.vars(b as u64, per as u64, (layout.tray * per) as u64);
         if let (Some(s), Some(c)) = (&self.protocol.span, run) {
-            env.insert(s.var.clone(), c as u64);
+            vars.insert(s.var.clone(), c as u64);
         }
         for q in 0..self.groups.n {
-            self.stage_rank(q, cells, &layout, &env)?;
+            self.stage_rank(q, cells, &layout, &vars)?;
         }
-        Ok(Staged { tray: self, layout, env })
+        Ok(Staged { tray: self, layout, vars })
     }
 
     /// Rank `q`'s inputs for a step: every fill, the page tables and the
     /// line tables (see the module doc for which span the group).
-    fn stage_rank(&mut self, q: usize, cells: &[Cell<'_>], l: &Layout, env: &BTreeMap<String, u64>) -> Result<()> {
+    fn stage_rank(&mut self, q: usize, cells: &[Cell<'_>], l: &Layout, vars: &BTreeMap<String, u64>) -> Result<()> {
         let (per, b, me, groups) = (l.per, l.b, self.groups.member(q), self.groups);
         let p = &self.protocol;
         let pad = &self.pad[q];
@@ -750,10 +750,10 @@ impl Tray {
         }
         let rt = &mut self.ranks[q];
         for (f, v) in &writes {
-            rt.write_input_at(&f.name, &f.encode(v), env)?;
+            rt.write_input_at(&f.name, &f.encode(v), vars)?;
         }
         for (name, table) in &tables {
-            rt.write_input_at(name, &le_bytes_i32(table), env)?;
+            rt.write_input_at(name, &le_bytes_i32(table), vars)?;
         }
         for (name, table) in &lines {
             rt.write_input(name, &le_bytes_i32(table))?;
@@ -774,7 +774,7 @@ fn seqs_max(p: &Protocol, t: usize) -> usize {
 pub struct Staged<'t> {
     tray: &'t mut Tray,
     layout: Layout,
-    env: BTreeMap<String, u64>,
+    vars: BTreeMap<String, u64>,
 }
 
 impl Staged<'_> {
@@ -792,7 +792,7 @@ impl Staged<'_> {
     /// so), then read the error word when the manifest has one.
     pub fn run(&mut self, f: &Forward) -> Result<()> {
         for (q, rt) in self.tray.ranks.iter_mut().enumerate() {
-            rt.issue(&f.name, &self.env).with_context(|| format!("rank {q}"))?;
+            rt.issue(&f.name, &self.vars).with_context(|| format!("rank {q}"))?;
         }
         for (q, rt) in self.tray.ranks.iter().enumerate() {
             rt.synchronize().with_context(|| format!("rank {q}"))?;

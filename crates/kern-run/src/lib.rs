@@ -85,8 +85,8 @@ pub fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-/// The var env of one call.
-pub type Env = BTreeMap<String, u64>;
+/// The var vars of one call.
+pub type Vars = BTreeMap<String, u64>;
 
 /// The safetensors a `--weights` entry stands for: the file itself, or
 /// every `*.safetensors` under a directory (a checkpoint's shards) in
@@ -177,11 +177,11 @@ impl Caller {
 
     /// Stage one call's rows at the cursor: `ids` as consecutive positions
     /// of this one sequence, in every fill the manifest declares. Does not
-    /// advance. Returns the call's var env.
-    pub fn stage(&mut self, ids: &[i64]) -> Result<Env> {
+    /// advance. Returns the call's var vars.
+    pub fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
         let c = ids.len();
         let pos = self.pos as usize;
-        let e = self.protocol.env(1, c as u64, c as u64);
+        let e = self.protocol.vars(1, c as u64, c as u64);
         let p = self.protocol.clone();
         let mut put =
             |f: &kern_manifest::protocol::Filled, v: &[i64]| self.rt.write_input_at(&f.name, &f.encode(v), &e);
@@ -204,7 +204,7 @@ impl Caller {
     /// token, in row 0 and again in every other row. A program that
     /// drafts its own rows (a speculative round) overwrites rows 1.. on
     /// the device; a one-row step reads only row 0.
-    pub fn stage_rows(&mut self, tok: i64, rows: u64) -> Result<Env> {
+    pub fn stage_rows(&mut self, tok: i64, rows: u64) -> Result<Vars> {
         self.stage(&vec![tok; rows as usize])
     }
 
@@ -263,7 +263,7 @@ impl Caller {
         m.buffers[&self.protocol.token_rows().name]
             .domain
             .as_ref()
-            .and_then(|d| d.resolve(m, &self.protocol.env(1, 1, 1), &self.rt.provision()).ok())
+            .and_then(|d| d.resolve(m, &self.protocol.vars(1, 1, 1), &self.rt.provision()).ok())
             .and_then(|r| r.hi)
             .map_or(1000, |hi| hi as u64 + 1)
     }

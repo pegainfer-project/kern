@@ -178,7 +178,7 @@ tray04 4×GB300 实测（2026-09-02）：EP4 每 rank 64 token **227 µs/层**
 `KernelArtifact`（cubin 缺失/哈希不符/ABI 不匹配/peer launch 含 multicast
 指令，重新抽核）、
 `WeightArtifact`（权重与 manifest 不符，重新导出）、`Api`（caller 用法
-错误：未知 buffer/program、kind 不符、var 越界、graph env 不一致）、
+错误：未知 buffer/program、kind 不符、var 越界、graph vars 不一致）、
 `Call`（定位 call 表位置并包住底层错误）、`Cuda`/`Driver`/`Blas`
 （执行期 CUDA 失败）。
 
@@ -199,13 +199,13 @@ gate_up 的拼接写在 buffer 的 `bind` 里，rope 表 / kv_scales / tied lm_h
 grid/标量实参全是常量，每步只有 4 个小 input buffer 的**内容**变、指针不变
 → 整个 call 表 stream-capture 成一张静态图，H2D 写留在图外，每步一次
 `cuGraphLaunch`。`Runtime::issue` 按 program 的 `graph` 决定走图还是逐 launch；
-graph 按 (program, env) 键控——env 只需给这个 program 的 launch 真正读到的 var（grid、
+graph 按 (program, vars) 键控——vars 只需给这个 program 的 launch 真正读到的 var（grid、
 shared_mem、标量实参、pack 字段），其余 var 不属于它，caller 给不给、给多少都归一成最小值（K3 的 `decode` 不读
 `span`，`decode_span` 读）：decode 捕在 tokens=1；prefill 不声明 `graph`，
 每块按实际长度逐 launch 跑（走图不快，见 manifest.md）。要点：capture
 不能用 legacy NULL stream（runtime 已改 `new_stream()`）；cublasLt 可被
 捕获（workspace 预分配，算法启发式在捕获时定死，顺带省了每步的 CPU
-开销）；`run_captured` 校验 env 与捕获时一致（var 值烧死在图里）。
+开销）；`run_captured` 校验 vars 与捕获时一致（var 值烧死在图里）。
 
 **greedy 采样已下沉 GPU**：`tools/kernels-src/argmax.cu` 两段式行 argmax（64 block
 分部归约 + 1 block 收尾；单 block 版 nsys 实测 55.7µs/步——单 SM 读 300KB
