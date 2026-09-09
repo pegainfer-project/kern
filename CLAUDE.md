@@ -87,9 +87,14 @@ exact; pegainfer stays pinned by rev and is bumped deliberately.
 
 Nothing is done until its gate closes; a PR is not done until CI is green.
 
-- Unit tests live in `mod tests` beside the code, built from tiny fixtures
-  (`plain()`, `speculative()`, `pool()`). Assert tuples so one line states one
-  fact.
+- Tests are integration tests: `tests/` in each crate, driving the crate
+  through its public API only, so a test reads like a caller and survives
+  any refactor that keeps the contract. Fewer, broader integration tests
+  over many unit tests; a `mod tests` beside the code is the exception,
+  for a pure function the public surface cannot reach in one step. When a
+  test wants a private item, either the item is part of the contract and
+  goes public, or the test belongs one level up. Fixtures are tiny and
+  shared, never copied. Assert tuples so one line states one fact.
 - Anything with enumerable inputs gets a property test rather than another
   example: layout arithmetic, accounting, a state machine against a reference
   model. The fake behind it is a model simpler than the code, never a mirror
