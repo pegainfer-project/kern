@@ -149,37 +149,34 @@ mod tests {
     }
 
     #[test]
-    fn concatenation_is_contiguous_copies_end_to_end() {
+    fn a_plan_is_one_copy_per_segment() {
+        // Two whole tensors concatenated: contiguous copies end to end.
         let b = weight(DType::Bf16, &[10, 4], vec![seg("q", None, None), seg("k", None, None)]);
-        let c = plan("qk", &b, 80, lookup).unwrap();
         assert_eq!(
-            c,
-            vec![
+            plan("qk", &b, 80, lookup).unwrap(),
+            [
                 Copy { dst: 0, blob: 0, src: 0, width: 8, rows: 8, pitch: 8 },
                 Copy { dst: 64, blob: 0, src: 64, width: 8, rows: 2, pitch: 8 },
             ]
         );
-    }
-
-    #[test]
-    fn a_column_block_is_a_strided_copy() {
+        // A column block is a strided copy.
         let b = weight(DType::Bf16, &[4, 4], vec![seg("fc", None, Some([4, 8]))]);
-        let c = plan("fc.1", &b, 32, lookup).unwrap();
-        assert_eq!(c, vec![Copy { dst: 0, blob: 1, src: 108, width: 8, rows: 4, pitch: 16 }]);
-    }
-
-    #[test]
-    fn a_row_range_skips_leading_rows() {
+        assert_eq!(
+            plan("fc.1", &b, 32, lookup).unwrap(),
+            [Copy { dst: 0, blob: 1, src: 108, width: 8, rows: 4, pitch: 16 }]
+        );
+        // A row range skips the leading rows.
         let b = weight(DType::Bf16, &[3, 4], vec![seg("q", Some([5, 8]), None)]);
-        let c = plan("q.tail", &b, 24, lookup).unwrap();
-        assert_eq!(c, vec![Copy { dst: 0, blob: 0, src: 40, width: 8, rows: 3, pitch: 8 }]);
-    }
-
-    #[test]
-    fn trailing_axes_fold_into_columns() {
+        assert_eq!(
+            plan("q.tail", &b, 24, lookup).unwrap(),
+            [Copy { dst: 0, blob: 0, src: 40, width: 8, rows: 3, pitch: 8 }]
+        );
+        // Trailing axes fold into columns.
         let b = weight(DType::Bf16, &[6, 4], vec![seg("conv", None, None)]);
-        let c = plan("conv", &b, 48, lookup).unwrap();
-        assert_eq!(c[0], Copy { dst: 0, blob: 0, src: 200, width: 8, rows: 6, pitch: 8 });
+        assert_eq!(
+            plan("conv", &b, 48, lookup).unwrap(),
+            [Copy { dst: 0, blob: 0, src: 200, width: 8, rows: 6, pitch: 8 }]
+        );
     }
 
     #[test]
