@@ -3,18 +3,19 @@
 ```bash
 # 独立 workspace（serving 栈不进 runtime 的依赖图和 CI）；binary 在 crates/kern-serve/target/
 cd crates/kern-serve && cargo build --release
-target/release/kern-serve --model-path /mnt/shared/weights/Qwen3-4B --gpus 3 --port 8000   # --gpus 0,1,2,3 drives a tray
+target/release/kern-serve --manifest examples/qwen3-4b.json --kernels kernels --weights weights/Qwen3-4B --gpus 3 --port 8000   # --gpus 0,1,2,3 drives a tray
 # state 池默认按显存自动定：权重/激活/scratch 分完后，剩余显存减 1 GiB 全给 state，
-# KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 或
-# kern.toml 的 `capacity` 显式给则照旧。
+# KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 显式给则照旧。
 # /v1/completions、/v1/chat/completions（流式 + chat template）、/v1/models、/metrics
 ```
 
-manifest / kernels / weights 来自 kern.toml 的 target，或直接 `--manifest`
-`--kernels` `--weights`（与 `kern run` 同一套 flag，没有 kern.toml 也能起）；
-API 里的模型名缺省是 target 名（没有 target 时是 manifest 的 `model`），
-`--served-model-name` 覆盖。`--model-path` 是给**前端**的 HF 目录（tokenizer、
-chat template、`generation_config.json` 的 eos）。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
+manifest / kernels / weights 走 `--manifest` `--kernels` `--weights`（与 `kern run`
+同一套 flag）。kern-serve **不读 kern.toml**：那是改 kernel 的开发循环的文件
+（reference、dumps、test seed），服务进程的输入全在命令行上，和 vLLM 一样。
+API 里的模型名缺省是 manifest 的 `model`，`--served-model-name` 覆盖。
+**前端**要的 HF 目录（config.json、tokenizer、chat template、`generation_config.json`
+的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名、
+截到第一个 `{ep}`/`*` 分片段之前（`dense-tp4/r{tp}/l*.safetensors` → `dense-tp4`）。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
 ## 分工
@@ -69,8 +70,10 @@ Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡�
 ## 投机解码（`--rows`，2026-09-03）
 
 ```bash
-target/release/kern-serve qwen3-4b-dspark --model-path /mnt/shared/weights/Qwen3-4B            # 缺省取最宽：7 行的 round
-target/release/kern-serve qwen3.8-27b-dflash2 --model-path <Qwen3.8-27B 的 HF 目录> --rows 8   # 显式给；--rows 1 是 plain
+target/release/kern-serve --manifest examples/qwen3-4b-dspark.json --kernels kernels \
+    --weights weights/Qwen3-4B --weights weights/dspark-qwen3-4b-b7                  # 缺省取最宽：7 行的 round
+target/release/kern-serve --manifest examples/qwen3.8-27b-dflash2.json --kernels kernels-qwen38-dflash2 \
+    --weights weights/Qwen3.8-27B --weights weights/Qwen3.8-27B-DFlash2 --rows 8     # 显式给；--rows 1 是 plain
 ```
 
 投机不是模式开关，是 manifest 声明的一个形状：`round` program 的
@@ -254,7 +257,7 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
   二轮踩过，t=1 conc1 的 sha 全部对不上，runtime 用 93 层 12.9k oracle 证明是同的）。没有 span program 时
   逐 token（12.9k 的 prompt 要 12.9k 步）。b>1 走形状包含
   `(b, 1)` 的 program 里 `groups` 上界最紧的那个；没有 chunk program 时 `--rows` 只能是 1。
-- 权重按 rank：kern.toml 的 `weights` 里 `{ep}` / `{tp}` 换成该 rank 在组里的下标，文件
+- 权重按 rank：`--weights` 里 `{ep}` / `{tp}` 换成该 rank 在组里的下标，文件
   名里的 `*` 按名字序展开（`dense-tp4/r{tp}/l*.safetensors`），mmap 不读入。
   `--capacity` / `--host-gib` / `--max-seqs` 都是 per rank。
 

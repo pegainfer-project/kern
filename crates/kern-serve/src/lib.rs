@@ -30,7 +30,7 @@ use tracing::info;
 use scheduler::{KernScheduler, Policy};
 use tray::Tray;
 
-/// The manifest and its artifacts (from kern.toml's target or flags).
+/// The manifest and its artifacts, as named on the command line.
 pub struct Artifacts {
     pub manifest: PathBuf,
     pub kernels: PathBuf,
@@ -38,23 +38,9 @@ pub struct Artifacts {
     pub weights: Vec<PathBuf>,
 }
 
-/// Defaults a kern.toml may supply.
-#[derive(Default)]
-pub struct Defaults {
-    pub gpu: Option<usize>,
-    pub capacity: Option<u64>,
-    pub chunk: Option<u64>,
-}
-
 #[derive(Args, Debug, Clone)]
 pub struct ServeOpts {
-    /// HF-layout model directory for the frontend: config.json, tokenizer,
-    /// chat template, generation_config (stop tokens)
-    #[arg(long)]
-    pub model_path: PathBuf,
-
-    /// Model id served by the API (default: the kern.toml target's name,
-    /// else the manifest's `model`)
+    /// Model id served by the API (default: the manifest's `model`)
     #[arg(long)]
     pub served_model_name: Option<String>,
 
@@ -63,7 +49,7 @@ pub struct ServeOpts {
 
     /// CUDA device ordinals, one per rank of the tray, in rank order (a
     /// manifest with a topology needs every group's members; `tp` groups
-    /// are consecutive ranks). Default: kern.toml's `gpu`, else 0
+    /// are consecutive ranks). Default: 0
     #[arg(long, value_delimiter = ',')]
     pub gpus: Vec<usize>,
 
@@ -109,7 +95,23 @@ pub struct ServeOpts {
     pub host_gib: f64,
 }
 
-/// One rank's weight files from the target's list: every `{group}` in a
+/// The checkpoint directory a weights entry names, where the frontend
+/// reads config.json, the tokenizer, the chat template and
+/// generation_config.json: the entry up to its first per-rank component
+/// (`{group}` or `*`), less a `.safetensors` file name.
+fn checkpoint_dir(w: &Path) -> PathBuf {
+    let s = |c: &std::path::Component| c.as_os_str().to_string_lossy().into_owned();
+    let fixed: Vec<String> = w.components().map(|c| s(&c)).take_while(|c| !c.contains(['{', '*'])).collect();
+    let dir = fixed.iter().take(fixed.len() - usize::from(fixed.last().is_some_and(|f| f.ends_with(".safetensors"))));
+    let d: PathBuf = dir.collect();
+    if d.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        d
+    }
+}
+
+/// One rank's weight files from the `--weights` list: every `{group}` in a
 /// path is the rank's index in that topology group (`{ep}`, `{tp}`), and
 /// a `*` in a file name matches that directory's files around it, in name
 /// order. A manifest sharded per rank names its shards this way once for
@@ -145,17 +147,18 @@ fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
-    let gpus = if o.gpus.is_empty() { vec![d.gpu.unwrap_or(0)] } else { o.gpus.clone() };
-    let chunk = o.chunk.or(d.chunk).unwrap_or(512) as usize;
-    let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&o.model_path).into_iter().map(|x| x as u32).collect();
+pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
+    let gpus = if o.gpus.is_empty() { vec![0] } else { o.gpus.clone() };
+    let chunk = o.chunk.unwrap_or(512) as usize;
+    let model_path = checkpoint_dir(&art.weights[0]);
+    let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&model_path).into_iter().map(|x| x as u32).collect();
     stop_tokens.extend(&o.stop_tokens);
     stop_tokens.sort_unstable();
     stop_tokens.dedup();
     anyhow::ensure!(
         !stop_tokens.is_empty(),
         "no stop tokens: none in {}/generation_config.json or config.json and no --stop-tokens",
-        o.model_path.display()
+        model_path.display()
     );
     info!(ids = ?stop_tokens, "stop tokens");
 
@@ -167,7 +170,7 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     // Every sequence of a tray batch group holds a token slot on each of
     // its `t` ranks, and each rank its pad.
     let t = manifest.group_size("tp").unwrap_or(1) as usize;
-    let capacity = Capacity { tokens: o.capacity.or(d.capacity), seqs: ((o.max_seqs + 1) * t) as u64 };
+    let capacity = Capacity { tokens: o.capacity, seqs: ((o.max_seqs + 1) * t) as u64 };
 
     // The scheduler thread owns the tray for its whole life: load there,
     // report readiness, then drive.
@@ -221,11 +224,11 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    info!(model = %served_name, port = o.port, model_dir = %o.model_path.display(), "serving");
+    info!(model = %served_name, port = o.port, model_dir = %model_path.display(), "serving");
     rt.block_on(async move {
         // Needs the runtime: it spawns the signal listener.
         let shutdown = vllm::shutdown_token_from_ctrl_c();
-        vllm::serve_with_engine_count(engine, &o.model_path, vec![served_name], o.port, None, 1, shutdown).await
+        vllm::serve_with_engine_count(engine, &model_path, vec![served_name], o.port, None, 1, shutdown).await
     })
 }
 
@@ -233,6 +236,16 @@ pub fn serve(o: ServeOpts, art: Artifacts, d: Defaults) -> Result<()> {
 mod tests {
     use super::*;
     use kern_runtime::GroupRank;
+
+    #[test]
+    fn checkpoint_dir_is_the_entry_less_shard_name_and_rank_pattern() {
+        let d = |p: &str| checkpoint_dir(Path::new(p)).to_string_lossy().into_owned();
+        assert_eq!(
+            (d("weights/Qwen3-4B"), d("weights/Qwen3-4B/model-00001.safetensors"), d("dense-tp4/r{tp}/l*.safetensors")),
+            ("weights/Qwen3-4B".into(), "weights/Qwen3-4B".into(), "dense-tp4".into())
+        );
+        assert_eq!((d("model.safetensors"), d("r{ep}/x.safetensors")), (".".into(), ".".into()));
+    }
 
     #[test]
     fn rank_weights_substitute_groups_and_expand_stars() {

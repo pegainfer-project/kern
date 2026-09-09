@@ -27,25 +27,19 @@ hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38     # kernels + 
 hf download Qwen/Qwen3.8-27B                                        # prints the checkpoint path, if you don't have one yet
 ```
 
-Name the pieces once in a `kern.toml`:
-
-```toml
-[targets."qwen3.8-27b"]
-manifest = "kern-qwen38/manifests/qwen3.8-27b.json"
-kernels  = "kern-qwen38/cubins"
-weights  = ["<your_qwen38_checkpoint_path>"]
-```
-
 The checkpoint is used as published: the manifest says which tensor fills
-which buffer, and `tokenizer.json` and `generation_config.json` beside the
-shards supply the tokenizer and the stop tokens.
+which buffer, and `tokenizer.json`, the chat template and
+`generation_config.json` beside the shards supply the tokenizer and the stop
+tokens.
 
 ## Serve
 
-Start the server on one GPU:
+Three flags name the artifact: the manifest, the directory of kernels it
+pins by hash, and the checkpoint. Start the server on one GPU:
 
 ```sh
-kern-serve qwen3.8-27b --model-path <your_qwen38_checkpoint_path> --gpus 0 --port 8000
+kern-serve --manifest kern-qwen38/manifests/qwen3.8-27b.json --kernels kern-qwen38/cubins \
+           --weights <your_qwen38_checkpoint_path> --served-model-name qwen3.8-27b
 ```
 
 Then, from another shell, a completion:
@@ -77,40 +71,38 @@ curl -N http://localhost:8000/v1/chat/completions \
 With thinking on, the reasoning arrives as `reasoning` deltas and the answer
 as `content`. `/v1/models` lists what is served, `/metrics` is Prometheus.
 
-`--model-path` is the checkpoint directory again, read by the front end for
-the chat template. `--gpus 0,1,2,3` drives several GPUs in lockstep when the
-manifest declares a topology; this one is single-GPU.
+`--served-model-name` is the id the API answers to (default: the manifest's
+`model`). `--port` defaults to 8000. `--gpus 0,1,2,3` drives several GPUs in
+lockstep when the manifest declares a topology; this one is single-GPU.
 
 ## Generate without a server
 
 ```sh
-kern run qwen3.8-27b --prompt "The capital of France is" --steps 64
+kern run --manifest kern-qwen38/manifests/qwen3.8-27b.json --kernels kern-qwen38/cubins \
+         --weights <your_qwen38_checkpoint_path> --prompt "The capital of France is" --steps 64
 ```
 
-One greedy sequence. Diagnostics go to stderr (the manifest verified, every
-kernel resolved by its pinned hash, the weights assembled from the shards,
-the decode step captured as one CUDA graph); the text goes to stdout.
-Without a `kern.toml`, `--manifest`, `--kernels` and `--weights` name the
-same three things on either command.
+The same three flags, one greedy sequence. Diagnostics go to stderr (the
+manifest verified, every kernel resolved by its pinned hash, the weights
+assembled from the shards, the decode step captured as one CUDA graph); the
+text goes to stdout.
 
 ## Speculative decoding
 
-Qwen3.8-27B has a DFlash2 draft. One more download and one more target:
+Qwen3.8-27B has a DFlash2 draft. One more download, the draft's manifest,
+and the draft's checkpoint as a second `--weights`:
 
 ```sh
 hf download incoai/Qwen3.8-27B-DFlash2
 ```
 
-```toml
-[targets."qwen3.8-27b-dflash2"]
-manifest = "kern-qwen38/manifests/qwen3.8-27b-dflash2.json"
-kernels  = "kern-qwen38/cubins"
-weights  = ["<your_qwen38_checkpoint_path>", "<your_dflash2_checkpoint_path>"]
-```
-
 ```sh
-kern-serve qwen3.8-27b-dflash2 --model-path <your_qwen38_checkpoint_path> --gpus 0 --port 8000
-kern run   qwen3.8-27b-dflash2 --prompt "The capital of France is" --steps 64
+kern-serve --manifest kern-qwen38/manifests/qwen3.8-27b-dflash2.json --kernels kern-qwen38/cubins \
+           --weights <your_qwen38_checkpoint_path> --weights <your_dflash2_checkpoint_path> \
+           --served-model-name qwen3.8-27b-dflash2
+kern run   --manifest kern-qwen38/manifests/qwen3.8-27b-dflash2.json --kernels kern-qwen38/cubins \
+           --weights <your_qwen38_checkpoint_path> --weights <your_dflash2_checkpoint_path> \
+           --prompt "The capital of France is" --steps 64
 ```
 
 Every step drafts 7 tokens and verifies them in one pass; the manifest
