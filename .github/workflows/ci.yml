@@ -44,11 +44,15 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Clippy kern-manifest
-        run: cargo clippy -p kern-manifest --all-targets -- -D warnings
+      - name: Clippy
+        # kern-serve builds only in the kernel-lab container; every other crate
+        # compiles here, cudarc loads libcuda at run time.
+        run: cargo clippy -p kern-manifest -p kern-runtime -p kern-run --all-targets -- -D warnings
 
-      - name: Test kern-manifest
-        run: cargo test -p kern-manifest
+      - name: Test
+        # The runtime's tests are host-side (Pool, Prefix, Host, values); the
+        # GPU gate is `kern test`.
+        run: cargo test -p kern-manifest -p kern-runtime
 
       - name: Performance evidence regression tests
         run: python3 -m unittest discover -s tools -p test_profile.py
