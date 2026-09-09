@@ -305,7 +305,7 @@ function TheLoop() {
             </i>
             <em>→</em>
             <i>
-              attest <b>7 s</b>
+              test <b>7 s</b>
             </i>
           </div>
           <strong className="lane-cost cost-green">SHIPPED</strong>
@@ -465,7 +465,7 @@ function Evidence() {
         </div>
         <div className="evidence-header-side">
           <pre className="evidence-cmd">
-            <b>$</b> kern-attest --a qwen3-4b.json{"\n"}
+            <b>$</b> kern test --a qwen3-4b.json{"\n"}
             {"             "}--b qwen3-4b-silu-mined.json
           </pre>
           <p>

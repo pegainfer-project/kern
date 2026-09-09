@@ -8,7 +8,7 @@ tools/kernel-capture/libkernelcapture.so
 /kernels
 /kernels-qwen38
 /.wrangler/
-/attestation.json
+/test-report.json
 /kernels-qwen38-dflash2
 /crates/kern-serve/target
 /crates/kern-serve/target-lab*

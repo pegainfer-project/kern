@@ -9,10 +9,10 @@
 
 #![deny(unsafe_code)]
 
-pub mod attest;
 pub mod bench;
 pub mod config;
 pub mod run;
+pub mod test;
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;

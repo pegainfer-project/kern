@@ -107,7 +107,7 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
 - step 边界 GPU 化（vs vLLM 差的 ~0.25ms/step）：token 反馈闭环进 graph——
   embedding 的 token_ids 直接由 next_token 喂，positions/slot_mapping/seq_lens
   可预知提前写，host 滞后一步异步取结果，步间不再 sync。E4 直接依赖它。
-- attest 后续：kernel-as-package 目录里带上 attestation 当证据；bs>1 的
+- kern test 后续：kernel-as-package 目录里带上 test report 当证据；bs>1 的
   workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
   0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
   domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。

@@ -441,7 +441,7 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
   690–750 GB/s：普通 ld/st、1-D `cp.async.bulk` 拉/推、`cp.reduce.async.bulk`、sys 原子、
   **非 multicast 的 tensor-map TMA**（1024 CTA 满并发也没事）。verifier 规则：拿到
   `peer` 派生指针的 module，SASS 里 UTMALDG/UTMASTG 带 `.MULTICAST` 即拒绝装载；
-  extern op（cublasLt）永远不能接 peer buffer。attest 记录这条检查。
+  extern op（cublasLt）永远不能接 peer buffer。kern test 记录这条检查。
 - **跨卡数据永远是 ship q / 回 partial，不读远端 KV**：远端流式读比本地慢 8×。
   远端读只用于迁移/staging。
 - **DCP 宽度 w 是 per-span 的调度决策，不是 manifest 常量**：decode 上 DCP 是纯税
@@ -449,7 +449,7 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
   1.7–2.5×）。与"段长是 per-rank var、stripe 掩码是派生标量"一致：同一张图，w 由
   每步的 var 决定。
 
-### Attest / 确定性
+### kern test / 确定性
 
 - rank-local：每 rank 对自己的 cut 做，peer buffer 的内容作为输入录下来
   （allreduce 的输入是本 rank 的 `ar_in` + 各 peer 的 `ar_in`），cut 边界

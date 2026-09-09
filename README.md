@@ -118,7 +118,7 @@ to stderr (`RUST_LOG`); stdout carries the generated text or the report.
 The pipeline that produces `kernels/` and `weights/` from a live vLLM
 process is in [docs/runtime.md](docs/runtime.md) (`kern kernels` drives
 it from `kern.toml`); what `kern test` measures and how it decides is in
-[docs/attest.md](docs/attest.md).
+[docs/test.md](docs/test.md).
 
 ## The contract
 
@@ -132,8 +132,8 @@ golden-checked in CI:
 | `crates/kern-manifest` | Schema + verifier (pure, no CUDA) |
 | `crates/kern-runtime` | The executor: fetch, verify, replay, CUDA graphs |
 | `crates/kern-run` | `kern run` (generation) and `kern test` (A/B evidence) over the example manifests |
-| `examples/` | Generated manifests — the artifact a provider ships (`*-silu-mined.json` is the attest fixture) |
-| `docs/` | [design](docs/design.md) · [manifest](docs/manifest.md) · [kernel mining](docs/kernel-mining.md) · [runtime](docs/runtime.md) · [attest](docs/attest.md) · [spec decode](docs/spec-decode.md) · [roadmap](docs/roadmap.md) · [release](docs/release.md) |
+| `examples/` | Generated manifests — the artifact a provider ships (`*-silu-mined.json` is the `kern test` fixture) |
+| `docs/` | [design](docs/design.md) · [manifest](docs/manifest.md) · [kernel mining](docs/kernel-mining.md) · [runtime](docs/runtime.md) · [test](docs/test.md) · [spec decode](docs/spec-decode.md) · [roadmap](docs/roadmap.md) · [release](docs/release.md) |
 
 **Website:** [kern-baa.pages.dev](https://kern-baa.pages.dev/)
 

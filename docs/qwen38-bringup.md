@@ -15,7 +15,7 @@
 
 - `nvidia-smi`：4×GB300 全空。选 GPU 0 做 vLLM 挖矿、GPU 1 做 kern-run。
 - 读 README / docs（design / manifest / kernel-mining / runtime / spec-decode /
-  attest / roadmap）/ tools/README、`gen_qwen3_decode.py`（934 行）、
+  test / roadmap）/ tools/README、`gen_qwen3_decode.py`（934 行）、
   `mine_capture.py`、`export_weights.py`、`extract_kernels.sh`、
   `kern-manifest/types.rs`、`kern-runtime/lib.rs`、`kern-run/lib.rs+main.rs`。
 - 读 vLLM 0.28 的 `qwen_gdn_linear_attn.py`（2055 行）、`qwen3_5.py`：
@@ -205,9 +205,9 @@
   一致**，prefill 10.0k tok/s（eager）/ 9.1k（graph）；chunk=2048（单块）在第
   85 个 token 分叉（`docs/qwen38/compare-long-*.json`）。没有再追这条
   （M=1787 与 M=512 的 GEMM 算法选择、或分块边界，二者之一）。
-- `kern-attest --a --b` 自己对自己：DIFF 段遍历了 prefill 1079 / decode 742
-  个 dispatch，报 "nothing to attest: the programs are identical"
-  （`docs/qwen38/attest-self.txt`）——harness 能读这份带 `bytes_fixed` state
+- `kern test --a --b` 自己对自己：DIFF 段遍历了 prefill 1079 / decode 742
+  个 dispatch，报 "nothing to test: the programs are identical"
+  （`docs/qwen38/test-self.txt`）——harness 能读这份带 `bytes_fixed` state
   的 manifest。
 - 数值残差的最终定性：prefill 路径上 in_proj_qkvz（N=16384）exact、in_proj_ba
   （N=96）1 ulp；decode 路径在 state 精确时每个 op exact；kern 在 4×512 分块
@@ -238,7 +238,7 @@
   （`docs/qwen38/vllm-perf-*.json`）。对照 kern Stage 1 graph decode 80.8 tok/s
   （5120-hidden、64 层、bs=1，每步 742 个 dispatch）。
 - 13:50Z runtime 改动一处：`Runtime::load_weights` 接受多份 safetensors
-  （target 50 GiB + draft 单独一份，不重复导出 50 GiB）；kern-run / kern-attest
+  （target 50 GiB + draft 单独一份，不重复导出 50 GiB）；kern-run / kern test
   的 `--weights` 可重复。+10 行。
 - 13:52Z vLLM DFlash2 参考（开 stats 重跑）：5 条 prompt 均值 **175.6 tok/s**
   （149–208），817 轮 / 5719 draft token / 1191 接受 → **2.46 token/轮**，
@@ -404,10 +404,10 @@ forward，launch 开销被摊薄。
   （1 ulp / 4 个元素）——`extern:cublaslt_bf16_tn` 是 manifest 里唯一由
   runtime 自行挑算法的 dispatch。下一步自然是把 cublasLt 的 algo id 也写进
   manifest（`extern` 带 `algo` 字段），让 GEMM 和 Triton 核一样可钉、可 diff。
-- **`kern-attest` 需要"外部参考"这一侧。** 现在它 diff 的是两份 manifest；
+- **`kern test` 需要"外部参考"这一侧。** 现在它 diff 的是两份 manifest；
   这次真正有用的是"manifest vs vLLM 的逐 op 中间量"（`KERN_PROBE_LAYER` +
   `qwen38_probe_vllm.py`）。把 vLLM 的 forward hook 输出当作一份"参考 tap"
-  喂给 attest，就能在一次运行里回答"第一个不一致的 dispatch 是哪个"。
+  喂给 kern test，就能在一次运行里回答"第一个不一致的 dispatch 是哪个"。
 - **near-tie 翻转不是 bug 信号。** 5 条 prompt 上，vLLM 自己 graph vs eager、
   spec vs plain、chunk 16 vs 单块，两两一致长度都在 66–400 之间；kern 的每个
   配置也落在同一区间。要区分"算术不同"和"算术错误"，需要看的是 top-2 logit

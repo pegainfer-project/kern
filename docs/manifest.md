@@ -205,7 +205,7 @@ impl 不必重写先验，kernel package 零改动。两种形式互斥：
 完全合法**——e2e 一模一样地跑；填了以后 runtime 在 `write_input` 时校验
 host 写入（O(n)，免费），`kern test` 据此为整数 buffer 合成合法随机值、
 并检查 kernel 产出的值落在声明域内（后置条件）。浮点 buffer 不写 = 任意
-有限值，attest 自己决定分布。整数 buffer 不写 = attest 跳过它的 fuzz 并
+有限值，kern test 自己决定分布。整数 buffer 不写 = kern test 跳过它的 fuzz 并
 在报告里列为 unfuzzed。
 
 **可插拔**：换一个 op 的实现 = 只改它的 `impl` 块（可能在 `modules` 里
@@ -253,7 +253,7 @@ target+draft 权重同处一份 manifest，多一个 7 行的 `round` program，
 [spec-decode.md](spec-decode.md)）。
 
 **故意留下的重复**：64 层展开成 64×26 个 call（decode 742 个 call 里
-737 个是逐层模板）——加 `repeat` 就是加控制流，attest 按 call 切、
+737 个是逐层模板）——加 `repeat` 就是加控制流，kern test 按 call 切、
 verifier 按 call 查都靠展开；weight buffer 的 dtype/shape 与 checkpoint 的
 safetensors header 重复——没有权重文件也要能 verify，load 时再对账。冗余在 manifest 不在 schema，
 "源码"是生成器。
@@ -317,7 +317,7 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   这是一个每组 1 行的 decode 步，其中**一组**可以喂一段 run——同一序列的
   连续 token 各占一行，run 的长度是这次调用的 `span` 值、首行写进 `span_at`
   fill 的 `[1]` i32 输入（没有 run 时写 0）；只有带 run 的调用走它。没有
-  `batch` 的 program 不被循环驱动（attest 按段切的材料、k3 的单层 MoE
+  `batch` 的 program 不被循环驱动（kern test 按段切的材料、k3 的单层 MoE
   测试）。
 - **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
   allreduce 的 poison 值）。与 `batch` 互斥。

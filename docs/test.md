@@ -1,14 +1,14 @@
 # kern test：一次 kernel 替换的证据
 
 `kern test` 拿两份 manifest——A（参考，**默认正确**）和 B（候选）——
-产出一份 attestation：换掉的东西在哪、每个 cut 数值上等不等价、随机输入
+产出一份 test report：换掉的东西在哪、每个 cut 数值上等不等价、随机输入
 下是否一致、快了多少。老 program 就是 oracle；manifest 里**没有阈值**。
 
 ```bash
-./target/release/kern test qwen3-4b --out attestation.json   # A/B/kernels/weights 来自 kern.toml 的 target
+./target/release/kern test qwen3-4b --out test-report.json   # A/B/kernels/weights 来自 kern.toml 的 target
 ./target/release/kern test \                                 # 或全用 flag（没有 kern.toml 时）
   --reference examples/qwen3-4b.json --manifest examples/qwen3-4b-silu-mined.json \
-  --kernels kernels --weights weights/Qwen3-4B --out attestation.json
+  --kernels kernels --weights weights/Qwen3-4B --out test-report.json
                                   # --diff-only 只看静态 diff；--no-perf 跳过计时
                                   # --no-graph-step / --no-sweep 关掉 TPOT graph 计时 / prefill 扫描
 ```
@@ -136,7 +136,7 @@ manifest 不规定 program 叫什么；能把真实 workload 喂进去的是 **d
 （`crates/kern-run/src/lib.rs` 的 `Caller`：知道 `token_ids` /
 `positions` / `slot_mapping` 怎么填、prefill 按 chunk 推位置、`tokens`
 是 prefill 的尺寸符号）。它是模型家族契约，`kern run` 与 `kern test`
-共用，目前只有 qwen3 一份。attest 遍历 manifest 的 programs；变了但
+共用，目前只有 qwen3 一份。kern test 遍历 manifest 的 programs；变了但
 driver 不会 stage 的 program 在 TAP 里标红、判 INCONCLUSIVE。
 
 ## 判定
@@ -181,7 +181,7 @@ runtime，PERF 1.8 s。
 ## 位置
 
 - 静态 diff、frontier、快照、fuzz、比较全在
-  `crates/kern-run/src/attest.rs`（caller 契约在
+  `crates/kern-run/src/test.rs`（caller 契约在
   `crates/kern-run/src/lib.rs`，和 `kern run` 共用）。
 - runtime 只加了不在服务路径上的原语：`run_range`（按 call 区间
   eager 执行）、`read_buffer_prefix` / `write_buffer` / `read_state`（任意

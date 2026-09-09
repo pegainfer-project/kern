@@ -37,12 +37,12 @@
 //! landed, and a woken lease is a [`Waking`] until [`Runtime::awake`]
 //! finds its copy landed, so no program can read pages still in flight.
 
-mod attest;
 mod chunks;
 mod compile;
 mod cubin;
 mod device;
 mod error;
+mod harness;
 mod host;
 mod pages;
 mod prefix;

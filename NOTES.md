@@ -99,7 +99,7 @@ directions), so state-streaming kernels bottom out near there.
    core_attn_out off by 1 ulp and the whole-state compare reported 22% of
    the GDN bytes differing (layers 1..47 of the driven slot: the ulp
    propagates through out_proj into every later layer's state). With it
-   mirrored the attestation is bit-identical at every cut, in both states
+   mirrored the test report is bit-identical at every cut, in both states
    and in the logits, on the random and the prose prompt. `KERN_TEST_DUMP=
    <dir>` (added to kern test) writes both sides' final state images.
 
@@ -150,7 +150,7 @@ manifest (the target name is still required).
 
 `kern test` with defaults panics on this target ("position past the lease",
 `Caller::stage`, from the prefill sweep past the 4096-token lease). Working
-invocation (71 s, after the attest fix that leases one sequence's slots):
+invocation (71 s, after the kern test fix that leases one sequence's slots):
 `kern test qwen3.8-27b --reference /tmp/an/ref.json --manifest <cand> --gpu 0
 --no-perf --capacity 4096 --prefill 300 --decode-steps 16 --no-sweep --fuzz 0`.
 Before the fix a run grew past 700 GB of host RSS (whole-state reads of 128

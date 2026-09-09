@@ -31,7 +31,7 @@ fn qwen3_decode_mined_verifies() {
     assert_eq!(m.to_json(), again.to_json());
 
     // Domains: the structural inputs carry priors the runtime enforces and
-    // attestation synthesizes from; activations deliberately carry none.
+    // `kern test` synthesizes from; activations deliberately carry none.
     for name in ["token_ids", "slot_mapping", "block_table", "cu_seqlens_q", "next_token"] {
         assert!(m.buffers[name].domain.is_some(), "{name} has no domain");
     }

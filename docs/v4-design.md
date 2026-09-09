@@ -17,7 +17,7 @@ buffer 名或 program 名的字符串字面量。
 | runtime | `kern-runtime` | **按结构推导，不按名字**：`page_tables()` / `seq_tables()` 由 `domain.index_into` 指向 paged state 还是 per-seq state 决定。这是做对了的样板 |
 | caller | `kern-run` + `kern-serve` | 全部硬编码 |
 
-caller 层硬编码的清单（scheduler.rs、kern-run/lib.rs、attest.rs）：
+caller 层硬编码的清单（scheduler.rs、kern-run/lib.rs、test.rs）：
 
 - program 名 9 个：`prefill` `decode` `decode_batch` `decode_spec` `draft`
   `verify` `draft_precompute` `advance` `round`；
@@ -112,7 +112,7 @@ verify / precompute / advance / round），逐个去掉后发现：
 - `rows`：每组行数，**精确值**（round 的 8 行是 mask 布局，调 3 行就是
   错的），或字面 `"tokens"`：一组、行数就是这次调用的 tokens（prefill 的
   chunk 随末块变短）。
-- 没有 `batch` 的 program 不被 serve 驱动：attest 按段切的材料、ep0 的
+- 没有 `batch` 的 program 不被 serve 驱动：kern test 按段切的材料、ep0 的
   barrier、k3 的单层 MoE 测试。
 - 不能从 output 反推：纯 KV 的 prefill 没有 output。
 
@@ -140,7 +140,7 @@ JSON ──from_json──▶ Manifest ──verify──▶ Verified ──Prot
 
 | 类型 | 证明了什么 | 带什么 | 谁消费 |
 |---|---|---|---|
-| `Verified` | 声明自洽：引用解析、dtype、读写序、grid 在界内。"runtime 能执行它" | `Manifest` 的 newtype，不加信息 | runtime、attest |
+| `Verified` | 声明自洽：引用解析、dtype、读写序、grid 在界内。"runtime 能执行它" | `Manifest` 的 newtype，不加信息 | runtime、kern test |
 | `Protocol` | manifest 与 serving 循环之间的契约成立。"一个循环能驱动它" | 派生事实：每个 batch program 的形状、每个 fill 对应的 buffer 和 dtype、line/page table 的行列、`seqs` / `tokens` 界 | kern-run、kern-serve |
 
 - `verify` 返回 `Result<Verified, VerifyErrors>`；`Verified` 只能这样构造。
@@ -153,7 +153,7 @@ JSON ──from_json──▶ Manifest ──verify──▶ Verified ──Prot
 - `Protocol` 是只读投影。scheduler 和 kern-run 不再翻
   `rt.manifest.buffers[..].shape`；`stage_lines` / `Caller::new` 里那些
   pattern match 全是 Protocol 构造时该算好的。做完后 `rt.manifest` 在
-  caller 侧只剩 attest 在用，因为它真的要按 call 切 program。
+  caller 侧只剩 kern test 在用，因为它真的要按 call 切 program。
 
 Protocol 的检查项（从 `SpecPlan::check` / `Contract::check` 搬来，
 放进 verifier 之后的第二遍）：
@@ -217,7 +217,7 @@ advance 192，一张图一次 sync。host 还做的三件事全是重复劳动�
 **分相路径退役**。`draft` / `verify` / `advance` / `draft_precompute`
 作为独立 program 被 host 轮流调（qwen3-4b-dspark 走的）不再被 serve
 驱动：每轮四次 sync，serve.md 已经写了它不如 fused。它们可以留在
-manifest 里给 attest 按段切，只是没有 `batch`。要做的活：
+manifest 里给 kern test 按段切，只是没有 `batch`。要做的活：
 
 - dspark 的生成器补一个 round。`splice_verify`、`spec_accept` 两个核现成；
   dspark 的 draft 7 行、verify 8 行不同宽，round 要求同宽，draft 补一行
@@ -300,7 +300,7 @@ round 两个 program。
 按 §8 的顺序落地。与设计稿不同的决定：
 
 - **`once`**：k3 的 `tp_init`（allreduce 的 poison 预填）不是 forward
-  也不是 attest 材料，装载后跑一次即可。program 多一个 `once: true`，
+  也不是 kern test 材料，装载后跑一次即可。program 多一个 `once: true`，
   与 `batch` 互斥；runtime 不解释它，`Protocol.once` 列出来由 caller
   在 peers 导入之后跑。
 - **`error` fill**：tray 的 `tp_err` 输出以前靠名字认，现在是

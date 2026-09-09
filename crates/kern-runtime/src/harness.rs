@@ -1,7 +1,7 @@
-//! The attestation surface: whole-buffer and whole-state access, a
+//! The harness surface: whole-buffer and whole-state access, a
 //! program's call list replayed in part, and event-bracketed timing.
 //! Nothing here is on the serving path and every call synchronizes; the
-//! harness driving it is `kern test` (`docs/attest.md`).
+//! harness driving it is `kern test` (`docs/test.md`).
 //!
 //! Whole-state access is for the layout the runtime loaded with: once a
 //! remap has moved chunks, a pooled state has holes and the bytes at an

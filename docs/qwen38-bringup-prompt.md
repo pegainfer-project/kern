@@ -1,7 +1,7 @@
 # 任务：把 Qwen3.8-27B（+ DFlash2 投机）带上 kern，并把"支持一个新模型要多久"记录成证据
 
 你在 `~/kern`（GB300 tray，aarch64）。先读 `README.md`、`docs/`（design / manifest /
-kernel-mining / runtime / spec-decode / attest / roadmap）和 `tools/README.md`，
+kernel-mining / runtime / spec-decode / test / roadmap）和 `tools/README.md`，
 再读 `~/.claude/CLAUDE.md`（集群规矩：GPU 共享、用前 `nvidia-smi`；host 无 cargo，
 Rust 在 `kernel-lab` 容器里构建，home 挂在 `/work`；binary 宿主机裸跑）。
 
@@ -77,7 +77,7 @@ full attention + 48 层 GatedDeltaNet；hidden 5120，MLP 17408，vocab 248320�
 （`tools/gen_qwen35.py`，可以抄 `gen_qwen3_decode.py` 的骨架但别把它改成一锅粥）→
 `extract_kernels.sh` → `export_weights.py`。验收：`kern-run` 贪心输出与 vLLM 0.28
 裸跑（TRITON_ATTN + triton GDN）逐字节一致，≥300 token，多条散文 prompt；chunk=1 /
-chunk=512 / eager 三路一致；跑 `kern-attest --a --b`（自己对自己）确认 harness 能
+chunk=512 / eager 三路一致；跑 `kern test --a --b`（自己对自己）确认 harness 能
 遍历这份 manifest 的 program。Stage 1 完成本身就证明了 model-agnostic（新的 state
 类别 + 混合层）。
 

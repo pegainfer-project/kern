@@ -11,9 +11,9 @@ use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use kern_run::attest::TestOpts;
 use kern_run::config::Config;
 use kern_run::run::RunOpts;
+use kern_run::test::TestOpts;
 
 #[derive(Parser)]
 #[command(
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
                     None
                 }
             };
-            let code = kern_run::attest::run(opts, cfg.as_ref(), t)?;
+            let code = kern_run::test::run(opts, cfg.as_ref(), t)?;
             if code != 0 {
                 std::process::exit(code);
             }

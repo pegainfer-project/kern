@@ -1,7 +1,7 @@
-//! `kern test`: evidence for a kernel swap (the attestation).
+//! `kern test`: evidence for a kernel swap (the test report).
 //!
 //! Given two manifests A (the reference — assumed correct) and B (the
-//! candidate), attest:
+//! candidate), the test:
 //!   1. diffs them structurally: which kernels changed (interface / impl /
 //!      added / removed) and, per program, the aligned call segments
 //!      that differ ("cuts") — everything else is shared;
@@ -113,7 +113,7 @@ pub struct TestOpts {
     /// Device peak memory bandwidth in GB/s, for the roofline column
     #[arg(long, default_value_t = 8000.0)]
     pub peak_bw: f64,
-    /// Write the attestation as JSON here (a directory when several
+    /// Write the test report as JSON here (a directory when several
     /// targets run: one file per target)
     #[arg(long)]
     pub out: Option<PathBuf>,
@@ -801,7 +801,7 @@ fn restore_state(
 }
 
 fn load_side(m: &Verified, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
-    // The attestation drives one sequence (`Caller` leases one and writes
+    // The test drives one sequence (`Caller` leases one and writes
     // its lines into every table column), so one slot is all the
     // per-sequence states need. Sizing them for the manifest's whole batch
     // made every whole-state read of a cut copy 128 slots: on qwen3.8-27b

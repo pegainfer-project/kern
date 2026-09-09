@@ -1,5 +1,5 @@
 //! Element codec: raw buffer bytes <-> f64 per manifest dtype. Used for
-//! domain checks on input writes and by attestation (synthesis, comparison).
+//! domain checks on input writes and by `kern test` (synthesis, comparison).
 //! Lossless for every integer dtype below 2^53 and for every float dtype.
 
 use half::{bf16, f16};

@@ -55,7 +55,7 @@ kernel 都过了才 unmap），完成后主线程在下一次 `lease` / `checkpo
 不给 `--capacity` 时的默认）则在 buffer、scratch 和定长 state 都分完之后
 `cuMemGetInfo`，剩余显存减
 `HEADROOM`（1 GiB）全给。整块读写 state（`read_state` / `write_state_at` /
-`zero_states`，attest 用）只在第一次 remap 之前有效。
+`zero_states`，kern test 用）只在第一次 remap 之前有效。
 `Runtime::lease(tokens)` 一次租下 KV 页和每个 per-seq state 的一个 slot
 （租时在 stream 上清零），`Lease::seq_line(table, r)` 给出 line 表的项（宽表
 `[lines, seqs, w]` 的格宽由 `seq_width` 给出，caller 决定 line 落在哪一项）；

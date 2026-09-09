@@ -40,7 +40,7 @@ perturbation results, and timing evidence. Its exit status is part of the API:
 For automation, write a portable report or emit one JSON object:
 
 ```sh
-./target/release/kern test demo --out attestation.json
+./target/release/kern test demo --out test-report.json
 ./target/release/kern test demo --json
 ```
 

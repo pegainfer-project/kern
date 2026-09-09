@@ -28,7 +28,7 @@ The stable, flat paths below are grouped here by purpose.
 - [Manifest format and verifier](manifest.md)
 - [Runtime](runtime.md)
 - [Serving](serve.md)
-- [`kern test` attestation](attest.md)
+- [`kern test`](test.md)
 - [Speculative decode](spec-decode.md)
 - [K3 kernel ABI](k3-kernel-abi.md)
 - [Kernel mining](kernel-mining.md)

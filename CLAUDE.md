@@ -10,7 +10,7 @@ the design is wrong, not the model.
 
 `docs/` is the design record (mostly Chinese); code, comments and commit
 messages are English. `docs/manifest.md`, `runtime.md`, `serve.md`,
-`spec-decode.md`, `attest.md` are the contracts; `docs/roadmap.md` is what is
+`spec-decode.md`, `test.md` are the contracts; `docs/roadmap.md` is what is
 being built and the gate that closes each item; `docs/lessons.md` is what went
 wrong before and the rule each incident left behind — read it before a gate.
 
@@ -24,7 +24,7 @@ the schema golden, lints) belongs in CI, not here.
 - `crates/kern-runtime` — loads a verified manifest, allocates, lowers programs
   to flat launch lists, runs them. The only crate that touches CUDA.
 - `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
-  `kern.toml`, attestation.
+  `kern.toml`, the `kern test` harness.
 - `crates/kern-serve` — its own workspace: the pegainfer/vLLM front end plus
   `KernScheduler`. Builds only inside the kernel-lab container.
 - `tools/` — capture, extract, export, manifest generators. Model knowledge
@@ -110,7 +110,7 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
 ## Commits
 
 `<area>: <what is true after the commit, lowercase, no period>`. Area is the
-crate or the feature: `runtime:`, `kern-serve:`, `manifest:`, `attest:`,
+crate or the feature: `runtime:`, `kern-serve:`, `manifest:`, `test:`,
 `k3:`, `docs:`. The subject states the new fact, not the activity
 (`runtime: own the token slots, hand them out as leases`). The body carries
 the why and the gate result if one was measured. One idea per commit.

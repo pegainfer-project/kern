@@ -755,7 +755,7 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
     Ok(())
 }
 
-/// A pool of timing events, for attestation and profiling.
+/// A pool of timing events, for `kern test` and profiling.
 pub(crate) struct Events(pub(crate) Vec<sys::CUevent>);
 
 impl Events {
