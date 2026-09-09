@@ -655,7 +655,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
     if m.programs.is_empty() {
         errs.push("no programs declared".to_string());
     }
-    let initially_written: BTreeSet<String> = m
+    let initially_written: BTreeSet<&str> = m
         .buffers
         .iter()
         .filter(|(_, b)| {
@@ -666,9 +666,9 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             // handles are imported, before any program runs.
             matches!(b.kind, BufferKind::Input | BufferKind::Weight | BufferKind::Carry | BufferKind::Peer)
         })
-        .map(|(n, _)| n.clone())
+        .map(|(n, _)| n.as_str())
         .collect();
-    let mut actually_written: BTreeSet<String> = BTreeSet::new();
+    let mut actually_written: BTreeSet<&str> = BTreeSet::new();
 
     for (pname, p) in &m.programs {
         if p.once && p.batch.is_some() {
@@ -750,7 +750,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                                 }
                             }
                         }
-                        if matches!(dir, Dir::In | Dir::InOut) && !written.contains(buf) {
+                        if matches!(dir, Dir::In | Dir::InOut) && !written.contains(buf.as_str()) {
                             errs.push(format!("{actx}: buffer `{buf}` is read before ever being written"));
                         }
                         if let (Some(tms), Some(&sz)) = (op_tensormaps.get(c.op.as_str()), buf_sizes.get(buf.as_str()))
@@ -774,8 +774,8 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             if matches!(b.kind, BufferKind::Input | BufferKind::Weight | BufferKind::Peer) {
                                 errs.push(format!("{actx}: op writes to read-only {} buffer `{buf}`", b.kind));
                             }
-                            written.insert(buf.clone());
-                            actually_written.insert(buf.clone());
+                            written.insert(buf.as_str());
+                            actually_written.insert(buf.as_str());
                         }
                     }
                     (Arg::State { state, .. }, ParamType::State { .. }) => {
@@ -830,7 +830,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
     // prefill-style program whose only effect is state mutation legitimately
     // writes none itself.
     for (bname, b) in &m.buffers {
-        if matches!(b.kind, BufferKind::Output | BufferKind::Carry) && !actually_written.contains(bname) {
+        if matches!(b.kind, BufferKind::Output | BufferKind::Carry) && !actually_written.contains(bname.as_str()) {
             errs.push(format!("{} buffer `{bname}` is never written by any program", b.kind));
         }
     }

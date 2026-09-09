@@ -171,8 +171,13 @@ impl<'de> Deserialize<'de> for UniqueValue {
             fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
                 let mut m = serde_json::Map::new();
                 while let Some((k, UniqueValue(v))) = a.next_entry::<String, UniqueValue>()? {
-                    if m.insert(k.clone(), v).is_some() {
-                        return Err(A::Error::custom(format!("duplicate name `{k}`")));
+                    match m.entry(k) {
+                        serde_json::map::Entry::Vacant(entry) => {
+                            entry.insert(v);
+                        }
+                        serde_json::map::Entry::Occupied(entry) => {
+                            return Err(A::Error::custom(format!("duplicate name `{}`", entry.key())));
+                        }
                     }
                 }
                 Ok(UniqueValue(Value::Object(m)))

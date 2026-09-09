@@ -22,7 +22,7 @@ use kern_run::run::RunOpts;
     about = "model-agnostic GPU runtime: run a manifest, test a kernel swap, gather cubins, verify a manifest"
 )]
 struct Cli {
-    /// kern.toml to use (default: the nearest one at or above the cwd)
+    /// kern.toml to use (default: the nearest one at or above the cwd; ignored by verify)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -60,8 +60,8 @@ enum Cmd {
     /// fill, the tables, and the call shape each program accepts. No GPU.
     /// Exit 1 when verification or the protocol fails
     Verify {
-        /// Manifest JSON, or a target's when none is given
-        manifest: Option<PathBuf>,
+        /// Manifest JSON to verify (does not read kern.toml)
+        manifest: PathBuf,
     },
 }
 
@@ -76,7 +76,10 @@ fn main() -> Result<()> {
         .without_time()
         .init();
     let cli = Cli::parse();
-    let cfg = Config::find(cli.config.as_deref())?;
+    let cfg = match &cli.cmd {
+        Cmd::Verify { .. } => None,
+        _ => Config::find(cli.config.as_deref())?,
+    };
     match cli.cmd {
         Cmd::Bench { target, opts } => {
             let t = cfg.as_ref().map(|c| c.one(target.as_deref()).map(|(_, t)| t)).transpose()?;
@@ -124,12 +127,7 @@ fn main() -> Result<()> {
         }
         Cmd::Kernels { targets } => kernels(cfg.as_ref(), &targets),
         Cmd::Verify { manifest } => {
-            let path = match (manifest, &cfg) {
-                (Some(p), _) => p,
-                (None, Some(c)) if !c.targets.is_empty() => c.one(None)?.1.manifest.clone(),
-                _ => bail!("kern verify needs a manifest path or a kern.toml target"),
-            };
-            if !verify(&path)? {
+            if !verify(&manifest) {
                 std::process::exit(1);
             }
             Ok(())
@@ -138,24 +136,30 @@ fn main() -> Result<()> {
 }
 
 /// `kern verify`: verification, then the protocol, both reported in full.
-fn verify(path: &Path) -> Result<bool> {
+fn verify(path: &Path) -> bool {
     use kern_manifest::protocol::{Axis, Rows};
-    let json = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let json = match std::fs::read_to_string(path) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::error!("{}: failed to read manifest: {e}", path.display());
+            return false;
+        }
+    };
     let m = match kern_manifest::Verified::from_json(&json) {
         Ok(m) => m,
         Err(e) => {
-            println!("{}: {e}", path.display());
-            return Ok(false);
+            tracing::error!("{}: {e}", path.display());
+            return false;
         }
     };
-    println!("{}: `{}` schema v{}, verified", path.display(), m.model, m.schema_version);
     let p = match kern_manifest::Protocol::check(&m) {
         Ok(p) => p,
         Err(e) => {
-            println!("{e}");
-            return Ok(false);
+            tracing::error!("{}: {e}", path.display());
+            return false;
         }
     };
+    tracing::info!("{}: `{}` schema v{}, verified", path.display(), m.model, m.schema_version);
     let axis = |a: Axis| match a {
         Axis::Rows => format!("[{}]", p.rows.var),
         Axis::Groups => format!("[{}]", p.groups.var),
@@ -197,7 +201,7 @@ fn verify(path: &Path) -> Result<bool> {
     for o in &p.once {
         println!("  once      `{o}`");
     }
-    Ok(true)
+    true
 }
 
 /// `kern kernels`: the two tools scripts, driven from kern.toml.
