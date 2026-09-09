@@ -44,6 +44,7 @@
 //! length and page-table row) and reads the last row's token.
 
 use crate::types::*;
+use crate::Verified;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The axis a caller-facing buffer's first dimension spans.
@@ -196,8 +197,10 @@ pub struct Protocol {
 }
 
 impl Protocol {
-    /// Read the contract off `m`, or say everything that is missing.
-    pub fn check(m: &Manifest) -> Result<Protocol, ProtocolErrors> {
+    /// Read the contract off a verified manifest, or say everything that
+    /// is missing. Verification comes first: the protocol is built on
+    /// buffers and programs that are already known to be consistent.
+    pub fn check(m: &Verified) -> Result<Protocol, ProtocolErrors> {
         let mut errs = Vec::new();
         let var_max = |v: &str| m.vars.get(v).map(|v| v.max);
         let axis_var = |b: &Buffer| match b.shape.first() {
@@ -431,19 +434,16 @@ impl Protocol {
                         "{ctx}: batch.span is `{v}`, which sizes the call itself; a run needs its own var"
                     ));
                 }
-                match var_max(v) {
-                    Some(max) if max > rows.max => {
-                        errs.push(format!(
-                            "{ctx}: a run of {max} rows (`{v}`) exceeds the {} rows `{}` allows",
-                            rows.max, rows.var
-                        ));
-                        None
-                    }
-                    Some(max) => Some(Bound { var: v.clone(), max }),
-                    None => {
-                        errs.push(format!("{ctx}: batch.span names unknown var `{v}`"));
-                        None
-                    }
+                // A verified manifest's batch.span names a declared var.
+                let max = var_max(v).expect("verified: batch.span names a var");
+                if max > rows.max {
+                    errs.push(format!(
+                        "{ctx}: a run of {max} rows (`{v}`) exceeds the {} rows `{}` allows",
+                        rows.max, rows.var
+                    ));
+                    None
+                } else {
+                    Some(Bound { var: v.clone(), max })
                 }
             });
             if let Some(s) = &span {

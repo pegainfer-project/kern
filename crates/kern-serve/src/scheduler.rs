@@ -910,6 +910,7 @@ impl Scheduler for KernScheduler {
 mod tests {
     use super::*;
     use kern_manifest::types::Manifest;
+    use kern_manifest::verify;
 
     #[test]
     fn rows_per_rank_keeps_the_ladder_for_a_run() {
@@ -941,33 +942,11 @@ mod tests {
         assert_eq!(runs(&[], 2, 1, 16, 256), (1, vec![]));
     }
 
-    /// The plain contract: 8 rows, 4 sequences, a chunk forward that only
-    /// writes state, a one-row step for one sequence and one for four.
+    /// The plain contract of kern-manifest's own tests: a prefill chunk
+    /// that only writes state, a one-row step for one sequence and one
+    /// for four.
     fn plain() -> Manifest {
-        Manifest::from_json(
-            r#"{
-            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 4}},
-            "states": {"kv": {"bytes_per_token": 1}},
-            "buffers": {
-                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token"},
-                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "slot", "domain": {"index_into": "kv"}},
-                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
-                "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
-                "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"], "fill": "tokens"}
-            },
-            "modules": {},
-            "ops": {
-                "write": {"params": ["in buffer<i64>", "in buffer<i32>"], "impl": {"launches": []}},
-                "head": {"params": ["in buffer<i64>", "out buffer<i64>"], "impl": {"launches": []}}
-            },
-            "programs": {
-                "prefill": {"batch": {"groups": 1, "rows": "tokens"}, "calls": [{"op": "write", "args": [{"buf": "token_ids"}, {"buf": "seq_lens"}]}]},
-                "decode": {"batch": {"groups": 1, "rows": 1}, "calls": [{"op": "head", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]},
-                "decode_batch": {"batch": {"groups": 4, "rows": 1}, "calls": [{"op": "head", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]}
-            }
-        }"#,
-        )
-        .unwrap()
+        Manifest::from_json(include_str!("../../kern-manifest/tests/fixtures/plain.json")).unwrap()
     }
 
     /// The same plus a speculative round: 4 rows per sequence for up to 2
@@ -978,9 +957,9 @@ mod tests {
             serde_json::json!({"kind": "output", "dtype": "i64", "shape": ["seqs", 4], "fill": "tokens"});
         v["buffers"]["nacc"] =
             serde_json::json!({"kind": "output", "dtype": "i32", "shape": ["seqs"], "fill": "count"});
-        v["ops"]["round_head"] = serde_json::json!({"params": ["in buffer<i64>", "out buffer<i64>", "out buffer<i32>"], "impl": {"launches": []}});
+        v["ops"]["accept"] = serde_json::json!({"params": ["out buffer<i64>", "out buffer<i32>"], "impl": {"launches": [{"entry": "extern:x"}]}});
         v["programs"]["round"] = serde_json::json!({"batch": {"groups": 2, "rows": 4}, "calls": [
-            {"op": "round_head", "args": [{"buf": "token_ids"}, {"buf": "verify_tokens"}, {"buf": "nacc"}]}]});
+            {"op": "accept", "args": [{"buf": "verify_tokens"}, {"buf": "nacc"}]}]});
         Manifest::from_json(&v.to_string()).unwrap()
     }
 
@@ -990,13 +969,17 @@ mod tests {
         let mut v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&plain()).unwrap()).unwrap();
         v["vars"]["span"] = serde_json::json!({"max": 6});
         v["buffers"]["span_at"] = serde_json::json!({"kind": "input", "dtype": "i32", "shape": [1], "fill": "span_at"});
-        v["programs"]["decode_span"] = serde_json::json!({"batch": {"groups": 4, "rows": 1, "span": "span"}, "calls": [
-            {"op": "head", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]});
+        v["ops"]["read_span"] =
+            serde_json::json!({"params": ["in buffer<i32>"], "impl": {"launches": [{"entry": "extern:x"}]}});
+        let mut calls = v["programs"]["decode"]["calls"].clone();
+        calls.as_array_mut().unwrap().push(serde_json::json!({"op": "read_span", "args": [{"buf": "span_at"}]}));
+        v["programs"]["decode_span"] =
+            serde_json::json!({"batch": {"groups": 4, "rows": 1, "span": "span"}, "calls": calls});
         Manifest::from_json(&v.to_string()).unwrap()
     }
 
     fn check(m: &Manifest, page: usize, rows: Option<u64>, seqs: usize) -> Result<Plan> {
-        Plan::check(&Protocol::check(m)?, page, 4, rows, seqs)
+        Plan::check(&Protocol::check(&verify(m.clone())?)?, page, 4, rows, seqs)
     }
 
     fn rejects(m: &Manifest, page: usize, rows: Option<u64>, what: &str) {
@@ -1024,6 +1007,7 @@ mod tests {
     fn a_prompt_goes_through_steps_without_a_chunk_forward() {
         let mut m = plain();
         m.programs.remove("prefill");
+        m.ops.remove("write");
         let p = check(&m, 16, None, 4).unwrap();
         assert_eq!((p.chunk, p.rows, p.span), (None, 1, None));
     }
@@ -1059,6 +1043,7 @@ mod tests {
         rejects(&speculative(), 2, Some(4), "exceed the 2-token pad page");
         let mut m = speculative();
         m.programs.remove("prefill");
+        m.ops.remove("write");
         rejects(&m, 16, Some(4), "prompts go through steps, which takes one-row steps, not 4");
         // Only a chunk forward, one that hands a token back: nothing to step with.
         let mut m = plain();

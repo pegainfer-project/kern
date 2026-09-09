@@ -842,35 +842,18 @@ impl Staged<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kern_manifest::verify;
 
-    /// A tray manifest: 4 ranks' rows in `rows`, the tokens and the line
-    /// table over it, the page table and the slots a rank's own.
+    /// A tray manifest, kern-manifest's own: 4 ranks' rows in `rows`, the
+    /// tokens and the line table over it, the page table and the slots a
+    /// rank's own.
     fn tray() -> Manifest {
-        Manifest::from_json(
-            r#"{
-            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 8}, "rows": {"max": 32}},
-            "topology": {"groups": {"ep": 4, "tp": 4}},
-            "states": {"kv": {"bytes_per_token": 1}, "kda": {"bytes_per_seq": 24}},
-            "buffers": {
-                "token_ids": {"kind": "input", "dtype": "i64", "shape": ["rows"], "fill": "token"},
-                "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "slot", "domain": {"index_into": "kv"}},
-                "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
-                "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
-                "kda.line_index": {"kind": "input", "dtype": "i32", "shape": [3, "rows"], "domain": {"index_into": "kda", "stride": 8}},
-                "next_token": {"kind": "output", "dtype": "i64", "shape": ["rows"], "fill": "tokens"},
-                "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"},
-                "tp_blocks": {"kind": "input", "dtype": "i32", "shape": [5], "fill": "blocks"}
-            },
-            "modules": {}, "ops": {"step": {"params": ["in buffer<i64>", "out buffer<i64>"], "impl": {"launches": []}}},
-            "programs": {"decode": {"batch": {"groups": 8, "rows": 1}, "calls": [{"op": "step", "args": [{"buf": "token_ids"}, {"buf": "next_token"}]}]}}
-        }"#,
-        )
-        .unwrap()
+        Manifest::from_json(include_str!("../../kern-manifest/tests/fixtures/tray.json")).unwrap()
     }
 
     #[test]
     fn a_tray_batch_shares_the_rows_bound() {
-        let p = Protocol::check(&tray()).unwrap();
+        let p = Protocol::check(&verify(tray()).unwrap()).unwrap();
         // 32 rows over a group of 4 is 8 per rank, the sequences bound; over 8 it is 4.
         assert_eq!((seqs_max(&p, 4), seqs_max(&p, 8), seqs_max(&p, 1)), (8, 4, 8));
     }
