@@ -60,13 +60,10 @@ pub struct ServeOpts {
     #[arg(long)]
     pub capacity: Option<u64>,
 
-    /// Prefill chunk in tokens
+    /// Prefill chunk in tokens: the manifest's `tokens` bound unless a
+    /// smaller one is asked for
     #[arg(long)]
     pub chunk: Option<u64>,
-
-    /// Prompt tokens one step may prefill before it decodes
-    #[arg(long, default_value_t = 2048)]
-    pub prefill_budget: usize,
 
     /// Cap on concurrently running sequences per rank (≤ the manifest's
     /// `seqs` bound)
@@ -149,7 +146,6 @@ fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
 
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let gpus = if o.gpus.is_empty() { vec![0] } else { o.gpus.clone() };
-    let chunk = o.chunk.unwrap_or(512) as usize;
     let model_path = checkpoint_dir(&art.weights[0]);
     let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&model_path).into_iter().map(|x| x as u32).collect();
     stop_tokens.extend(&o.stop_tokens);
@@ -177,14 +173,8 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let (handle, backend) = scheduler_pair();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<scheduler::Facts>>();
     let host_bytes = (o.host_gib * (1u64 << 30) as f64) as u64;
-    let policy = Policy {
-        chunk,
-        prefill_budget: o.prefill_budget,
-        max_seqs: o.max_seqs,
-        stop_tokens,
-        rows: o.rows,
-        host_bytes,
-    };
+    let policy =
+        Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, stop_tokens, rows: o.rows, host_bytes };
     let join = std::thread::Builder::new()
         .name("kern-scheduler".into())
         .spawn(move || {

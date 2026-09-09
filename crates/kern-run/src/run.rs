@@ -63,7 +63,8 @@ pub struct RunOpts {
     #[arg(long)]
     pub capacity: Option<u64>,
 
-    /// Chunked-prefill chunk size (clamped to the manifest's tokens bound)
+    /// Prefill chunk in tokens: the manifest's `tokens` bound unless a
+    /// smaller one is asked for
     #[arg(long)]
     pub chunk: Option<u64>,
 
@@ -109,7 +110,7 @@ struct Opts {
     steps: usize,
     gpu: usize,
     capacity: Option<u64>,
-    chunk: u64,
+    chunk: Option<u64>,
     eager: bool,
     rows: Option<u64>,
     stop_tokens: Vec<i64>,
@@ -158,7 +159,7 @@ impl RunOpts {
             steps: self.steps.or_else(|| cfg.and_then(|c| c.run.steps)).unwrap_or(32),
             gpu: self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0),
             capacity: self.capacity.or_else(|| cfg.and_then(|c| c.capacity)),
-            chunk: self.chunk.or_else(|| cfg.and_then(|c| c.run.chunk)).unwrap_or(512),
+            chunk: self.chunk.or_else(|| cfg.and_then(|c| c.run.chunk)),
             eager: self.eager,
             rows: self.rows,
             stop_tokens,
@@ -324,8 +325,9 @@ fn execute(o: Opts) -> Result<()> {
         caller.limit()
     );
 
+    let chunk = chunk_size(o.chunk, caller.protocol.rows.max)?;
     if let Some(dir) = &o.probe_dir {
-        return probe(&mut caller, &prompt_ids, dir, &o.probe_labels, o.chunk, &step, o.probe_steps);
+        return probe(&mut caller, &prompt_ids, dir, &o.probe_labels, chunk, &step, o.probe_steps);
     }
 
     // Chunked prefill. A chunk program that hands a token back takes every
@@ -334,7 +336,6 @@ fn execute(o: Opts) -> Result<()> {
     // decode kernel, and the reference runs the last prompt token through
     // the former). One that only writes state takes the first n-1 prompt
     // tokens, and the last one goes through the step program.
-    let chunk = o.chunk.min(caller.protocol.rows.max).max(1);
     let n_prompt = prompt_ids.len();
     let prefill_all = chunk_f.emits.is_some();
     let n_pre = if prefill_all { n_prompt } else { n_prompt - 1 };
@@ -415,6 +416,16 @@ fn execute(o: Opts) -> Result<()> {
     Ok(())
 }
 
+/// The prefill chunk: the manifest's `tokens` bound, or the smaller one
+/// asked for; a bigger one is the caller's mistake, not clamped.
+fn chunk_size(asked: Option<u64>, max: u64) -> Result<u64> {
+    match asked {
+        None => Ok(max),
+        Some(c) if (1..=max).contains(&c) => Ok(c),
+        Some(c) => anyhow::bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
+    }
+}
+
 /// Activation probe for reference comparison (`--probe-dir`): the first
 /// prefill chunk and `steps` decode steps, each run as consecutive call
 /// ranges cut after every call whose label equals or ends with one of
@@ -489,7 +500,7 @@ fn probe(
         Ok(())
     };
     let chunk_f = caller.chunk_forward()?;
-    let chunk = chunk.min(caller.protocol.rows.max).max(1) as usize;
+    let chunk = chunk as usize;
     let prefill_all = chunk_f.emits.is_some();
     let n_pre = if prefill_all { prompt_ids.len() } else { prompt_ids.len() - 1 };
     let c = n_pre.min(chunk);

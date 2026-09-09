@@ -47,8 +47,10 @@ kern run qwen3.8-27b \
 
 ## Choose execution behavior
 
-- `--chunk N` sets the chunked-prefill size, bounded by the manifest.
-- `--eager` disables CUDA graph capture.
+- `--chunk N` sets the prefill chunk; the default is the manifest's `tokens`
+  bound, and a larger value is an error.
+- `--eager` launches every program eagerly, ignoring the manifest's `graph`
+  flags (a debug switch).
 - `--rows N` selects a declared decode shape. A one-row program is ordinary
   decode; a wider declared program is a speculative round (the DFlash2
   manifest's is 8 rows). Default: the widest the manifest declares.

@@ -23,9 +23,17 @@ Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡�
 - **`kern-serve::scheduler::KernScheduler`** 实现 pegainfer 的 `Scheduler`
   契约（`submit` / `step` / `metrics`），跑在 pegainfer 的 `drive` 轮询线程
   上，独占一个 `Runtime`。策略刻意简单：
-  - prefill 优先、不混批：每步先把 waiting 里的请求逐个（bs=1、chunk 级）
-    prefill 到预算（`--prefill-budget`，默认 2048 token），再对全部 running
+  - prefill 优先、不混批：每步先把 waiting 里能坐下的请求按序逐个（bs=1、
+    按 `--chunk` 切块、逐 launch 不走图）整条 prefill 完，再对全部 running
     序列做一步 decode；最后一个 prompt token 作为首个 decode 步的输入。
+    `--chunk` 缺省是 manifest 的 `tokens` 上界，只能改小。没有预算、没有分时：
+    一条长 prompt 进来，正在 decode 的序列等它整条喂完（roadmap D2）。
+    **2026-09-09 tray07 GB300 × 1，Qwen3.8-27B（registry cubins）**：`kern run` 35.9k token
+    prompt，prefill 2048 块逐 launch 22.3k tok/s（走图 22.3k，512 块 18.2k），48 步 decode
+    图 11.14 ms/step、`--eager` 11.13 ms/step，三种设置文本逐字相同；`--chunk 4096` 报
+    "the manifest's `tokens` bound is 2048"。kern-serve 同一 manifest：conc1 completion
+    与之前逐字同，29.9k token 的 prompt 走 15 块 prefill 21.6k tok/s，日志里只有 `decode`
+    捕图一次。
   - 准入即预留：请求在准入时向 runtime 租下最坏情况 `prompt + max_tokens`
     的全部 KV 页（`Runtime::lease` → `Lease`，序列结束即 drop 归还），
     decode 永远不缺页、不抢占。超过单序列上限（最窄页表行长 × 页）→

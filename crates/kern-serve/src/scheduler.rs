@@ -30,9 +30,10 @@
 //! the run.
 //!
 //! Policy, deliberately simple:
-//! - prefill first: each step admits waiting requests (up to a token
-//!   budget when there is a chunk forward) and prefills them one at a
-//!   time, then runs one step over every running sequence;
+//! - prefill first: each step admits every waiting request it can seat,
+//!   in order, and prefills each whole (one sequence, `chunk` tokens per
+//!   call, launch by launch: no graph per chunk length), then runs one
+//!   step over every running sequence;
 //! - a request leases every KV page its worst case (`prompt + max_tokens`,
 //!   plus `rows - 1` for the last step's rows past the end) needs at
 //!   admission (`Tray::lease`, on the rank with the fewest rows, then
@@ -135,12 +136,9 @@ fn runs(seqs: &[(usize, usize)], n: usize, t: usize, limit: usize, cap: usize) -
 }
 
 pub struct Policy {
-    /// Prefill chunk (tokens per `prefill` call), clamped to the manifest's
-    /// `tokens` bound.
-    pub chunk: usize,
-    /// Prompt tokens one step may prefill before it runs decode (at least
-    /// one request is always admitted when one fits).
-    pub prefill_budget: usize,
+    /// Prefill chunk (tokens per `prefill` call): the manifest's `tokens`
+    /// bound, or a smaller one.
+    pub chunk: Option<usize>,
     /// Cap on concurrently running sequences per rank (≤ the manifest's
     /// `seqs` bound).
     pub max_seqs: usize,
@@ -303,6 +301,8 @@ impl Seq {
 pub struct KernScheduler {
     tray: Tray,
     policy: Policy,
+    /// Tokens per `prefill` call, within the manifest's bound.
+    chunk: usize,
     plan: Plan,
     /// Draft acceptance, for a plan whose steps take several rows.
     counters: Option<SpecDecodeCounters>,
@@ -386,11 +386,13 @@ impl KernScheduler {
     /// settle how this process drives the manifest, within its bounds.
     pub fn new(tray: Tray, policy: Policy) -> Result<KernScheduler> {
         let plan = Plan::check(tray.protocol(), tray.page(), tray.seqs_max(), policy.rows, policy.max_seqs)?;
-        let policy = Policy {
-            max_seqs: plan.max_seqs,
-            chunk: policy.chunk.clamp(1, tray.protocol().rows.max as usize),
-            ..policy
+        let max = tray.protocol().rows.max as usize;
+        let chunk = match policy.chunk {
+            None => max,
+            Some(c) if (1..=max).contains(&c) => c,
+            Some(c) => bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
         };
+        let policy = Policy { max_seqs: plan.max_seqs, ..policy };
         let counters = plan.counters();
         let stats = Stats::new(&counters);
         let every_page = !tray.has_seq_state();
@@ -398,6 +400,7 @@ impl KernScheduler {
         let s = KernScheduler {
             tray,
             policy,
+            chunk,
             plan,
             counters,
             waiting: VecDeque::new(),
@@ -443,7 +446,7 @@ impl KernScheduler {
             seq_slots = (slots > 0).then_some(slots),
             max_seqs_per_rank = policy.max_seqs,
             max_request_tokens = facts.max_request_tokens,
-            chunk = policy.chunk,
+            chunk = self.chunk,
             buckets = ?BUCKETS.iter().filter(|&&b| b <= policy.max_seqs).collect::<Vec<_>>(),
             rows = plan.rows,
             step = %plan.step.name,
@@ -473,9 +476,8 @@ impl KernScheduler {
     }
 
     /// Admit waiting requests in order and prefill each (single sequence,
-    /// chunked) up to the step's token budget.
+    /// chunked); one that cannot be seated stops the scan.
     fn admit(&mut self, ledger: &mut RequestLedger) -> Result<()> {
-        let mut budget_used = 0usize;
         // Wakes land in order: the first still in flight stops the scan.
         while let Some((q, r)) = self.waking.pop_front() {
             match self.tray.awake(r)? {
@@ -486,7 +488,7 @@ impl KernScheduler {
                     }
                     self.stats.wakes += 1;
                     self.stats.wake_tokens += row.prefix() as u64;
-                    budget_used += self.admit_one(q, row, true, ledger)?;
+                    self.admit_one(q, row, true, ledger)?;
                 }
                 Err(r) => {
                     self.waking.push_front((q, r));
@@ -514,9 +516,6 @@ impl KernScheduler {
                 ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
                 self.waiting.pop_front();
                 continue;
-            }
-            if self.plan.chunk.is_some() && budget_used > 0 && budget_used + prompt - 1 > self.policy.prefill_budget {
-                break; // enough prefill for this step; decode must run
             }
             let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
             let hit = self.prefix.lookup(&ids);
@@ -574,16 +573,15 @@ impl KernScheduler {
                 Err(e) => return Err(e.into()),
             };
             let q = self.waiting.pop_front().unwrap();
-            budget_used += self.admit_one(q, row, false, ledger)?;
+            self.admit_one(q, row, false, ledger)?;
         }
         Ok(())
     }
 
     /// Start `q` running in `row` (past the row's prefix): through the
     /// chunk forward when the manifest has one, else with the prompt
-    /// queued for the steps. Returns the prompt tokens prefilled, for the
-    /// step's budget.
-    fn admit_one(&mut self, q: QueuedRequest, row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<usize> {
+    /// queued for the steps.
+    fn admit_one(&mut self, q: QueuedRequest, row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<()> {
         let id = q.id;
         let prompt = q.request.prompt_tokens.len();
         let max_tokens = q.request.max_tokens;
@@ -648,11 +646,11 @@ impl KernScheduler {
             self.stats.tokens += emitted;
             if done {
                 self.finish(seq);
-                return Ok(n_pre - start);
+                return Ok(());
             }
         }
         self.running.push(seq);
-        Ok(n_pre - start)
+        Ok(())
     }
 
     /// Room for a `Busy` lease: the coldest resident snapshot goes to
@@ -726,7 +724,7 @@ impl KernScheduler {
     /// `start..` of `row` (`start` is the row's prefix) through `f`; the
     /// first generated token when `f` hands it back.
     fn prefill(&mut self, f: &Forward, row: &Row, ids: &[i64], start: usize) -> Result<Option<u32>> {
-        let chunk = self.policy.chunk;
+        let chunk = self.chunk;
         let mut first = None;
         let mut pos = start;
         while pos < ids.len() {
@@ -760,7 +758,7 @@ impl KernScheduler {
                 let seqs: Vec<(usize, usize)> =
                     self.running.iter().map(|s| (s.row.owner().index(), 1 + s.pending.len())).collect();
                 let (n, t, limit) = (self.tray.len(), self.tray.group_size(), self.tray.seqs_max());
-                runs(&seqs, n, t, limit, mx.min(self.policy.chunk))
+                runs(&seqs, n, t, limit, mx.min(self.chunk))
             }
             None => (1, Vec::new()),
         };
