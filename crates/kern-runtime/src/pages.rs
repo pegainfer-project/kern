@@ -529,7 +529,7 @@ impl Pool {
     }
 
     /// Whether any remap was ever planned: the initial layout is gone.
-    pub fn remapped(&self) -> bool {
+    pub(crate) fn remapped(&self) -> bool {
         lock(&self.inner).remapped
     }
 

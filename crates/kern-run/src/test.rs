@@ -57,81 +57,81 @@ pub struct TestOpts {
     pub reference: Option<PathBuf>,
     /// Candidate manifest B
     #[arg(long)]
-    pub manifest: Option<PathBuf>,
+    manifest: Option<PathBuf>,
     /// Directory of cubins for both manifests; steps resolve by their pinned
     /// sha256, so one dir holds every version (file names are labels)
     #[arg(long)]
-    pub kernels: Option<PathBuf>,
+    kernels: Option<PathBuf>,
     /// Safetensors artifact(s), tensors bound by name across all of them
     #[arg(long)]
-    pub weights: Vec<PathBuf>,
+    weights: Vec<PathBuf>,
     /// HF tokenizer.json (only needed with --prompt)
     #[arg(long)]
-    pub tokenizer: Option<PathBuf>,
+    tokenizer: Option<PathBuf>,
     /// Real-text prompt for the tap's prefill instead of seeded random
     /// tokens (decode tokens stay seeded)
     #[arg(long)]
-    pub prompt: Option<String>,
+    prompt: Option<String>,
     /// Prefill length in tokens; 0 = drawn from the seed: half the time
     /// uniform in [1, capacity − steps], half the time a structural
     /// boundary (a page, a chunk, the `tokens` max, ±1)
     #[arg(long, default_value_t = 0)]
-    pub prefill: u64,
+    prefill: u64,
     /// Decode steps; the seed picks a length in [steps/2, steps] (default 32)
     #[arg(long)]
-    pub decode_steps: Option<u64>,
+    decode_steps: Option<u64>,
     /// How far the end-to-end logits may move, in ulps at the row's scale
     /// (A's max |logit|), and still PASS (with logit evidence), provided
     /// the argmax agrees except at near-ties (default 4)
     #[arg(long)]
-    pub logit_ulp: Option<u64>,
+    logit_ulp: Option<u64>,
     /// Fuzz rounds per cut (0 disables); rounds cycle through the
     /// perturbations of the tapped inputs (jitter, noise, scale, shuffle,
     /// resample, outliers) (default 6)
     #[arg(long)]
-    pub fuzz: Option<usize>,
+    fuzz: Option<usize>,
     /// CUDA device ordinal (default 0)
     #[arg(long)]
-    pub gpu: Option<usize>,
+    gpu: Option<usize>,
     /// State capacity in tokens; rounded down to the manifest's page unit
     /// (default 4096)
     #[arg(long)]
-    pub capacity: Option<u64>,
+    capacity: Option<u64>,
     /// Prefill chunk; 0 = drawn from the seed among the `tokens` max, 512,
     /// a page and a random size
     #[arg(long, default_value_t = 0)]
-    pub chunk: u64,
+    chunk: u64,
     /// Replays for cut timing (minimum is reported)
     #[arg(long, default_value_t = 20)]
-    pub iters: usize,
+    iters: usize,
     /// Skip capturing both decode programs as CUDA graphs for the step time
     #[arg(long)]
-    pub no_graph_step: bool,
+    no_graph_step: bool,
     /// Skip sweeping prefill over the `tokens` var range
     #[arg(long)]
-    pub no_sweep: bool,
+    no_sweep: bool,
     /// Device peak memory bandwidth in GB/s, for the roofline column
     #[arg(long, default_value_t = 8000.0)]
-    pub peak_bw: f64,
+    peak_bw: f64,
     /// Write the test report as JSON here (a directory when several
     /// targets run: one file per target)
     #[arg(long)]
-    pub out: Option<PathBuf>,
+    out: Option<PathBuf>,
     /// Only print the structural diff
     #[arg(long)]
-    pub diff_only: bool,
+    diff_only: bool,
     /// Skip the timing section
     #[arg(long)]
-    pub no_perf: bool,
+    no_perf: bool,
     /// Skip the noise-floor re-runs
     #[arg(long)]
-    pub no_noise: bool,
+    no_noise: bool,
     /// Seed for the workload and the fuzz generator (default 0x5eed)
     #[arg(long)]
-    pub seed: Option<u64>,
+    seed: Option<u64>,
     /// Print the report as one JSON object instead of text lines
     #[arg(long)]
-    pub json: bool,
+    json: bool,
 }
 
 /// Resolved options: flag, else kern.toml, else default.

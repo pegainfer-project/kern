@@ -146,7 +146,7 @@ pub struct Forward {
 impl Forward {
     /// Whether the program accepts a call of `groups` sequences of `rows`
     /// with no run among them.
-    pub fn accepts(&self, groups: u64, rows: Rows) -> bool {
+    fn accepts(&self, groups: u64, rows: Rows) -> bool {
         !self.span && self.rows == rows && groups <= self.groups
     }
 }

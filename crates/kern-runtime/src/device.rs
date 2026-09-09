@@ -19,8 +19,8 @@ use crate::error::{bail, cuda_check, Error, Result};
 /// importer must map in full.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PeerHandle {
-    pub fabric: [u8; 64],
-    pub bytes: u64,
+    fabric: [u8; 64],
+    pub(crate) bytes: u64,
 }
 
 impl PeerHandle {

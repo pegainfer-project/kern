@@ -199,7 +199,7 @@ impl Runtime {
     /// Check `data` (a prefix of buffer `name`) against the buffer's declared
     /// domain, if any, at the given var values. Symbol-dependent bounds
     /// need `vars`; pass the values the next run will use.
-    pub fn check_domain(&self, name: &str, data: &[u8], vars: &BTreeMap<String, u64>) -> Result<()> {
+    fn check_domain(&self, name: &str, data: &[u8], vars: &BTreeMap<String, u64>) -> Result<()> {
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
@@ -333,7 +333,7 @@ impl Runtime {
 /// Device memory left untouched when the states are fitted to the device:
 /// the driver's own allocations after load (captured graphs, module
 /// lazy-loading, cuBLASLt algorithm state) and a margin for a neighbour.
-pub const HEADROOM: u64 = 1 << 30;
+pub(crate) const HEADROOM: u64 = 1 << 30;
 
 /// Tokens one sequence of `m` can reach — the narrowest page table's row,
 /// in whole pages — or `None` when nothing is paged per token. What a

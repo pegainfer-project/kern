@@ -152,16 +152,10 @@ impl Runtime {
         Ok(())
     }
 
-    /// Per-call GPU time in ms (eager, event-bracketed), minimum over
-    /// `iters` replays of the whole program. Note this attributes launch
-    /// gaps to the call that follows them.
-    pub fn time_calls(&self, program: &str, vars: &BTreeMap<String, u64>, iters: usize) -> Result<Vec<f32>> {
-        let n = self.call_count(program)?;
-        self.time_range(program, vars, 0, n, iters)
-    }
-
-    /// Same, for calls `[lo, hi)` only — replaying just that range, so
-    /// a cut can be timed without the rest of the program.
+    /// Per-call GPU time in ms (eager, event-bracketed) for calls
+    /// `[lo, hi)`, minimum over `iters` replays of just that range, so a
+    /// cut can be timed without the rest of the program. Note this
+    /// attributes launch gaps to the call that follows them.
     pub fn time_range(
         &self,
         program: &str,

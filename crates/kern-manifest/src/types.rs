@@ -28,7 +28,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 /// The one format this crate reads and writes.
-pub const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 
 /// Deserialize a JSON object into a map, rejecting duplicate keys (plain
 /// serde silently keeps the last one).
@@ -309,10 +309,10 @@ pub struct Segment {
 pub struct Domain {
     /// Inclusive lower bound, e.g. `0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min: Option<Bound>,
+    pub(crate) min: Option<Bound>,
     /// Inclusive upper bound, a literal or a var expression, e.g. `"tokens"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max: Option<Bound>,
+    pub(crate) max: Option<Bound>,
     /// Buffer or state whose rows / token slots the elements index, e.g. `"model.embed_tokens.weight"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_into: Option<String>,
@@ -321,7 +321,7 @@ pub struct Domain {
     pub stride: u64,
     /// Require a non-decreasing sequence, e.g. `cu_seqlens`.
     #[serde(default, skip_serializing_if = "is_false")]
-    pub monotone: bool,
+    pub(crate) monotone: bool,
 }
 
 fn one() -> u64 {
@@ -344,7 +344,7 @@ pub enum Bound {
 }
 
 impl Bound {
-    pub fn eval(&self, vars: &BTreeMap<String, u64>) -> Result<f64, EvalError> {
+    pub(crate) fn eval(&self, vars: &BTreeMap<String, u64>) -> Result<f64, EvalError> {
         Ok(match self {
             Bound::Int(v) => *v as f64,
             Bound::Float(v) => *v,
@@ -485,7 +485,7 @@ impl DType {
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             DType::Bf16 => "bf16",
             DType::F16 => "f16",
@@ -764,7 +764,7 @@ pub struct KernelLaunch {
     pub entry: String,
     /// This launch's own ABI when it differs from the op's params, e.g. `["in buffer<bf16>", "out buffer<f32>", "i32"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<Vec<ParamType>>,
+    params: Option<Vec<ParamType>>,
     /// Threads per block, e.g. `[1024, 1, 1]`.
     pub block: [u32; 3],
     /// Blocks per launch, as expressions, e.g. `[{"ceil_div": ["tokens", 128]}, 1, 1]`.
@@ -780,7 +780,7 @@ pub struct KernelLaunch {
     pub pdl: bool,
     /// Where each launch param comes from (default: the op's params in order), e.g. `[{"param": 0}, {"scratch": "pmax"}, {"i32": 64}]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<LaunchArg>>,
+    args: Option<Vec<LaunchArg>>,
 }
 
 /// A runtime built-in launch, e.g. `{"entry": "extern:cublaslt_bf16_tn"}`.
@@ -791,14 +791,14 @@ pub struct ExternLaunch {
     pub entry: String,
     /// This launch's own ABI when it differs from the op's params.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<Vec<ParamType>>,
+    params: Option<Vec<ParamType>>,
     /// Where each launch param comes from (default: the op's params in order).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<LaunchArg>>,
+    args: Option<Vec<LaunchArg>>,
 }
 
 impl Launch {
-    pub fn is_extern(&self) -> bool {
+    pub(crate) fn is_extern(&self) -> bool {
         matches!(self, Launch::Extern(_))
     }
 
@@ -928,7 +928,7 @@ pub enum FieldSrc {
 impl Field {
     /// The field's width: explicit, else the source's natural width
     /// (`None` for a param source, whose width is the param's).
-    pub fn natural_width(&self) -> Option<u32> {
+    fn natural_width(&self) -> Option<u32> {
         self.width.or(match &self.src {
             FieldSrc::Param { .. } => None,
             FieldSrc::Scratch { .. } | FieldSrc::I64 { .. } => Some(8),
@@ -946,7 +946,7 @@ impl Field {
 impl Pack {
     /// Structural diagnostics: every field inside the image and no two
     /// overlapping. `width_of` supplies a param field's width.
-    pub fn check(&self, width_of: impl Fn(usize) -> Option<u32>) -> Vec<String> {
+    pub(crate) fn check(&self, width_of: impl Fn(usize) -> Option<u32>) -> Vec<String> {
         let mut errs = Vec::new();
         let mut spans: Vec<(u32, u32, usize)> = Vec::new();
         for (i, f) in self.fields.iter().enumerate() {
@@ -1039,7 +1039,7 @@ pub enum TmaDType {
 
 impl TmaDType {
     /// Element size in bits.
-    pub fn bits(self) -> u64 {
+    fn bits(self) -> u64 {
         match self {
             TmaDType::U4 => 4,
             TmaDType::U8 => 8,
@@ -1053,7 +1053,7 @@ impl TmaDType {
 impl TensorMap {
     /// Structural checks that need no buffer: rank, box limits, stride and
     /// swizzle alignment. Returns every violation.
-    pub fn check(&self) -> Vec<String> {
+    pub(crate) fn check(&self) -> Vec<String> {
         let mut errs = Vec::new();
         let n = self.dims.len();
         if !(1..=5).contains(&n) {
