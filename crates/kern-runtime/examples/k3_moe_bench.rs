@@ -73,7 +73,7 @@ impl Routing {
             Routing::Narrow(k)
         } else if let Some(p) = s.strip_prefix("file:") {
             let bytes = std::fs::read(p).expect("routing file");
-            let ids: Vec<i32> = bytes.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect();
+            let ids: Vec<i32> = bytes.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c)).collect();
             assert!(ids.len().is_multiple_of(TOPK) && ids.iter().all(|&e| (0..EXPERTS as i32).contains(&e)));
             Routing::File(Arc::new(ids))
         } else {
