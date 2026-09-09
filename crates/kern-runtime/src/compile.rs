@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use cudarc::driver::{result as cu, sys, CudaStream};
 use kern_manifest::types::{
-    Arg, Call, Dim, Expr, FieldSrc, LaunchArg, Manifest, Op, Pack, ParamType, TensorMap, TmaDType,
+    Arg, Call, Dim, Expr, FieldSrc, LaunchArg, Manifest, Op, Pack, ParamType, TensorMap, TmaDType, Var,
 };
 use std::os::raw::c_void;
 
@@ -31,11 +31,48 @@ pub(crate) enum CExpr {
     Mul(Box<CExpr>, u64),
 }
 
+/// A program's var values in manifest var order, the index space every
+/// compiled expression reads. Built by [`Dense::check`] and nowhere else:
+/// each value is inside its declared bound, and a var the program does
+/// not read is `Var::MIN`, so two calls that differ only in vars the
+/// program never reads are one `Dense` and one graph key.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Dense(Vec<u64>);
+
+impl Dense {
+    /// The caller's values for the vars `used` marks, checked against
+    /// their declared bounds; the rest at the minimum.
+    pub(crate) fn check(m: &Manifest, vars: &BTreeMap<String, u64>, used: &[bool]) -> Result<Dense> {
+        m.vars
+            .iter()
+            .zip(used)
+            .map(|((var, decl), &used)| {
+                if !used {
+                    return Ok(Var::MIN);
+                }
+                let Some(&v) = vars.get(var) else {
+                    bail!(Api, "var `{var}` not provided");
+                };
+                if v < Var::MIN || v > decl.max {
+                    bail!(Api, "var `{var}` = {v} outside declared [{}, {}]", Var::MIN, decl.max);
+                }
+                Ok(v)
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Dense)
+    }
+
+    /// `var=value` in manifest var order, for error messages.
+    pub(crate) fn describe(&self, m: &Manifest) -> String {
+        m.vars.keys().zip(&self.0).map(|(s, v)| format!("{s}={v}")).collect::<Vec<_>>().join(", ")
+    }
+}
+
 impl CExpr {
-    pub(crate) fn eval(&self, vars: &[u64]) -> Result<u64> {
+    pub(crate) fn eval(&self, vars: &Dense) -> Result<u64> {
         match self {
             CExpr::Const(c) => Ok(*c),
-            CExpr::Var(i) => Ok(vars[*i]),
+            CExpr::Var(i) => Ok(vars.0[*i]),
             CExpr::CeilDiv(e, c) => Ok(e.eval(vars)?.checked_add(c - 1).ok_or_else(overflow)? / c),
             CExpr::Mul(e, c) => e.eval(vars)?.checked_mul(*c).ok_or_else(overflow),
         }
@@ -87,7 +124,7 @@ pub(crate) struct PackPlan {
 
 impl PackPlan {
     /// The image for one run: every field's low `width` bytes, little-endian, at its offset.
-    pub(crate) fn image(&self, vars: &[u64]) -> Result<Vec<u8>> {
+    pub(crate) fn image(&self, vars: &Dense) -> Result<Vec<u8>> {
         let mut out = vec![0u8; self.size];
         for (at, blob) in &self.maps {
             out[*at..*at + 128].copy_from_slice(&blob.0);
@@ -755,11 +792,11 @@ mod tests {
             ],
             maps: vec![],
         };
-        let img = plan.image(&[3]).unwrap();
+        let img = plan.image(&Dense(vec![3])).unwrap();
         assert_eq!(&img[..8], &0xf767e4600400u64.to_le_bytes());
         assert_eq!((&img[8..12], &img[12..16]), (&512u32.to_le_bytes()[..], &3u32.to_le_bytes()[..]));
         assert_eq!(&img[16..24], &1536u64.to_le_bytes());
-        assert_eq!(plan.image(&[7]).unwrap()[12], 7);
+        assert_eq!(plan.image(&Dense(vec![7])).unwrap()[12], 7);
     }
 
     #[test]

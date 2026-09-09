@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use cudarc::driver::sys;
 
+use crate::compile::Dense;
 use crate::device::Events;
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
@@ -138,7 +139,7 @@ impl Runtime {
             bail!(Api, "program `{program}`: call range [{lo}, {hi}) outside 0..{n}");
         }
         self.require_peers()?;
-        let vars = self.dense_vars(vars, &prog.vars)?;
+        let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         if lo < hi {
             let (l0, _) = prog.call_ranges[lo];
@@ -176,7 +177,7 @@ impl Runtime {
             bail!(Api, "program `{program}`: call range [{lo}, {hi}) outside 0..{}", prog.call_ranges.len());
         }
         self.require_peers()?;
-        let vars = self.dense_vars(vars, &prog.vars)?;
+        let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         let n = hi - lo;
         let events = Events::new(n + 1)?;

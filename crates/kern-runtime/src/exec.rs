@@ -25,42 +25,12 @@ use std::os::raw::c_void;
 
 use cudarc::driver::sys;
 
-use crate::compile::{CompiledProgram, Launch, LaunchKind, RVal, Slot};
+use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
 use crate::device::{gemm_bf16_tn, gemm_bf16_tn_f32};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
 impl Runtime {
-    /// Validate the caller's var values and densify them into manifest var
-    /// order — the index space every compiled expression uses. A program
-    /// needs the vars it reads (`used`); the rest are no part of it and
-    /// densify to the minimum whatever the caller passed, so a graph is
-    /// keyed by the values that shaped it.
-    pub(crate) fn dense_vars(&self, vars: &BTreeMap<String, u64>, used: &[bool]) -> Result<Vec<u64>> {
-        self.manifest
-            .vars
-            .iter()
-            .zip(used)
-            .map(|((var, decl), &used)| {
-                if !used {
-                    return Ok(kern_manifest::types::Var::MIN);
-                }
-                let Some(&v) = vars.get(var) else {
-                    bail!(Api, "var `{var}` not provided");
-                };
-                if v < kern_manifest::types::Var::MIN || v > decl.max {
-                    bail!(Api, "var `{var}` = {v} outside declared [{}, {}]", kern_manifest::types::Var::MIN, decl.max);
-                }
-                Ok(v)
-            })
-            .collect()
-    }
-
-    /// `var=value` in manifest var order, for error messages.
-    fn fmt_vars(&self, vars: &[u64]) -> String {
-        self.manifest.vars.keys().zip(vars).map(|(s, v)| format!("{s}={v}")).collect::<Vec<_>>().join(", ")
-    }
-
     /// Execute one program with the given var values, then synchronize.
     pub fn run(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         self.enqueue(program, vars)?;
@@ -104,7 +74,7 @@ impl Runtime {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
-        let vars = self.dense_vars(vars, &prog.vars)?;
+        let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         self.replay(prog, &vars)
     }
@@ -119,7 +89,7 @@ impl Runtime {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
-        let vars = self.dense_vars(vars, &prog.vars)?;
+        let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(
             unsafe {
@@ -157,7 +127,7 @@ impl Runtime {
     pub fn is_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> bool {
         self.programs
             .get(program)
-            .and_then(|prog| self.dense_vars(vars, &prog.vars).ok())
+            .and_then(|prog| Dense::check(&self.manifest, vars, &prog.vars).ok())
             .is_some_and(|vars| self.graphs.contains_key(&(program.to_string(), vars)))
     }
 
@@ -167,7 +137,7 @@ impl Runtime {
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
-        let dense = self.dense_vars(vars, &prog.vars)?;
+        let dense = Dense::check(&self.manifest, vars, &prog.vars)?;
         if let Some(exec) = self.graphs.get(&(program.to_string(), dense.clone())) {
             return Ok(*exec);
         }
@@ -175,7 +145,7 @@ impl Runtime {
             .graphs
             .keys()
             .filter(|(p, _)| p == program)
-            .map(|(_, e)| format!("{{{}}}", self.fmt_vars(e)))
+            .map(|(_, e)| format!("{{{}}}", e.describe(&self.manifest)))
             .collect();
         if others.is_empty() {
             bail!(Api, "program `{program}` has not been captured");
@@ -183,7 +153,7 @@ impl Runtime {
         bail!(
             Api,
             "program `{program}` called with {{{}}} but captured at {}",
-            self.fmt_vars(&dense),
+            dense.describe(&self.manifest),
             others.join(", ")
         )
     }
@@ -204,14 +174,14 @@ impl Runtime {
     }
 
     /// Issue every launch of a compiled program onto the stream (no sync).
-    pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &[u64]) -> Result<()> {
+    pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &Dense) -> Result<()> {
         for l in &prog.launches {
             self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
         }
         Ok(())
     }
 
-    pub(crate) fn launch(&self, l: &Launch, vars: &[u64]) -> Result<()> {
+    pub(crate) fn launch(&self, l: &Launch, vars: &Dense) -> Result<()> {
         // Materialize the slots; only var-dependent scalars are left to
         // compute, everything else was finished at load. Packs (and the
         // tensor maps inside them) ride along as pointers to their images.

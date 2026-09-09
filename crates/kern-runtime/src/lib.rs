@@ -62,7 +62,7 @@ use kern_manifest::types::{BufferKind, Manifest, Provision, State};
 use kern_manifest::Verified;
 
 pub use chunks::{Kind, Remap};
-use compile::CompiledProgram;
+use compile::{CompiledProgram, Dense};
 pub use device::PeerHandle;
 use device::{alloc, alloc_vmm, chunk_granularity, copy_2d, Arena, Blas, DeviceBuf, Mapper, Physical, Pinned, Share};
 use error::{bail, cuda_check};
@@ -163,7 +163,7 @@ pub struct Runtime {
     /// and scalar args are baked in at capture, so one program holds one
     /// graph per var assignment it was captured at (a batched decode keeps
     /// one per batch bucket).
-    graphs: BTreeMap<(String, Vec<u64>), sys::CUgraphExec>,
+    graphs: BTreeMap<(String, Dense), sys::CUgraphExec>,
     /// Debug override: [`Runtime::issue`] launches every program eagerly,
     /// whatever its manifest says.
     eager: bool,
