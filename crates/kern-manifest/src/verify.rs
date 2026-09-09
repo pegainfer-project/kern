@@ -118,10 +118,6 @@ impl Verified {
         let m = Manifest::from_json(s).map_err(|e| VerifyErrors(vec![e.to_string()]))?;
         verify(m)
     }
-
-    pub fn into_inner(self) -> Manifest {
-        self.0
-    }
 }
 
 impl std::ops::Deref for Verified {
