@@ -31,9 +31,10 @@ Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡�
     **2026-09-09 tray07 GB300 × 1，Qwen3.8-27B（registry cubins）**：`kern run` 35.9k token
     prompt，prefill 2048 块逐 launch 22.3k tok/s（走图 22.3k，512 块 18.2k），48 步 decode
     图 11.14 ms/step、`--eager` 11.13 ms/step，三种设置文本逐字相同；`--chunk 4096` 报
-    "the manifest's `tokens` bound is 2048"。kern-serve 同一 manifest：conc1 completion
-    与之前逐字同，29.9k token 的 prompt 走 15 块 prefill 21.6k tok/s，日志里只有 `decode`
-    捕图一次。
+    "the manifest's `tokens` bound is 2048"（当时的 manifest）。kern-serve 同一 manifest：conc1
+    completion 与之前逐字同，29.9k token 的 prompt 走 15 块 prefill 21.6k tok/s，日志里只有
+    `decode` 捕图一次。同日 tray08，上界提到 8192 的 manifest（bdd2805）：5 块 23.5k tok/s
+    对 18 块 22.4k，文本逐字节同；kern-serve chunk=8192，29.9k token 24.0k tok/s。
   - 准入即预留：请求在准入时向 runtime 租下最坏情况 `prompt + max_tokens`
     的全部 KV 页（`Runtime::lease` → `Lease`，序列结束即 drop 归还），
     decode 永远不缺页、不抢占。超过单序列上限（最窄页表行长 × 页）→
