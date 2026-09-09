@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use cudarc::driver::{sys, CudaFunction, LaunchConfig, PushKernelArg};
 use kern_manifest::types::{Arg, BufferKind, Dir};
 
-use crate::device::Events;
+use crate::compile::RVal;
+use crate::device::{gemm_bf16_tn, Events};
 use crate::{alloc, cuda_check, DeviceBuf, Result, Runtime};
 
 impl Events {
@@ -275,15 +276,15 @@ impl Probe {
                 "GEMM probe fill",
             )?;
         }
-        let args = [a.ptr, b.ptr, c.ptr, size, size, size].map(|val| crate::RVal { val, bytes });
-        crate::gemm_bf16_tn(&rt.blt, &rt.stream, &args, 0.)?;
+        let args = [a.ptr, b.ptr, c.ptr, size, size, size].map(|val| RVal { val, bytes });
+        gemm_bf16_tn(&rt.blt, &rt.stream, &args, 0.)?;
         rt.stream.synchronize()?;
         let events = Events::new(samples * 2)?;
         let graph = capture(rt, || {
             for i in 0..samples {
                 self.mark(rt, "profile_anchor_start")?;
                 events.captured_record(i * 2, rt)?;
-                crate::gemm_bf16_tn(&rt.blt, &rt.stream, &args, 0.)?;
+                gemm_bf16_tn(&rt.blt, &rt.stream, &args, 0.)?;
                 events.captured_record(i * 2 + 1, rt)?;
                 self.mark(rt, "profile_end")?;
             }
