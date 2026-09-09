@@ -348,6 +348,7 @@ impl Tray {
         capacity: Capacity,
         weights_of: &(dyn Fn(&Topology) -> Result<Vec<PathBuf>> + Sync),
         host_bytes: u64,
+        eager: bool,
     ) -> Result<Tray> {
         let protocol = Protocol::check(m)?;
         let n = gpus.len();
@@ -391,6 +392,7 @@ impl Tray {
                     s.spawn(move || -> Result<Sent> {
                         let mut rt = Runtime::load(m, kernels, gpu, Some(capacity), has_topology.then_some(&topo))
                             .with_context(|| format!("rank {q} on gpu {gpu}"))?;
+                        rt.set_eager(eager);
                         let files = weights_of(&topo)?;
                         let maps = kern_run::map_weights(&files)?;
                         let blobs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
@@ -786,11 +788,11 @@ impl Staged<'_> {
         }
     }
 
-    /// Run `f` on every rank, eagerly or through its graph (captured on
-    /// first use), then read the error word when the manifest has one.
-    pub fn run(&mut self, f: &Forward, eager: bool) -> Result<()> {
+    /// Run `f` on every rank (through its graph when the manifest says
+    /// so), then read the error word when the manifest has one.
+    pub fn run(&mut self, f: &Forward) -> Result<()> {
         for (q, rt) in self.tray.ranks.iter_mut().enumerate() {
-            enqueue_program(rt, &f.name, &self.env, eager).with_context(|| format!("rank {q}"))?;
+            rt.issue(&f.name, &self.env).with_context(|| format!("rank {q}"))?;
         }
         for (q, rt) in self.tray.ranks.iter().enumerate() {
             rt.synchronize().with_context(|| format!("rank {q}"))?;
@@ -835,20 +837,6 @@ impl Staged<'_> {
         }
         Ok(out)
     }
-}
-
-/// Issue `program` at `env` onto the rank's stream without waiting:
-/// eagerly, or through its CUDA graph, captured on first use.
-fn enqueue_program(rt: &mut Runtime, program: &str, env: &BTreeMap<String, u64>, eager: bool) -> Result<()> {
-    if eager {
-        return Ok(rt.enqueue(program, env)?);
-    }
-    if !rt.is_captured(program, env) {
-        let t = std::time::Instant::now();
-        rt.capture(program, env)?;
-        info!(program, env = ?env, capture_ms = logline::ms(t.elapsed()), "captured");
-    }
-    Ok(rt.enqueue_captured(program, env)?)
 }
 
 #[cfg(test)]

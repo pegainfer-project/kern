@@ -141,8 +141,6 @@ pub struct Policy {
     /// Prompt tokens one step may prefill before it runs decode (at least
     /// one request is always admitted when one fits).
     pub prefill_budget: usize,
-    /// Launch every call eagerly instead of capturing graphs.
-    pub eager: bool,
     /// Cap on concurrently running sequences per rank (≤ the manifest's
     /// `seqs` bound).
     pub max_seqs: usize,
@@ -447,7 +445,6 @@ impl KernScheduler {
             max_request_tokens = facts.max_request_tokens,
             chunk = policy.chunk,
             buckets = ?BUCKETS.iter().filter(|&&b| b <= policy.max_seqs).collect::<Vec<_>>(),
-            eager = policy.eager,
             rows = plan.rows,
             step = %plan.step.name,
             span = plan.span,
@@ -735,9 +732,8 @@ impl KernScheduler {
         while pos < ids.len() {
             let c = (ids.len() - pos).min(chunk);
             let cells = [Cell { row, ids: ids[pos..pos + c].to_vec(), pos }];
-            let eager = self.policy.eager || c != chunk;
             let mut st = self.tray.stage(&cells, c, |_| 1)?;
-            st.run(f, eager)?;
+            st.run(f)?;
             pos += c;
             if pos == ids.len() {
                 first = st.emitted(f)?[0].first().map(|&t| t as u32);
@@ -788,7 +784,7 @@ impl KernScheduler {
             .collect();
         let mut st = self.tray.stage(&cells, rows as usize, |k| rows_per_rank(k, max_seqs))?;
         let f = st.forward(rows).expect("planned: every bucket up to max_seqs has a forward");
-        st.run(&f, self.policy.eager)?;
+        st.run(&f)?;
         let out = st.emitted(&f)?;
         drop(st);
         self.stats.step_ns += t0.elapsed().as_nanos();

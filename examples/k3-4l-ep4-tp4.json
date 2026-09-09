@@ -5709,6 +5709,7 @@
     "groups": 8,
     "rows": 1
    },
+   "graph": true,
    "calls": [
     {
      "label": "embed",
@@ -8257,6 +8258,7 @@
     "rows": 1,
     "span": "span"
    },
+   "graph": true,
    "calls": [
     {
      "label": "embed",

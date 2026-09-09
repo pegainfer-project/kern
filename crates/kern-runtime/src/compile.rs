@@ -133,6 +133,8 @@ pub(crate) struct Launch {
 }
 
 pub(crate) struct CompiledProgram {
+    /// The manifest's `graph`: driven through a captured CUDA graph.
+    pub(crate) graph: bool,
     pub(crate) launches: Vec<Launch>,
     /// Launch index range `[lo, hi)` of every call, in call order (a
     /// multi-launch impl contributes several launches).
@@ -361,7 +363,7 @@ pub(crate) fn compile_programs(
         }
         let mut used = vec![false; manifest.vars.len()];
         launches.iter().for_each(|l| l.mark(&mut used));
-        programs.insert(pname.clone(), CompiledProgram { launches, call_ranges, vars: used });
+        programs.insert(pname.clone(), CompiledProgram { graph: p.graph, launches, call_ranges, vars: used });
     }
     Ok(programs)
 }

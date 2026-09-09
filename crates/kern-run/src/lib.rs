@@ -241,29 +241,20 @@ impl Caller {
     /// advancing the cursor past them. Returns the token the last chunk
     /// handed back, if the chunk program emits one, and whether a graph
     /// was captured.
-    pub fn prefill(&mut self, ids: &[i64], chunk: u64, eager: bool) -> Result<(Option<i64>, bool)> {
+    pub fn prefill(&mut self, ids: &[i64], chunk: u64) -> Result<Option<i64>> {
         let f = self.chunk_forward()?;
-        let chunk = chunk.min(self.protocol.rows.max).max(1);
-        let mut captured = false;
         let mut last = None;
         let mut i = 0usize;
         while i < ids.len() {
             let c = ((ids.len() - i) as u64).min(chunk) as usize;
             let e = self.stage(&ids[i..i + c])?;
-            if !eager && c as u64 == chunk {
-                if !captured {
-                    self.rt.capture(&f.name, &e)?;
-                    captured = true;
-                }
-                self.rt.run_captured(&f.name, &e)?;
-            } else {
-                self.rt.run(&f.name, &e)?;
-            }
+            self.rt.issue(&f.name, &e)?;
+            self.rt.synchronize()?;
             self.advance(c as u64);
             last = self.emitted(&f)?.0.first().copied();
             i += c;
         }
-        Ok((last, captured))
+        Ok(last)
     }
 
     /// Vocabulary size as declared by the token fill's domain (1000 if none).

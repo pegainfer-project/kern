@@ -166,6 +166,9 @@ pub struct Runtime {
     /// graph per var assignment it was captured at (a batched decode keeps
     /// one per batch bucket).
     graphs: BTreeMap<(String, Vec<u64>), sys::CUgraphExec>,
+    /// Debug override: [`Runtime::issue`] launches every program eagerly,
+    /// whatever its manifest says.
+    eager: bool,
     /// CUDA device ordinal, for the virtual-memory calls.
     gpu: usize,
     /// This rank's index per group (empty without a topology).
@@ -556,6 +559,7 @@ impl Runtime {
             resolution,
             n_modules: modules.len(),
             graphs: BTreeMap::new(),
+            eager: false,
             gpu,
             ranks,
             peers,
@@ -1449,6 +1453,32 @@ impl Runtime {
         self.ctx.bind_to_thread()?;
         self.stream.synchronize()?;
         Ok(())
+    }
+
+    /// Launch every program eagerly from now on, ignoring the manifest's
+    /// `graph`: a debug switch for telling a graph problem from a kernel one.
+    pub fn set_eager(&mut self, eager: bool) {
+        self.eager = eager;
+    }
+
+    /// Issue one program the way its manifest says, without waiting: a
+    /// `graph` program through its CUDA graph, captured at these var
+    /// values on first use; any other launch by launch (see
+    /// [`Runtime::enqueue`] for the ordering ranks need).
+    pub fn issue(&mut self, program: &str, env: &BTreeMap<String, u64>) -> Result<()> {
+        let Some(prog) = self.programs.get(program) else {
+            bail!(Api, "no program `{program}`");
+        };
+        if !prog.graph || self.eager {
+            return self.enqueue(program, env);
+        }
+        if !self.is_captured(program, env) {
+            let t = std::time::Instant::now();
+            let calls = prog.call_ranges.len();
+            self.capture(program, env)?;
+            tracing::info!(program, env = ?env, calls, capture_ms = t.elapsed().as_millis() as u64, "graph captured");
+        }
+        self.enqueue_captured(program, env)
     }
 
     /// Issue one program's launches onto the stream and return without

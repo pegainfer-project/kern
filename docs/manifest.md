@@ -321,6 +321,14 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   测试）。
 - **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
   allreduce 的 poison 值）。与 `batch` 互斥。
+- **program 上的 `graph`**：runtime 按调用形状（这次调用的 var 值）首次
+  capture 成一张 CUDA graph、之后 replay，一步一次 launch。给形状固定、
+  launch 多而短的 program（decode 步、投机 round）；行数随调用变的
+  program（prefill chunk）不写，逐 launch 跑——实测 Qwen3.8-27B 的 prefill
+  走图与否吞吐相同（2026-09-09，chunk 2048 都是 22k tok/s，512 时走图
+  反而慢），而 decode 一步 646 个 launch 没图不行。这是 manifest 作者知道、
+  runtime 猜不到的事，所以写在这里；`--eager` 只是调试开关，全部按 launch
+  跑。要求有 `batch`。
 
 轴全部从 fill 派生：行轴的 var 是 `slot` fill 的维（`tokens`），组轴的
 var 是 `seq_len` fill 的维（`seqs`），fill 或 line 表跨过的第三个 var 是

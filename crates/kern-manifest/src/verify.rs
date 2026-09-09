@@ -676,6 +676,9 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 "program `{pname}`: `once` (run after load) and `batch` (driven per step) are exclusive"
             ));
         }
+        if p.graph && p.batch.is_none() {
+            errs.push(format!("program `{pname}`: `graph` (captured per call shape) needs a `batch` (a program a serving loop drives)"));
+        }
         if let Some(batch) = &p.batch {
             if batch.groups == 0 {
                 errs.push(format!("program `{pname}`: batch.groups must be >= 1"));
@@ -1172,6 +1175,13 @@ mod tests {
         let mut v = base();
         v["ops"]["embed"]["impl"]["launches"][0].as_object_mut().unwrap().remove("grid");
         assert!(check(v).is_err());
+    }
+
+    #[test]
+    fn graph_needs_a_batch() {
+        let mut v = base();
+        v["programs"]["decode"]["graph"] = true.into();
+        assert_err(v, "`graph` (captured per call shape) needs a `batch`");
     }
 
     #[test]

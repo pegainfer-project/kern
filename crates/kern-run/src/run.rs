@@ -67,7 +67,7 @@ pub struct RunOpts {
     #[arg(long)]
     pub chunk: Option<u64>,
 
-    /// Skip CUDA graph capture, launch every call eagerly
+    /// Debug: launch every program eagerly, ignoring the manifest's `graph`
     #[arg(long)]
     pub eager: bool,
 
@@ -203,6 +203,7 @@ fn execute(o: Opts) -> Result<()> {
         .or_else(|| kern_runtime::seq_capacity(&verified))
         .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
     let mut rt = Runtime::load(&verified, &o.kernels, o.gpu, capacity, None)?;
+    rt.set_eager(o.eager);
     let load_t = t0.elapsed();
 
     let m = &rt.manifest;
@@ -340,15 +341,13 @@ fn execute(o: Opts) -> Result<()> {
     let mut generated: Vec<i64> = Vec::new();
     if n_pre > 0 {
         let t = Instant::now();
-        let (first, captured) = caller.prefill(&prompt_ids[..n_pre], chunk, o.eager)?;
+        let first = caller.prefill(&prompt_ids[..n_pre], chunk)?;
         let dt = t.elapsed();
         let pos = caller.pos;
         let n_chunks = (pos as u64).div_ceil(chunk);
         info!(
-            "prefill: {pos} tokens in {n_chunks} chunk(s) of <= {chunk} \
-             ({dt:?}, {:.0} tok/s{}{})",
+            "prefill: {pos} tokens in {n_chunks} chunk(s) of <= {chunk} ({dt:?}, {:.0} tok/s{})",
             pos as f64 / dt.as_secs_f64(),
-            if captured { ", graph-captured" } else { ", eager" },
             if prefill_all { ", emits the first token" } else { "" }
         );
         if let Some(first) = first {
@@ -362,16 +361,6 @@ fn execute(o: Opts) -> Result<()> {
     }
 
     let env = caller.protocol.env(1, rows, rows);
-    if !o.eager {
-        let t = Instant::now();
-        caller.rt.capture(&step.name, &env)?;
-        info!(
-            "CUDA graph: `{}` stream-captured at {rows} rows, {} calls -> 1 graph launch/step ({:?})",
-            step.name,
-            caller.rt.manifest.programs[&step.name].calls.len(),
-            t.elapsed()
-        );
-    }
     let mut decode_ns: u128 = 0;
     let mut steps = 0u32;
     let mut taken = 0usize;
@@ -381,11 +370,8 @@ fn execute(o: Opts) -> Result<()> {
         let tok = if pos < prompt_ids.len() { prompt_ids[pos] } else { *generated.last().unwrap() };
         caller.stage_rows(tok, rows)?;
         let t = Instant::now();
-        if o.eager {
-            caller.rt.run(&step.name, &env)?;
-        } else {
-            caller.rt.run_captured(&step.name, &env)?;
-        }
+        caller.rt.issue(&step.name, &env)?;
+        caller.rt.synchronize()?;
         let out = caller.emitted(&step)?.0;
         decode_ns += t.elapsed().as_nanos();
         steps += 1;
@@ -512,7 +498,7 @@ fn probe(
     caller.advance(c as u64);
     let mut first = caller.emitted(&chunk_f)?.0.first().copied();
     if c < n_pre {
-        first = caller.prefill(&prompt_ids[c..n_pre], chunk as u64, true)?.0;
+        first = caller.prefill(&prompt_ids[c..n_pre], chunk as u64)?;
     }
     let mut tok = match first {
         Some(t) => t,

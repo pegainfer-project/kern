@@ -31,8 +31,9 @@ Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡�
     decode 永远不缺页、不抢占。超过单序列上限（最窄页表行长 × 页）→
     `ContextLength`，超过整池 → `KvBudget`。`slot_mapping` / `block_table`
     的值只能从 `Lease` 算出来，scheduler 不碰裸页号。
-  - decode 按 bucket（1,2,4,8,16,24,32,48,64,96,128,192,256）pad，每个
-    bucket 首次使用时 capture 一张图；pad 行写进 scheduler 自己租的一页。
+  - decode 按 bucket（1,2,4,8,16,24,32,48,64,96,128,192,256）pad，声明了
+    `graph` 的 program 每个 bucket 首次使用时 capture 一张图；pad 行写进
+    scheduler 自己租的一页。
   - greedy：采样就是 manifest 里的 `argmax`。非 greedy 参数 warn 一次后按
     greedy 服务。EOS 本身不发出（pegainfer 约定），仍计入 `max_tokens`。
 - **manifest**（`tools/gen_qwen3_decode.py`）多了一个 var `seqs`（≤256）和

@@ -148,6 +148,9 @@ pub struct Program {
     /// Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.
     #[serde(default, skip_serializing_if = "is_false")]
     pub once: bool,
+    /// Driven through a CUDA graph: the runtime captures the call list at each var assignment the program is called with and replays it with one launch. For a program of fixed shape per call whose launches are many and short (a decode step, a speculative round); a program whose rows vary per call (a prefill chunk) runs launch by launch.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub graph: bool,
     /// The calls, in order, e.g. `[{"op": "embedding", "args": [...]}, ...]`.
     pub calls: Vec<Call>,
 }

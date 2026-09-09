@@ -73,7 +73,7 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 256)]
     pub max_seqs: usize,
 
-    /// Skip CUDA graph capture, launch every call eagerly
+    /// Debug: launch every program eagerly, ignoring the manifest's `graph`
     #[arg(long)]
     pub eager: bool,
 
@@ -180,7 +180,6 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let policy = Policy {
         chunk,
         prefill_budget: o.prefill_budget,
-        eager: o.eager,
         max_seqs: o.max_seqs,
         stop_tokens,
         rows: o.rows,
@@ -192,7 +191,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             let load = || -> Result<KernScheduler> {
                 let t0 = Instant::now();
                 let weights_of = |topo: &Topology| rank_weights(&art.weights, topo);
-                let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &weights_of, host_bytes)?;
+                let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &weights_of, host_bytes, o.eager)?;
                 info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
                 KernScheduler::new(tray, policy)
             };

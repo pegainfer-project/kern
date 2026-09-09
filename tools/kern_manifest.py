@@ -34,21 +34,25 @@ SCALARS = ("i32", "i64", "f32", "u8")
 
 _TOP = ["schema_version", "model", "constants", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
 _BUFFER = ["dtype", "shape", "kind", "fill", "domain", "bind"]
-_PROGRAM = ["batch", "once", "calls"]
+_PROGRAM = ["batch", "once", "graph", "calls"]
 _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster", "pdl", "args"]
 _CALL = ["label", "op", "args"]
 
 
-def program(calls, groups=None, rows=None, span=None, once=False):
+def program(calls, groups=None, rows=None, span=None, once=False, graph=False):
     """A program object of the wire form: a forward of `groups` sequences of
     `rows` rows each (rows a constant or the name of the var fed per call;
     `span` the var one sequence's run of rows is sized by), a
-    once-after-load program, or a plain one."""
+    once-after-load program, or a plain one. `graph`: the runtime drives
+    it through a CUDA graph captured per call shape (a fixed-shape step,
+    never a variable-row prefill)."""
     p = {}
     if groups is not None:
         p["batch"] = {"groups": groups, "rows": rows, **({"span": span} if span else {})}
     if once:
         p["once"] = True
+    if graph:
+        p["graph"] = True
     p["calls"] = calls
     return p
 

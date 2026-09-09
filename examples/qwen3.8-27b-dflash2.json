@@ -45822,6 +45822,7 @@
     "groups": 1,
     "rows": 1
    },
+   "graph": true,
    "calls": [
     {
      "label": "ones",
@@ -70011,6 +70012,7 @@
     "groups": "MAX_SEQS",
     "rows": "VERIFY_TOKENS_PER_ROUND"
    },
+   "graph": true,
    "calls": [
     {
      "label": "ones",

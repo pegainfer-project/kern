@@ -195,13 +195,14 @@ HF checkpoint（`--weights` 给 snapshot 目录或若干 .safetensors）：qkv /
 gate_up 的拼接写在 buffer 的 `bind` 里，rope 表 / kv_scales / tied lm_head
 这类派生物由 manifest 的 `load` once program 在设备上算（manifest.md「权重」）。
 
-**CUDA graph（默认开，`--eager` 回退）**：tokens=1 下 436 个 call 的
+**CUDA graph（manifest 的 program 声明 `graph`，`--eager` 是调试回退）**：tokens=1 下 436 个 call 的
 grid/标量实参全是常量，每步只有 4 个小 input buffer 的**内容**变、指针不变
 → 整个 call 表 stream-capture 成一张静态图，H2D 写留在图外，每步一次
-`cuGraphLaunch`。graph 按 (program, env) 键控——env 只需给这个 program 的 launch 真正读到的 var（grid、
+`cuGraphLaunch`。`Runtime::issue` 按 program 的 `graph` 决定走图还是逐 launch；
+graph 按 (program, env) 键控——env 只需给这个 program 的 launch 真正读到的 var（grid、
 shared_mem、标量实参、pack 字段），其余 var 不属于它，caller 给不给、给多少都归一成最小值（K3 的 `decode` 不读
-`span`，`decode_span` 读）：decode 捕在 tokens=1，
-prefill 捕在 tokens=chunk（整块走图、余数块 eager 一次）。要点：capture
+`span`，`decode_span` 读）：decode 捕在 tokens=1；prefill 不声明 `graph`，
+每块按实际长度逐 launch 跑（走图不快，见 manifest.md）。要点：capture
 不能用 legacy NULL stream（runtime 已改 `new_stream()`）；cublasLt 可被
 捕获（workspace 预分配，算法启发式在捕获时定死，顺带省了每步的 CPU
 开销）；`run_captured` 校验 env 与捕获时一致（var 值烧死在图里）。

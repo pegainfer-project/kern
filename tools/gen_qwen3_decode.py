@@ -1004,8 +1004,8 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         # runs which kernel is the manifest's choice: the caller picks the
         # forward whose batch fits, the runtime does not know
         "prefill": program(forward("attn_prefill", None, taps=spec), groups=1, rows="tokens"),
-        "decode": program(forward("attn", "decode"), groups=1, rows=1),
-        "decode_batch": program(forward("attn_batch", "decode"), groups=MAX_SEQS, rows=1),
+        "decode": program(forward("attn", "decode"), groups=1, rows=1, graph=True),
+        "decode_batch": program(forward("attn_batch", "decode"), groups=MAX_SEQS, rows=1, graph=True),
     }
     if spec:
         states["draft_kv"] = {"bytes_per_token": DRAFT_KV_BYTES_PER_TOKEN}
@@ -1042,7 +1042,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
             + [d("count", "spec_count",
                  [buf("draft_tokens"), buf("verify_tokens"), buf("nacc"), i32(VERIFY_TOKENS),
                   i32(BLOCK_TOKENS)])],
-            groups=MAX_SEQS, rows=BLOCK_TOKENS)
+            groups=MAX_SEQS, rows=BLOCK_TOKENS, graph=True)
     for name, dom in DOMAINS.items():
         if name in buffers:
             buffers[name]["domain"] = dom

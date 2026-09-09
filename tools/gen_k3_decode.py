@@ -726,9 +726,9 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     groups = {"ep": ranks, **({"tp": tp} if tp > 1 else {})}
     # A decode step over the batch; with a span, the same step in which
     # rows [span_at, span_at + span) are one sequence's prompt chunk.
-    programs = {"decode": kern_manifest.program(emit(False), groups=seqs_max, rows=1)}
+    programs = {"decode": kern_manifest.program(emit(False), groups=seqs_max, rows=1, graph=True)}
     if span_max:
-        programs["decode_span"] = kern_manifest.program(emit(True), groups=seqs_max, rows=1, span=SP)
+        programs["decode_span"] = kern_manifest.program(emit(True), groups=seqs_max, rows=1, span=SP, graph=True)
     # Run once after the peers are imported: the Lamport stages must read
     # -0.0 before the first allreduce, and a carry starts at zero.
     if tp > 1:

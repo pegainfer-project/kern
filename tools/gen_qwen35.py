@@ -1448,7 +1448,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
             "prefill": program(forward(False, taps=True), groups=1, rows="tokens"),
             # the one-row step on the speculative state layout (the spec
             # kernels at tokens=1): the in-manifest oracle for the round
-            "decode": program(ones + forward(True, nacc=nacc), groups=1, rows=1),
+            "decode": program(ones + forward(True, nacc=nacc), groups=1, rows=1, graph=True),
             # round = one speculative round per sequence as one program (one
             # CUDA graph, one host sync): draft's rows spliced from the
             # anchor the caller staged, draft, verify's ids spliced from
@@ -1476,7 +1476,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
                      [buf("gdn.line_index"), buf("nacc_adv"), buf("line_adv"), i32(SPEC_BLOCK),
                       i32(len(GDN_LAYERS)), i32(MAX_SEQS)])]
                 + pre("advance", [c for i in GDN_LAYERS for c in advance_layer(i, "nacc_adv", "line_adv")]),
-                groups=MAX_SEQS, rows=SPEC_BLOCK),
+                groups=MAX_SEQS, rows=SPEC_BLOCK, graph=True),
         }
         states["draft_kv"] = {"bytes_per_token": D_KV_BYTES_PER_TOKEN}
         head = {"schema_version": SCHEMA_VERSION, "model": "qwen3.8-27b-dflash2"}
@@ -1492,8 +1492,8 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     else:
         programs = {
             "prefill": program(forward(False), groups=1, rows="tokens"),
-            "decode": program(forward(True), groups=1, rows=1),
-            "decode_batch": program(forward(True, batch=True), groups=MAX_SEQS, rows=1),
+            "decode": program(forward(True), groups=1, rows=1, graph=True),
+            "decode_batch": program(forward(True, batch=True), groups=MAX_SEQS, rows=1, graph=True),
         }
     for name, dom in DOMAINS.items():
         if name in buffers:

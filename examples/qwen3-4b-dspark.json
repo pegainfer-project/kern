@@ -19005,6 +19005,7 @@
     "groups": 1,
     "rows": 1
    },
+   "graph": true,
    "calls": [
     {
      "label": "embed",
@@ -29953,6 +29954,7 @@
     "groups": "MAX_SEQS",
     "rows": 1
    },
+   "graph": true,
    "calls": [
     {
      "label": "embed",
@@ -41009,6 +41011,7 @@
     "groups": "MAX_SEQS",
     "rows": "VERIFY_TOKENS_PER_ROUND"
    },
+   "graph": true,
    "calls": [
     {
      "label": "splice_draft",
