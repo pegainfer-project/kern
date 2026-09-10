@@ -3,6 +3,10 @@ from pathlib import Path
 import hashlib
 
 
+def align4(rows):
+    return (rows + 3) // 4 * 4 if isinstance(rows, int) else {"mul": [{"ceil_div": [rows, 4]}, 4]}
+
+
 def definitions(cubin: Path, rows="rows", groups="groups", copies=4, hash_cols=24, heads=64, seqs="seqs"):
     module = {"source": cubin.name, "sha256": hashlib.sha256(cubin.read_bytes()).hexdigest()}
     def op(entry, params, grid):
@@ -16,6 +20,8 @@ def definitions(cubin: Path, rows="rows", groups="groups", copies=4, hash_cols=2
         "engram_inject": op("engram_inject", "out buffer<bf16>;in buffer<bf16>;in buffer<bf16>;in buffer<bf16>;in buffer<bf16>;in buffer<u8>;i32;i32;i32;f32", [rows, copies, 1]),
         "compress2": op("compress2", "out buffer<bf16>;in buffer<f32>;in buffer<f32>;in buffer<bf16>;i32;i32;f32", [groups, 1, 1]),
         "compress1": op("norm", "out buffer<bf16>;in buffer<bf16>;in buffer<bf16>;i32;i32;f32", [rows, 1, 1]),
+        "norm_quant": op("norm_quant", "out buffer<bf16>;out buffer<fp8e4m3>;out buffer<i32>;in buffer<bf16>;in buffer<bf16>;i32;i32;i32;i32;f32", [align4(rows), 1, 1]),
+        "norm_rope": op("norm_rope", "out buffer<bf16>;in buffer<bf16>;in buffer<bf16>;in buffer<f32>;in buffer<i32>;i32;i32;i32;i32;i32;f32", [rows, 1, 1]),
     }
     ops.update({
         "context_tap_init": op("context_tap", "out buffer<bf16>;in buffer<bf16>;i32;i32", [{"ceil_div": [{"mul": [rows, 5120]}, 256]}, 1, 1]),

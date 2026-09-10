@@ -10,6 +10,11 @@ from .moe import dense
 from .programs import buf, call, integer
 
 
+def view(name, offset=0):
+    """A buffer argument, or a byte offset into one whose rows are wider."""
+    return {"buf": name, "offset": offset} if offset else {"buf": name}
+
+
 def scalar(value):
     if isinstance(value, int):
         return integer(value)
@@ -88,8 +93,47 @@ def fp8_input(prefix, capacity):
             sf: {"dtype": "i32", "shape": [5120 // 128, align4(capacity)], "kind": "workspace"}}, (q, sf)
 
 
-def attention_inputs(pieces, layer, layouts, *, prefix, rows,
-                     capacity, cubin_dir, auxiliary_cubin):
+def norm_quant(pieces, label, source, weight, output, workspace, *, rows, width,
+               capacity, cubin, stride=None, epsilon=1e-20):
+    """One launch for `normalize` and the `quantize` of its result.
+
+    The normalized rows stay live because the compressor reads them; `source`
+    may be the leading columns of a wider projection output, hence the stride.
+    """
+    from .auxiliary.ops import definitions
+    op = pieces.add(selected(definitions(cubin, rows=rows), "norm_quant"))["norm_quant"]
+    q, sf = workspace + ".fp8", workspace + ".sf"
+    padded = align4(capacity)
+    buffers = {
+        output: {"dtype": "bf16", "shape": [capacity, width], "kind": "workspace"},
+        q: {"dtype": "fp8e4m3", "shape": [capacity, width], "kind": "workspace"},
+        sf: {"dtype": "i32", "shape": [width // 128, padded], "kind": "workspace"},
+    }
+    calls = [call(label, op, buf(output), buf(q), buf(sf), buf(source), buf(weight),
+                  scalar(rows), integer(width), integer(stride or width), scalar(padded),
+                  {"f32": epsilon})]
+    return Lowered(buffers, calls), (q, sf)
+
+
+def norm_rope(pieces, label, source, weight, output, cos_sin, positions, *, rows, width,
+              rope_width, capacity, cubin, stride=None, offset=0, inverse=0, epsilon=1e-20):
+    """One launch for `normalize` and the single-head RoPE of its result.
+
+    Nothing reads the normalized rows on their own, so only the rotated ones
+    reach a buffer.
+    """
+    from .auxiliary.ops import definitions
+    op = pieces.add(selected(definitions(cubin, rows=rows), "norm_rope"))["norm_rope"]
+    return Lowered(
+        {output: {"dtype": "bf16", "shape": [capacity, width], "kind": "workspace"}},
+        [call(label, op, buf(output), view(source, offset), buf(weight), buf(cos_sin),
+              buf(positions), scalar(rows), integer(width), integer(rope_width),
+              integer(stride or width), integer(inverse), {"f32": epsilon})],
+    )
+
+
+def attention_inputs(pieces, layer, layouts, *, prefix, rows, capacity,
+                     cubin_dir, auxiliary_cubin, cos_sin, positions):
     """Lower Q-LoRA and shared KV projections up to their RoPE boundary.
 
     The input is already attention RMS-normalized and MXFP8-quantized by Mega
@@ -100,21 +144,30 @@ def attention_inputs(pieces, layer, layouts, *, prefix, rows,
     def extend(stage):
         buffers.update(stage.buffers)
         calls.extend(stage.calls)
-    def project(name, src, dst):
-        extend(projection(pieces, prefix+"."+layer+"."+name, layouts[layer+".attn."+name],
-                          src, dst, rows=rows, row_capacity=capacity,
-                          workspace=prefix+"."+name+".quant", cubin_dir=cubin_dir))
-    def norm(name, src, dst, width):
-        extend(normalize(pieces,prefix+"."+layer+"."+name,src,layer+".attn."+name+".weight",
-                         dst,rows=rows,width=width,capacity=capacity,cubin=auxiliary_cubin))
+    def label(name):
+        return prefix+"."+layer+"."+name
+    # wq_a and wkv read the rows Mega mHC already quantized and are one
+    # matrix at load: project once, then split the result by column.
     fp8, (q, sf) = fp8_input(prefix, capacity)
     buffers.update(fp8)
-    for name, dst in (("wq_a", prefix+".qr_raw"), ("wkv", prefix+".kv_raw")):
-        extend(quantized_projection(pieces, prefix+"."+layer+"."+name+".gemm", layouts[layer+".attn."+name],
-                                    q, sf, dst, rows=rows, capacity=capacity, cubin_dir=cubin_dir))
-    norm("q_norm", prefix+".qr_raw", prefix+".qr", 1280)
-    project("wq_b", prefix+".qr", prefix+".q")
-    norm("kv_norm", prefix+".kv_raw", prefix+".kv", 512)
+    wide = layouts[layer+".attn.wqkv"]
+    raw, stride = prefix+".qkv_raw", wide["n"]
+    extend(quantized_projection(pieces, label("wqkv.gemm"), wide, q, sf, raw,
+                                rows=rows, capacity=capacity, cubin_dir=cubin_dir))
+    q_lora = layouts[layer+".attn.wq_b"]["k"]
+    stage, (qr, qr_sf) = norm_quant(pieces, label("q_norm"), raw,
+                                    layer+".attn.q_norm.weight", prefix+".qr", prefix+".wq_b.quant",
+                                    rows=rows, width=q_lora, stride=stride,
+                                    capacity=capacity, cubin=auxiliary_cubin)
+    extend(stage)
+    extend(quantized_projection(pieces, label("wq_b.gemm"), layouts[layer+".attn.wq_b"],
+                                qr, qr_sf, prefix+".q", rows=rows, capacity=capacity,
+                                cubin_dir=cubin_dir))
+    # The shared KV latent carries its interleaved 64-wide RoPE tail inline.
+    extend(norm_rope(pieces, label("kv_rope"), raw, layer+".attn.kv_norm.weight",
+                     prefix+".kv_rotated", cos_sin, positions, rows=rows,
+                     width=stride-q_lora, rope_width=64, stride=stride, offset=q_lora*2,
+                     capacity=capacity, cubin=auxiliary_cubin))
     return Lowered(buffers,calls)
 
 
@@ -131,14 +184,22 @@ def bf16_projection(pieces, label, source, weight, output, *, rows, capacity, n,
 
 
 def quantized_projection(pieces,label,layout,source,scales,output,*,rows,capacity,cubin_dir=None):
-    """Consume MXFP8 values and their packed I32 scales directly, emitting BF16."""
+    """Consume MXFP8 values and their packed I32 scales directly, emitting BF16.
+
+    A layout carrying `columns` is a view of a wider matrix: its weight and
+    scale offsets pick the slice and `columns` is that matrix's N, which the
+    packed scales are strided by.
+    """
     n,k,groups=(layout[key] for key in ("n","k","groups"))
     if groups!=1:
         raise ValueError("unsupported grouped projection")
-    name=pieces.add(dense.pieces(capacity,n,k,sfa_rows=align4(capacity),cubin_dir=cubin_dir))["dsv41_dense"]
+    name=pieces.add(dense.pieces(capacity,n,k,sfa_rows=align4(capacity),
+                                 sfb_rows=layout.get("columns"),cubin_dir=cubin_dir))["dsv41_dense"]
     return Lowered({output:{"dtype":"bf16","kind":"workspace","shape":[capacity,n]}},
-                   [call(label,name,buf(output),buf(source),buf(layout["weight"]),buf(scales),
-                         buf(layout["scale"]),scalar(rows),integer(n),integer(k))])
+                   [call(label,name,buf(output),buf(source),
+                         view(layout["weight"],layout.get("weight_offset",0)),buf(scales),
+                         view(layout["scale"],layout.get("scale_offset",0)),
+                         scalar(rows),integer(n),integer(k))])
 
 
 def output_projection(pieces,label,layout,source,scales,output,*,rows,capacity,cubin_dir=None):

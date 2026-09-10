@@ -74,10 +74,26 @@ def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, 
     Routed/shared experts use the MegaMoE packing provider separately.
     O-A is eight grouped matrices whose scales retain the same group order.
     All input scales remain original E8M0 checkpoint bindings.
+
+    Q-LoRA and shared-KV read the same rows, so their checkpoint tensors bind
+    end to end into one matrix and one GEMM writes both. The KV half keeps a
+    layout of its own, a view of that matrix, for the callers that project it
+    alone.
     """
     if bf16_oa and fused_attention:
         raise ValueError("BF16 O-A requires ordinary BF16 attention output")
     buffers, calls, layouts = {}, [], {}
+
+    def pack_scale(prefix, source, n, k, groups):
+        """The load call that packs E8M0 checkpoint scales into `<prefix>.sf`."""
+        modules, ops = dense.prep_pieces(1, n, k, groups=groups, cubin_dir=cubin_dir)
+        op = ops["dsv41_dense_sf_pack"]
+        used = {launch["module"] for launch in op["impl"]["launches"]}
+        name = pieces.add(({key: modules[key] for key in used},
+                           {"dsv41_dense_sf_pack": op}))["dsv41_dense_sf_pack"]
+        return call(prefix + ".pack_scale", name, buf(prefix + ".sf"), buf(source),
+                    integer(n), integer(k), integer(groups), integer(32))
+
     for name, weight in sorted(raw_buffers.items()):
         if weight["dtype"] != "fp8e4m3" or not name.endswith(".weight"):
             continue
@@ -97,6 +113,28 @@ def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, 
         expected = [total_n // 32, k // 32]
         if raw_buffers[scale]["shape"] != expected or raw_buffers[scale]["dtype"] != "fp8e8m0":
             raise ValueError(f"incorrect dense scale storage: {scale}")
+        if prefix.endswith(".attn.wkv") and prefix.removesuffix("wkv") + "wq_a.weight" in raw_buffers:
+            continue  # concatenated into `wqkv` with the Q-LoRA half below
+        kv = prefix.removesuffix("wq_a") + "wkv" if prefix.endswith(".attn.wq_a") else None
+        if kv is not None and kv + ".weight" in raw_buffers:
+            kv_weight, kv_scale = raw_buffers[kv + ".weight"], raw_buffers[kv + ".scale"]
+            if kv_weight["dtype"] != "fp8e4m3" or kv_weight["shape"][1] != k:
+                raise ValueError(f"`{kv}` must be MXFP8 over the same input width as `{prefix}`")
+            wide = prefix.removesuffix("wq_a") + "wqkv"
+            columns = total_n + kv_weight["shape"][0]
+            buffers[wide + ".weight"] = {"dtype": "fp8e4m3", "shape": [columns, k], "kind": "weight",
+                                         "bind": weight["bind"] + kv_weight["bind"]}
+            buffers[wide + ".scale"] = {"dtype": "fp8e8m0", "shape": [columns // 32, k // 32],
+                                        "kind": "weight",
+                                        "bind": raw_buffers[scale]["bind"] + kv_scale["bind"]}
+            buffers[wide + ".sf"] = {"dtype": "i32", "shape": [1, k // 128, columns], "kind": "carry"}
+            calls.append(pack_scale(wide, wide + ".scale", columns, k, 1))
+            layouts[wide] = {"n": columns, "k": k, "groups": 1,
+                             "weight": wide + ".weight", "scale": wide + ".sf"}
+            layouts[kv] = {"n": kv_weight["shape"][0], "k": k, "groups": 1, "columns": columns,
+                           "weight": wide + ".weight", "weight_offset": total_n * k,
+                           "scale": wide + ".sf", "scale_offset": total_n * 4}
+            continue
         if bf16_oa and groups == 8:
             from pathlib import Path
             from .attention.woa import load
@@ -124,12 +162,7 @@ def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, 
             continue
         # Only the scale-pack op is used in load. Dynamic quant ops get their
         # own token geometry when lowering each forward program.
-        modules, ops = dense.prep_pieces(1, n, k, groups=groups, cubin_dir=cubin_dir)
-        pack = ops["dsv41_dense_sf_pack"]
-        used = {launch["module"] for launch in pack["impl"]["launches"]}
-        names = pieces.add(({key: modules[key] for key in used}, {"dsv41_dense_sf_pack": pack}))
-        calls.append(call(prefix + ".pack_scale", names["dsv41_dense_sf_pack"],
-                          buf(packed), buf(scale), integer(n), integer(k), integer(groups), integer(32)))
+        calls.append(pack_scale(prefix, scale, n, k, groups))
         layouts[prefix] = {"n": n, "k": k, "groups": groups, "weight": name, "scale": packed}
     return buffers, calls, layouts
 

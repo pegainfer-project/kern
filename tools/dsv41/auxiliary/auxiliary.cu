@@ -63,6 +63,42 @@ extern "C" __global__ void dsv41_norm(bf16* out,const bf16* x,const bf16* weight
  float s=sum256(ss),inv=rsqrtf(s/dim+eps);
  for(int d=threadIdx.x;d<dim;d+=256)out[(int64_t)row*dim+d]=__float2bfloat16((__bfloat162float(x[(int64_t)row*dim+d])*inv)*__bfloat162float(weight[d]));
 }
+// The normalized row, rounded to BF16 exactly as dsv41_norm rounds it. Input
+// rows may be a slice of a wider projection output, hence the element stride.
+__device__ bf16 normed(const bf16* row,const bf16* weight,int d,float inv){
+ return __float2bfloat16((__bfloat162float(row[d])*inv)*__bfloat162float(weight[d]));
+}
+// dsv41_norm followed by the MXFP8 activation quantization of its result, one
+// block per token. The normalized rows stay live for the compressor, and the
+// quantization re-reads them so its bytes are the ones dsv41_dense_quant_x
+// would have produced. Grid covers align4(rows): trailing blocks only clear
+// the scale words of the four-row padding, matching that kernel's guard.
+//   out [rows,dim] bf16, fp8 [rows,dim] e4m3, sf [dim/128,sf_stride] i32
+extern "C" __global__ void dsv41_norm_quant(bf16* out,unsigned char* fp8,int* sf,const bf16* x,const bf16* weight,int rows,int dim,int x_stride,int sf_stride,float eps){
+ int token=blockIdx.x,words=dim/128;
+ if(token>=rows){for(int word=threadIdx.x;word<words;word+=256)sf[(int64_t)word*sf_stride+token]=0;return;}
+ const bf16* src=x+(int64_t)token*x_stride;float ss=0;
+ for(int d=threadIdx.x;d<dim;d+=256){float v=__bfloat162float(src[d]);ss+=v*v;}
+ float s=sum256(ss),inv=rsqrtf(s/dim+eps);
+ bf16* row=out+(int64_t)token*dim;
+ for(int d=threadIdx.x;d<dim;d+=256)row[d]=normed(src,weight,d,inv);
+ __syncthreads();
+ int lane=threadIdx.x%32,group=lane/8,base=(lane%8)*4;
+ for(int word=threadIdx.x/32;word<words;word+=8){
+  const bf16* in=row+word*128;unsigned char* q=fp8+(int64_t)token*dim+word*128;
+  float v[4],amax=0;
+  for(int i=0;i<4;i++){v[i]=__bfloat162float(in[group*32+base+i]);amax=fmaxf(amax,fabsf(v[i]));}
+  for(int offset=4;offset;offset>>=1)amax=fmaxf(amax,__shfl_xor_sync(0xffffffffu,amax,offset));
+  amax=fmaxf(amax,1e-4f);
+  unsigned int bits=__float_as_uint(amax/448.0f)&0x7fffffffu;
+  int exp=(int)((bits>>23)&0xffu)+((bits&0x7fffffu)!=0u?1:0);exp=exp<1?1:(exp>254?254:exp);
+  float inv_sf=1.0f/__uint_as_float((unsigned int)exp<<23);
+  for(int i=0;i<4;i++)q[group*32+base+i]=(unsigned char)__nv_cvt_float_to_fp8(v[i]*inv_sf,__NV_SATFINITE,__NV_E4M3);
+  unsigned int e=(unsigned int)exp;
+  unsigned int e0=__shfl_sync(0xffffffffu,e,0),e1=__shfl_sync(0xffffffffu,e,8),e2=__shfl_sync(0xffffffffu,e,16),e3=__shfl_sync(0xffffffffu,e,24);
+  if(lane==0)sf[(int64_t)word*sf_stride+token]=(int)(e0|(e1<<8)|(e2<<16)|(e3<<24));
+ }
+}
 extern "C" __global__ void dsv41_compressor_stage(float* kv_history,float* score_history,const float* kv,const float* score,const int64_t* slots,int rows,int dim){
  int row=blockIdx.x; int64_t dst=slots[row]*dim;
  for(int d=threadIdx.x;d<dim;d+=256){kv_history[dst+d]=kv[(int64_t)row*dim+d];score_history[dst+d]=score[(int64_t)row*dim+d];}
@@ -128,6 +164,18 @@ extern "C" __global__ void dsv41_rope(bf16* out,const bf16* x,const float* cos_s
  for(int d=threadIdx.x;d<dim;d+=256){int64_t i=((int64_t)row*heads+head)*dim+d;
  if(d<dim-rope_dim)out[i]=x[i];
  else{int tail=d-(dim-rope_dim),pair=tail/2;if((tail&1)==0){int64_t f=(int64_t)positions[row]*rope_dim+pair*2;float c=cos_sin[f],s=cos_sin[f+1]*(inverse?-1:1);float a=__bfloat162float(x[i]),b=__bfloat162float(x[i+1]);out[i]=__float2bfloat16(a*c-b*s);out[i+1]=__float2bfloat16(a*s+b*c);}}}
+}
+// dsv41_norm followed by dsv41_rope over its result for a single head, one
+// block per row. Nothing reads the normalized rows on their own, so only the
+// rotated ones are written; the tail pair is normalized where it is rotated.
+extern "C" __global__ void dsv41_norm_rope(bf16* out,const bf16* x,const bf16* weight,const float* cos_sin,const int32_t* positions,int rows,int dim,int rope_dim,int x_stride,int inverse,float eps){
+ int row=blockIdx.x;const bf16* src=x+(int64_t)row*x_stride;float ss=0;
+ for(int d=threadIdx.x;d<dim;d+=256){float v=__bfloat162float(src[d]);ss+=v*v;}
+ float inv=rsqrtf(sum256(ss)/dim+eps);
+ for(int d=threadIdx.x;d<dim;d+=256){int64_t i=(int64_t)row*dim+d;
+ if(d<dim-rope_dim)out[i]=normed(src,weight,d,inv);
+ else{int tail=d-(dim-rope_dim),pair=tail/2;if((tail&1)==0){int64_t f=(int64_t)positions[row]*rope_dim+pair*2;float c=cos_sin[f],s=cos_sin[f+1]*(inverse?-1:1);
+ float a=__bfloat162float(normed(src,weight,d,inv)),b=__bfloat162float(normed(src,weight,d+1,inv));out[i]=__float2bfloat16(a*c-b*s);out[i+1]=__float2bfloat16(a*s+b*c);}}}
 }
 // General MXFP4 preparation for indexer Q/K; BF16 dequant output is optional
 // downstream oracle/scoring input, packed bytes and scales feed optimized GEMM.

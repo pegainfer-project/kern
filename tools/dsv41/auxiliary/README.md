@@ -11,7 +11,13 @@ verbatim (AST extracts classes to avoid constructing the entire model), and the
 supplied TileLang quantization kernel for cache validation. Run on an allocated
 GPU only. The reference source and checkpoint must refer to the same revision.
 
-All arrays are contiguous; `rows` is the flattened local request-token dimension.
+`test_fused.py AUXILIARY_CUBIN STAGE_CUBIN` asserts that `norm_quant` and
+`norm_rope` are byte-identical to the launch pairs they replace, over row
+counts that are not a multiple of four and over the full row capacity.
+
+Arrays are contiguous except where an op takes an input row stride: those read
+a column slice of a wider projection output in place, so the merged Q-LoRA/KV
+GEMM needs no split. `rows` is the flattened local request-token dimension.
 
 | Op | Arguments in order, after output(s) | Layout |
 |---|---|---|
@@ -23,6 +29,8 @@ All arrays are contiguous; `rows` is the flattened local request-token dimension
 | compressor_gather | output KV, score, validity; history states, request IDs, positions, pages, rows, dim, page size, stride | gathered `[rows,2,dim]`; valid iff position is odd; incomplete outputs zero |
 | compress2 | gathered KV, score, norm weight, groups, dim, epsilon | output `[groups,dim]`; dim <=1024; pooling is rounded to BF16 before norm |
 | compress1 | input, norm weight, rows, dim, epsilon | ordinary BF16 RMSNorm |
+| norm_quant | input, norm weight, rows, dim, input row stride, scale row stride, epsilon | compress1 then the MXFP8 activation quantization of its result; outputs normalized BF16 `[rows,dim]`, E4M3 `[rows,dim]` and packed I32 scales `[dim/128,scale row stride]`; grid is align4(rows) so the four-row padding clears its scale words, as moe/stage.cu does |
+| norm_rope | input, norm weight, cos/sin, positions, rows, dim, rope dim, input row stride, inverse, epsilon | compress1 then rope over one head; only the rotated rows reach a buffer |
 | window_indices | request IDs, positions, block-end positions, pages, rows, window size, output width, page size, stride, noncausal, draft rows | output int32 physical slots `[rows,width]`, invalid=-1 |
 | map_indices | logical selected positions, request IDs, positions, compressed pages, rows, topk, ratio, page size, stride | checks selected positions against `(position+1)//ratio` |
 | cache_fp8/cache_fp4 | input BF16, physical slots, rows, page size | state is page-major FlashMLA storage; negative slots skip writes |

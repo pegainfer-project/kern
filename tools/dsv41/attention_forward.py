@@ -27,7 +27,8 @@ def forward(pieces, serving, layer, layouts, source, output, *,
         raise ValueError("physical pool must contain complete pages")
     pre = attention_inputs(pieces,layer,layouts,prefix=prefix,
                            rows=rows,capacity=capacity,cubin_dir=cubin_dir,
-                           auxiliary_cubin=auxiliary_cubin)
+                           auxiliary_cubin=auxiliary_cubin,
+                           cos_sin=cos_sin,positions=mode+".position")
     buffers, calls = dict(pre.buffers), list(pre.calls)
     # Compressor and indexer depend on normalized hidden and Q-LoRA. Their
     # publication/selection must precede attention, while compressor commit is
@@ -47,7 +48,6 @@ def forward(pieces, serving, layer, layouts, source, output, *,
                           scalar(rows),integer(heads),integer(512),integer(64),integer(inverse)))
     if not fused:
         rope("q_rope",prefix+".q",prefix+".q_rotated",64,0)
-    rope("kv_rope",prefix+".kv",prefix+".kv_rotated",1,0)
     layer_id = int(layer.rsplit(".",1)[1])
     calls += serving.window_write(mode,layer_id,prefix+".kv_rotated")
     window = f"{'draft' if mode == 'draft' else 'target'}.window.{layer_id}"

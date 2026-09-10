@@ -30,7 +30,8 @@ indexer、不写 KV），不含 source 层、Engram、DSpark 和通信。2026-09
 （registry manifest，kern f38924e）：我们的 reuse 层 prefill 与 decode 都是
 27 个 call、30 次 launch（mHC 与 Mega-Gate 各带一次 `zero_u64`），source 层
 31 次，另有每步 250 余次不归属于层的 launch（indexer、compressor、Engram、
-cache 写入、head）。与 11 的差距全在未融合的胶水：4 次独立的 MXFP8 动态
+cache 写入、head）。同日经 §5 末尾记录的七步收缩后，reuse 层 prefill 与
+decode 都是 11 次 launch，与报告持平。当时与 11 的差距全在未融合的胶水：4 次独立的 MXFP8 动态
 量化（wq_a / wq_b / wkv / wo_b）、2 次独立 RMSNorm、3 次独立 RoPE（q /
 kv / o，FlashMLA 的融合版本把它们收进 attention）、O-A 按 8 组各发一次
 cuBLAS（分组 GEMM 可收成一次）、MoE 入口一次独立量化。主算子数量与报告
@@ -624,6 +625,13 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   输出 + `dsv41_dense_quant_x`"逐字节相同，也是恒等变换。顺带发现 checkpoint
   自带的 `model.act_quant` 在 32 行以上不确定（同一输入两次得到不同位置的
   NaN 字节），测试改为自带量化并在 32 行处与参考对齐。
+- attention 输入胶水：wq_a 与 wkv 的权重和 scale 在 `load` 里按 checkpoint 顺序
+  连续绑定成一个 [1792, 5120] 矩阵，一次 GEMM 写 `qkv_raw`，两个消费者按列
+  偏移读；`q_norm` + `wq_b.quant` 合成 `dsv41_norm_quant`，`kv_norm` +
+  `kv_rope` 合成 `dsv41_norm_rope`（都在 auxiliary.cu，`test_fused.py` 验证
+  与原两个核序列逐字节相同；合并 GEMM 因 1280 % 128 == 0 且不 split-K，
+  逐列与分开算相同）。14 → 11，与报告的 decode 数持平：
+  mhc, wqkv, norm_quant, wq_b, norm_rope, attention, wo_a, wo_b, mhc, gate, experts。
 - 原checkpoint直接绑定与生成器`--bundle`产物已验证manifest一致；
   不需要离线导出权重。连续host权重段改为一次拷贝后，实际加载耗时
   从约154秒降至52–64秒。以上HTTP耗时仍为debug smoke，release性能验收待完成。
