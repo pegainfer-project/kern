@@ -131,6 +131,12 @@ impl Runtime {
             .is_some_and(|vars| self.graphs.contains_key(&(program.to_string(), vars)))
     }
 
+    /// Whether `issue` can replay an existing graph without host library
+    /// launches or capture. An eager override always disables this path.
+    pub fn uses_cached_graph(&self, program: &str, vars: &BTreeMap<String, u64>) -> bool {
+        !self.eager && self.programs.get(program).is_some_and(|p| p.graph) && self.is_captured(program, vars)
+    }
+
     /// The graph captured for (program, vars), or an `Api` error naming the
     /// var values that were captured instead.
     pub(crate) fn graph(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<sys::CUgraphExec> {
