@@ -44,12 +44,12 @@ def publish(pieces, serving, layouts, *, mode, capacity, auxiliary_cubin, cubin_
                          capacity=capacity,cubin=auxiliary_cubin))
     project(prefix+".main_proj",hidden_name(mode),"mtp.0.main_proj",prefix+".raw")
     norm(prefix+".main_norm",prefix+".raw","mtp.0.main_norm.weight",prefix+".main",5120)
-    slots=f"{mode}.slot"
+    slots=f"{mode}.window_slot"
     if mode=="verify":
         slots=prefix+".slots"
         buffers[slots]={"dtype":"i64","shape":[capacity],"kind":"workspace"}
         op=pieces.add(selected(definitions(auxiliary_cubin,rows=rows),"context_slots"))["context_slots"]
-        calls.append(call(prefix+".accepted_slots",op,buf(slots),buf(f"{mode}.slot"),
+        calls.append(call(prefix+".accepted_slots",op,buf(slots),buf(f"{mode}.window_slot"),
                           buf(f"{mode}.request"),buf(f"{mode}.starts"),buf(accepted),scalar(rows)))
     ops={name:pieces.add(selected(definitions(auxiliary_cubin,rows=rows,heads=1),name))[name]
          for name in ("rope","cache_fp8")}

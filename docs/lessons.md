@@ -3,6 +3,19 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-10，DSv4.1 window ring（per-seq state 第一次走 TMA）
+
+**铺满维要按预留算，不按装载时做出的对象算。** window cache 改成每序列一个
+`bytes_per_seq` ring 后，tray05 上 57 个 checkpoint 拿满了 slot，remap 拆页补出
+第 20 个 slot，落在那个 slot 上的 10k prompt 整段输出全是"的"。tensormap 的
+铺满维是装载时按 state 的 `bytes`（初始布局：19 个 slot）编的，新 slot 在图外，
+TMA 越界读回零。之前的 per-seq state（compressor 4 KB）都是普通指针读，从没走过
+TMA；per-token state 装载时就把预算填满，remap 只加 slot 不加页，所以没暴露。
+规则：state 指针的可寻址长度是整段预留（`DeviceBuf::span`），不是当前做出的
+对象数；同一条规则也适用于任何"整块"语义。同一次还发现预算按 Σbytes 取整一次，
+43 个 ring state 各自的 arena 一共差 33 块，装载直接拒绝——预算按 state 逐个取整。
+门禁：hits.py 的多轮 / 并发场景把 slot 用满触发 remap，再跑 10k prompt。
+
 ## 2026-09-08，权重改绑 checkpoint（`bind` + `load` once program）
 
 **A/B 共用的 bug，`kern test` 看不见。** rope 表改成设备上由 once program 算，核用

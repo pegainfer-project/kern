@@ -112,12 +112,15 @@ extern "C" __global__ void dsv41_compressor_gather(float* kv,float* score,int32_
   score[(int64_t)row*2*dim+d]=complete?score_history[slot*dim+d%dim]:0;
  }
 }
+// Window token index inside a sequence's ring: ring tokens per slot, position
+// modulo ring inside it. The slot is the sequence's window line.
+__device__ int64_t ring_slot(const int32_t* lines,int seq,int position,int ring){return (int64_t)lines[seq]*ring+position%ring;}
 // Logical causal window indices. Each query receives exactly window entries;
 // invalid prefix entries are -1. DSpark extends visibility to block_end[row].
-extern "C" __global__ void dsv41_window_indices(int32_t* out,const int32_t* req,const int32_t* pos,const int32_t* block_end,const int32_t* pages,int rows,int window,int width,int page_size,int page_stride,int noncausal,int draft_rows){
+extern "C" __global__ void dsv41_window_indices(int32_t* out,const int32_t* req,const int32_t* pos,const int32_t* block_end,const int32_t* lines,int rows,int window,int width,int ring,int noncausal,int draft_rows){
  int row=blockIdx.x;int end=noncausal?block_end[row]:pos[row]+1;
  int start=max(0,noncausal?end-window-draft_rows:pos[row]-window+1);int count=end-start;
- for(int i=threadIdx.x;i<width;i+=256){int p=start+i;out[(int64_t)row*width+i]=(i<count)?pages[req[row]*page_stride+p/page_size]*page_size+p%page_size:-1;}
+ for(int i=threadIdx.x;i<width;i+=256)out[(int64_t)row*width+i]=(i<count)?(int32_t)ring_slot(lines,req[row],start+i,ring):-1;
 }
 extern "C" __global__ void dsv41_map_indices(int32_t* out,const int32_t* logical,const int32_t* req,const int32_t* pos,const int32_t* pages,int rows,int topk,int ratio,int page_size,int page_stride){
  int row=blockIdx.x;int available=(pos[row]+1)/ratio;
@@ -210,12 +213,13 @@ extern "C" __global__ void dsv41_compressor_commit(float* state,const float* kv,
 // Generic serving metadata. phase0 preserves staged rows; phase1 selects the
 // five draft rows starting at each six-row verification anchor. `valid` is a caller
 // fill; token IDs and leased padding addresses cannot reveal padded rows.
-extern "C" __global__ void dsv41_metadata(int32_t* req,int32_t* pos,int64_t* slots,uint8_t* mask,int32_t* starts,int32_t* seq_valid,int32_t* ends,int32_t* ids32,int32_t* counts,int32_t* window_length,int32_t* compressed_length,const int32_t* input_pos,const int64_t* input_slots,const int32_t* valid,const int64_t* ids,const int32_t* cu,const int32_t* seq_lens,int rows,int seqs,int phase){
+extern "C" __global__ void dsv41_metadata(int32_t* req,int32_t* pos,int64_t* slots,int64_t* window_slots,uint8_t* mask,int32_t* starts,int32_t* seq_valid,int32_t* ends,int32_t* ids32,int32_t* counts,int32_t* window_length,int32_t* compressed_length,const int32_t* input_pos,const int64_t* input_slots,const int32_t* valid,const int64_t* ids,const int32_t* cu,const int32_t* seq_lens,const int32_t* window_lines,int rows,int seqs,int phase,int ring){
  int row=blockIdx.x*256+threadIdx.x;
  if(row<rows){int seq,source;
  if(phase){seq=row/5;source=cu[seq]+row%5;}
  else {int lo=0,hi=seqs;while(lo+1<hi){int mid=(lo+hi)/2;if(cu[mid]<=row)lo=mid;else hi=mid;}seq=lo;source=row;}
  bool live=valid[source]!=0;req[row]=seq;pos[row]=input_pos[source];slots[row]=live?input_slots[source]:-1;mask[row]=live;
+ window_slots[row]=live?ring_slot(window_lines,seq,input_pos[source],ring):-1;
  ids32[row]=(int32_t)ids[phase?row:source];ends[row]=seq_lens[seq]-(phase?1:0);window_length[row]=live?(phase?min(seq_lens[seq]-1,133):min(input_pos[source]+1,128)):0;compressed_length[row]=live?512:0;}
  if(row<seqs){bool live=valid[cu[row]]!=0;starts[row]=phase?row*5:cu[row];seq_valid[row]=live;counts[row]=live?(phase?5:cu[row+1]-cu[row]):0;}
  if(row==0)starts[seqs]=rows;

@@ -57,6 +57,13 @@ class Layout:
     def pages(self):
         return self.max_context // self.page_size
 
+    @property
+    def ring(self):
+        """Window tokens kept per sequence: the128-token window plus every row one
+        step can write ahead of the oldest read, rounded to whole pages. Draft
+        rounds read133 back and write six, well inside the same bound."""
+        return -(-(128 + self.max_tokens) // self.page_size) * self.page_size
+
 
 @dataclass
 class Serving:
@@ -105,10 +112,10 @@ class Serving:
         ids is staged input_ids for plain, verify_ids or draft_ids for the round.
         """
         rows = scalar(self.rows(mode))
-        names = ("request", "position", "slot", "mask", "starts", "seq_valid", "block_end", "ids32", "all_count", "window_length", "compressed_length")
+        names = ("request", "position", "slot", "window_slot", "mask", "starts", "seq_valid", "block_end", "ids32", "all_count", "window_length", "compressed_length")
         calls = [self._call(mode, "metadata", "metadata", *(buf(f"{mode}.{n}") for n in names),
             buf("positions"), buf("slot_mapping"), buf("valid"), buf(ids), buf("cu_seqlens"), buf("seq_lens"),
-            rows, scalar("seqs"), scalar(int(mode == "draft")))]
+            buf("window.lines"), rows, scalar("seqs"), scalar(int(mode == "draft")), scalar(self.layout.ring))]
         if mode != "draft":
             calls += [self._call(mode, f"compressed{ratio}", "compressed_metadata",
                 buf(f"{mode}.c{ratio}_slot"), buf(f"{mode}.c{ratio}_position"),
@@ -116,9 +123,8 @@ class Serving:
                 for ratio in (1, 2)]
         width = 192 if mode == "draft" else 128
         calls += [self._call(mode, "window_indices", "window_indices", buf(f"{mode}.window_indices"),
-            buf(f"{mode}.request"), buf(f"{mode}.position"), buf(f"{mode}.block_end"), buf("page_table"),
-            rows, scalar(128), scalar(width), scalar(self.layout.page_size), scalar(self.layout.pages),
-            scalar(int(mode == "draft")), scalar(5)),
+            buf(f"{mode}.request"), buf(f"{mode}.position"), buf(f"{mode}.block_end"), buf("window.lines"),
+            rows, scalar(128), scalar(width), scalar(self.layout.ring), scalar(int(mode == "draft")), scalar(5)),
             self._call(mode, "window_mask", "indices_mask", buf(f"{mode}.window_indices"),
                 buf(f"{mode}.mask"), rows, scalar(width))]
         return calls
@@ -147,9 +153,10 @@ class Serving:
             scalar(24), scalar(256), scalar(48), scalar(0 if layer == 1 else 24))]
 
     def window_write(self, mode, layer, post_rope_kv):
+        """Ring writes: window_slot is the row's position modulo the ring inside its sequence's slot."""
         prefix = "draft" if mode == "draft" else "target"
         return [self._call(mode, f"window{layer}.write", "cache_fp8", state(f"{prefix}.window.{layer}"),
-            buf(post_rope_kv), buf(f"{mode}.slot"), scalar(self.rows(mode)), scalar(self.layout.page_size))]
+            buf(post_rope_kv), buf(f"{mode}.window_slot"), scalar(self.rows(mode)), scalar(self.layout.page_size))]
 
     def compressor(self, mode, source, projected_kv, projected_score, norm_weight, output):
         """Projected f32 KV/score must survive until the accepted commit.
@@ -245,10 +252,14 @@ def build(cubin: Path, layout=Layout()):
         "cu_seqlens": {"kind": "input", "dtype": "i32", "shape": [layout.max_seqs + 1], "fill": "cu_seqlens"},
         "page_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", layout.pages],
                        "domain": {"index_into": "engram_history", "stride": layout.page_size}},
+        # One line per sequence, the whole ring: the value is the sequence's
+        # slot, shared by every window state of the lease.
+        "window.lines": {"kind": "input", "dtype": "i32", "shape": [1, "seqs"],
+                         "domain": {"index_into": "target.window.0", "stride": layout.ring * 528}},
     }
     states = {"engram_history": {"bytes_per_token": 8}}
     for prefix, count in (("target", layout.target_layers), ("draft", layout.draft_layers)):
-        states.update({f"{prefix}.window.{layer}": {"bytes_per_token": 528} for layer in range(count)})
+        states.update({f"{prefix}.window.{layer}": {"bytes_per_seq": layout.ring * 528} for layer in range(count)})
     for source, ratio in layout.sources:
         # State allocation is measured per ORIGINAL token; kernels address
         # compressed tokens with page_size/ratio and slot_mapping/ratio.
@@ -265,7 +276,7 @@ def build(cubin: Path, layout=Layout()):
         modules.update(mods)
         all_ops.update({f"{mode}.{name}": op for name, op in ops.items()})
         shapes = {"request": ("i32", ["tokens"]), "position": ("i32", ["tokens"]),
-            "slot": ("i64", ["tokens"]), "mask": ("u8", ["tokens"]), "starts": ("i32", [layout.max_seqs + 1]),
+            "slot": ("i64", ["tokens"]), "window_slot": ("i64", ["tokens"]), "mask": ("u8", ["tokens"]), "starts": ("i32", [layout.max_seqs + 1]),
             "seq_valid": ("i32", ["seqs"]), "block_end": ("i32", ["tokens"]), "ids32": ("i32", ["tokens"]),
             "window_length": ("i32", ["tokens"]), "compressed_length": ("i32", ["tokens"]),
             "all_count": ("i32", ["seqs"]), "commit_count": ("i32", ["seqs"]),

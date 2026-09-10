@@ -48,7 +48,7 @@ cuBLAS（分组 GEMM 可收成一次）、MoE 入口一次独立量化。主算�
 | Routed MoE | 384 experts，top-6，intermediate 2304 | 96 experts/rank |
 | Shared expert | 1，intermediate 2304 | 每 rank 完整复制，处理本地 token |
 | Indexer | 32 heads，head dim 128，top-512 | 32 heads/rank，score/top-k 本地计算 |
-| Window | 128 tokens | 每层独立 window state |
+| Window | 128 tokens | 每层一个 `bytes_per_seq` ring state：每序列 256 token（window + 一步最多写入的行数），按 `position % 256` 写入，不随上下文增长 |
 | mHC | mult 4，Sinkhorn 20 iterations | residual 每 token 为 4×5120 |
 | Engram | 2 张 FP8 表，分别约 384M 行，行宽 256 | 暂按行四分预算；跨 owner lookup 通信待选 |
 
