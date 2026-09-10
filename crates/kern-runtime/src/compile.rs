@@ -156,7 +156,7 @@ pub(crate) enum LaunchKind {
         pdl: bool,
     },
     /// `extern:cublaslt_bf16_tn` / `..._acc` (beta 0.0 / 1.0); 6 args, or
-    /// 7 with C's row stride.
+    /// 7 with C's row stride, or 8 with C's and A's row strides.
     Gemm { beta: f32 },
     /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
     GemmF32,
@@ -488,10 +488,11 @@ fn compile_call(
                 if touches_peer {
                     bail!(Manifest, "launch #{li}: a peer buffer reaches the extern gemm; runtime built-ins never receive peer memory");
                 }
-                if slots.len() != 6 && slots.len() != 7 {
+                let max_args = if matches!(imp, LaunchImpl::GemmBf16Tn { .. }) { 8 } else { 7 };
+                if !(6..=max_args).contains(&slots.len()) {
                     bail!(
                         Manifest,
-                        "launch #{li}: extern gemm takes 6 args (a, w, c, m, n, k) or 7 (+ ldc), got {}",
+                        "launch #{li}: extern gemm takes 6..={max_args} args (a, w, c, m, n, k, optional C/A row strides), got {}",
                         slots.len()
                     );
                 }

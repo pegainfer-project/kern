@@ -126,6 +126,10 @@ park 31 ms、wake 28 ms，发起 0.9 / 0.5 ms（2500 页折成 ~50 次拷贝）�
 `extern:cublaslt_bf16_tn_acc` 是同一条路径 β=1（`C += A@W^T`，c 参
 `inout`），投机解码的 fc 分块累加与 markov 偏置都靠它，省掉 concat
 缓冲和拷贝核。
+这两个 BF16 输出入口接受 `[a,w,c,m,n,k]`，可追加第 7 参 C 行步长
+（默认 n），再追加第 8 参 A 行步长（默认 k），单位都是元素。
+配合 buffer 字节 offset，可直接读取交错存储的组并写入输出列带，
+无需先转置或复制输入。
 `extern:cublas_bf16_tn_f32` 同一映射但结果落 **f32**（cublasGemmEx，
 `CUBLAS_COMPUTE_32F` / `DEFAULT_TENSOR_OP`，独立 cuBLAS handle + 32 MiB
 workspace，可捕获）：K3 的每条稠密投影都是 f32 partial 再由认证的 `k3_land`
