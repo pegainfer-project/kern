@@ -111,6 +111,30 @@ cargo build --release
 ./target/release/kern test qwen3-4b
 ```
 
+Serve a configured target with the independent HTTP server:
+
+```bash
+cargo build --release --manifest-path crates/kern-serve/Cargo.toml
+KERN_SERVE_BIN="$PWD/crates/kern-serve/target/release/kern-serve" \
+  ./target/release/kern server qwen3-4b --port 8000
+```
+
+`kern server` resolves the target's manifest, kernels and weights from
+`kern.toml`, then forwards server arguments unchanged. Explicit `--manifest`,
+`--kernels` or `--weights` replace the corresponding target defaults.
+`KERN_SERVE_BIN` selects the executable; otherwise kern looks beside itself,
+then on `PATH`. On Unix the server replaces the CLI process, preserving signals
+and exit status. Use `kern server <target> -- --help` for the server's flags.
+`--renderer` explicitly selects a frontend renderer, such as `hf` or
+`deepseek_v41`, when automatic detection does not recognize a checkpoint; its
+chat format must match that checkpoint. The default is `auto`.
+The V4.1 renderer matches the released text encoding for system messages,
+multi-turn history and thinking. It accepts `low`, `high`, `xhigh` and `max`
+reasoning effort; integer budgets from 1 to 100 can be supplied as
+`chat_template_kwargs.reasoning_effort`. V4.1 tool schemas and historical tool
+calls are encoded and tested, but its output `tool_calls` parser is not yet
+adapted; this is not complete tool-calling support.
+
 `kern <cmd> --help` lists the flags; `crates/kern-run/src/config.rs`
 documents `kern.toml` (targets are names you pick — kern reads no meaning
 into them; anything the manifest already knows stays out of it). Logs go
@@ -124,7 +148,7 @@ it from `kern.toml`); what `kern test` measures and how it decides is in
 
 The wire format is one JSON Schema, generated from the code and
 golden-checked in CI:
-[`schema/manifest-v4.schema.json`](schema/manifest-v4.schema.json)
+[`schema/manifest-v5.schema.json`](schema/manifest-v5.schema.json)
 · [rendered](https://kern-baa.pages.dev/schema/).
 
 | Path | What it is |

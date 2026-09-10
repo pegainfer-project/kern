@@ -44,6 +44,14 @@ enum Cmd {
         #[command(flatten)]
         opts: RunOpts,
     },
+    /// Serve a target through the separately installed kern-serve binary
+    Server {
+        /// Target in kern.toml
+        target: String,
+        /// Arguments forwarded to kern-serve (for example --port 8000)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
     /// A/B a kernel swap: a target's `reference` (A) against its
     /// `manifest` (B). Exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE
     Test {
@@ -98,6 +106,11 @@ fn main() -> Result<()> {
                 }
             };
             kern_run::run::run(opts, cfg.as_ref(), t)
+        }
+        Cmd::Server { target, args } => {
+            let cfg = cfg.as_ref().context("kern server needs a kern.toml with targets")?;
+            let (_, target) = cfg.one(Some(&target))?;
+            kern_run::server::run(target, &args)
         }
         Cmd::Test { target, opts } => {
             let t = match &cfg {
