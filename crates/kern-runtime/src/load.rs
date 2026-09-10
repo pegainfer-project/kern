@@ -15,11 +15,13 @@ use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
 use cudarc::driver::CudaContext;
-use kern_manifest::types::{BufferKind, Manifest, Provision};
+use kern_manifest::types::{BufferKind, Manifest, Placement, Provision};
 use kern_manifest::Verified;
 
 use crate::chunks::Kind;
-use crate::device::{alloc, alloc_vmm, chunk_granularity, copy_2d, Arena, Blas, DeviceBuf, Mapper, Physical, Share};
+use crate::device::{
+    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, Blas, DeviceBuf, Mapper, Physical, Share,
+};
 use crate::error::bail;
 use crate::lease::Remaps;
 use crate::pages::{page_unit, Pool};
@@ -44,6 +46,19 @@ impl Runtime {
         gpu: usize,
         capacity: Option<Capacity>,
         topology: Option<&Topology>,
+    ) -> Result<Runtime> {
+        Self::load_with_host_weights(manifest, kernels_dir, gpu, capacity, topology, &crate::HostWeights::new())
+    }
+
+    /// Load a rank using host weights shared within one checkpoint snapshot.
+    /// All participating ranks must bind their weights before serving begins.
+    pub fn load_with_host_weights(
+        manifest: &Verified,
+        kernels_dir: &std::path::Path,
+        gpu: usize,
+        capacity: Option<Capacity>,
+        topology: Option<&Topology>,
+        host_weights: &crate::HostWeights,
     ) -> Result<Runtime> {
         let manifest = manifest.clone();
         let mut ranks = BTreeMap::new();
@@ -97,7 +112,9 @@ impl Runtime {
         let mut peers = BTreeMap::new();
         for (name, b) in &manifest.buffers {
             let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), &vars_max)?;
-            let buf = if b.export {
+            let buf = if b.placement == Placement::Host {
+                alloc_host(&stream, host_weights.acquire(name, b, bytes, &ctx)?)?
+            } else if b.export {
                 alloc_vmm(&stream, dev, bytes, Share::Required, &format!("buffer `{name}`"))?
             } else {
                 alloc(&stream, bytes)?
@@ -208,6 +225,7 @@ impl Runtime {
         let provision = Provision { tokens: pool.pages_max() as u64 * page, seq_slots: pool.slots_max() as u64 };
         let remaps = Remaps::spawn(Arc::clone(&ctx), mapper)?;
         let mut rt = Runtime {
+            host_weights_ready: !manifest.buffers.values().any(|b| b.placement == Placement::Host),
             manifest,
             ctx,
             stream,
@@ -245,6 +263,9 @@ impl Runtime {
     /// segment is one copy straight out of the blob. A tensor name that
     /// appears in more than one blob is ambiguous and refused.
     pub fn load_weights(&mut self, blobs: &[&[u8]]) -> Result<()> {
+        if self.host_weights_ready && self.buffers.values().any(|b| b.host_weight().is_some()) {
+            bail!(Api, "host weights are an immutable snapshot; use a new runtime and scope to reload");
+        }
         self.ctx.bind_to_thread()?;
         let sts = blobs
             .iter()
@@ -271,7 +292,15 @@ impl Runtime {
                 continue;
             }
             let dst = &self.buffers[name];
-            for c in weights::plan(name, b, dst.bytes, lookup)? {
+            let copies = weights::plan(name, b, dst.bytes, lookup, |group| self.ranks.get(group).copied())?;
+            if let Some(host) = dst.host_weight() {
+                host.initialize(|bytes| {
+                    copy_host_weights(bytes, blobs, &copies);
+                    Ok(())
+                })?;
+                continue;
+            }
+            for c in copies {
                 let src = &blobs[c.blob][c.src..c.src + (c.pitch * (c.rows - 1) + c.width) as usize];
                 if c.pitch == c.width {
                     let mut view = dst.view(c.dst as usize..(c.dst + c.width * c.rows) as usize)?;
@@ -290,7 +319,27 @@ impl Runtime {
             }
         }
         self.stream.synchronize()?;
+        self.host_weights_ready = true;
         Ok(())
+    }
+}
+
+/// Execute copies already bounded and laid out by `weights::plan`.
+/// Full-width tensor segments use one memcpy, even for hundreds of millions
+/// of short rows. Rectangular slices retain their source row pitch.
+fn copy_host_weights(dst: &mut [u8], blobs: &[&[u8]], copies: &[weights::Copy]) {
+    for c in copies {
+        if c.pitch == c.width {
+            let len = (c.width * c.rows) as usize;
+            let dest = c.dst as usize;
+            dst[dest..dest + len].copy_from_slice(&blobs[c.blob][c.src..c.src + len]);
+        } else {
+            for row in 0..c.rows {
+                let src = (c.src as u64 + row * c.pitch) as usize;
+                let dest = (c.dst + row * c.width) as usize;
+                dst[dest..dest + c.width as usize].copy_from_slice(&blobs[c.blob][src..src + c.width as usize]);
+            }
+        }
     }
 }
 
@@ -349,4 +398,33 @@ fn fit_budget(ctx: &CudaContext, fixed: u64, page_bytes: u64, first_slots_bytes:
         gib(HEADROOM)
     );
     Ok(budget)
+}
+
+#[cfg(test)]
+mod host_copy_tests {
+    use super::*;
+
+    #[test]
+    fn contiguous_and_strided_rectangles_preserve_destination_neighbors() {
+        let contiguous = [90, 91, 1, 2, 3, 4, 5, 6, 92];
+        let strided = [90, 1, 2, 80, 81, 3, 4, 82, 83, 5, 6, 84];
+        let blobs: &[&[u8]] = &[&contiguous, &strided];
+        for (blob, src, pitch) in [(0, 2, 2), (1, 1, 4)] {
+            let mut dst = [77; 12];
+            copy_host_weights(&mut dst, blobs, &[weights::Copy { dst: 3, blob, src, width: 2, rows: 3, pitch }]);
+            assert_eq!(dst, [77, 77, 77, 1, 2, 3, 4, 5, 6, 77, 77, 77]);
+        }
+    }
+
+    #[test]
+    fn mixed_segments_from_multiple_blobs_assemble_in_order() {
+        let blobs: &[&[u8]] = &[&[90, 1, 2, 3, 4, 91], &[80, 5, 6, 81, 82, 7, 8, 83]];
+        let copies = [
+            weights::Copy { dst: 0, blob: 0, src: 1, width: 2, rows: 2, pitch: 2 },
+            weights::Copy { dst: 4, blob: 1, src: 1, width: 2, rows: 2, pitch: 4 },
+        ];
+        let mut dst = [0; 8];
+        copy_host_weights(&mut dst, blobs, &copies);
+        assert_eq!(dst, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
 }

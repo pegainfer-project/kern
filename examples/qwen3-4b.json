@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model": "qwen3-4b",
  "constants": {
   "MAX_BLOCKS_PER_SEQ": 2560,

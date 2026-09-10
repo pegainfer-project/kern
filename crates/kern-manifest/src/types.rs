@@ -1,4 +1,4 @@
-//! Manifest schema (format 4). Parsing is already strict: unknown fields,
+//! Manifest schema (format 5). Parsing is already strict: unknown fields,
 //! duplicate names and malformed type strings are rejected at
 //! deserialization time. Semantic checks (references, dtypes, dataflow,
 //! bounds) live in [`crate::verify`]; what a serving loop needs to drive
@@ -28,7 +28,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 /// The one format this crate reads and writes.
-pub(crate) const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 5;
 
 /// Deserialize a JSON object into a map, rejecting duplicate keys (plain
 /// serde silently keeps the last one).
@@ -67,7 +67,7 @@ where
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Wire-format version; must be `4`.
+    /// Wire-format version; must be `5`.
     pub schema_version: u32,
     /// Free-form model label, e.g. `"qwen3-4b"`.
     pub model: String,
@@ -176,6 +176,8 @@ pub enum Fill {
     Token,
     /// Input: each row's position in its sequence.
     Position,
+    /// Input: one for a real row, zero for serving bucket padding.
+    Valid,
     /// Input: each row's token slot in the paged states, from the sequence's lease.
     Slot,
     /// Input: each sequence's length after this call (rows already in the state plus this call's).
@@ -199,6 +201,7 @@ impl fmt::Display for Fill {
         f.write_str(match self {
             Fill::Token => "token",
             Fill::Position => "position",
+            Fill::Valid => "valid",
             Fill::Slot => "slot",
             Fill::SeqLen => "seq_len",
             Fill::CuSeqlens => "cu_seqlens",
@@ -269,6 +272,9 @@ pub struct Buffer {
     pub shape: Vec<Dim>,
     /// Who provides the buffer and how long its contents live.
     pub kind: BufferKind,
+    /// Immutable weights may reside in shared, GPU-addressable host memory.
+    #[serde(default, skip_serializing_if = "Placement::is_device")]
+    pub placement: Placement,
     /// `input` / `output` buffers only: the role a serving loop fills or reads it for, e.g. `"token"`; absent for one a harness stages by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Fill>,
@@ -289,18 +295,57 @@ pub struct Buffer {
     pub bind: Vec<Segment>,
 }
 
+/// Physical placement of a buffer; host placement is restricted to immutable weights.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    #[default]
+    Device,
+    Host,
+}
+
+impl Placement {
+    fn is_device(&self) -> bool {
+        *self == Self::Device
+    }
+}
+
 /// One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{"tensor": "fc.weight", "cols": [0, 5120]}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Segment {
     /// Tensor name in the safetensors header, e.g. `"model.layers.0.self_attn.q_proj.weight"`.
-    pub tensor: String,
+    pub tensor: TensorSource,
     /// Half-open row range `[from, to)` of the tensor's first axis; the whole axis when absent, e.g. `[0, 1024]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<[u64; 2]>,
     /// Half-open column range `[from, to)` over the product of the remaining axes; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<[u64; 2]>,
+}
+
+/// A checkpoint tensor, fixed or selected by a declared rank group.
+/// Selection is a load-time table lookup, never a string template or expression.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TensorSource {
+    Named(String),
+    Ranked { group: String, tensors: Vec<String> },
+}
+
+impl From<String> for TensorSource {
+    fn from(name: String) -> Self {
+        Self::Named(name)
+    }
+}
+
+impl fmt::Display for TensorSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Named(name) => f.write_str(name),
+            Self::Ranked { group, .. } => write!(f, "rank-selected tensor in {group}"),
+        }
+    }
 }
 
 /// A prior on a buffer's contents: bounds (`{"min": 0, "max": "tokens"}`) or an index into a buffer/state (`{"index_into": "kv", "stride": 16}`).
@@ -468,6 +513,8 @@ pub enum DType {
     F16,
     F32,
     Fp8E4m3,
+    Fp8E8m0,
+    I8,
     I32,
     U32,
     I64,
@@ -481,7 +528,7 @@ impl DType {
             DType::Bf16 | DType::F16 => 2,
             DType::F32 | DType::I32 | DType::U32 => 4,
             DType::I64 | DType::U64 => 8,
-            DType::Fp8E4m3 | DType::U8 => 1,
+            DType::Fp8E4m3 | DType::Fp8E8m0 | DType::I8 | DType::U8 => 1,
         }
     }
 
@@ -491,6 +538,8 @@ impl DType {
             DType::F16 => "f16",
             DType::F32 => "f32",
             DType::Fp8E4m3 => "fp8e4m3",
+            DType::Fp8E8m0 => "fp8e8m0",
+            DType::I8 => "i8",
             DType::I32 => "i32",
             DType::U32 => "u32",
             DType::I64 => "i64",
@@ -509,6 +558,8 @@ impl FromStr for DType {
             "f16" => DType::F16,
             "f32" => DType::F32,
             "fp8e4m3" => DType::Fp8E4m3,
+            "fp8e8m0" => DType::Fp8E8m0,
+            "i8" => DType::I8,
             "i32" => DType::I32,
             "u32" => DType::U32,
             "i64" => DType::I64,
@@ -534,7 +585,7 @@ impl schemars::JsonSchema for DType {
         schemars::json_schema!({
             "description": "Element type of a buffer or scratch, e.g. `\"bf16\"`.",
             "type": "string",
-            "enum": ["bf16", "f16", "f32", "fp8e4m3", "i32", "u32", "i64", "u64", "u8"],
+            "enum": ["bf16", "f16", "f32", "fp8e4m3", "fp8e8m0", "i8", "i32", "u32", "i64", "u64", "u8"],
         })
     }
 }
@@ -687,7 +738,7 @@ impl schemars::JsonSchema for ParamType {
                 `\"inout state\"`), or a launch-private `\"tensormap\"` (128-byte TMA descriptor) \
                 or `\"bytes<n>\"` (an n-byte aggregate filled by a `pack` launch arg).",
             "type": "string",
-            "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
+            "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|fp8e8m0|i8|i32|u32|i64|u64|u8)>))$",
         })
     }
 }
@@ -1033,18 +1084,22 @@ pub enum TmaDType {
     F16,
     Bf16,
     F32,
+    /// Float32 storage converted to TF32 by TMA.
+    Tf32,
     /// 4-bit elements, 16 per 8-byte unit (`16U4_ALIGN16B`); dims and box count nibbles.
     U4,
+    /// Packed 4-bit shared-memory output (`16U4_ALIGN8B`).
+    U4packed,
 }
 
 impl TmaDType {
     /// Element size in bits.
     fn bits(self) -> u64 {
         match self {
-            TmaDType::U4 => 4,
+            TmaDType::U4 | TmaDType::U4packed => 4,
             TmaDType::U8 => 8,
             TmaDType::U16 | TmaDType::F16 | TmaDType::Bf16 => 16,
-            TmaDType::U32 | TmaDType::I32 | TmaDType::F32 => 32,
+            TmaDType::U32 | TmaDType::I32 | TmaDType::F32 | TmaDType::Tf32 => 32,
             TmaDType::U64 | TmaDType::I64 => 64,
         }
     }

@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model": "kimi-k3-pruned-75pct/moe-l1/ep4",
  "vars": {
   "tokens": {

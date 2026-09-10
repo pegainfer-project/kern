@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import schemaRaw from "../../../schema/manifest-v4.schema.json?raw";
+import schemaRaw from "../../../schema/manifest-v5.schema.json?raw";
 import minimalRaw from "../../../examples/minimal.json?raw";
 
 const schema: any = JSON.parse(schemaRaw);
@@ -540,7 +540,7 @@ function Protocol() {
 
 /* ------------------------------------------------------------------ page */
 
-const RAW_URL = "/schema/manifest-v4.schema.json";
+const RAW_URL = "/schema/manifest-v5.schema.json";
 const TYPES_URL =
   "https://github.com/pegainfer-project/kern/blob/master/crates/kern-manifest/src/types.rs";
 

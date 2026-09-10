@@ -34,3 +34,21 @@ fn ulps() {
     let n = from_f64(DType::F32, &[-1e-45]);
     assert_eq!(ulp_distance(DType::F32, &p, &n), Some(2));
 }
+
+#[test]
+fn microscale_and_signed_byte_preserve_checkpoint_bits() {
+    let codes: Vec<u8> = (0..=254).collect();
+    let scales = to_f64(DType::Fp8E8m0, &codes);
+    assert_eq!(scales[0], 2f64.powi(-127));
+    assert_eq!(scales[127], 1.0);
+    assert_eq!(scales[254], 2f64.powi(127));
+    assert_eq!(from_f64(DType::Fp8E8m0, &scales), codes);
+    assert!(to_f64(DType::Fp8E8m0, &[255])[0].is_nan());
+    assert_eq!(ulp_distance(DType::Fp8E8m0, &[126], &[128]), Some(2));
+    assert_eq!(ulp_distance(DType::Fp8E8m0, &[255], &[128]), None);
+    let bytes: Vec<u8> = (0..=255).collect();
+    let signed = to_f64(DType::I8, &bytes);
+    assert_eq!(signed[128], -128.0);
+    assert_eq!(signed[255], -1.0);
+    assert_eq!(from_f64(DType::I8, &signed), bytes);
+}

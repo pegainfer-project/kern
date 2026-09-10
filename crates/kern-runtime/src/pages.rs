@@ -1016,7 +1016,7 @@ mod tests {
     fn hybrid() -> Manifest {
         Manifest::from_json(
             r#"{
-            "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+            "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
             "states": {"kv": {"bytes_per_token": 1}, "gdn": {"bytes_per_seq": 24}},
             "buffers": {
                 "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},

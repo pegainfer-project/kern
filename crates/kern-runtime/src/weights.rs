@@ -5,7 +5,7 @@
 //! buffer's segments into byte copies and checks that they tile the buffer
 //! exactly, so the shell that runs them has nothing left to decide.
 
-use kern_manifest::types::{Buffer, DType};
+use kern_manifest::types::{Buffer, DType, TensorSource};
 
 use crate::error::{bail, Error, Result};
 
@@ -41,6 +41,8 @@ pub(crate) fn dtype_of(st: safetensors::Dtype) -> Option<DType> {
         S::F16 => DType::F16,
         S::F32 => DType::F32,
         S::F8_E4M3 => DType::Fp8E4m3,
+        S::F8_E8M0 => DType::Fp8E8m0,
+        S::I8 => DType::I8,
         S::I32 => DType::I32,
         S::U32 => DType::U32,
         S::I64 => DType::I64,
@@ -59,13 +61,24 @@ pub(crate) fn plan(
     b: &Buffer,
     bytes: u64,
     lookup: impl Fn(&str) -> Result<TensorInfo>,
+    rank: impl Fn(&str) -> Option<u64>,
 ) -> Result<Vec<Copy>> {
     let elt = b.dtype.bytes();
     let mut copies = Vec::with_capacity(b.bind.len());
     let mut dst = 0u64;
     for (i, s) in b.bind.iter().enumerate() {
         let ctx = || format!("weight `{name}` bind[{i}] (`{}`)", s.tensor);
-        let t = lookup(&s.tensor)?;
+        let tensor = match &s.tensor {
+            TensorSource::Named(name) => name,
+            TensorSource::Ranked { group, tensors } => {
+                let index =
+                    rank(group).ok_or_else(|| Error::WeightArtifact(format!("{}: no rank for `{group}`", ctx())))?;
+                tensors
+                    .get(index as usize)
+                    .ok_or_else(|| Error::WeightArtifact(format!("{}: rank {index} outside tensor table", ctx())))?
+            }
+        };
+        let t = lookup(tensor)?;
         if t.dtype != b.dtype {
             bail!(WeightArtifact, "{}: checkpoint tensor is {}, buffer declares {}", ctx(), t.dtype, b.dtype);
         }
@@ -123,6 +136,7 @@ mod tests {
             dtype,
             shape: shape.iter().map(|&d| Dim::Const(d)).collect(),
             kind: BufferKind::Weight,
+            placement: Default::default(),
             fill: None,
             domain: None,
             export: false,
@@ -133,7 +147,7 @@ mod tests {
     }
 
     fn seg(tensor: &str, rows: Option<[u64; 2]>, cols: Option<[u64; 2]>) -> Segment {
-        Segment { tensor: tensor.to_string(), rows, cols }
+        Segment { tensor: tensor.to_string().into(), rows, cols }
     }
 
     fn lookup(name: &str) -> Result<TensorInfo> {
@@ -153,7 +167,7 @@ mod tests {
         // Two whole tensors concatenated: contiguous copies end to end.
         let b = weight(DType::Bf16, &[10, 4], vec![seg("q", None, None), seg("k", None, None)]);
         assert_eq!(
-            plan("qk", &b, 80, lookup).unwrap(),
+            plan("qk", &b, 80, lookup, |_| None).unwrap(),
             [
                 Copy { dst: 0, blob: 0, src: 0, width: 8, rows: 8, pitch: 8 },
                 Copy { dst: 64, blob: 0, src: 64, width: 8, rows: 2, pitch: 8 },
@@ -162,26 +176,40 @@ mod tests {
         // A column block is a strided copy.
         let b = weight(DType::Bf16, &[4, 4], vec![seg("fc", None, Some([4, 8]))]);
         assert_eq!(
-            plan("fc.1", &b, 32, lookup).unwrap(),
+            plan("fc.1", &b, 32, lookup, |_| None).unwrap(),
             [Copy { dst: 0, blob: 1, src: 108, width: 8, rows: 4, pitch: 16 }]
         );
         // A row range skips the leading rows.
         let b = weight(DType::Bf16, &[3, 4], vec![seg("q", Some([5, 8]), None)]);
         assert_eq!(
-            plan("q.tail", &b, 24, lookup).unwrap(),
+            plan("q.tail", &b, 24, lookup, |_| None).unwrap(),
             [Copy { dst: 0, blob: 0, src: 40, width: 8, rows: 3, pitch: 8 }]
         );
         // Trailing axes fold into columns.
         let b = weight(DType::Bf16, &[6, 4], vec![seg("conv", None, None)]);
         assert_eq!(
-            plan("conv", &b, 48, lookup).unwrap(),
+            plan("conv", &b, 48, lookup, |_| None).unwrap(),
             [Copy { dst: 0, blob: 0, src: 200, width: 8, rows: 6, pitch: 8 }]
         );
     }
 
     #[test]
+    fn rank_selects_one_source_before_planning_copies() {
+        let source = TensorSource::Ranked { group: "ep".into(), tensors: vec!["q".into(), "fc".into()] };
+        let b = weight(DType::Bf16, &[4, 4], vec![Segment { tensor: source, rows: Some([0, 4]), cols: Some([0, 4]) }]);
+        let first = plan("local", &b, 32, lookup, |_| Some(0)).unwrap();
+        let second = plan("local", &b, 32, lookup, |_| Some(1)).unwrap();
+        assert_eq!(first, [Copy { dst: 0, blob: 0, src: 0, width: 8, rows: 4, pitch: 8 }]);
+        assert_eq!(second, [Copy { dst: 0, blob: 1, src: 100, width: 8, rows: 4, pitch: 16 }]);
+        assert!(plan("local", &b, 32, lookup, |_| None).unwrap_err().to_string().contains("no rank"));
+        assert!(plan("local", &b, 32, lookup, |_| Some(2)).unwrap_err().to_string().contains("outside tensor table"));
+        assert_eq!(dtype_of(safetensors::Dtype::I8), Some(DType::I8));
+        assert_eq!(dtype_of(safetensors::Dtype::F8_E8M0), Some(DType::Fp8E8m0));
+    }
+
+    #[test]
     fn mismatches_name_the_segment() {
-        let err = |b: Buffer, bytes| plan("w", &b, bytes, lookup).unwrap_err().to_string();
+        let err = |b: Buffer, bytes| plan("w", &b, bytes, lookup, |_| None).unwrap_err().to_string();
         assert!(
             err(weight(DType::F32, &[8, 4], vec![seg("q", None, None)]), 128).contains("is bf16, buffer declares f32")
         );

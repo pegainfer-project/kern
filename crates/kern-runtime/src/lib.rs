@@ -31,6 +31,7 @@ mod error;
 mod exec;
 mod harness;
 mod host;
+mod host_weights;
 mod lease;
 mod load;
 mod pages;
@@ -56,6 +57,7 @@ use device::{alloc, Blas, DeviceBuf, Pinned};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use host::{Host, Park, Parked};
+pub use host_weights::HostWeights;
 use lease::Remaps;
 pub use pages::{page_unit, Checkpoint, Copies, Denied, Lease, Pool, Pooled};
 pub use park::{Room, Waking};
@@ -125,6 +127,8 @@ pub struct Runtime {
     /// `read_output`, weight binding); execution never looks these up —
     /// their device pointers are baked into `programs`.
     buffers: BTreeMap<String, DeviceBuf>,
+    /// No kernels may read mapped host bytes before checkpoint binding completes.
+    host_weights_ready: bool,
     states: BTreeMap<String, DeviceBuf>,
     /// Persistent pinned staging, one per input buffer: H2D from pageable
     /// memory degrades to a synchronous driver-staged copy (tens of µs per

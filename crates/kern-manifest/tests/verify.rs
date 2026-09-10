@@ -9,7 +9,7 @@ use kern_manifest::{verify, Manifest, Verified, VerifyErrors};
 /// is the minimal single-launch op (ABI = interface, wiring defaulted);
 /// `attn` is a two-launch implementation with a private scratch buffer.
 const BASE: &str = r#"{
-  "schema_version": 4, "model": "toy",
+  "schema_version": 5, "model": "toy",
   "vars": { "tokens": { "max": 128 } },
   "states": { "kv": { "bytes_per_token": 4096 } },
   "buffers": {
@@ -900,4 +900,46 @@ fn bind_is_a_weight_s_and_only_a_weight_s() {
         serde_json::json!([{ "tensor": "a", "cols": [0, 32] }, { "tensor": "a", "cols": [32, 64], "rows": [0, 64] }]);
     let m: Manifest = serde_json::from_value(v).unwrap();
     assert!(verify(m).is_ok());
+}
+
+#[test]
+fn microscale_is_a_float_and_cannot_index_state() {
+    let mut v = base();
+    v["buffers"]["x"]["dtype"] = "fp8e8m0".into();
+    v["ops"]["embed"]["params"][0] = "in buffer<fp8e8m0>".into();
+    assert!(check(v.clone()).is_ok());
+    v["buffers"]["x"]["domain"] = serde_json::json!({"index_into": "kv"});
+    assert_err(v, "cannot index anything");
+}
+
+#[test]
+fn ranked_binding_requires_one_name_per_group_member() {
+    let mut v = base();
+    v["topology"] = serde_json::json!({"groups": {"ep": 2}});
+    v["buffers"]["w"]["bind"][0]["tensor"] = serde_json::json!({"group": "ep", "tensors": ["w0", "w1"]});
+    assert!(check(v.clone()).is_ok());
+    let mut bad = v.clone();
+    bad["buffers"]["w"]["bind"][0]["tensor"]["tensors"] = serde_json::json!(["w0"]);
+    assert_err(bad, "needs 2 tensor names");
+    let mut bad = v.clone();
+    bad["buffers"]["w"]["bind"][0]["tensor"]["tensors"][1] = "".into();
+    assert_err(bad, "empty tensor name");
+    v["buffers"]["w"]["bind"][0]["tensor"]["group"] = "missing".into();
+    assert_err(v, "unknown topology group");
+}
+
+#[test]
+fn host_placement_is_immutable_and_rank_independent() {
+    let mut v = base();
+    v["buffers"]["w"]["placement"] = serde_json::json!("host");
+    assert!(check(v.clone()).is_ok());
+    v["buffers"]["w"]["export"] = serde_json::json!(true);
+    assert!(check(v.clone()).unwrap_err().to_string().contains("non-exported immutable"));
+    v["buffers"]["w"]["export"] = serde_json::json!(false);
+    v["topology"] = serde_json::json!({"groups": {"ep": 2}});
+    v["buffers"]["w"]["bind"][0]["tensor"] = serde_json::json!({"group": "ep", "tensors": ["w0", "w1"]});
+    assert!(check(v).unwrap_err().to_string().contains("cannot select tensors by rank"));
+    let mut v = base();
+    v["buffers"]["x"]["placement"] = serde_json::json!("host");
+    assert!(check(v).unwrap_err().to_string().contains("immutable weight"));
 }

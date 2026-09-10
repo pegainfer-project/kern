@@ -247,6 +247,14 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 errs.push(format!("{ctx}: fill `{fill}` needs an i32 or i64 buffer, not {}", b.dtype));
             }
         }
+        if b.placement == Placement::Host {
+            if b.kind != BufferKind::Weight || b.export {
+                errs.push(format!("{ctx}: host placement requires a non-exported immutable weight"));
+            }
+            if b.bind.iter().any(|s| matches!(s.tensor, TensorSource::Ranked { .. })) {
+                errs.push(format!("{ctx}: shared host weights cannot select tensors by rank"));
+            }
+        }
         // 9c. bind: a weight is its segments, nothing else has any
         match (b.kind, b.bind.is_empty()) {
             (BufferKind::Weight, true) => {
@@ -255,8 +263,25 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             (BufferKind::Weight, false) => {
                 for (i, s) in b.bind.iter().enumerate() {
                     let sctx = format!("{ctx}: bind[{i}]");
-                    if s.tensor.is_empty() {
-                        errs.push(format!("{sctx}: empty tensor name"));
+                    match &s.tensor {
+                        TensorSource::Named(name) => {
+                            if name.is_empty() {
+                                errs.push(format!("{sctx}: empty tensor name"));
+                            }
+                        }
+                        TensorSource::Ranked { group, tensors } => {
+                            match group_ctx(group, &mut errs, &mut used_groups, &sctx) {
+                                Some(n) if n as usize == tensors.len() => {}
+                                Some(n) => errs.push(format!(
+                                    "{sctx}: group `{group}` needs {n} tensor names, got {}",
+                                    tensors.len()
+                                )),
+                                None => {}
+                            }
+                            if tensors.iter().any(String::is_empty) {
+                                errs.push(format!("{sctx}: empty tensor name"));
+                            }
+                        }
                     }
                     for (axis, r) in [("rows", s.rows), ("cols", s.cols)] {
                         if let Some([from, to]) = r {
@@ -892,7 +917,7 @@ fn check_domain(
     errs: &mut Vec<String>,
 ) {
     let ctx = format!("buffer `{name}` domain");
-    let is_float = matches!(b.dtype, DType::Bf16 | DType::F16 | DType::F32 | DType::Fp8E4m3);
+    let is_float = matches!(b.dtype, DType::Bf16 | DType::F16 | DType::F32 | DType::Fp8E4m3 | DType::Fp8E8m0);
     if d.index_into.is_some() && (d.min.is_some() || d.max.is_some()) {
         errs.push(format!("{ctx}: `index_into` and `min`/`max` are mutually exclusive"));
     }

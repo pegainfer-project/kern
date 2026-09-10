@@ -81,9 +81,9 @@ jobs:
 
       - name: Schema golden check
         run: |
-          cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v4.schema.json
-          if ! diff -u schema/manifest-v4.schema.json /tmp/manifest-v4.schema.json; then
-            echo "::error::schema/manifest-v4.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v4.schema.json"
+          cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v5.schema.json
+          if ! diff -u schema/manifest-v5.schema.json /tmp/manifest-v5.schema.json; then
+            echo "::error::schema/manifest-v5.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v5.schema.json"
             exit 1
           fi
 

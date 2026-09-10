@@ -19,7 +19,7 @@ fn manifest(json: &str) -> Manifest {
 pub fn two_paged() -> Manifest {
     manifest(
         r#"{
-        "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+        "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
         "states": {"kv": {"bytes_per_token": 1}, "draft_kv": {"bytes_per_token": 1}},
         "buffers": {
             "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "domain": {"index_into": "kv"}},
@@ -36,7 +36,7 @@ pub fn two_paged() -> Manifest {
 pub fn hybrid() -> Manifest {
     manifest(
         r#"{
-        "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+        "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
         "states": {"kv": {"bytes_per_token": 1}, "gdn": {"bytes_per_seq": 24}},
         "buffers": {
             "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv", "stride": 16}},
@@ -51,7 +51,7 @@ pub fn hybrid() -> Manifest {
 pub fn paged4() -> Manifest {
     manifest(
         r#"{
-        "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+        "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
         "states": {"kv": {"bytes_per_token": 1}},
         "buffers": {
             "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 8], "domain": {"index_into": "kv", "stride": 4}}
@@ -65,7 +65,7 @@ pub fn paged4() -> Manifest {
 pub fn hybrid4() -> Manifest {
     manifest(
         r#"{
-        "schema_version": 4, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 1}},
+        "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 1}},
         "states": {"kv": {"bytes_per_token": 1}, "rec": {"bytes_per_seq": 8}},
         "buffers": {
             "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 8], "domain": {"index_into": "kv", "stride": 4}},

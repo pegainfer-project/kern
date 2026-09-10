@@ -721,7 +721,9 @@ fn encode_tensor_map(t: &TensorMap, rv: RVal) -> Result<TmaBlob> {
         TmaDType::F16 => Dt::CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
         TmaDType::Bf16 => Dt::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
         TmaDType::F32 => Dt::CU_TENSOR_MAP_DATA_TYPE_FLOAT32,
+        TmaDType::Tf32 => Dt::CU_TENSOR_MAP_DATA_TYPE_TFLOAT32,
         TmaDType::U4 => Dt::CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B,
+        TmaDType::U4packed => Dt::CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN8B,
     };
     let swizzle = match t.swizzle {
         0 => Sw::CU_TENSOR_MAP_SWIZZLE_NONE,

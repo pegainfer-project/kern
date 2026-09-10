@@ -38,7 +38,7 @@ def probe_manifest(batch, qlen, lengths, pages, table_width, mode, splits):
     args=[{'buf':'out'},{'buf':'q'},{'buf':'slab','offset':LAYER_PAGE_BYTES},
           {'buf':'slab','offset':LAYER_PAGE_BYTES+512},{'buf':'table'},
           {'buf':'seq'},{'buf':'cuq'},{'var':'seqs'},{'var':'tokens'}]
-    return normalize(dict(schema_version=4,model='trtllm-gen-qwen38-probe',
+    return normalize(dict(schema_version=5,model='trtllm-gen-qwen38-probe',
         vars={'tokens':{'max':bound},'seqs':{'max':batch}},buffers=buffers,
         ops={'attn':op(mode,max_rows=bound,max_seqs=batch,max_context=table_width*64,
                        layers=2,splits=splits,kv_type='in buffer<bf16>')},

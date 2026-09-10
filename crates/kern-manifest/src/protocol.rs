@@ -296,7 +296,7 @@ impl Protocol {
             };
             let ok = match fill {
                 Fill::Token => width == 1 && matches!(axis, Axis::Rows | Axis::Tray | Axis::Groups),
-                Fill::Position | Fill::Slot => width == 1 && axis == Axis::Rows,
+                Fill::Position | Fill::Valid | Fill::Slot => width == 1 && axis == Axis::Rows,
                 Fill::SeqLen | Fill::Count => width == 1 && axis == Axis::Groups,
                 Fill::CuSeqlens => matches!(axis, Axis::Fixed(n) if n > groups.max),
                 Fill::Tokens => axis == Axis::Groups || (axis == Axis::Tray && width == 1),
@@ -309,7 +309,7 @@ impl Protocol {
                     b.shape,
                     match fill {
                         Fill::Token => "expected [rows], [tray] (one per row) or [groups] (each sequence's first)",
-                        Fill::Position | Fill::Slot => "expected [rows]",
+                        Fill::Position | Fill::Valid | Fill::Slot => "expected [rows]",
                         Fill::SeqLen | Fill::Count => "expected [groups]",
                         Fill::CuSeqlens => "expected [n] with n >= groups + 1",
                         Fill::Tokens => "expected [groups], [groups, w] or [tray]",
@@ -333,7 +333,8 @@ impl Protocol {
         if fills.iter().filter(|f| f.fill == Fill::Token && f.axis == Axis::Groups).count() > 1 {
             errs.push("fill `token` over the sequences is on more than one buffer".into());
         }
-        for fill in [Fill::Position, Fill::CuSeqlens, Fill::SpanAt, Fill::Blocks, Fill::Count, Fill::Error] {
+        for fill in [Fill::Position, Fill::Valid, Fill::CuSeqlens, Fill::SpanAt, Fill::Blocks, Fill::Count, Fill::Error]
+        {
             if one(fill).is_none() && m.buffers.values().any(|b| b.fill == Some(fill)) {
                 errs.push(format!("fill `{fill}` is on more than one buffer"));
             }

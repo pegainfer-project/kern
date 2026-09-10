@@ -12,11 +12,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # declare `graph`, 2026-09-09). Changes to kernel wiring, capacities, float
 # literals or even artifact pins require review.
 BASELINES = {
-    "qwen3-4b-dspark.json": "ab9b2a4c94b21f23d58740b585896e189b759f5141615f8a782b7713ae2f6abb",
-    "qwen3-4b-silu-mined.json": "e481ceb9d6f2f96b0f86979d8aad346b59696a711d2b363ccb86afb1295b6a58",
-    "qwen3-4b.json": "59846f84ecee0ddea921e597a307fe824f5388e9ae04d4c7f79fffb84459a1e8",
-    "qwen3.8-27b-dflash2.json": "3d69d2ef7360bb08552d28aa95a25cf7bebc70d63a382180ac070fcb0fa71af3",
-    "qwen3.8-27b.json": "a3a5c16fb460b6c0e9ac37742c2aed55a5a0e030fccc7c05586cc9c063cc8e05"
+    "qwen3-4b-dspark.json": "9c583a7b5f2817dcc0f31f9105372358833ac15fae6818a0e7fbcfa80c071ddf",
+    "qwen3-4b-silu-mined.json": "947f8a6b0a40e184d8971dda66ee5c81d2152a8933795878700f14b0d1c80f7b",
+    "qwen3-4b.json": "9d92001af43426c2838cfd37c58c2ac0fe6742db95ddb429963539b7f8ed0d2f",
+    "qwen3.8-27b-dflash2.json": "32755ff86f96a0f2ffc6884c2ec66be589174383178209ddb85c8105663559da",
+    "qwen3.8-27b.json": "a9cc996a7548dabc756b30f9ef848459c2a5c2043075b79e11091054d1a30443"
 }
 
 

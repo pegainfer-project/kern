@@ -329,6 +329,10 @@
             "null"
           ]
         },
+        "placement": {
+          "$ref": "#/$defs/Placement",
+          "description": "Immutable weights may reside in shared, GPU-addressable host memory."
+        },
         "shape": {
           "description": "Extents, constants or var names, e.g. `[\"tokens\", 2560]`.",
           "items": {
@@ -415,6 +419,8 @@
         "f16",
         "f32",
         "fp8e4m3",
+        "fp8e8m0",
+        "i8",
         "i32",
         "u32",
         "i64",
@@ -859,6 +865,11 @@
           "type": "string"
         },
         {
+          "const": "valid",
+          "description": "Input: one for a real row, zero for serving bucket padding.",
+          "type": "string"
+        },
+        {
           "const": "slot",
           "description": "Input: each row's token slot in the paged states, from the sequence's lease.",
           "type": "string"
@@ -1282,7 +1293,15 @@
     },
     "ParamType": {
       "description": "One parameter: a scalar (`\"i32\"`, `\"i64\"`, `\"f32\"`, `\"u8\"`), a directional pointer (`\"in buffer<bf16>\"`, `\"out buffer<f32>\"`, `\"inout state\"`), or a launch-private `\"tensormap\"` (128-byte TMA descriptor) or `\"bytes<n>\"` (an n-byte aggregate filled by a `pack` launch arg).",
-      "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|i32|u32|i64|u64|u8)>))$",
+      "pattern": "^(i32|i64|f32|u8|bytes<[1-9][0-9]*>|(in|out|inout) (state|buffer<(bf16|f16|f32|fp8e4m3|fp8e8m0|i8|i32|u32|i64|u64|u8)>))$",
+      "type": "string"
+    },
+    "Placement": {
+      "description": "Physical placement of a buffer; host placement is restricted to immutable weights.",
+      "enum": [
+        "device",
+        "host"
+      ],
       "type": "string"
     },
     "Program": {
@@ -1394,8 +1413,8 @@
           ]
         },
         "tensor": {
-          "description": "Tensor name in the safetensors header, e.g. `\"model.layers.0.self_attn.q_proj.weight\"`.",
-          "type": "string"
+          "$ref": "#/$defs/TensorSource",
+          "description": "Tensor name in the safetensors header, e.g. `\"model.layers.0.self_attn.q_proj.weight\"`."
         }
       },
       "required": [
@@ -1581,6 +1600,33 @@
       ],
       "type": "object"
     },
+    "TensorSource": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "group": {
+              "type": "string"
+            },
+            "tensors": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "group",
+            "tensors"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A checkpoint tensor, fixed or selected by a declared rank group.\nSelection is a load-time table lookup, never a string template or expression."
+    },
     "TmaDType": {
       "description": "TMA element types the runtime encodes.",
       "oneOf": [
@@ -1599,8 +1645,18 @@
           "type": "string"
         },
         {
+          "const": "tf32",
+          "description": "Float32 storage converted to TF32 by TMA.",
+          "type": "string"
+        },
+        {
           "const": "u4",
           "description": "4-bit elements, 16 per 8-byte unit (`16U4_ALIGN16B`); dims and box count nibbles.",
+          "type": "string"
+        },
+        {
+          "const": "u4packed",
+          "description": "Packed 4-bit shared-memory output (`16U4_ALIGN8B`).",
           "type": "string"
         }
       ]
@@ -1660,7 +1716,7 @@
       "type": "object"
     }
   },
-  "$id": "https://kern-baa.pages.dev/schema/manifest-v4.schema.json",
+  "$id": "https://kern-baa.pages.dev/schema/manifest-v5.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The resolved contract: vars, states, buffers, modules, ops and programs.\nThe wire format also accepts optional `constants`, expanded during\ndeserialization. Use [`crate::json_schema`] for the complete wire schema;\nthis type's derived schema describes the resolved numeric form.",
@@ -1708,7 +1764,7 @@
       "type": "object"
     },
     "schema_version": {
-      "description": "Wire-format version; must be `4`.",
+      "description": "Wire-format version; must be `5`.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
@@ -1747,6 +1803,6 @@
     "ops",
     "programs"
   ],
-  "title": "kern manifest v4",
+  "title": "kern manifest v5",
   "type": "object"
 }

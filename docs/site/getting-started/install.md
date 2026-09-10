@@ -71,7 +71,7 @@ cargo run -p kern-manifest --example verify -- examples/qwen3-4b.json
 ./target/release/kern verify path/to/manifest.json   # the CLI's version: also prints the serving protocol
 ```
 
-The published [JSON Schema](https://kern-baa.pages.dev/schema/manifest-v4.schema.json)
+The published [JSON Schema](https://kern-baa.pages.dev/schema/manifest-v5.schema.json)
 gives editor completion and early validation; `kern verify` remains
 authoritative, since it runs the verifier the runtime itself uses.
 

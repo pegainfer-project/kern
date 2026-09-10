@@ -27,7 +27,7 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
 顶层平铺，全部名字唯一、引用必须解析、不允许未知字段：
 
 ```json
-{ "schema_version": 4, "model": "qwen3.8-27b",
+{ "schema_version": 5, "model": "qwen3.8-27b",
   "topology": {"groups": {"ep": 4}},
   "vars": …, "states": …, "buffers": …, "modules": …, "ops": …, "programs": … }
 ```
@@ -236,7 +236,7 @@ torch 扩展 .so）：runtime 剖开 ELF 取 `.nv_fatbin` 里的设备代码逐�
 挖矿基线逐字节一致。
 
 **Wire format 的 ground truth 是 `kern-manifest` 的 Rust 类型**（parser
-即法律）；`schema/manifest-v4.schema.json` 是它生成的可发布投影
+即法律）；`schema/manifest-v5.schema.json` 是它生成的可发布投影
 （`cargo run -p kern-manifest --example gen_schema`，CI golden 检查防
 漂移），给生成器/agent 当形状契约用。
 

@@ -191,6 +191,9 @@ impl Caller {
         if let Some(f) = p.filled(Fill::Token, Axis::Groups) {
             put(f, &ids[..1])?;
         }
+        if let Some(f) = p.filled(Fill::Valid, Axis::Rows) {
+            put(f, &vec![1; c])?;
+        }
         if let Some(f) = p.filled(Fill::Position, Axis::Rows) {
             put(f, &(self.pos..self.pos + c as i64).collect::<Vec<_>>())?;
         }

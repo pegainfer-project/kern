@@ -50,7 +50,7 @@ fn main() {
         ]
     });
     let manifest = serde_json::json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "model": "peer-barrier",
         "topology": { "groups": { "ep": n } },
         "buffers": {

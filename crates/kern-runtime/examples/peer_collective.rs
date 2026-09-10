@@ -99,7 +99,7 @@ fn main() {
         "i64",
     ];
     let manifest = serde_json::json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "model": "peer-collective",
         "vars": { "tokens": { "max": B_MAX }, "rows": { "max": n * B_MAX }, "rb": { "max": RB_MAX } },
         "topology": { "groups": { "tp": n } },

@@ -15,6 +15,14 @@ pub fn to_f64(dtype: DType, bytes: &[u8]) -> Vec<f64> {
             DType::F16 => f16::from_le_bytes([c[0], c[1]]).to_f64(),
             DType::F32 => f32::from_le_bytes(c.try_into().unwrap()) as f64,
             DType::Fp8E4m3 => fp8_e4m3_to_f64(c[0]),
+            DType::Fp8E8m0 => {
+                if c[0] == 255 {
+                    f64::NAN
+                } else {
+                    2f64.powi(c[0] as i32 - 127)
+                }
+            }
+            DType::I8 => (c[0] as i8) as f64,
             DType::I32 => i32::from_le_bytes(c.try_into().unwrap()) as f64,
             DType::U32 => u32::from_le_bytes(c.try_into().unwrap()) as f64,
             DType::I64 => i64::from_le_bytes(c.try_into().unwrap()) as f64,
@@ -34,6 +42,8 @@ pub fn from_f64(dtype: DType, vals: &[f64]) -> Vec<u8> {
             DType::F16 => out.extend_from_slice(&f16::from_f64(v).to_le_bytes()),
             DType::F32 => out.extend_from_slice(&(v as f32).to_le_bytes()),
             DType::Fp8E4m3 => out.push(f64_to_fp8_e4m3(v)),
+            DType::Fp8E8m0 => out.push(f64_to_fp8_e8m0(v)),
+            DType::I8 => out.push(v as i8 as u8),
             DType::I32 => out.extend_from_slice(&(v as i32).to_le_bytes()),
             DType::U32 => out.extend_from_slice(&(v as u32).to_le_bytes()),
             DType::I64 => out.extend_from_slice(&(v as i64).to_le_bytes()),
@@ -53,6 +63,7 @@ pub fn ulp_distance(dtype: DType, a: &[u8], b: &[u8]) -> Option<u64> {
             DType::Bf16 | DType::F16 => (u16::from_le_bytes([c[0], c[1]]) as i64, 1 << 15),
             DType::F32 => (u32::from_le_bytes(c.try_into().unwrap()) as i64, 1 << 31),
             DType::Fp8E4m3 => (c[0] as i64, 1 << 7),
+            DType::Fp8E8m0 => return (c[0] != 255).then_some(c[0] as i64),
             _ => return None,
         };
         Some(if bits & sign_bit != 0 { sign_bit - (bits & (sign_bit - 1)) - sign_bit } else { bits })
@@ -99,4 +110,26 @@ fn f64_to_fp8_e4m3(v: f64) -> u8 {
         return sign | 0x7e; // max finite, never NaN
     }
     sign | (e << 3) | m
+}
+
+// E8M0 has only positive powers of two and NaN; zero saturates to the
+// smallest value. Nearest-value ties choose the even encoded exponent.
+fn f64_to_fp8_e8m0(v: f64) -> u8 {
+    if !v.is_finite() || v < 0.0 {
+        return 255;
+    }
+    if v <= 2f64.powi(-127) {
+        return 0;
+    }
+    if v >= 2f64.powi(127) {
+        return 254;
+    }
+    let exponent = v.log2().floor() as i32;
+    let code = (exponent + 127) as u8;
+    let midpoint = 1.5 * 2f64.powi(exponent);
+    if v > midpoint || (v == midpoint && !code.is_multiple_of(2)) {
+        code + 1
+    } else {
+        code
+    }
 }

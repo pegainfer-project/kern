@@ -210,6 +210,7 @@ fn stage(
                 Axis::Groups => ids.chunks(rows).map(|x| x[0]).collect(),
                 _ => ids.to_vec(),
             },
+            Fill::Valid => vec![1; b * rows],
             Fill::Position => positions.iter().flat_map(|pos| (*pos..*pos + rows).map(|v| v as i64)).collect(),
             Fill::Slot => leases.iter().zip(positions).flat_map(|(l, pos)| l.slots(*pos..*pos + rows)).collect(),
             Fill::SeqLen => positions.iter().map(|pos| (*pos + rows) as i64).collect(),

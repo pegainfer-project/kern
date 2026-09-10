@@ -1,5 +1,5 @@
 {
-  "schema_version": 4, "model": "t",
+  "schema_version": 5, "model": "t",
   "vars": {"tokens": {"max": 8}, "seqs": {"max": 8}, "rows": {"max": 32}},
   "topology": {"groups": {"ep": 4, "tp": 4}},
   "states": {"kv": {"bytes_per_token": 1}, "kda": {"bytes_per_seq": 24}},

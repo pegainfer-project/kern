@@ -9,8 +9,8 @@ The JSON Schema is generated from the Rust manifest types and checked into the
 repository:
 
 - [Browse the rendered schema](https://kern-baa.pages.dev/schema/)
-- [Download `manifest-v4.schema.json`](https://kern-baa.pages.dev/schema/manifest-v4.schema.json)
-- [View the source on GitHub](https://github.com/pegainfer-project/kern/blob/master/schema/manifest-v4.schema.json)
+- [Download `manifest-v5.schema.json`](https://kern-baa.pages.dev/schema/manifest-v5.schema.json)
+- [View the source on GitHub](https://github.com/pegainfer-project/kern/blob/master/schema/manifest-v5.schema.json)
 
 Use it for editor completion and generic structural checks. Run `kern verify`
 for the cross-field invariants and serving protocol validation implemented by

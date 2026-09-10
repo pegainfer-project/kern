@@ -12,6 +12,7 @@ use half::bf16;
 
 use crate::compile::RVal;
 use crate::error::{bail, cuda_check, Error, Result};
+use crate::host_weights::HostWeight;
 
 /// A fabric handle another process — on this tray or across the NVL72
 /// fabric — can map with [`import`]. `bytes` is the mapped size (the
@@ -65,6 +66,8 @@ pub(crate) struct DeviceBuf {
 }
 
 enum Backing {
+    /// Immutable portable host weight, shared across local runtimes.
+    Host(Arc<HostWeight>),
     /// `cuMemAlloc` through cudarc: local only.
     Pool(#[allow(dead_code)] CudaSlice<u8>),
     /// `cuMemCreate` + reserve + map: exportable when created with a fabric
@@ -110,6 +113,14 @@ pub(crate) fn alloc(stream: &Arc<CudaStream>, bytes: u64) -> Result<DeviceBuf> {
         p
     };
     Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
+}
+
+/// Stable alias of an immutable host weight in this stream's CUDA context.
+pub(crate) fn alloc_host(stream: &Arc<CudaStream>, weight: Arc<HostWeight>) -> Result<DeviceBuf> {
+    stream.context().bind_to_thread()?;
+    let ptr = weight.device_pointer()?;
+    let bytes = weight.bytes;
+    Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Host(weight) })
 }
 
 fn fabric_handle_type() -> sys::CUmemAllocationHandleType {
@@ -260,6 +271,13 @@ pub(crate) fn import(stream: &Arc<CudaStream>, dev: i32, h: &PeerHandle, what: &
 }
 
 impl DeviceBuf {
+    pub(crate) fn host_weight(&self) -> Option<&Arc<HostWeight>> {
+        match &self.backing {
+            Backing::Host(weight) => Some(weight),
+            _ => None,
+        }
+    }
+
     /// A pooled state: `bytes` of its initial layout at `ptr`, `span`
     /// bytes reserved there; the arena behind it is the [`Mapper`]'s.
     pub(crate) fn reserved(stream: &Arc<CudaStream>, ptr: u64, bytes: u64, span: u64) -> DeviceBuf {
@@ -621,14 +639,25 @@ impl DevicePtrMut<bf16> for RawBf16 {
 /// `extern:cublaslt_bf16_tn_acc` is the same with beta=1: `C += A @ W^T`.
 pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[RVal], beta: f32) -> Result<()> {
     // `c[m, n] (+)= a[m, k] @ w[n, k]^T`; an optional 7th arg is C's row
-    // stride in elements (default n) so a call can write every `ldc`-th row.
-    let (a, w, c, m, n, k, ldc) = match args {
-        [a, w, c, m, n, k] => (a, w, c, m.val, n.val, k.val, n.val),
-        [a, w, c, m, n, k, ldc] => (a, w, c, m.val, n.val, k.val, ldc.val),
-        _ => bail!(Manifest, "gemm expects 6 or 7 args, got {}", args.len()),
+    // stride in elements (default n), and an optional 8th arg is A's row
+    // stride (default k). This permits group views without transposing A.
+    let (a, w, c, m, n, k, ldc, a_stride) = match args {
+        [a, w, c, m, n, k] => (a, w, c, m.val, n.val, k.val, n.val, k.val),
+        [a, w, c, m, n, k, ldc] => (a, w, c, m.val, n.val, k.val, ldc.val, k.val),
+        [a, w, c, m, n, k, ldc, a_stride] => (a, w, c, m.val, n.val, k.val, ldc.val, a_stride.val),
+        _ => bail!(Manifest, "gemm expects 6, 7 or 8 args, got {}", args.len()),
     };
     if ldc < n {
         bail!(Manifest, "gemm: ldc {ldc} < n {n}");
+    }
+    if a_stride < k {
+        bail!(Manifest, "gemm: A row stride {a_stride} < k {k}");
+    }
+    if m == 0 || n == 0 || k == 0 {
+        return Ok(());
+    }
+    if a.bytes < ((m - 1) * a_stride + k) * 2 || w.bytes < n * k * 2 || c.bytes < ((m - 1) * ldc + n) * 2 {
+        bail!(Manifest, "gemm: operands too small for m={m} n={n} k={k} ldc={ldc} A row stride={a_stride}");
     }
     let view = |rv: &RVal| RawBf16 { ptr: rv.val, len: (rv.bytes / 2) as usize, stream: stream.clone() };
     let cfg = MatmulConfig {
@@ -641,7 +670,7 @@ pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[R
         alpha: 1.0,
         beta,
         lda: k as i64,
-        ldb: k as i64,
+        ldb: a_stride as i64,
         ldc: ldc as i64,
         stride_a: None,
         stride_b: None,
