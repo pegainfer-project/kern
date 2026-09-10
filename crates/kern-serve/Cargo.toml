@@ -8,6 +8,7 @@ description = "OpenAI-compatible serving over a kern manifest: a continuous-batc
 # Its own workspace, on purpose: the serving stack (pegainfer frontend, vLLM
 # Rust server crates) stays out of the runtime's dependency graph and CI.
 [workspace]
+exclude = ["vendor/pegainfer-frontend", "vendor/vllm-chat"]
 [workspace.lints.clippy]
 disallowed_types = "deny"  # clippy.toml: std hash maps, whose iteration order is random per process
 dbg_macro = "deny"
@@ -22,8 +23,8 @@ workspace = true
 kern-manifest = { path = "../kern-manifest" }
 kern-runtime = { path = "../kern-runtime" }
 kern-run = { path = "../kern-run" }
-# Pinned to a pegainfer main commit; bump deliberately.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "1e3b6f23276b008d26b8aaba7e05fcc94857efcb" }
+# Pinned source plus the renderer configuration seam; see vendor/.../UPSTREAM.md.
+pegainfer-frontend = { path = "vendor/pegainfer-frontend" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
@@ -38,3 +39,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [[bin]]
 name = "kern-serve"
 path = "src/main.rs"
+
+[dev-dependencies]
+vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "d3e2888c7588fe3a7be93606c7c626dbfd304d2e" }
+
+[patch."https://github.com/vllm-project/vllm.git"]
+vllm-chat = { path = "vendor/vllm-chat" }

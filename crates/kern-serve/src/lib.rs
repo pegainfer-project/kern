@@ -44,6 +44,10 @@ pub struct ServeOpts {
     #[arg(long)]
     pub served_model_name: Option<String>,
 
+    /// Chat renderer selected by the frontend (auto, hf, or a native renderer)
+    #[arg(long, default_value = "auto")]
+    pub renderer: vllm::RendererSelection,
+
     #[arg(long, default_value_t = 8000)]
     pub port: u16,
 
@@ -217,7 +221,17 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     rt.block_on(async move {
         // Needs the runtime: it spawns the signal listener.
         let shutdown = vllm::shutdown_token_from_ctrl_c();
-        vllm::serve_with_engine_count(engine, &model_path, vec![served_name], o.port, None, 1, shutdown).await
+        vllm::serve_with_engine_count_and_renderer(
+            engine,
+            &model_path,
+            vec![served_name],
+            o.port,
+            None,
+            1,
+            o.renderer,
+            shutdown,
+        )
+        .await
     })
 }
 
