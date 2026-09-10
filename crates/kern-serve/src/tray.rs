@@ -388,15 +388,24 @@ impl Tray {
         };
         let has_topology = m.topology.is_some();
         let t0 = std::time::Instant::now();
+        let host_weights = kern_runtime::HostWeights::new();
         let loaded: Vec<Result<Sent>> = std::thread::scope(|s| {
             let handles: Vec<_> = gpus
                 .iter()
                 .enumerate()
                 .map(|(q, &gpu)| {
                     let topo = topology(q);
+                    let host_weights = &host_weights;
                     s.spawn(move || -> Result<Sent> {
-                        let mut rt = Runtime::load(m, kernels, gpu, Some(capacity), has_topology.then_some(&topo))
-                            .with_context(|| format!("rank {q} on gpu {gpu}"))?;
+                        let mut rt = Runtime::load_with_host_weights(
+                            m,
+                            kernels,
+                            gpu,
+                            Some(capacity),
+                            has_topology.then_some(&topo),
+                            host_weights,
+                        )
+                        .with_context(|| format!("rank {q} on gpu {gpu}"))?;
                         rt.set_eager(eager);
                         let files = weights_of(&topo)?;
                         let maps = kern_run::map_weights(&files)?;
