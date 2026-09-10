@@ -35,11 +35,29 @@ def selected(modules_ops, name):
     return {n: modules[n] for n in used}, {name: op}
 
 
+def quantize(pieces, label, source, workspace, *, rows, width, capacity, cubin_dir=None):
+    """BF16 rows -> dynamic MXFP8 values plus column-major packed E8M0 scales, four-row padded.
+
+    One quantization serves every projection that reads the same rows: the
+    op depends on the row capacity and width only.
+    """
+    q, sf = workspace + ".fp8", workspace + ".sf"
+    padded = align4(capacity)
+    buffers = {
+        q: {"dtype": "fp8e4m3", "shape": [capacity, width], "kind": "workspace"},
+        sf: {"dtype": "i32", "shape": [width // 128, padded], "kind": "workspace"},
+    }
+    quant = pieces.add(selected(
+        dense.prep_pieces(rows, width, width, cubin_dir=cubin_dir), "dsv41_dense_quant"))
+    calls = [call(label, quant["dsv41_dense_quant"],
+                  buf(source), buf(q), buf(sf), scalar(rows), integer(width), integer(width), scalar(padded))]
+    return Lowered(buffers, calls), (q, sf)
+
+
 def projection(pieces, label, layout, source, output, *, rows, workspace,
                cubin_dir=None, row_capacity=None):
     """BF16 input -> dynamic MXFP8 -> dense / eight-group O-A -> BF16.
 
-    All activation scales use column-major packed E8M0, with four-row padding.
     O-A quantizes the contiguous flattened eight-group input, then the grouped
     kernel consumes matching group slices without a separate transpose.
     """
@@ -51,28 +69,11 @@ def projection(pieces, label, layout, source, output, *, rows, workspace,
     capacity = rows if isinstance(rows, int) else row_capacity
     if not isinstance(capacity, int) or capacity < 1:
         raise ValueError("dynamic projections require a static row_capacity for TMA")
-    width = k * groups
-    q, sf = workspace + ".fp8", workspace + ".sf"
-    padded = align4(capacity)
-    buffers = {
-        q: {"dtype": "fp8e4m3", "shape": [capacity, width], "kind": "workspace"},
-        sf: {"dtype": "i32", "shape": [width // 128, padded], "kind": "workspace"},
-        output: {"dtype": "bf16", "shape": [capacity, groups*n], "kind": "workspace"},
-    }
-    quant = pieces.add(selected(
-        dense.prep_pieces(rows, n, width, cubin_dir=cubin_dir), "dsv41_dense_quant"))
-    implementation = (dense.pieces(capacity, n, k, sfa_rows=padded, cubin_dir=cubin_dir) if groups == 1
-                      else dense.oa_pieces(capacity, sfa_rows=padded, cubin_dir=cubin_dir))
-    entry = "dsv41_dense" if groups == 1 else "dsv41_oa"
-    gemm = pieces.add(implementation)
-    calls = [
-        call(label + ".quant", quant["dsv41_dense_quant"],
-             buf(source), buf(q), buf(sf), scalar(rows), integer(width), integer(width), scalar(padded)),
-        call(label + ".gemm", gemm[entry],
-             buf(output), buf(q), buf(layout["weight"]), buf(sf), buf(layout["scale"]),
-             scalar(rows), integer(n), integer(k)),
-    ]
-    return Lowered(buffers, calls)
+    quant, (q, sf) = quantize(pieces, label + ".quant", source, workspace,
+                              rows=rows, width=k * groups, capacity=capacity, cubin_dir=cubin_dir)
+    gemm = quantized_projection(pieces, label + ".gemm", layout, q, sf, output,
+                                rows=rows, capacity=capacity, cubin_dir=cubin_dir)
+    return Lowered({**quant.buffers, **gemm.buffers}, quant.calls + gemm.calls)
 
 def normalize(pieces, label, source, weight, output, *, rows, width,
               capacity, cubin, epsilon=1e-20):
@@ -94,21 +95,25 @@ def attention_inputs(pieces, layer, layouts, source, *, prefix, rows,
     DP-local head dimensions; no TP slicing or communication is inserted.
     """
     buffers, calls = {}, []
+    def extend(stage):
+        buffers.update(stage.buffers)
+        calls.extend(stage.calls)
     def project(name, src, dst):
-        stage = projection(pieces, prefix+"."+layer+"."+name, layouts[layer+".attn."+name],
-                           src, dst, rows=rows, row_capacity=capacity,
-                           workspace=prefix+"."+name+".quant", cubin_dir=cubin_dir)
-        buffers.update(stage.buffers)
-        calls.extend(stage.calls)
+        extend(projection(pieces, prefix+"."+layer+"."+name, layouts[layer+".attn."+name],
+                          src, dst, rows=rows, row_capacity=capacity,
+                          workspace=prefix+"."+name+".quant", cubin_dir=cubin_dir))
     def norm(name, src, dst, width):
-        stage = normalize(pieces,prefix+"."+layer+"."+name,src,layer+".attn."+name+".weight",
-                          dst,rows=rows,width=width,capacity=capacity,cubin=auxiliary_cubin)
-        buffers.update(stage.buffers)
-        calls.extend(stage.calls)
-    project("wq_a", source, prefix+".qr_raw")
+        extend(normalize(pieces,prefix+"."+layer+"."+name,src,layer+".attn."+name+".weight",
+                         dst,rows=rows,width=width,capacity=capacity,cubin=auxiliary_cubin))
+    # wq_a and wkv read the same normalized rows: quantize them once.
+    quant, (q, sf) = quantize(pieces, prefix+"."+layer+".input.quant", source, prefix+".input.quant",
+                              rows=rows, width=5120, capacity=capacity, cubin_dir=cubin_dir)
+    extend(quant)
+    for name, dst in (("wq_a", prefix+".qr_raw"), ("wkv", prefix+".kv_raw")):
+        extend(quantized_projection(pieces, prefix+"."+layer+"."+name+".gemm", layouts[layer+".attn."+name],
+                                    q, sf, dst, rows=rows, capacity=capacity, cubin_dir=cubin_dir))
     norm("q_norm", prefix+".qr_raw", prefix+".qr", 1280)
     project("wq_b", prefix+".qr", prefix+".q")
-    project("wkv", source, prefix+".kv_raw")
     norm("kv_norm", prefix+".kv_raw", prefix+".kv", 512)
     return Lowered(buffers,calls)
 
