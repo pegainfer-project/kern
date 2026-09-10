@@ -4,8 +4,12 @@
 Regenerate both with `python plot.py` (Python, seaborn and matplotlib).
 
 Configuration: 4 NVIDIA GB300 GPUs, one process, DP4 attention / EP4 MoE,
-BF16 O-A, original checkpoint, complete Engram tables in 512 MiB transparent
-huge pages, chunk size 128. Measured on 2026-09-10 through the HTTP completions API.
+MXFP8 O-A from the GEMM epilogue, Mega mHC emitting MXFP8, fused
+norm+quant / norm+RoPE (11 launches per reuse-mode layer, kern 34343fa),
+original checkpoint, complete Engram tables in 512 MiB transparent
+huge pages, chunk size 128. Measured on 2026-09-10 (tray05) through the HTTP completions API; the
+earlier paged-attention / BF16 O-A numbers are kept in `data.json` under
+`previous_2026-09-10_paged_bf16_oa`.
 
 - Prefill: four simultaneous requests with distinct prefixes, exactly 10,000
   input tokens and one output token each. Aggregate throughput is 40,000 /
@@ -17,7 +21,7 @@ huge pages, chunk size 128. Measured on 2026-09-10 through the HTTP completions 
   delivery, not constant inter-token latency. Plain uses rows=1; DSpark rows=6.
 - Bars show the maximum observed throughput per metric. All trial values are
   in `data.json`: three prefill batches, three plain-decode requests, and six
-  DSpark requests across two runs. The slower trials are retained in the data.
+  DSpark requests across two passes over the same three prompts. The slower trials are retained in the data.
   Decode measurements were made in separate runs of the same THP runtime build.
   Prefix reuse was zero in the measured requests. Performance does not establish
   identical text, numerical equivalence or stable official-reference acceptance.
