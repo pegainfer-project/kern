@@ -20,10 +20,21 @@ prefill 和 batch decode kernel，再生成 kern manifest。模型语义放在 `
 - 本仓库已有 [MoE 通信选型](moe-comm-survey.md)、
   [K3 kernel ABI](k3-kernel-abi.md) 和 `tools/k3-mega/` 的接入基础。
 
-用户提到 DeepSeek 的 **prefill 15 个、decode 11 个 kernel**。目前尚未核实
-技术报告中的原文和统计范围，不把它当作完整模型的 launch 数，也不为了凑数
-划分算子。下一步核对：是 kernel 种类还是每层 launch；是否针对特定层型；
-是否包含通信、共享专家、Engram、KV/index source 层和 DSpark。
+技术报告（`DeepSeek_V41_Tech_Report.pdf` §3.2，第 18–19 页）的原文：
+"the vast majority of Transformer layers—those whose CSA2 operates in Reuse
+Mode—execute with only 15 kernels during prefill and 11 during decode"，融合核
+点名 FlashMLA 的 fused-RoPE-attention-RoPE-cast、DeepGEMM 的 Mega-Gate /
+Mega-mHC / Mega-MoE、TileKernels、DeepSelect 的 TopK。口径是**每层的 launch
+数，只算 CSA2 Reuse Mode 的层**（复用上游层 KV 与 Top-K 索引，自身不跑
+indexer、不写 KV），不含 source 层、Engram、DSpark 和通信。2026-09-10 核对
+（registry manifest，kern f38924e）：我们的 reuse 层 prefill 与 decode 都是
+27 个 call、30 次 launch（mHC 与 Mega-Gate 各带一次 `zero_u64`），source 层
+31 次，另有每步 250 余次不归属于层的 launch（indexer、compressor、Engram、
+cache 写入、head）。与 11 的差距全在未融合的胶水：4 次独立的 MXFP8 动态
+量化（wq_a / wq_b / wkv / wo_b）、2 次独立 RMSNorm、3 次独立 RoPE（q /
+kv / o，FlashMLA 的融合版本把它们收进 attention）、O-A 按 8 组各发一次
+cuBLAS（分组 GEMM 可收成一次）、MoE 入口一次独立量化。主算子数量与报告
+同量级，融合是性能阶段的事，不为凑数划分算子。
 
 ## 2. DP4 / EP4 的已知形状
 
