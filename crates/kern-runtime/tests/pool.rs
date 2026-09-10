@@ -6,7 +6,7 @@ mod common;
 use std::sync::Arc;
 
 use kern_manifest::types::{Dim, Manifest};
-use kern_runtime::{Checkpoint, Copies, Denied, Kind, Lease, Pool};
+use kern_runtime::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool};
 
 use common::{hybrid, hybrid_pool, land, pool, pool_of, two_paged};
 
@@ -63,6 +63,20 @@ fn pool_rejects_a_manifest_it_cannot_lay_out() {
     assert_eq!((a.seq_width("line_index").unwrap(), a.seq_lines("line_index").unwrap()), (8, 3));
     // The budget must hold the first slots.
     assert!(err(&hybrid(), 5, 4).contains("hold 1 sequence slots"));
+}
+
+#[test]
+fn the_chunk_budget_rounds_every_state_on_its_own() {
+    // kv: 32 tokens of 1 byte = 4 chunks; gdn: 4 slots of 24 bytes = 12 chunks.
+    assert_eq!(chunks_for(&hybrid(), 32, 4, 8), 16);
+    // Two per-sequence states of 40 bytes each hold one slot in 2 chunks of 32
+    // apiece, not the 3 the summed 80 bytes suggest: each arena rounds alone.
+    let mut m = hybrid();
+    m.states.get_mut("gdn").unwrap().bytes_per_seq = 40;
+    m.states.insert("gdn2".into(), m.states["gdn"].clone());
+    assert_eq!(chunks_for(&m, 0, 1, 32), 4);
+    assert!(Pool::new(&m, 32, 4, 1).is_ok());
+    assert!(Pool::new(&m, 32, 3, 1).is_err());
 }
 
 #[test]

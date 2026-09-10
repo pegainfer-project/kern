@@ -24,7 +24,7 @@ use crate::device::{
 };
 use crate::error::bail;
 use crate::lease::Remaps;
-use crate::pages::{page_unit, Pool};
+use crate::pages::{chunks_for, page_unit, Pool};
 use crate::peers::PeerSlot;
 use crate::{compile, cubin, weights, Capacity, Error, Result, Runtime, Topology, HEADROOM};
 
@@ -172,7 +172,7 @@ impl Runtime {
                 if aligned != asked {
                     tracing::warn!("state capacity {asked} is not a multiple of the page unit {page}; using {aligned}");
                 }
-                (aligned * token_bytes).div_ceil(chunk) + (first_slots * slot_bytes).div_ceil(chunk)
+                chunks_for(&manifest, aligned, first_slots, chunk)
             }
             None => fit_budget(&ctx, fixed_bytes, paged_bytes, slot_bytes * first_slots)? / chunk,
         };

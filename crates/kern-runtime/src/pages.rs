@@ -232,6 +232,17 @@ pub fn page_unit(m: &Manifest) -> u64 {
         .fold(1u64, lcm)
 }
 
+/// Chunks that hold `tokens` of every paged state and `first_slots` of
+/// every per-sequence state. Every pooled state is its own arena of whole
+/// chunks, so each rounds up on its own: rounding the sum once leaves the
+/// last page or slot of a state short of a chunk.
+pub fn chunks_for(m: &Manifest, tokens: u64, first_slots: u64, chunk: u64) -> u64 {
+    m.states
+        .values()
+        .map(|s| (tokens * s.bytes_per_token).div_ceil(chunk) + (first_slots * s.bytes_per_seq).div_ceil(chunk))
+        .sum()
+}
+
 /// Tokens one sequence can hold, in whole pages of `unit`: what the
 /// narrowest page-table row references. `None` when nothing is paged.
 pub(crate) fn row_tokens(m: &Manifest, unit: u64) -> Option<u64> {

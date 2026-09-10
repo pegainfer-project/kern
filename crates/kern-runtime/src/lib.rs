@@ -59,7 +59,7 @@ pub use error::{Error, Result};
 pub use host::{Host, Park, Parked};
 pub use host_weights::HostWeights;
 use lease::Remaps;
-pub use pages::{page_unit, Checkpoint, Copies, Denied, Lease, Pool, Pooled};
+pub use pages::{chunks_for, page_unit, Checkpoint, Copies, Denied, Lease, Pool, Pooled};
 pub use park::{Room, Waking};
 use peers::PeerSlot;
 pub use prefix::{Chain, Hit, Kept, Prefix, Tier};
