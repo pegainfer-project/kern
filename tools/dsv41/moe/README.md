@@ -20,7 +20,11 @@ exclusive four-GPU allocation; it has not yet completed numerical validation.
 Weight prep is byte-exact against upstream pure Torch transforms for both
 routed FP4 and shared FP8, including W1/W2 scales. Raw routed bindings are
 `i8`, shared weight bindings `fp8e4m3`, and raw scale bindings `fp8e8m0`;
-prepared weight buffers are `u8`, packed scale buffers are `i32`.
+prepared weight buffers are `u8`, packed scale buffers are `i32`. The grid's
+y axis is the expert: one launch per transform prepares a layer's whole
+expert slab, and the single-expert launch is a grid of height one. The
+batched launches were checked byte-exact against the per-expert ones at
+the real 96-expert size (`~/bench_results/2026-09-10-dsv41-batched-prep`).
 
 EP4 validation completed for both 128/top3 and 384/top6, with counts
 `[1,1,1,1]` then `[1,5,0,3]` in one process. Empty rank participation and

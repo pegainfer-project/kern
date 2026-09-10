@@ -119,13 +119,11 @@ def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, 
 def expert_weights(raw_buffers, pieces, *, cubin_dir=None):
     """Interleave gate/up and pack scales, retaining W2 checkpoint storage.
 
-    Each rank's raw expert buffers are already contiguous after ranked binding.
-    The transforms operate on per-expert byte ranges, never crossing ranks.
+    Each rank's raw expert buffers are already contiguous after ranked binding,
+    so one launch per transform prepares a layer's whole expert slab.
     """
-    from math import prod
     from .moe import prep
     from .forward import selected
-    from .head import offset
 
     buffers, calls, layouts = {}, [], {}
     prefixes = sorted(n.removesuffix(".w1.weight") for n in raw_buffers
@@ -155,27 +153,23 @@ def expert_weights(raw_buffers, pieces, *, cubin_dir=None):
         for suffix, (dtype, shape) in packed.items():
             buffers[out+"."+suffix] = {"dtype":dtype,"shape":shape,"kind":"carry"}
         mode = "shared" if shared else "routed"
-        up = prep.pieces(n,k,row_group,True,cubin_dir)
-        down = prep.pieces(k,n,row_group,False,cubin_dir)
+        up = prep.pieces(n,k,row_group,True,cubin_dir,experts=count)
+        down = prep.pieces(k,n,row_group,False,cubin_dir,experts=count)
         interleave_name = f"dsv41_interleave_gate_up_{mode}"
         sfup_name = f"dsv41_pack_expert_sf_{mode}_gate_up"
         sfdown_name = f"dsv41_pack_expert_sf_{mode}_down"
         interleave = pieces.add(selected(up,interleave_name))[interleave_name]
         sfup = pieces.add(selected(up,sfup_name))[sfup_name]
         sfdown = pieces.add(selected(down,sfdown_name))[sfdown_name]
-        for expert in range(count):
-            weight = lambda name: offset(name,expert*prod(expected[name]))
-            target = lambda suffix: offset(out+"."+suffix,
-                expert*prod(packed[suffix][1][1:])*(4 if suffix.endswith("_sf") else 1))
-            tag = f"{prefix}.{expert}.prepare"
-            calls += [
-                call(tag+".gate_up",interleave,target("w13"),weight(w1),weight(w3),
-                     integer(n),integer(k//packed_per_byte)),
-                call(tag+".gate_up_sf",sfup,target("w13_sf"),weight(s1),weight(s3),
-                     integer(2*n),integer(k),integer(row_group),integer(1)),
-                call(tag+".down_sf",sfdown,target("w2_sf"),weight(s2),weight(s2),
-                     integer(k),integer(n),integer(row_group),integer(0)),
-            ]
+        tag = prefix + ".prepare"
+        calls += [
+            call(tag+".gate_up",interleave,buf(out+".w13"),buf(w1),buf(w3),
+                 integer(n),integer(k//packed_per_byte)),
+            call(tag+".gate_up_sf",sfup,buf(out+".w13_sf"),buf(s1),buf(s3),
+                 integer(2*n),integer(k),integer(row_group),integer(1)),
+            call(tag+".down_sf",sfdown,buf(out+".w2_sf"),buf(s2),buf(s2),
+                 integer(k),integer(n),integer(row_group),integer(0)),
+        ]
         layouts[prefix] = {"w1":out+".w13","w1_sf":out+".w13_sf",
                            "w2":w2,"w2_sf":out+".w2_sf","count":count}
     return buffers,calls,layouts
