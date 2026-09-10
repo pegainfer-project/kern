@@ -327,6 +327,18 @@ struct Sent(Runtime);
 #[allow(unsafe_code)]
 unsafe impl Send for Sent {}
 
+/// An exclusive runtime borrow may move to one scoped launch thread. Runtime
+/// entry points bind their context, and the scope joins before reuse.
+struct Issuing<'a>(&'a mut Runtime);
+#[allow(unsafe_code)]
+unsafe impl Send for Issuing<'_> {}
+
+impl Issuing<'_> {
+    fn issue(self, program: &str, vars: &BTreeMap<String, u64>) -> kern_runtime::Result<()> {
+        self.0.issue(program, vars)
+    }
+}
+
 pub struct Tray {
     ranks: Vec<Runtime>,
     groups: Groups,
@@ -809,8 +821,33 @@ impl Staged<'_> {
     /// Run `f` on every rank (through its graph when the manifest says
     /// so), then read the error word when the manifest has one.
     pub fn run(&mut self, f: &Forward) -> Result<()> {
-        for (q, rt) in self.tray.ranks.iter_mut().enumerate() {
-            rt.issue(&f.name, &self.vars).with_context(|| format!("rank {q}"))?;
+        // A library launch may synchronize internally during lazy setup. A
+        // previous collective on that rank then needs peers to be issuing
+        // concurrently, even though Runtime::issue itself never waits.
+        if self.tray.ranks.iter().all(|rt| rt.uses_cached_graph(&f.name, &self.vars)) {
+            // Graph replay only queues cuGraphLaunch, so steady-state decode
+            // needs no launch threads. Every rank must be ready for this path.
+            for (q, rt) in self.tray.ranks.iter_mut().enumerate() {
+                rt.issue(&f.name, &self.vars).with_context(|| format!("rank {q}"))?;
+            }
+        } else {
+            std::thread::scope(|scope| -> Result<()> {
+                let handles: Vec<_> = self
+                    .tray
+                    .ranks
+                    .iter_mut()
+                    .enumerate()
+                    .map(|(q, rt)| {
+                        let rank = Issuing(rt);
+                        let (program, vars) = (&f.name, &self.vars);
+                        scope.spawn(move || rank.issue(program, vars).with_context(|| format!("rank {q}")))
+                    })
+                    .collect();
+                for handle in handles {
+                    handle.join().map_err(|_| anyhow::anyhow!("rank launch thread panicked"))??;
+                }
+                Ok(())
+            })?;
         }
         for (q, rt) in self.tray.ranks.iter().enumerate() {
             rt.synchronize().with_context(|| format!("rank {q}"))?;
