@@ -1,9 +1,9 @@
 """Three DSpark blocks and sequential Markov-conditioned greedy predictions."""
 from .attention_forward import forward as attention
 from .blocks import Blocks
-from .forward import Lowered, align4, normalize, scalar, selected
+from .forward import Lowered, align4, fp8_input, normalize, scalar, selected
 from .head import definitions, markov_calls
-from .moe_forward import forward as moe
+from .moe_forward import forward as moe, fp8_input as moe_fp8_input
 from .programs import buf, call, integer
 
 
@@ -32,7 +32,9 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_to
         def ffn(source, output):
             return moe(pieces,layer,expert_layouts,source,output,rows=rows,capacity=capacity,
                        workspace=prefix+".moe",experts=128,cubin_dir=cubin_dir)
-        state, stage = blocks.layer(state,layer,attn,ffn)
+        state, stage = blocks.layer(state,layer,attn,ffn,
+                                    attention_fp8=fp8_input(prefix+".attention",capacity)[1],
+                                    ffn_fp8=moe_fp8_input(prefix+".moe",experts=128,cubin_dir=cubin_dir,rows=rows))
         buffers.update(stage.buffers)
         calls.extend(stage.calls)
     collapsed, normalized = prefix+".collapsed", "draft.head_hidden"

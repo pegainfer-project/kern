@@ -87,12 +87,20 @@ def normalize(pieces, label, source, weight, output, *, rows, width,
     )
 
 
-def attention_inputs(pieces, layer, layouts, source, *, prefix, rows,
+def fp8_input(prefix, capacity):
+    """Where Mega mHC stores the attention input: FP8 rows and column-major GEMM scales."""
+    q, sf = prefix + ".input.fp8", prefix + ".input.sf"
+    return {q: {"dtype": "fp8e4m3", "shape": [capacity, 5120], "kind": "workspace"},
+            sf: {"dtype": "i32", "shape": [5120 // 128, align4(capacity)], "kind": "workspace"}}, (q, sf)
+
+
+def attention_inputs(pieces, layer, layouts, *, prefix, rows,
                      capacity, cubin_dir, auxiliary_cubin):
     """Lower Q-LoRA and shared KV projections up to their RoPE boundary.
 
-    The input is already attention RMS-normalized by Mega mHC. Keep full
-    DP-local head dimensions; no TP slicing or communication is inserted.
+    The input is already attention RMS-normalized and MXFP8-quantized by Mega
+    mHC (`fp8_input`). Keep full DP-local head dimensions; no TP slicing or
+    communication is inserted.
     """
     buffers, calls = {}, []
     def extend(stage):
@@ -105,10 +113,8 @@ def attention_inputs(pieces, layer, layouts, source, *, prefix, rows,
     def norm(name, src, dst, width):
         extend(normalize(pieces,prefix+"."+layer+"."+name,src,layer+".attn."+name+".weight",
                          dst,rows=rows,width=width,capacity=capacity,cubin=auxiliary_cubin))
-    # wq_a and wkv read the same normalized rows: quantize them once.
-    quant, (q, sf) = quantize(pieces, prefix+"."+layer+".input.quant", source, prefix+".input.quant",
-                              rows=rows, width=5120, capacity=capacity, cubin_dir=cubin_dir)
-    extend(quant)
+    fp8, (q, sf) = fp8_input(prefix, capacity)
+    buffers.update(fp8)
     for name, dst in (("wq_a", prefix+".qr_raw"), ("wkv", prefix+".kv_raw")):
         extend(quantized_projection(pieces, prefix+"."+layer+"."+name+".gemm", layouts[layer+".attn."+name],
                                     q, sf, dst, rows=rows, capacity=capacity, cubin_dir=cubin_dir))

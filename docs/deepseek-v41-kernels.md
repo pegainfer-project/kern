@@ -611,6 +611,12 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   的 barrier 从每次调用清零的 op 私有 scratch 改为 `load` 清零一次的 carry
   buffer，作为 op 的最后一个 `inout` 参数传入（20 → 17）。上游就是每个
   stream 分配一次、kernel 自行复位，这里只是把同一约定写进 manifest。
+- Mega mHC 直接输出 MXFP8（上游模板 `kStoreFP8` / `SF_BLOCK_M`，报告里
+  "incorporates input pre-norm and FP8 conversion" 指的就是它）：attention 侧
+  写列主序 GEMM scale，FFN 侧把 routed / shared scale 直接写进 MoE slab，
+  `input.quant` 与 MoE 入口的 `quant` 两次 launch 消失（17 → 15）。FP8 由已
+  舍入的 BF16 派生，`test_mhc.py` 验证与原两个量化核逐字节相同，因此这一步
+  在数值上是恒等变换。
 - 原checkpoint直接绑定与生成器`--bundle`产物已验证manifest一致；
   不需要离线导出权重。连续host权重段改为一次拷贝后，实际加载耗时
   从约154秒降至52–64秒。以上HTTP耗时仍为debug smoke，release性能验收待完成。

@@ -6,6 +6,14 @@ from .moe import gate, moe
 from .programs import buf, call, integer
 
 
+def fp8_input(workspace, *, experts=384, cubin_dir=None, rows="tokens"):
+    """Where Mega mHC stores the MoE input: slab regions for FP8 x, routed and shared scales."""
+    _, _, geometry = moe.pieces(experts, cubin_dir, rows)
+    slab = f"{workspace}.e{experts}.slab"
+    regions = [offset(slab, geometry["offsets"][name]) for name in ("x", "x_sf", "shared_x_sf")]
+    return regions, geometry["shared_sf_rows"]
+
+
 def forward(pieces, layer, layouts, source, output, *, rows, capacity,
             workspace, experts=384, cubin_dir=None):
     if capacity > 8192 or capacity < 1:
@@ -28,9 +36,6 @@ def forward(pieces, layer, layouts, source, output, *, rows, capacity,
     calls = [
         call(tag+".gate",gates[gate_name],buf(source),buf(layer+".ffn.gate.weight"),
              buf(layer+".ffn.gate.bias"),region("idx"),region("weights"),scalar(rows),buf(GATE_BARRIERS)),
-        call(tag+".quant",names["dsv41_moe_quant_x"],buf(source),region("x"),region("x_sf"),
-             scalar(rows),integer(5120),integer(5120),integer(40),
-             region("shared_x_sf"),integer(geometry["shared_sf_rows"])),
         call(tag+".experts",names[f"dsv41_mega_moe_e{experts}"],
              buf(output),buf(stats),scalar(rows),buf(peers),{"rank":"ep"},
              region("l1"),region("l1_sf"),buf(routed["w1"]),buf(routed["w1_sf"]),

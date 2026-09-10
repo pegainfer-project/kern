@@ -24,7 +24,7 @@ def forward(pieces, serving, layer, layouts, source, output, *,
     page = serving.layout.page_size
     if pool_tokens % page:
         raise ValueError("physical pool must contain complete pages")
-    pre = attention_inputs(pieces,layer,layouts,source,prefix=prefix,
+    pre = attention_inputs(pieces,layer,layouts,prefix=prefix,
                            rows=rows,capacity=capacity,cubin_dir=cubin_dir,
                            auxiliary_cubin=auxiliary_cubin)
     buffers, calls = dict(pre.buffers), list(pre.calls)

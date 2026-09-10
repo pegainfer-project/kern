@@ -21,8 +21,15 @@ class Blocks:
     def __init__(self, pieces, *, prefix, rows, capacity, cubin_dir=None):
         self.prefix, self.rows, self.capacity = prefix, rows, capacity
         self.boundary = pieces.add(boundary.pieces(rows, cubin_dir))
-        # TMA describes allocated capacity; token_count controls live rows.
-        self.mhc = pieces.add(mhc.pieces(capacity, cubin_dir, max_tokens=capacity))["dsv41_mhc"]
+        self.pieces, self.cubin_dir = pieces, cubin_dir
+
+    def mhc(self, fp8, shared_rows=None):
+        """The mHC op storing its normalized output for one consumer kind.
+
+        TMA describes allocated capacity; token_count controls live rows.
+        """
+        return self.pieces.add(mhc.pieces(self.capacity, self.cubin_dir, max_tokens=self.capacity,
+                                          fp8=fp8, shared_rows=shared_rows))["dsv41_mhc"]
 
     def name(self, suffix):
         return self.prefix + "." + suffix
@@ -64,11 +71,14 @@ class Blocks:
                       buf(state.residual),buf(state.post),buf(state.comb),scalar(self.rows))]
         return Stream(output,state.update,self.name("post0"),self.name("comb0"),state.pre), calls
 
-    def sublayer(self, state, *, layer, kind, bank, update):
+    def sublayer(self, state, *, layer, kind, bank, update, fp8):
         """Collapse with previous pre, derive current mixes, apply RMSNorm.
 
-        Return pending state whose update is produced by the following attention
-        or MoE calls. The caller appends those calls before consuming this state.
+        The normalized rows go out as BF16 and as the consumer's MXFP8 input:
+        `fp8` is (q, sf) buffer names for attention, or (slab regions,
+        shared_rows) for the MoE. Return pending state whose update is
+        produced by the following attention or MoE calls. The caller appends
+        those calls before consuming this state.
         """
         if kind not in ("attn","ffn") or bank not in (1,2):
             raise ValueError("sublayer kind/bank")
@@ -76,11 +86,16 @@ class Blocks:
         if state.residual == residual or state.pre == pre:
             raise ValueError("mHC output bank aliases live input")
         norm = self.name("normalized")
-        calls = [call(f"{self.prefix}.{layer}.{kind}.mhc",self.mhc,
+        if kind == "attn":
+            op, outputs = self.mhc("gemm"), [buf(name) for name in fp8]
+        else:
+            regions, shared_rows = fp8
+            op, outputs = self.mhc("moe", shared_rows), list(regions)
+        calls = [call(f"{self.prefix}.{layer}.{kind}.mhc",op,
                       buf(state.update),buf(state.residual),buf(state.post),buf(state.comb),buf(state.pre),
                       buf(f"{layer}.hc_{kind}_fn"),buf(f"{layer}.hc_{kind}_scale"),
                       buf(f"{layer}.hc_{kind}_base"),buf(f"{layer}.{kind}_norm.weight"),
-                      buf(residual),buf(pre),buf(post),buf(comb),buf(norm),scalar(self.rows),buf(MHC_BARRIERS))]
+                      buf(residual),buf(pre),buf(post),buf(comb),buf(norm),scalar(self.rows),buf(MHC_BARRIERS),*outputs)]
         return Stream(residual,update,post,comb,pre), norm, calls
 
     def head_input(self, state, output):
@@ -89,17 +104,18 @@ class Blocks:
                           buf(output),buf(state.residual),buf(state.pre),scalar(self.rows)))
         return calls
 
-    def layer(self, state, layer, attention, feed_forward):
+    def layer(self, state, layer, attention, feed_forward, *, attention_fp8, ffn_fp8):
         """Compose one full block from concrete sublayer lowering functions.
 
-        Providers receive (normalized_input, output_buffer) and return Lowered.
+        Providers receive (normalized_input, output_buffer) and return Lowered;
+        their MXFP8 inputs are written by the preceding mHC (see `sublayer`).
         Their calls are inlined in this program. There are no runtime subprograms.
         """
         next_state, normalized, before_attention = self.sublayer(
-            state,layer=layer,kind="attn",bank=1,update=self.name("attention_result"))
+            state,layer=layer,kind="attn",bank=1,update=self.name("attention_result"),fp8=attention_fp8)
         attn = attention(normalized,next_state.update)
         final_state, normalized, before_ffn = self.sublayer(
-            next_state,layer=layer,kind="ffn",bank=2,update=self.name("ffn_result"))
+            next_state,layer=layer,kind="ffn",bank=2,update=self.name("ffn_result"),fp8=ffn_fp8)
         ffn = feed_forward(normalized,final_state.update)
         buffers = self.buffers()
         for part in (attn.buffers,ffn.buffers):

@@ -7,9 +7,9 @@ from .attention_forward import forward as attention
 from .blocks import Blocks
 from .compressed_attention import CompressedAttention
 from .engram import inject
-from .forward import Lowered, normalize, scalar, selected
+from .forward import Lowered, fp8_input, normalize, scalar, selected
 from .head import definitions as head_ops
-from .moe_forward import forward as moe
+from .moe_forward import forward as moe, fp8_input as moe_fp8_input
 from .programs import buf, call, integer
 
 
@@ -86,7 +86,9 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, mode, ids,
             return moe(pieces,layer,expert_layouts,source,output,rows=rows,capacity=capacity,
                        workspace=prefix+".moe",cubin_dir=cubin_dir)
 
-        state, stage = blocks.layer(state,layer,attn,ffn)
+        state, stage = blocks.layer(state,layer,attn,ffn,
+                                    attention_fp8=fp8_input(prefix+".attention",capacity)[1],
+                                    ffn_fp8=moe_fp8_input(prefix+".moe",cubin_dir=cubin_dir,rows=rows))
         extend(stage)
 
     collapsed, normalized = prefix+".collapsed", prefix+".head_hidden"

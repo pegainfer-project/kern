@@ -14,7 +14,8 @@ from kern_manifest import SCHEMA_VERSION
 from dsv41.loading import Pieces,barriers,dense_scales,expert_weights
 from dsv41.blocks import Blocks
 from dsv41.attention_forward import forward as attention
-from dsv41.moe_forward import forward as moe
+from dsv41.forward import fp8_input
+from dsv41.moe_forward import forward as moe, fp8_input as moe_fp8_input
 from dsv41.auxiliary.serving import build,Layout
 
 
@@ -38,7 +39,9 @@ def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, 
     def ffn(src,out):
         return moe(pieces,layer,expert_layout,src,out,rows="tokens",capacity=capacity,
                    workspace=mode+".moe",cubin_dir=cubin_dir)
-    state,lowered = blocks.layer(state,layer,attn,ffn)
+    state,lowered = blocks.layer(state,layer,attn,ffn,
+                                 attention_fp8=fp8_input(mode+".attn",capacity)[1],
+                                 ffn_fp8=moe_fp8_input(mode+".moe",cubin_dir=cubin_dir,rows="tokens"))
     state,finish = blocks.materialize(state,mode+".finish")
     programs = {
         "load":{"once":True,"calls":dense_load+expert_load+barrier_load},
