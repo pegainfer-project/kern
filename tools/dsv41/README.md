@@ -11,7 +11,9 @@ the new mapping; small-page fallback is a large random-lookup regression.
 Physical mappings include huge-page padding, while tensor lengths stay unchanged.
 Attention is FlashMLA's fused kernel (Q RoPE, sparse attention, inverse O
 RoPE and the MXFP8 cast in one launch); O-A is one FP8 grouped GEMM over that
-output, with Q-B / O-A weights permuted once at load. The supplied PyTorch
+output, with Q-B / O-A weights permuted once at load. O-A's epilogue casts
+its own result back to MXFP8, so WO_B reads it with no cast between them and
+a reuse layer costs 16 launches per step. The supplied PyTorch
 inference keeps O-A in BF16, so this is the tech report's production kernel
 flow rather than the reference's precision; see the A/B in
 `docs/deepseek-v41-kernels.md`.

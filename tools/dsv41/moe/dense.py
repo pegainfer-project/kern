@@ -5,13 +5,15 @@ Optional element row strides allow O projection group views without copies.
 from pathlib import Path
 import hashlib
 
+def tm(p,d,dims,strides,box,sw=0):
+ return {'pack':{'size':128,'fields':[{'at':0,'tensormap':{'param':p,'dtype':d,'dims':dims,'strides':strides,'box':box,'swizzle':sw}}]}}
+
 def pieces(rows,n,k,*,a_stride=None,b_stride=None,out_stride=None,sfa_rows=None,sfb_rows=None,cubin_dir=None,max_tokens=8192):
  root=Path(cubin_dir) if cubin_dir else Path(__file__).resolve().parents[3]/'target/cubins/dsv41'
  modules={'dsv41_dense':{'source':str((Path(cubin_dir) if cubin_dir else Path('target/cubins/dsv41'))/'dense.cubin'),'sha256':hashlib.sha256((root/'dense.cubin').read_bytes()).hexdigest()}}
  capacity=rows if isinstance(rows,int) else max_tokens
  a_stride=a_stride or k;b_stride=b_stride or k;out_stride=out_stride or n
  sfa_rows=sfa_rows or ((capacity+3)//4*4);sfb_rows=sfb_rows or n
- def tm(p,d,dims,strides,box,sw=0):return {'pack':{'size':128,'fields':[{'at':0,'tensormap':{'param':p,'dtype':d,'dims':dims,'strides':strides,'box':box,'swizzle':sw}}]}}
  entry='_ZN9deep_gemm28sm100_fp8_fp4_gemm_1d1d_implILN4cute4UMMA5MajorE0ELS3_0ELj32ELj32ELj32ELj0ELj0ELj0ELj0ELj64ELj128ELj128ELj1ELj128ELj128ELj128ELj4ELj2ELj128ELj128ELj1ELb1ELj152ELb0ELb0ELNS_8GemmTypeE0ELb0EN7cutlass12float_e4m3_tES6_NS5_10bfloat16_tENS_8epilogue9transform16EpilogueIdentityEEEvPijjjT28_14CUtensorMap_stSD_SD_SD_SD_'
  # SHAPE_M/N/K are the three zeros following K alignment.
  entry=entry.replace('ELj0ELj0ELj0ELj0ELj64','ELj0ELj0ELj0ELj64')
@@ -21,12 +23,29 @@ def pieces(rows,n,k,*,a_stride=None,b_stride=None,out_stride=None,sfa_rows=None,
  return modules,{'dsv41_dense':op}
 
 def oa_pieces(rows,*,sfa_rows=None,cubin_dir=None,max_tokens=8192):
- """One-launch O-A einsum [T,8,4096] x [8,1024,4096] -> [T,8,1024]."""
- modules,ops=pieces(rows,1024,4096,sfa_rows=sfa_rows,cubin_dir=cubin_dir,max_tokens=max_tokens);op=ops.pop('dsv41_dense');launch=op['impl']['launches'][0];launch['entry']=launch['entry'].replace('ELj128ELj128ELj1ELj128','ELj128ELj128ELj8ELj128').replace('GemmTypeE0','GemmTypeE4')
+ """One-launch O-A einsum [T,8,4096] x [8,1024,4096] -> MXFP8 [T,8,1024].
+
+ DeepGEMM's dynamically-scaled epilogue casts D to E4M3 and writes per-32 UE8M0
+ scales as I32 words indexed by (batch*N+n)/128 and the row, i.e. exactly the
+ [K/128,sf_rows] column-major A-scale layout dsv41_dense reads over the flattened
+ 8192-wide output. WO_B therefore consumes this output with no cast in between.
+ ABI extends the dense one with the scale output: out FP8, A, B, sfA, sfB, M, N, K, outSF.
+ """
+ modules,ops=pieces(rows,1024,4096,sfa_rows=sfa_rows,cubin_dir=cubin_dir,max_tokens=max_tokens)
+ op=ops.pop('dsv41_dense');launch=op['impl']['launches'][0]
+ capacity=rows if isinstance(rows,int) else max_tokens;sf_rows=sfa_rows or ((capacity+3)//4*4)
+ launch['entry']='_ZN9deep_gemm28sm100_fp8_fp4_gemm_1d1d_implILN4cute4UMMA5MajorE0ELS3_0ELj32ELj32ELj32ELj0ELj0ELj0ELj64ELj128ELj128ELj8ELj128ELj128ELj128ELj4ELj2ELj128ELj128ELj1ELb1ELj152ELb0ELb0ELNS_8GemmTypeE4ELb0EN7cutlass12float_e4m3_tES6_S6_NS_8epilogue9transform24EpilogueDynamicScaledFP8EEEvPijjjT28_14CUtensorMap_stSC_SC_SC_SC_'
+ op['params'][0]='out buffer<fp8e4m3>';op['params'].append('out buffer<i32>')
+ # EpilogueArgs {sfd, sfd_stride, shape_m, shape_n, alpha}: the epilogue clamps SF
+ # writes to the live M and flattens SF columns over (batch, N), so N stays per-group.
+ launch['args'][4]={'pack':{'size':24,'fields':[{'at':0,'param':8},{'at':8,'i32':sf_rows},{'at':12,'param':5},{'at':16,'i32':1024},{'at':20,'f32':1.}]}}
  maps=launch['args'][5:]
- for index,strides in [(0,[32768,4096]),(1,[4096,1024*4096]),(4,[8*1024*2,1024*2])]:
+ for index,strides in [(0,[32768,4096]),(1,[4096,1024*4096])]:
   t=maps[index]['pack']['fields'][0]['tensormap'];t['dims'].append(8);t['box'].append(1);t['strides']=strides
  for index in (2,3):maps[index]['pack']['fields'][0]['tensormap']['dims'][1]*=8
+ # FP8 D halves the store element, so the store block widens to the 128-byte swizzle span.
+ maps[4]=tm(0,'u8',[1024,capacity,8],[8*1024,1024],[128,64,1],128)
+ launch['args']=launch['args'][:5]+maps
  return modules,{'dsv41_oa':op}
 
 def prep_pieces(rows,n,k,*,groups=1,row_group=32,cubin_dir=None):

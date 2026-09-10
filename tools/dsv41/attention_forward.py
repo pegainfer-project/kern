@@ -3,7 +3,8 @@
 Q/KV remain in ordinary head order. The fused variant needs corresponding
 load-time Q-B/O-A weight permutations and is selected separately.
 """
-from .forward import Lowered, attention_inputs, projection, quantized_projection, align4, scalar, selected
+from .forward import (Lowered, attention_inputs, output_projection, projection, quantize,
+                      quantized_projection, align4, scalar, selected)
 from .programs import buf, call, integer
 from .auxiliary.ops import definitions as auxiliary_definitions
 from .attention.paged_ops import definitions as paged_definitions
@@ -79,25 +80,33 @@ def forward(pieces, serving, layer, layouts, source, output, *,
         buffers[sf] = {"dtype":"i32","kind":"workspace","shape":[8,32,align4(capacity)]}
         args += [buf(mode+".position"),buf(fused_cos_sin),buf(sf)]
     calls.append(call(prefix+"."+layer+".attention",names[entry],*args))
+    # O-A emits MXFP8, so WO_B reads its values and scales directly; only the
+    # BF16 O-A diagnostic still needs a quantization ahead of WO_B.
     if fused:
-        lowered = quantized_projection(
+        lowered,lowrank = output_projection(
             pieces,prefix+"."+layer+".wo_a",layouts[layer+".attn.wo_a"],
             raw,sf,prefix+".o_lowrank",rows=rows,capacity=capacity,cubin_dir=cubin_dir)
-        buffers.update(lowered.buffers);calls += lowered.calls
     else:
         rope("o_rope",raw,prefix+".o",64,1)
         oa_layout = layouts[layer+".attn.wo_a"]
         if oa_layout.get("dtype") == "bf16":
             from .attention.woa import forward as bf16_oa
-            lowered = bf16_oa(pieces,prefix+"."+layer+".wo_a",oa_layout,
-                              prefix+".o",prefix+".o_lowrank",rows=rows,capacity=capacity)
+            lowered,lowrank = bf16_oa(pieces,prefix+"."+layer+".wo_a",oa_layout,
+                                      prefix+".o",prefix+".o_lowrank",rows=rows,capacity=capacity),None
         else:
-            lowered = projection(pieces,prefix+"."+layer+".wo_a",oa_layout,
-                                 prefix+".o",prefix+".o_lowrank",rows=rows,row_capacity=capacity,
-                                 workspace=prefix+".wo_a.quant",cubin_dir=cubin_dir)
-        buffers.update(lowered.buffers);calls += lowered.calls
-    lowered = projection(pieces,prefix+"."+layer+".wo_b",layouts[layer+".attn.wo_b"],
-                         prefix+".o_lowrank",output,rows=rows,row_capacity=capacity,
-                         workspace=prefix+".wo_b.quant",cubin_dir=cubin_dir)
+            quant,(q,q_sf) = quantize(pieces,prefix+"."+layer+".wo_a.quant",prefix+".o",
+                                      prefix+".wo_a.quant",rows=rows,width=32768,
+                                      capacity=capacity,cubin_dir=cubin_dir)
+            gemm,lowrank = output_projection(pieces,prefix+"."+layer+".wo_a.gemm",oa_layout,q,q_sf,
+                                             prefix+".o_lowrank",rows=rows,capacity=capacity,
+                                             cubin_dir=cubin_dir)
+            lowered = Lowered({**quant.buffers,**gemm.buffers},quant.calls+gemm.calls)
+    buffers.update(lowered.buffers);calls += lowered.calls
+    lowered = (projection(pieces,prefix+"."+layer+".wo_b",layouts[layer+".attn.wo_b"],
+                          prefix+".o_lowrank",output,rows=rows,row_capacity=capacity,
+                          workspace=prefix+".wo_b.quant",cubin_dir=cubin_dir)
+               if lowrank is None else
+               quantized_projection(pieces,prefix+"."+layer+".wo_b.gemm",layouts[layer+".attn.wo_b"],
+                                    *lowrank,output,rows=rows,capacity=capacity,cubin_dir=cubin_dir))
     buffers.update(lowered.buffers);calls += lowered.calls
     return Lowered(buffers,calls)

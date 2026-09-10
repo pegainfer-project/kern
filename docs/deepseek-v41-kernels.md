@@ -617,6 +617,13 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   `input.quant` 与 MoE 入口的 `quant` 两次 launch 消失（17 → 15）。FP8 由已
   舍入的 BF16 派生，`test_mhc.py` 验证与原两个量化核逐字节相同，因此这一步
   在数值上是恒等变换。
+- O-A 分组 GEMM 用 DeepGEMM 的 `EpilogueDynamicScaledFP8` 直接输出 MXFP8
+  （E4M3 + per-32 UE8M0，SFD 布局与 `dsv41_dense` 读的 A scale 逐位相同，
+  只需 `sfd_stride = align4(capacity)`），`wo_b.quant` 消失（15 → 14）。上游
+  epilogue 先把累加器舍到 BF16 再取 amax / 量化，`test_oa.py` 验证与"BF16
+  输出 + `dsv41_dense_quant_x`"逐字节相同，也是恒等变换。顺带发现 checkpoint
+  自带的 `model.act_quant` 在 32 行以上不确定（同一输入两次得到不同位置的
+  NaN 字节），测试改为自带量化并在 32 行处与参考对齐。
 - 原checkpoint直接绑定与生成器`--bundle`产物已验证manifest一致；
   不需要离线导出权重。连续host权重段改为一次拷贝后，实际加载耗时
   从约154秒降至52–64秒。以上HTTP耗时仍为debug smoke，release性能验收待完成。

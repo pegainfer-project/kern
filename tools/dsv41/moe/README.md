@@ -44,7 +44,13 @@ uses BLOCK_M=16; large prefill needs additional tuned instances.
 with dynamic M/N/K and configurable row strides. The public interface is
 `out BF16, A FP8, B FP8, A SF I32, B SF I32, M, N, K`.
 `dense.oa_pieces(rows)` is a single batched launch for
-`[T,8,4096] × [8,1024,4096] -> [T,8,1024]`.
+`[T,8,4096] × [8,1024,4096] -> [T,8,1024]` that writes MXFP8 directly:
+DeepGEMM's dynamically-scaled epilogue casts D to E4M3 and emits per-32
+UE8M0 scales as I32 words indexed by `(batch*N+n)/128` and the row, which
+is exactly the `[K/128,align(capacity,4)]` A-scale layout `dsv41_dense`
+reads over the flattened 8192-wide output. WO_B therefore consumes O-A's
+result with no cast between them, and the ABI gains a trailing SF output:
+`out FP8, A, B, A SF, B SF, M, N, K, out SF`.
 Unlike MegaMoE, dense SF has **no UTCCP row permutation**: its kernel
 transposes internally. Physical scale layout is `[groups,K/128,N]` for
 weights and `[8*K/128,align(capacity,4)]` for O activations.
@@ -55,11 +61,20 @@ when different shape-specific definitions coexist in a manifest.
 
 Dense numerics against original `model.linear`: tested M=1/5/65 at
 N=1280,K=5120 and M=5,N=1024,K=4096, relative squared error <=2.1e-11.
-O-A against the reference BF16 einsum: M=1/5/17, relative squared error
-<=7.17e-4 from the added FP8 activation cast. This is not a certification
-of model-level accuracy. Dense quantization matches original `act_quant`
-byte-for-byte at K=5120 and flattened O K=32768; weight scale packing is
-byte-exact for one dense matrix and eight O groups.
+O-A against its dequantized inputs: M=1/5/65/128 at fixed capacity 128,
+relative squared error <=7.12e-4 from the MXFP8 output cast, and its FP8
+bytes and UE8M0 exponents are identical both to quantizing the reference
+BF16 O-A result and to the superseded BF16 kernel followed by
+`dsv41_dense_quant_x`. Feeding that output straight into `dsv41_dense`
+(N=5120, K=8192) agrees with the dequantized reference to <=1.9e-10.
+This is not a certification of model-level accuracy. Weight scale packing
+is byte-exact for one dense matrix and eight O groups.
+
+`test_oa.py` quantizes its own activations rather than calling the
+reference `act_quant`: that kernel races above 32 rows on GB300 and
+sporadically writes E4M3 NaN bytes, which a GEMM then spreads over whole
+rows. `check_reference` pins the harness quantizer to the reference at 32
+rows, where it is stable.
 
 `replay.py` fixtures exercise actual `program_io`, including a safetensors
 load followed by a `once` program. mHC graph replay is byte-exact at
@@ -103,8 +118,9 @@ synthetic activations, and full-model output agreement is still separate.
 Both fused layout transforms pass actual safetensors `once` replay and four
 real-weight GEMM graph cases. On checkpoint layer 0, query projection agrees
 with original `model.linear` to relative squared error <5e-16 at T=1/5.
-O-A agrees with its original BF16 einsum to 7.36e-4/7.10e-4 at T=1/5,
-reflecting the FP8 activation cast. Weight and scale permutations themselves
+O-A, dequantized from its MXFP8 output, agrees with the original BF16
+einsum to 1.40e-3/1.41e-3 at T=1/5, reflecting the FP8 activation cast and
+the output cast. Weight and scale permutations themselves
 are byte-exact. These fixed transforms apply to main-attention Wq_b and
 WO_A, not the differently shaped indexer projection.
 

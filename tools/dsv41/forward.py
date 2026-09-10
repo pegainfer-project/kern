@@ -56,21 +56,15 @@ def quantize(pieces, label, source, workspace, *, rows, width, capacity, cubin_d
 
 def projection(pieces, label, layout, source, output, *, rows, workspace,
                cubin_dir=None, row_capacity=None):
-    """BF16 input -> dynamic MXFP8 -> dense / eight-group O-A -> BF16.
-
-    O-A quantizes the contiguous flattened eight-group input, then the grouped
-    kernel consumes matching group slices without a separate transpose.
-    """
+    """BF16 input -> dynamic MXFP8 -> dense GEMM -> BF16."""
     n, k, groups = (layout[key] for key in ("n", "k", "groups"))
-    if groups not in (1, 8):
+    if groups != 1:
         raise ValueError(f"unsupported dense projection groups: {groups}")
-    if groups == 8 and (n, k) != (1024, 4096):
-        raise ValueError("the O-A instance requires eight 1024x4096 matrices")
     capacity = rows if isinstance(rows, int) else row_capacity
     if not isinstance(capacity, int) or capacity < 1:
         raise ValueError("dynamic projections require a static row_capacity for TMA")
     quant, (q, sf) = quantize(pieces, label + ".quant", source, workspace,
-                              rows=rows, width=k * groups, capacity=capacity, cubin_dir=cubin_dir)
+                              rows=rows, width=k, capacity=capacity, cubin_dir=cubin_dir)
     gemm = quantized_projection(pieces, label + ".gemm", layout, q, sf, output,
                                 rows=rows, capacity=capacity, cubin_dir=cubin_dir)
     return Lowered({**quant.buffers, **gemm.buffers}, quant.calls + gemm.calls)
@@ -137,17 +131,29 @@ def bf16_projection(pieces, label, source, weight, output, *, rows, capacity, n,
 
 
 def quantized_projection(pieces,label,layout,source,scales,output,*,rows,capacity,cubin_dir=None):
-    """Consume fused attention's FP8 values and packed I32 scales directly."""
+    """Consume MXFP8 values and their packed I32 scales directly, emitting BF16."""
     n,k,groups=(layout[key] for key in ("n","k","groups"))
-    if groups==8:
-        definitions=dense.oa_pieces(capacity,sfa_rows=align4(capacity),cubin_dir=cubin_dir)
-        entry="dsv41_oa"
-    elif groups==1:
-        definitions=dense.pieces(capacity,n,k,sfa_rows=align4(capacity),cubin_dir=cubin_dir)
-        entry="dsv41_dense"
-    else:
+    if groups!=1:
         raise ValueError("unsupported grouped projection")
-    name=pieces.add(definitions)[entry]
-    return Lowered({output:{"dtype":"bf16","kind":"workspace","shape":[capacity,n*groups]}},
+    name=pieces.add(dense.pieces(capacity,n,k,sfa_rows=align4(capacity),cubin_dir=cubin_dir))["dsv41_dense"]
+    return Lowered({output:{"dtype":"bf16","kind":"workspace","shape":[capacity,n]}},
                    [call(label,name,buf(output),buf(source),buf(layout["weight"]),buf(scales),
                          buf(layout["scale"]),scalar(rows),integer(n),integer(k))])
+
+
+def output_projection(pieces,label,layout,source,scales,output,*,rows,capacity,cubin_dir=None):
+    """O-A: the eight-group GEMM whose epilogue already writes MXFP8.
+
+    Returns the lowering and the (values, scales) pair, in the very layout
+    `quantized_projection` expects, so WO_B needs no quantization of its own.
+    """
+    n,k,groups=(layout[key] for key in ("n","k","groups"))
+    if (n,k,groups)!=(1024,4096,8):
+        raise ValueError("the O-A instance requires eight 1024x4096 matrices")
+    name=pieces.add(dense.oa_pieces(capacity,sfa_rows=align4(capacity),cubin_dir=cubin_dir))["dsv41_oa"]
+    sf=output+".sf"
+    buffers={output:{"dtype":"fp8e4m3","kind":"workspace","shape":[capacity,n*groups]},
+             sf:{"dtype":"i32","kind":"workspace","shape":[n*groups//128,align4(capacity)]}}
+    return Lowered(buffers,
+                   [call(label,name,buf(output),buf(source),buf(layout["weight"]),buf(scales),
+                         buf(layout["scale"]),scalar(rows),integer(n),integer(k),buf(sf))]),(output,sf)
