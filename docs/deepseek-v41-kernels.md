@@ -606,6 +606,11 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   einsum，所以 A 对齐参考实现、B 对齐报告的生产核；分叉点的 top-1/top-2
   margin 没有量（kern-serve 无 logprobs，`kern test` 只单卡），决定切到 B，
   margin 留给多 rank `kern test`。
+- 切到 B 之后的两步胶水收缩（同一 tray05 harness，rows=1 16/16 与 B 逐字
+  同）：wq_a 与 wkv 共用一次 MXFP8 量化（4f607fc，21 → 20）；mHC 与 Mega-Gate
+  的 barrier 从每次调用清零的 op 私有 scratch 改为 `load` 清零一次的 carry
+  buffer，作为 op 的最后一个 `inout` 参数传入（20 → 17）。上游就是每个
+  stream 分配一次、kernel 自行复位，这里只是把同一约定写进 manifest。
 - 原checkpoint直接绑定与生成器`--bundle`产物已验证manifest一致；
   不需要离线导出权重。连续host权重段改为一次拷贝后，实际加载耗时
   从约154秒降至52–64秒。以上HTTP耗时仍为debug smoke，release性能验收待完成。

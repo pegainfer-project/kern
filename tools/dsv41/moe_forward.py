@@ -1,6 +1,7 @@
 """Lower routing, quantization and fused EP4 MoE without intermediate copies."""
 from .forward import Lowered, scalar
 from .head import offset
+from .loading import GATE_BARRIERS
 from .moe import gate, moe
 from .programs import buf, call, integer
 
@@ -26,7 +27,7 @@ def forward(pieces, layer, layouts, source, output, *, rows, capacity,
     tag = workspace+"."+layer
     calls = [
         call(tag+".gate",gates[gate_name],buf(source),buf(layer+".ffn.gate.weight"),
-             buf(layer+".ffn.gate.bias"),region("idx"),region("weights"),scalar(rows)),
+             buf(layer+".ffn.gate.bias"),region("idx"),region("weights"),scalar(rows),buf(GATE_BARRIERS)),
         call(tag+".quant",names["dsv41_moe_quant_x"],buf(source),region("x"),region("x_sf"),
              scalar(rows),integer(5120),integer(5120),integer(40),
              region("shared_x_sf"),integer(geometry["shared_sf_rows"])),

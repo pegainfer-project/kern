@@ -13,7 +13,7 @@ def main():
         x=torch.randn(n,5120,device='cuda',dtype=torch.bfloat16);r=torch.randn(n,4,5120,device='cuda',dtype=torch.bfloat16)
         post=torch.randn(n,4,device='cuda').sigmoid();comb=torch.randn(n,4,4,device='cuda').softmax(-1);pre=torch.randn_like(post).sigmoid()
         fn=torch.randn(24,20480,device='cuda')*.01;scales=torch.randn(3,device='cuda')*.1;bases=torch.randn(24,device='cuda')*.1;norm=torch.randn(5120,device='cuda',dtype=torch.bfloat16)*.1+1
-        params=[x,r,post,comb,pre,fn,scales,bases,norm,torch.empty_like(r),torch.empty_like(pre),torch.empty_like(post),torch.empty_like(comb),torch.empty_like(x),n]
+        params=[x,r,post,comb,pre,fn,scales,bases,norm,torch.empty_like(r),torch.empty_like(pre),torch.empty_like(post),torch.empty_like(comb),torch.empty_like(x),n,torch.zeros(524288,dtype=torch.int64,device='cuda')]
         scratch={k:torch.zeros(v['shape'],dtype=torch.uint8 if v['dtype']=='u8' else torch.int64,device='cuda') for k,v in ops['dsv41_mhc']['impl']['scratch'].items()}
         def addr(i):return params[i].data_ptr() if isinstance(params[i],torch.Tensor) else params[i]
         keep=[]

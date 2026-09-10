@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 
 from .forward import Lowered, scalar
+from .loading import MHC_BARRIERS
 from .moe import mhc, ops as boundary
 from .programs import buf, call
 
@@ -79,7 +80,7 @@ class Blocks:
                       buf(state.update),buf(state.residual),buf(state.post),buf(state.comb),buf(state.pre),
                       buf(f"{layer}.hc_{kind}_fn"),buf(f"{layer}.hc_{kind}_scale"),
                       buf(f"{layer}.hc_{kind}_base"),buf(f"{layer}.{kind}_norm.weight"),
-                      buf(residual),buf(pre),buf(post),buf(comb),buf(norm),scalar(self.rows))]
+                      buf(residual),buf(pre),buf(post),buf(comb),buf(norm),scalar(self.rows),buf(MHC_BARRIERS))]
         return Stream(residual,update,post,comb,pre), norm, calls
 
     def head_input(self, state, output):

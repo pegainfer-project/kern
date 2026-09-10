@@ -15,3 +15,10 @@ def pieces(rows="tokens", cubin_dir=None):
     }
     ops = {name: {'params': params, 'impl': {'launches': [{'module': 'dsv41_moe_boundary', 'entry': name, 'block': [256, 1, 1], 'grid': [{'ceil_div': [{'mul': [rows, width]}, 256]}, 1, 1]}]}} for name, (params, width) in signatures.items()}
     return modules, ops
+
+
+def zero(count, cubin_dir=None):
+    """`dsv41_zero_u64` over a fixed count of u64 words, for once-at-load clears."""
+    modules, _ = pieces(cubin_dir=cubin_dir)
+    op = {'params': ['out buffer<u64>', 'i32'], 'impl': {'launches': [{'module': 'dsv41_moe_boundary', 'entry': 'dsv41_zero_u64', 'block': [256, 1, 1], 'grid': [(count + 255) // 256, 1, 1]}]}}
+    return modules, {'dsv41_zero_u64': op}

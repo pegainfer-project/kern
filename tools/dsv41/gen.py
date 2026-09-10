@@ -8,7 +8,7 @@ import shutil
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from kern_manifest import SCHEMA_VERSION
-from dsv41.loading import Pieces, dense_scales, expert_weights
+from dsv41.loading import Pieces, barriers, dense_scales, expert_weights
 from dsv41.auxiliary.serving import Layout, build
 from dsv41.draft_context import capture, publish
 from dsv41.target import forward, head
@@ -44,10 +44,11 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
     device_weights = {name:b for name,b in raw.items() if b.get("placement") != "host"}
     dense_buffers, dense_load, dense_layouts = dense_scales(device_weights,pieces,cubin_dir=cubin_dir,fused_attention=True)
     expert_buffers, expert_load, expert_layouts = expert_weights(device_weights,pieces,cubin_dir=cubin_dir)
+    barrier_buffers, barrier_load = barriers(pieces,cubin_dir=cubin_dir)
     serving = build(auxiliary_cubin,Layout(max_tokens=capacity,max_seqs=max_seqs,max_context=context))
-    buffers = {**dense_buffers,**expert_buffers,**constants["buffers"]}
+    buffers = {**dense_buffers,**expert_buffers,**barrier_buffers,**constants["buffers"]}
     pieces.fixed((constants["modules"],constants["ops"]))
-    programs = {"load":{"once":True,"calls":constants["calls"]+dense_load+expert_load}}
+    programs = {"load":{"once":True,"calls":constants["calls"]+dense_load+expert_load+barrier_load}}
     vocab = raw["embed.weight"]["shape"][0]
     buffers["next_token"] = {"kind":"output","dtype":"i64","shape":["seqs"],
                               "fill":"tokens","domain":{"index_into":"embed.weight"}}

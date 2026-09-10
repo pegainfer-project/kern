@@ -50,6 +50,24 @@ def digest(op):
     return hashlib.sha256(json.dumps(op, sort_keys=True).encode()).hexdigest()[:8]
 
 
+MHC_BARRIERS, GATE_BARRIERS = "mhc.barriers", "gate.barriers"
+
+
+def barriers(pieces, *, cubin_dir=None):
+    """Mega mHC and Mega Gate split / score barriers: carries cleared once at load.
+
+    Upstream allocates each once per stream and never clears it again; the
+    kernels leave the words consistent between calls, so every program
+    shares one buffer per kernel and `load` is the only other writer.
+    """
+    from .moe import ops
+    shapes = {MHC_BARRIERS: 524288, GATE_BARRIERS: 8192}
+    buffers = {name: {"dtype": "u64", "shape": [count], "kind": "carry"} for name, count in shapes.items()}
+    calls = [call(name + ".clear", pieces.add(ops.zero(count, cubin_dir=cubin_dir))["dsv41_zero_u64"],
+                  buf(name), integer(count)) for name, count in shapes.items()]
+    return buffers, calls
+
+
 def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, bf16_oa=False):
     """Return packed scale carry buffers and once calls for dense projections.
 

@@ -13,7 +13,7 @@ def main():
   for n in (1,5,65,128):
    modules,ops=pieces(rows=n,experts=experts,max_tokens=n,raw_outputs=a.raw_slab);op=next(iter(ops.values()));launch=op['impl']['launches'][-1]
    x=torch.randn(n,5120,device='cuda',dtype=torch.bfloat16);weight=torch.randn(experts,5120,device='cuda',dtype=torch.bfloat16)*.03;bias=torch.randn(experts,device='cuda')*.1
-   idx=torch.empty(n,topk,device='cuda',dtype=torch.int64);weights=torch.empty(n,topk,device='cuda');params=[x,weight,bias,idx,weights,n]
+   idx=torch.empty(n,topk,device='cuda',dtype=torch.int64);weights=torch.empty(n,topk,device='cuda');params=[x,weight,bias,idx,weights,n,torch.zeros(8192,dtype=torch.int64,device='cuda')]
    scratch={k:torch.zeros(v['shape'],dtype=torch.uint8 if v['dtype']=='u8' else torch.int64,device='cuda') for k,v in op['impl']['scratch'].items()}
    def arg(v):
     if 'param' in v:

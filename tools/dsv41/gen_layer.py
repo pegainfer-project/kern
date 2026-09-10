@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from kern_manifest import SCHEMA_VERSION
-from dsv41.loading import Pieces,dense_scales,expert_weights
+from dsv41.loading import Pieces,barriers,dense_scales,expert_weights
 from dsv41.blocks import Blocks
 from dsv41.attention_forward import forward as attention
 from dsv41.moe_forward import forward as moe
@@ -24,6 +24,7 @@ def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, 
     pieces = Pieces()
     dense_buffers,dense_load,dense_layout = dense_scales(weights,pieces,cubin_dir=cubin_dir,fused_attention=fused_cubin is not None)
     expert_buffers,expert_load,expert_layout = expert_weights(weights,pieces,cubin_dir=cubin_dir)
+    barrier_buffers,barrier_load = barriers(pieces,cubin_dir=cubin_dir)
     # One sequence per rank for this integration probe; rows remain dynamic.
     serving = build(auxiliary_cubin,Layout(max_seqs=1,max_tokens=capacity,max_context=context))
     blocks = Blocks(pieces,prefix=mode,rows="tokens",capacity=capacity,cubin_dir=cubin_dir)
@@ -40,12 +41,12 @@ def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, 
     state,lowered = blocks.layer(state,layer,attn,ffn)
     state,finish = blocks.materialize(state,mode+".finish")
     programs = {
-        "load":{"once":True,"calls":dense_load+expert_load},
+        "load":{"once":True,"calls":dense_load+expert_load+barrier_load},
         "prefill":{"batch":{"groups":1,"rows":"tokens"},
                    "calls":serving.prepare(mode,"input_ids")+init+lowered.calls+finish},
     }
     aux = serving.pieces(programs)
-    buffers = {**dense_buffers,**expert_buffers,**lowered.buffers,**aux["buffers"],
+    buffers = {**dense_buffers,**expert_buffers,**barrier_buffers,**lowered.buffers,**aux["buffers"],
                "embedding":{"dtype":"bf16","shape":[capacity,5120],"kind":"input"},
                "cos_sin":{"dtype":"f32","shape":[context,64],"kind":"input"}}
     if fused_cubin:
