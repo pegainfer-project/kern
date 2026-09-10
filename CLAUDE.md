@@ -26,7 +26,8 @@ the schema golden, lints) belongs in CI, not here.
 - `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
   `kern.toml`, the `kern test` harness.
 - `crates/kern-serve` — its own workspace: the pegainfer/vLLM front end plus
-  `KernScheduler`. Builds only inside the kernel-lab container.
+  `KernScheduler`. Builds where protoc and libssl-dev are: the kernel-lab
+  container, the release runner.
 - `tools/` — capture, extract, export, manifest generators. Model knowledge
   lives here.
 - GPU tests need a free GPU on a shared tray: `nvidia-smi` before `kern test`.

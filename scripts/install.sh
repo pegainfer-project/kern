@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the kern binary from a GitHub release.
+# Install the kern and kern-serve binaries from a GitHub release.
 #
 #   curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 #
@@ -8,7 +8,8 @@
 #   KERN_BASE_URL     where the release assets are (default: GitHub releases)
 #
 # Downloads kern-<arch>-unknown-linux-gnu.tar.gz and its checksum, verifies,
-# installs one file. Nothing else is written. Then it looks at the machine
+# installs two files (`kern server` finds kern-serve beside itself). Nothing
+# else is written. Then it looks at the machine
 # and says what `kern run` will need that it cannot see, without failing.
 set -eu
 
@@ -65,7 +66,8 @@ have=$(digest "$tmp/$asset")
 tar -xzf "$tmp/$asset" -C "$tmp"
 mkdir -p "$dir"
 install -m 0755 "$tmp/kern" "$dir/kern"
-say "installed $("$dir/kern" --version) to $dir/kern"
+install -m 0755 "$tmp/kern-serve" "$dir/kern-serve"
+say "installed $("$dir/kern" --version) and $("$dir/kern-serve" --version) to $dir"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
