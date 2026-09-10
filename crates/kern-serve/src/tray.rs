@@ -222,6 +222,11 @@ struct Layout {
 }
 
 impl Layout {
+    /// Row validity is independent of token id, position and pad lease address.
+    fn valid(&self, rank: usize) -> Vec<i64> {
+        self.rows(rank).flat_map(|cell| std::iter::repeat_n(i64::from(cell.is_some()), self.per)).collect()
+    }
+
     /// `cells[i]` = (owner, rows) of cell `i`; at most one cell per group
     /// has more than one row, and those all have the same number. `bucket`
     /// pads a row count up to its graph's.
@@ -699,12 +704,16 @@ impl Tray {
                 // Each sequence's first token, the anchor a drafting program
                 // splices its own rows from.
                 (Fill::Token, Axis::Groups) => l.rows(q).map(|c| ids_of(c)[0]).collect(),
+                (Fill::Valid, _) => l.valid(q),
                 (Fill::Position, _) => l.rows(q).flat_map(|c| (0..per).map(move |j| (pos_of(c) + j) as i64)).collect(),
                 (Fill::Slot, _) => l
                     .rows(q)
-                    .flat_map(|c| {
-                        let (pos, lease) = (pos_of(c), c.map_or(pad, |(i, _)| cells[i].row.own()));
-                        lease.slots(pos..pos + per)
+                    .flat_map(|c| match c {
+                        Some((i, _)) => {
+                            let pos = pos_of(c);
+                            cells[i].row.own().slots(pos..pos + per)
+                        }
+                        None => vec![pad.slots(0..1)[0]; per],
                     })
                     .collect(),
                 (Fill::SeqLen, _) => l.rows(q).map(|c| (pos_of(c) + per) as i64).collect(),
@@ -960,5 +969,17 @@ mod tests {
         // Only one of two groups runs: the other still leads.
         let l = Layout::new(&[(0, 3), one(2)], 1, &g, bucket);
         assert_eq!(l.lead, vec![0, 0, 3, 0]);
+    }
+    #[test]
+    fn valid_rows_distinguish_bucket_padding_and_empty_ranks() {
+        let groups = Groups { n: 4, t: 1 };
+        let layout = Layout::new(&[(0, 1), (2, 1), (0, 1)], 6, &groups, |n| n.next_power_of_two());
+        let valid = layout.valid(0);
+        assert_eq!(&valid[..12], &[1; 12]);
+        assert!(valid[12..].iter().all(|&x| x == 0));
+        assert!(layout.valid(1).iter().all(|&x| x == 0));
+        let other = layout.valid(2);
+        assert_eq!(&other[..6], &[1; 6]);
+        assert!(other[6..].iter().all(|&x| x == 0));
     }
 }
