@@ -54,8 +54,11 @@ kernel 都过了才 unmap），完成后主线程在下一次 `lease` / `checkpo
 最大页单位（block table 的 `stride`），不会出现半页；`tokens: None`（kern-serve
 不给 `--capacity` 时的默认）则在 buffer、scratch 和定长 state 都分完之后
 `cuMemGetInfo`，剩余显存减
-`HEADROOM`（1 GiB）全给。整块读写 state（`read_state` / `write_state_at` /
-`zero_states`，kern test 用）只在第一次 remap 之前有效。
+`HEADROOM`（1 GiB）全给；每个 pooled state 自成一个整块的 arena，预算按 state
+逐个向上取整（按 Σ 取整一次会让每个 state 的最后一页 / 最后一个 slot 差一块）。
+整块读写 state（`read_state` / `write_state_at` / `zero_states`，kern test 用）
+只在第一次 remap 之前有效；program 里 state 指针和铺满维（`dims` 末维 0）的
+tensormap 按整段预留编码，remap 新做出的页和 slot 在装载时编好的图里就可寻址。
 `Runtime::lease(tokens)` 一次租下 KV 页和每个 per-seq state 的一个 slot
 （租时在 stream 上清零），`Lease::seq_line(table, r)` 给出 line 表的项（宽表
 `[lines, seqs, w]` 的格宽由 `seq_width` 给出，caller 决定 line 落在哪一项）；

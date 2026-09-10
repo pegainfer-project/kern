@@ -300,6 +300,13 @@ impl DeviceBuf {
         Ok(Some(PeerHandle { fabric: fh.data, bytes: v.size as u64 }))
     }
 
+    /// Bytes addressable from `ptr`: a pooled state's whole reservation,
+    /// so a pointer or tensormap taken at load stays valid for every page
+    /// and slot a remap makes later.
+    pub(crate) fn span(&self) -> u64 {
+        self.span
+    }
+
     /// Whether this allocation carries a fabric handle.
     pub(crate) fn is_shareable(&self) -> bool {
         matches!(&self.backing, Backing::Vmm(v) if v.shareable)
