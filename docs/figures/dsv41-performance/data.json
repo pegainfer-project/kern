@@ -1,0 +1,38 @@
+{
+  "prefill_tokens_per_s": 4778.24531643024,
+  "decode_tokens_per_s": 82.97879412331184,
+  "dspark_tokens_per_s": 196.9584436894455,
+  "selection": "maximum observed throughput per metric",
+  "configuration": {
+    "gpu": "4 x NVIDIA GB300",
+    "attention": "DP4",
+    "moe": "EP4",
+    "input_tokens": 10000,
+    "decode_output_tokens": 256,
+    "prefill_concurrency": 4,
+    "decode_concurrency": 1,
+    "chunk_size": 128,
+    "engram": "512 MiB THP",
+    "oa": "BF16"
+  },
+  "trials": {
+    "prefill_tokens_per_s": [
+      1101.042397197764,
+      4778.24531643024,
+      4472.545974054043
+    ],
+    "decode_tokens_per_s": [
+      36.11986704986553,
+      82.97879412331184,
+      46.21474925573643
+    ],
+    "dspark_tokens_per_s": [
+      179.42002446212294,
+      127.27551177287275,
+      179.47809458145352,
+      180.74282334578356,
+      190.88862499236168,
+      196.9584436894455
+    ]
+  }
+}
