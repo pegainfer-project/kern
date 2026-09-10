@@ -56,7 +56,7 @@ The execution environment must expose its GPUs and IMEX channel for peer memory.
 
 ```bash
 kern server dsv41 --gpus 0,1,2,3 --capacity 32768 --chunk 128 \
-  --max-seqs 16 --rows 6 --renderer deepseek_v41 --port 8000
+  --max-seqs 16 --rows 6 --port 8000
 ```
 
 Use `--rows 1` for plain decode. Both modes update DSpark context. The native

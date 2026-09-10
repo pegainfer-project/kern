@@ -550,9 +550,9 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
 - 首次整链暴露rank串行issue与cuBLAS lazy setup的阻塞：rank0在layer2
   compressor GEMM等待前面的EP MoE，其他rank尚未提交，导致barrier timeout。
   Staged::run改为scoped线程并行issue后上述HTTP验证通过。
-- 新增generic `kern server <target>`桥接与`--renderer`参数。显式DeepSeekV4
-  renderer的单用户非思考普通chat编码与官方V4.1一致；系统/思考/工具格式
-  尚未完成V4.1精确适配。验证没有改动原始checkpoint。
+- 新增generic `kern server <target>`桥接。chat renderer 由 checkpoint 的
+  `model_type` 自动选定（upstream vLLM 6ff479e1 起带 `deepseek_v41`，pegainfer
+  a30543d 跟进），本仓库不再 vendor frontend 或 renderer。验证没有改动原始checkpoint。
 - DSpark round已静态通过，正在进行原attention对照后切换HTTP六行round；
   接受长度及性能仍未证实。
 

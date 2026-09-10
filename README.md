@@ -125,15 +125,12 @@ KERN_SERVE_BIN="$PWD/crates/kern-serve/target/release/kern-serve" \
 `KERN_SERVE_BIN` selects the executable; otherwise kern looks beside itself,
 then on `PATH`. On Unix the server replaces the CLI process, preserving signals
 and exit status. Use `kern server <target> -- --help` for the server's flags.
-`--renderer` explicitly selects a frontend renderer, such as `hf` or
-`deepseek_v41`, when automatic detection does not recognize a checkpoint; its
-chat format must match that checkpoint. The default is `auto`.
-The V4.1 renderer matches the released text encoding for system messages,
-multi-turn history and thinking. It accepts `low`, `high`, `xhigh` and `max`
-reasoning effort; integer budgets from 1 to 100 can be supplied as
-`chat_template_kwargs.reasoning_effort`. V4.1 tool schemas and historical tool
-calls are encoded and tested, but its output `tool_calls` parser is not yet
-adapted; this is not complete tool-calling support.
+The frontend picks the chat renderer from the checkpoint's `model_type`
+(`deepseek_v41` included; anything else renders through the HF chat
+template). The V4.1 renderer matches the released text encoding for system
+messages, multi-turn history and thinking; it accepts `low`, `high`, `xhigh`
+and `max` reasoning effort, and integer budgets from 1 to 100 as
+`chat_template_kwargs.reasoning_effort`.
 
 `kern <cmd> --help` lists the flags; `crates/kern-run/src/config.rs`
 documents `kern.toml` (targets are names you pick — kern reads no meaning

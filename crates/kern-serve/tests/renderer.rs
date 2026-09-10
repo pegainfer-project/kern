@@ -1,27 +1,5 @@
 //! Native rendering is CPU-only and does not require a checkpoint chat template.
-use clap::Parser;
-use kern_serve::ServeOpts;
-use pegainfer_frontend::vllm::RendererSelection;
 use vllm_chat::{ChatMessage, ChatRenderer, ChatRequest, DeepSeekV4ChatRenderer};
-
-#[derive(Parser)]
-struct Cli {
-    #[command(flatten)]
-    options: ServeOpts,
-}
-
-#[test]
-fn explicit_renderer_survives_unrecognized_model_type() {
-    let cli = Cli::try_parse_from(["server", "--renderer", "deepseek_v4"]).unwrap();
-    assert_eq!(cli.options.renderer.resolve("deepseek_v41"), RendererSelection::DeepSeekV4);
-    assert_eq!(RendererSelection::Auto.resolve("deepseek_v41"), RendererSelection::DeepSeekV41);
-    assert_eq!(
-        Cli::try_parse_from(["server", "--renderer", "deepseek_v41"]).unwrap().options.renderer,
-        RendererSelection::DeepSeekV41
-    );
-    assert_eq!(Cli::try_parse_from(["server"]).unwrap().options.renderer, RendererSelection::Auto);
-    assert!(Cli::try_parse_from(["server", "--renderer", "missing"]).is_err());
-}
 
 #[test]
 fn native_nonthinking_user_prompt_matches_supplied_v41_encoding() {
@@ -33,6 +11,9 @@ fn native_nonthinking_user_prompt_matches_supplied_v41_encoding() {
     // changes system messages, reasoning effort and tool tags.
     assert_eq!(actual, "<｜begin▁of▁sentence｜><｜User｜>Hello.<｜Assistant｜></think>");
 }
+
+/// Fixture cases whose reference output upstream vLLM does not reproduce.
+const UPSTREAM_REJECTS: &[&str] = &["mixed-tool-user-sorted", "invalid-json-tool-argument-fallback"];
 
 #[test]
 fn v41_matches_released_reference_text_cases() {
@@ -87,7 +68,13 @@ fn v41_matches_released_reference_text_cases() {
             request.chat_options.template_kwargs.insert(key.into(), case[source].clone());
         }
         let rendered = DeepSeekV41ChatRenderer::new().render(&request);
-        if case["error"] == Value::Bool(true) {
+        // The released encoding.py decodes a tool call's arguments twice and
+        // wraps anything that is still not an object as {"arguments": raw};
+        // upstream vLLM rejects such history instead. The reference text for
+        // these two cases stays in the fixture so the divergence is visible.
+        if UPSTREAM_REJECTS.contains(&case["name"].as_str().unwrap()) {
+            assert!(rendered.is_err(), "{} is expected to be rejected by the upstream renderer", case["name"]);
+        } else if case["error"] == Value::Bool(true) {
             assert!(rendered.is_err(), "{} should fail", case["name"]);
         } else {
             assert_eq!(
