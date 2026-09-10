@@ -84,7 +84,7 @@ def main():
                           attention_cubin=a.artifacts/'libdsv41_paged_decode.2.sm_103a.cubin')
             init=selected(definitions(a.auxiliary,rows=sum(anchors)),'cache_fp8')
             init[1]['cache_fp8']['params'][0]='out buffer<u8>'
-            name=pieces.add('initialize',init)['cache_fp8']
+            name=pieces.add(init)['cache_fp8']
             calls=load+[{'op':name,'args':[{'buf':'cache'},{'buf':'context_kv'},{'buf':'context_slots'},{'i32':sum(anchors)},{'i32':page}]}]+serving.prepare('draft','draft_ids')+stage.calls
             programs={'probe':{'calls':calls}};aux=serving.pieces(programs)
             buffers={**weights,**packed,**stage.buffers,**aux['buffers']}

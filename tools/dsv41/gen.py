@@ -46,8 +46,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
     expert_buffers, expert_load, expert_layouts = expert_weights(device_weights,pieces,cubin_dir=cubin_dir)
     serving = build(auxiliary_cubin,Layout(max_tokens=capacity,max_seqs=max_seqs,max_context=context))
     buffers = {**dense_buffers,**expert_buffers,**constants["buffers"]}
-    pieces.add("constants",(constants["modules"],{}))
-    pieces.ops.update(constants["ops"])
+    pieces.fixed((constants["modules"],constants["ops"]))
     programs = {"load":{"once":True,"calls":constants["calls"]+dense_load+expert_load}}
     vocab = raw["embed.weight"]["shape"][0]
     buffers["next_token"] = {"kind":"output","dtype":"i64","shape":["seqs"],
@@ -85,9 +84,9 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
     buffers["verify_tokens"]["fill"] = "tokens"
     buffers["nacc"] = {"kind":"output","dtype":"i32","shape":["seqs"],"fill":"count",
                         "domain":{"min":1,"max":6}}
-    pieces.modules["dsv41_spec_round"] = {"source":spec_cubin.name,
-                                          "sha256":hashlib.sha256(spec_cubin.read_bytes()).hexdigest()}
-    pieces.ops.update(spec_ops("dsv41_spec_round"))
+    pieces.fixed(({"dsv41_spec_round":{"source":spec_cubin.name,
+                                       "sha256":hashlib.sha256(spec_cubin.read_bytes()).hexdigest()}},
+                  spec_ops("dsv41_spec_round")))
     programs = assemble(Stages(programs["load"]["calls"],forwards["prefill"],forwards["decode"],draft.calls,
                                forwards["verify"],contexts["prefill"],contexts["decode"],contexts["verify"],commits),
                         max_seqs=max_seqs)

@@ -59,12 +59,12 @@ def projection(pieces, label, layout, source, output, *, rows, workspace,
         sf: {"dtype": "i32", "shape": [width // 128, padded], "kind": "workspace"},
         output: {"dtype": "bf16", "shape": [capacity, groups*n], "kind": "workspace"},
     }
-    quant = pieces.add(label, selected(
+    quant = pieces.add(selected(
         dense.prep_pieces(rows, n, width, cubin_dir=cubin_dir), "dsv41_dense_quant"))
     implementation = (dense.pieces(capacity, n, k, sfa_rows=padded, cubin_dir=cubin_dir) if groups == 1
                       else dense.oa_pieces(capacity, sfa_rows=padded, cubin_dir=cubin_dir))
     entry = "dsv41_dense" if groups == 1 else "dsv41_oa"
-    gemm = pieces.add(label, implementation)
+    gemm = pieces.add(implementation)
     calls = [
         call(label + ".quant", quant["dsv41_dense_quant"],
              buf(source), buf(q), buf(sf), scalar(rows), integer(width), integer(width), scalar(padded)),
@@ -78,7 +78,7 @@ def normalize(pieces, label, source, weight, output, *, rows, width,
               capacity, cubin, epsilon=1e-20):
     """The auxiliary norm kernel implements the reference BF16 RMSNorm."""
     from .auxiliary.ops import definitions
-    op = pieces.add(label, selected(definitions(cubin, rows=rows), "compress1"))["compress1"]
+    op = pieces.add(selected(definitions(cubin, rows=rows), "compress1"))["compress1"]
     return Lowered(
         {output: {"dtype": "bf16", "shape": [capacity, width], "kind": "workspace"}},
         [call(label, op, buf(output), buf(source), buf(weight),
@@ -120,7 +120,7 @@ def bf16_projection(pieces, label, source, weight, output, *, rows, capacity, n,
     entry = "extern:cublas_bf16_tn_f32" if fp32 else "extern:cublaslt_bf16_tn"
     op = {"params":["in buffer<bf16>","in buffer<bf16>",f"out buffer<{dtype}>","i32","i32","i32"],
           "impl":{"launches":[{"entry":entry}]}}
-    key = pieces.add("linear", ({},{name:op}))[name]
+    key = pieces.add(({},{name:op}))[name]
     return Lowered({output:{"dtype":dtype,"kind":"workspace","shape":[capacity,n]}},
                    [call(label,key,buf(source),buf(weight),buf(output),scalar(rows),integer(n),integer(k))])
 
@@ -136,7 +136,7 @@ def quantized_projection(pieces,label,layout,source,scales,output,*,rows,capacit
         entry="dsv41_dense"
     else:
         raise ValueError("unsupported grouped projection")
-    name=pieces.add(label,definitions)[entry]
+    name=pieces.add(definitions)[entry]
     return Lowered({output:{"dtype":"bf16","kind":"workspace","shape":[capacity,n*groups]}},
                    [call(label,name,buf(output),buf(source),buf(layout["weight"]),buf(scales),
                          buf(layout["scale"]),scalar(rows),integer(n),integer(k))])

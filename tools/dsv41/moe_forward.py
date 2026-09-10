@@ -10,9 +10,9 @@ def forward(pieces, layer, layouts, source, output, *, rows, capacity,
     if capacity > 8192 or capacity < 1:
         raise ValueError("MegaMoE slab supports 1..8192 local rows")
     modules, ops, geometry = moe.pieces(experts, cubin_dir, rows)
-    names = pieces.add(f"{workspace}.e{experts}", (modules,ops))
+    names = pieces.add((modules,ops))
     gate_name = f"dsv41_gate_e{experts}"
-    gates = pieces.add(f"{workspace}.e{experts}", gate.pieces(
+    gates = pieces.add(gate.pieces(
         rows,experts,cubin_dir,max_tokens=capacity,raw_outputs=True))
     slab, peers, stats = (f"{workspace}.e{experts}.{n}" for n in ("slab","peers","stats"))
     buffers = {

@@ -19,9 +19,9 @@ class Stream:
 class Blocks:
     def __init__(self, pieces, *, prefix, rows, capacity, cubin_dir=None):
         self.prefix, self.rows, self.capacity = prefix, rows, capacity
-        self.boundary = pieces.add(prefix, boundary.pieces(rows, cubin_dir))
+        self.boundary = pieces.add(boundary.pieces(rows, cubin_dir))
         # TMA describes allocated capacity; token_count controls live rows.
-        self.mhc = pieces.add(prefix, mhc.pieces(capacity, cubin_dir, max_tokens=capacity))["dsv41_mhc"]
+        self.mhc = pieces.add(mhc.pieces(capacity, cubin_dir, max_tokens=capacity))["dsv41_mhc"]
 
     def name(self, suffix):
         return self.prefix + "." + suffix

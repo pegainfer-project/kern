@@ -1,31 +1,53 @@
 """Lower checkpoint storage transformations into the manifest once program."""
 from copy import deepcopy
+import hashlib
+import json
 
 from .moe import dense
 from .programs import call, buf, integer
 
 
 class Pieces:
-    """Combine specialized operators without silently overwriting geometry."""
+    """Specialized operators, named by what specializes them.
+
+    An op body is a pure function of its geometry (row capacity, matrix shape,
+    strides), never of the layer or phase that lowers it, so equal bodies share
+    one name: `<entry>.<digest>` where the digest is over the body. Forty layers
+    of the same projection become one op; distinct geometry stays distinct
+    without any caller choosing a namespace. `fixed` is for the few ops that
+    programs address by a literal name.
+    """
 
     def __init__(self):
         self.modules = {}
         self.ops = {}
 
-    def add(self, prefix, pieces):
+    def add(self, pieces):
         modules, ops = pieces
+        self._modules(modules)
+        return {name: self._op(f"{name}.{digest(op)}", op) for name, op in ops.items()}
+
+    def fixed(self, pieces):
+        modules, ops = pieces
+        self._modules(modules)
+        for name, op in ops.items():
+            self._op(name, op)
+
+    def _modules(self, modules):
         for name, module in modules.items():
             if name in self.modules and self.modules[name] != module:
                 raise ValueError(f"module identity changed while generating: {name}")
             self.modules[name] = deepcopy(module)
-        names = {}
-        for name, op in ops.items():
-            key = f"{prefix}.{name}"
-            if key in self.ops and self.ops[key] != op:
-                raise ValueError(f"specialized op collision: {key}")
-            self.ops[key] = deepcopy(op)
-            names[name] = key
-        return names
+
+    def _op(self, key, op):
+        if key in self.ops and self.ops[key] != op:
+            raise ValueError(f"specialized op collision: {key}")
+        self.ops[key] = deepcopy(op)
+        return key
+
+
+def digest(op):
+    return hashlib.sha256(json.dumps(op, sort_keys=True).encode()).hexdigest()[:8]
 
 
 def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, bf16_oa=False):
@@ -72,7 +94,7 @@ def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, 
         if fused_attention and permutation is not None:
             transformed = prefix + ".fused_weight"
             buffers[transformed] = {"dtype": "fp8e4m3", "shape": weight["shape"], "kind": "carry"}
-            names = pieces.add(prefix, dense.layout_pieces(permutation, cubin_dir=cubin_dir))
+            names = pieces.add(dense.layout_pieces(permutation, cubin_dir=cubin_dir))
             calls += [
                 call(prefix + ".weight_layout", names[f"dsv41_{permutation}_weight_layout"],
                      buf(transformed), buf(name)),
@@ -87,8 +109,7 @@ def dense_scales(raw_buffers, pieces, *, cubin_dir=None, fused_attention=False, 
         modules, ops = dense.prep_pieces(1, n, k, groups=groups, cubin_dir=cubin_dir)
         pack = ops["dsv41_dense_sf_pack"]
         used = {launch["module"] for launch in pack["impl"]["launches"]}
-        names = pieces.add(prefix, ({key: modules[key] for key in used},
-                                    {"dsv41_dense_sf_pack": pack}))
+        names = pieces.add(({key: modules[key] for key in used}, {"dsv41_dense_sf_pack": pack}))
         calls.append(call(prefix + ".pack_scale", names["dsv41_dense_sf_pack"],
                           buf(packed), buf(scale), integer(n), integer(k), integer(groups), integer(32)))
         layouts[prefix] = {"n": n, "k": k, "groups": groups, "weight": name, "scale": packed}
@@ -139,9 +160,9 @@ def expert_weights(raw_buffers, pieces, *, cubin_dir=None):
         interleave_name = f"dsv41_interleave_gate_up_{mode}"
         sfup_name = f"dsv41_pack_expert_sf_{mode}_gate_up"
         sfdown_name = f"dsv41_pack_expert_sf_{mode}_down"
-        interleave = pieces.add("moe.load", selected(up,interleave_name))[interleave_name]
-        sfup = pieces.add("moe.load",selected(up,sfup_name))[sfup_name]
-        sfdown = pieces.add("moe.load",selected(down,sfdown_name))[sfdown_name]
+        interleave = pieces.add(selected(up,interleave_name))[interleave_name]
+        sfup = pieces.add(selected(up,sfup_name))[sfup_name]
+        sfdown = pieces.add(selected(down,sfdown_name))[sfdown_name]
         for expert in range(count):
             weight = lambda name: offset(name,expert*prod(expected[name]))
             target = lambda suffix: offset(out+"."+suffix,

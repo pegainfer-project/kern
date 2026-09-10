@@ -15,7 +15,7 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_to
     buffers, calls = {}, serving.prepare("draft","draft_ids")
     embedding = prefix + ".embedding"
     buffers[embedding] = {"kind":"workspace","dtype":"bf16","shape":[capacity,5120]}
-    embedding_op = pieces.add(prefix,selected(definitions(head_cubin,seqs=rows),"head_embedding"))["head_embedding"]
+    embedding_op = pieces.add(selected(definitions(head_cubin,seqs=rows),"head_embedding"))["head_embedding"]
     calls.append(call(prefix+".embed",embedding_op,buf("draft_ids"),integer(1),buf("embed.weight"),buf(embedding),integer(5120)))
     blocks = Blocks(pieces,prefix=prefix,rows=rows,capacity=capacity,cubin_dir=cubin_dir)
     state, initial = blocks.initialize(embedding)
@@ -41,12 +41,7 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_to
                       rows=rows,width=5120,capacity=capacity,cubin=auxiliary_cubin)
     buffers.update(stage.buffers)
     calls.extend(stage.calls)
-    modules, ops = definitions(head_cubin)
-    pieces.add("draft_head_module",(modules,{}))
-    for name, op in ops.items():
-        if name in pieces.ops and pieces.ops[name] != op:
-            raise ValueError(f"draft head op collision: {name}")
-        pieces.ops[name] = op
+    pieces.fixed(definitions(head_cubin))
     for name,dtype,shape in (("draft.logits","f32",[capacity,vocab]),
                              ("draft.markov_embed","bf16",[max_seqs,256]),
                              ("draft.markov_bias","f32",[max_seqs,vocab])):

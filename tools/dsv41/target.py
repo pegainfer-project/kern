@@ -39,7 +39,7 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, mode, ids,
                                   compressed_pad_id=constants["metadata"]["compressed_pad_id"])
     embedding = prefix + ".embedding"
     buffers[embedding] = {"dtype":"bf16","kind":"workspace","shape":[capacity,5120]}
-    embedding_op = pieces.add(prefix,selected(head_ops(head_cubin,seqs=rows),"head_embedding"))["head_embedding"]
+    embedding_op = pieces.add(selected(head_ops(head_cubin,seqs=rows),"head_embedding"))["head_embedding"]
     calls.append(call(prefix+".embed",embedding_op,buf(ids),integer(1),buf("embed.weight"),buf(embedding),integer(5120)))
     blocks = Blocks(pieces,prefix=prefix,rows=rows,capacity=capacity,cubin_dir=cubin_dir)
     state, initial = blocks.initialize(embedding)
@@ -112,12 +112,12 @@ def head(pieces, hidden, output, *, mode, capacity, vocab, head_cubin, copy_cubi
         ops = {"last_row":{"params":["out buffer<bf16>","in buffer<bf16>","i32","i32","i32"],
                            "impl":{"launches":[{"module":"copy_rows","entry":"kern_last_row_bf16",
                                                   "grid":[1,1,1],"block":[256,1,1]}]}}}
-        name = pieces.add(prefix,(modules,ops))["last_row"]
+        name = pieces.add((modules,ops))["last_row"]
         last = prefix + ".last"
         buffers[last] = {"dtype":"bf16","kind":"workspace","shape":[1,5120]}
         calls.append(call(prefix+".last",name,buf(last),buf(hidden),integer(5120),integer(5120),scalar("tokens")))
         hidden = last
-    names = pieces.add(prefix,head_ops(head_cubin,seqs=rows))
+    names = pieces.add(head_ops(head_cubin,seqs=rows))
     logits = prefix + ".logits"
     buffers[logits] = {"dtype":"f32","kind":"workspace","shape":[head_capacity,vocab]}
     # The serving generator declares output geometry/fill; verification has

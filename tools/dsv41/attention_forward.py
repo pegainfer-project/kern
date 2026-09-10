@@ -38,7 +38,7 @@ def forward(pieces, serving, layer, layouts, source, output, *,
         buffers.update(lowered.buffers)
         calls.extend(lowered.calls)
     def rope(name, source, target, heads, inverse):
-        names = pieces.add(prefix+"."+name,selected(
+        names = pieces.add(selected(
             auxiliary_definitions(auxiliary_cubin,rows=rows,heads=heads),"rope"))
         buffers[target] = {"dtype":"bf16","kind":"workspace","shape":[capacity,heads*512]}
         calls.append(call(prefix+"."+layer+"."+name,names["rope"],
@@ -65,7 +65,7 @@ def forward(pieces, serving, layer, layouts, source, output, *,
         # The byte ABI holds packed E8M0 words; expose I32 storage so O-A
         # consumes the same allocation without copying or reinterpreting buffers.
         ops[entry]["params"][-1] = "out buffer<i32>"
-    names = pieces.add(prefix+"."+layer,(modules,ops))
+    names = pieces.add((modules,ops))
     raw = prefix+".attention_raw"
     buffers[raw] = {"dtype":"fp8e4m3" if fused else "bf16","kind":"workspace","shape":[capacity,32768]}
     args = [

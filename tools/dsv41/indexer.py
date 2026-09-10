@@ -49,14 +49,14 @@ def forward(pieces, serving, layer, source, layouts, hidden, qr, *, mode,
     extend(projection(pieces,prefix+".query",layouts[weight+".wq_b"],qr,query,
                       rows=rows,row_capacity=capacity,workspace=prefix+".query_quant",cubin_dir=cubin_dir))
     rotated = allocate("rotated","bf16",4096)
-    rope = pieces.add(prefix,selected(auxiliary_ops(auxiliary_cubin,rows=rows,heads=32),"rope"))["rope"]
+    rope = pieces.add(selected(auxiliary_ops(auxiliary_cubin,rows=rows,heads=32),"rope"))["rope"]
     calls.append(call(prefix+".rope",rope,buf(rotated),buf(query),buf(cos_sin),
                       buf(mode+".position"),scalar(rows),integer(32),integer(128),integer(64),integer(0)))
     packed = allocate("packed","u8",2048)
     scales = allocate("scales","fp8e8m0",128)
     dequant = allocate("dequant","bf16",4096)
     quant_rows = {"mul":[rows,32]}
-    quant = pieces.add(prefix,selected(auxiliary_ops(auxiliary_cubin,rows=quant_rows),"index_quant"))["index_quant"]
+    quant = pieces.add(selected(auxiliary_ops(auxiliary_cubin,rows=quant_rows),"index_quant"))["index_quant"]
     calls.append(call(prefix+".quant",quant,buf(packed),buf(scales),buf(dequant),buf(rotated),scalar(quant_rows),integer(128)))
     raw_weights = prefix + ".weights_raw"
     extend(bf16_projection(pieces,prefix+".weights",hidden,weight+".weights_proj.weight",
@@ -64,7 +64,7 @@ def forward(pieces, serving, layer, source, layouts, hidden, qr, *, mode,
     dense = dense_ops(dense_cubin,rows=rows,rows_max=capacity,kv_rows_max=width,
                       page_size=page,pages=pool_tokens//serving.layout.page_size,
                       page_cols=serving.layout.pages)
-    names = pieces.add(prefix,selected(dense,"dsv41_index_weights") if layer > 20 else dense)
+    names = pieces.add(selected(dense,"dsv41_index_weights") if layer > 20 else dense)
     weights_bf16 = allocate("weights_bf16","bf16",32)
     weights_f32 = allocate("weights_f32","f32",32)
     calls.append(call(prefix+".scale_weights",names["dsv41_index_weights"],
@@ -72,14 +72,14 @@ def forward(pieces, serving, layer, source, layouts, hidden, qr, *, mode,
     logical = allocate("logical","i32",512)
 
     def select(scores, ends, output, stride, topk, dtype, label):
-        name = pieces.add(prefix+"."+label,select_ops(select_cubin,rows=rows,rows_max=capacity,
+        name = pieces.add(select_ops(select_cubin,rows=rows,rows_max=capacity,
                           width=stride,topk=topk,dtype=dtype))["dsv41_select"]
         calls.append(call(prefix+"."+label,name,buf(scores),buf(ends),buf(output),scalar(rows)))
 
     if layer > 20:
         if candidates is None:
             raise ValueError("later indexers require layer20 candidate blocks")
-        sparse = pieces.add(prefix,sparse_ops(sparse_cubin,rows=rows,rows_max=capacity,
+        sparse = pieces.add(sparse_ops(sparse_cubin,rows=rows,rows_max=capacity,
                             page_size=page,page_cols=serving.layout.pages,scale_dtype="fp8e8m0"))
         scores = allocate("scores","bf16",16384)
         calls.append(call(prefix+".score",sparse["dsv41_paged_sparse_scores"],buf(packed),buf(scales),
@@ -104,7 +104,7 @@ def forward(pieces, serving, layer, source, layouts, hidden, qr, *, mode,
             block_ends = allocate("block_ends","i32",1)
             selected_blocks = allocate("selected_blocks","i32",2048)
             candidates = allocate("candidates","i32",2048)
-            adapters = pieces.add(prefix,candidate_ops(candidate_cubin,rows=rows,width=width,block_stride=block_stride))
+            adapters = pieces.add(candidate_ops(candidate_cubin,rows=rows,width=width,block_stride=block_stride))
             calls.append(call(prefix+".block_scores",adapters["dsv41_candidate_scores"],buf(scores),
                               buf(metadata["ends"]),buf(block_scores),buf(block_ends),scalar(rows)))
             select(block_scores,block_ends,selected_blocks,block_stride,2048,"f32","select_blocks")

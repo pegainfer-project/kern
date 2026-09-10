@@ -29,7 +29,7 @@ The caller retains original prefix.weight FP8[8192,4096] and
 prefix.scale E8M0[256,128] checkpoint bindings. No transformed files.
 """
     weight = prefix + '.bf16'
-    op = pieces.add('woa.load', definitions(cubin))['dequant']
+    op = pieces.add(definitions(cubin))['dequant']
     buffers = {weight: {'dtype': 'bf16', 'kind': 'carry', 'shape': [8192, 4096]}}
     calls = [call(prefix + '.dequant', op, buf(prefix + '.weight'), buf(prefix + '.scale'),
                   buf(weight), integer(8192), integer(4096))]
@@ -50,7 +50,7 @@ columns into the row-major concatenation consumed by WO_B.
         raise ValueError('BF16 WO_A expects ordinary attention head order')
     params = ['in buffer<bf16>', 'in buffer<bf16>', 'out buffer<bf16>'] + ['i32'] * 5
     op = {'params': params, 'impl': {'launches': [{'entry': 'extern:cublaslt_bf16_tn'}]}}
-    name = pieces.add('woa', ({}, {'group': op}))['group']
+    name = pieces.add(({}, {'group': op}))['group']
     calls = []
     for g in range(8):
         calls.append(call(label + f'.group{g}', name,

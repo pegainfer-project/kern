@@ -20,7 +20,7 @@ def capture(pieces, materialized_hc, layer, *, mode, rows, capacity, auxiliary_c
     if layer not in TARGET_LAYERS:
         raise ValueError("DSpark taps are target attention inputs37/38/39")
     entry = "context_tap_init" if layer == TARGET_LAYERS[0] else "context_tap"
-    op = pieces.add(f"{mode}.context", selected(definitions(auxiliary_cubin, rows=rows), entry))[entry]
+    op = pieces.add(selected(definitions(auxiliary_cubin, rows=rows), entry))[entry]
     output = hidden_name(mode)
     return Lowered({output: {"dtype": "bf16", "shape": [capacity,15360], "kind": "workspace"}},
                    [call(f"{mode}.context.tap{layer}", op, buf(output), buf(materialized_hc),
@@ -48,10 +48,10 @@ def publish(pieces, serving, layouts, *, mode, capacity, auxiliary_cubin, cubin_
     if mode=="verify":
         slots=prefix+".slots"
         buffers[slots]={"dtype":"i64","shape":[capacity],"kind":"workspace"}
-        op=pieces.add(prefix,selected(definitions(auxiliary_cubin,rows=rows),"context_slots"))["context_slots"]
+        op=pieces.add(selected(definitions(auxiliary_cubin,rows=rows),"context_slots"))["context_slots"]
         calls.append(call(prefix+".accepted_slots",op,buf(slots),buf(f"{mode}.slot"),
                           buf(f"{mode}.request"),buf(f"{mode}.starts"),buf(accepted),scalar(rows)))
-    ops={name:pieces.add(prefix,selected(definitions(auxiliary_cubin,rows=rows,heads=1),name))[name]
+    ops={name:pieces.add(selected(definitions(auxiliary_cubin,rows=rows,heads=1),name))[name]
          for name in ("rope","cache_fp8")}
     for layer in range(serving.layout.draft_layers):
         stage=f"{prefix}.{layer}"

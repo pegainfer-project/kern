@@ -42,7 +42,7 @@ def publish(pieces,serving,source,input_hidden,*,mode,capacity,cos_sin,auxiliary
                     prefix+".key",rows=rows,width=128,capacity=capacity,cubin=auxiliary_cubin)
     buffers.update(stage.buffers);calls+=stage.calls
     def rope(name,src,width):
-        key=pieces.add(prefix+"."+name,selected(definitions(auxiliary_cubin,rows=rows,heads=1),"rope"))["rope"]
+        key=pieces.add(selected(definitions(auxiliary_cubin,rows=rows,heads=1),"rope"))["rope"]
         dst=prefix+"."+name
         buffers[dst]={"dtype":"bf16","kind":"workspace","shape":[capacity,width]}
         calls.append(call(prefix+"."+name,key,buf(dst),buf(src),buf(cos_sin),
@@ -50,7 +50,7 @@ def publish(pieces,serving,source,input_hidden,*,mode,capacity,cos_sin,auxiliary
                           integer(width),integer(64),integer(0)))
         return dst
     key=rope("key_rope",prefix+".key",128)
-    quant=pieces.add(prefix,selected(definitions(auxiliary_cubin,rows=rows),"index_quant"))["index_quant"]
+    quant=pieces.add(selected(definitions(auxiliary_cubin,rows=rows),"index_quant"))["index_quant"]
     packed,scales,dequant=(prefix+"."+n for n in ("key_packed","key_scales","key_dequant"))
     for name,dtype,width in ((packed,"u8",64),(scales,"fp8e8m0",4),(dequant,"bf16",128)):
         buffers[name]={"dtype":dtype,"kind":"workspace","shape":[capacity,width]}
