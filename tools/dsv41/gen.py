@@ -93,7 +93,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
     aux = serving.pieces(programs)
     buffers.update(aux["buffers"])
     used = {a["buf"] for p in programs.values() for c in p["calls"] for a in c["args"] if "buf" in a}
-    for name in used - buffers.keys():
+    for name in sorted(used - buffers.keys()):
         buffers[name] = raw[name]
     for b in list(buffers.values()):
         if b.get("of"):
