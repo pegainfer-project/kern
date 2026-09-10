@@ -9,9 +9,12 @@ Immutable host weights use aligned 512 MiB transparent huge pages, followed by
 portable CUDA registration. Allocation fails if `AnonHugePages` does not cover
 the new mapping; small-page fallback is a large random-lookup regression.
 Physical mappings include huge-page padding, while tensor lengths stay unchanged.
-O-A weights are dequantized to BF16 once, matching the supplied inference;
-its grouped projection consumes BF16 attention output without adding FP8
-activation quantization. Build `attention/build_woa.sh` with the other kernels.
+Attention is FlashMLA's fused kernel (Q RoPE, sparse attention, inverse O
+RoPE and the MXFP8 cast in one launch); O-A is one FP8 grouped GEMM over that
+output, with Q-B / O-A weights permuted once at load. The supplied PyTorch
+inference keeps O-A in BF16, so this is the tech report's production kernel
+flow rather than the reference's precision; see the A/B in
+`docs/deepseek-v41-kernels.md`.
 
 Kernel builds and upstream pins are documented in [attention](attention/README.md),
 [MoE](moe/README.md), and [the integration log](../../docs/deepseek-v41-kernels.md).

@@ -8,7 +8,7 @@ from .programs import buf, call, integer
 
 
 def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_tokens,
-            constants, cubin_dir, auxiliary_cubin, attention_cubin, head_cubin, vocab):
+            constants, cubin_dir, auxiliary_cubin, attention_cubin, fused_cubin, head_cubin, vocab):
     rows = serving.rows("draft")
     capacity = align4(max_seqs * 5)
     prefix = "draft.blocks"
@@ -27,7 +27,8 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_to
             return attention(pieces,serving,layer,dense_layouts,source,output,mode="draft",
                              prefix=prefix+".attention",capacity=capacity,pool_tokens=pool_tokens,
                              cos_sin=constants["rope"]["window"]["interleaved"],cubin_dir=cubin_dir,
-                             auxiliary_cubin=auxiliary_cubin,attention_cubin=attention_cubin)
+                             auxiliary_cubin=auxiliary_cubin,attention_cubin=attention_cubin,
+                             fused_cubin=fused_cubin,fused_cos_sin=constants["rope"]["window"]["split"])
         def ffn(source, output):
             return moe(pieces,layer,expert_layouts,source,output,rows=rows,capacity=capacity,
                        workspace=prefix+".moe",experts=128,cubin_dir=cubin_dir)

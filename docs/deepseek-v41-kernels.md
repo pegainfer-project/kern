@@ -596,6 +596,16 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   这一结果尚不能归因于常规浮点误差，正在逐层定位。
 - 官方DSpark接受长度对照使用固定AR历史与tap，并补采kern在同历史上的
   proposal；官方推理脚本没有可直接比较的接受率或吞吐基线。
+- 2026-09-10 tray05 A/B（`~/bench_results/2026-09-10-dsv41-fused-ab`）：A =
+  paged attention + BF16 O-A（8 次 cuBLAS），B = FlashMLA fused
+  RoPE-attention-RoPE-cast + FP8 O-A 一次 launch，reuse 层每步 30 → 21 次
+  launch。16 条 prompt 贪心 256 token conc1：A、B 各自 rows=1 与 rows=6
+  16/16 逐字同；A 对 B 0/16 同（3 条首字分叉），全部连贯、措辞级差异；
+  rows=6 接受 2.71 → 2.76 token/步（34% → 35%）；TPOT rows=1 12.0 → 11.1
+  ms，rows=6 5.38 → 4.93 ms。官方 `inference/model.py` 的 `wo_a` 是 BF16
+  einsum，所以 A 对齐参考实现、B 对齐报告的生产核；分叉点的 top-1/top-2
+  margin 没有量（kern-serve 无 logprobs，`kern test` 只单卡），决定切到 B，
+  margin 留给多 rank `kern test`。
 - 原checkpoint直接绑定与生成器`--bundle`产物已验证manifest一致；
   不需要离线导出权重。连续host权重段改为一次拷贝后，实际加载耗时
   从约154秒降至52–64秒。以上HTTP耗时仍为debug smoke，release性能验收待完成。

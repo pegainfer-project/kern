@@ -42,7 +42,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
              head_cubin, copy_cubin, spec_cubin, capacity=128, max_seqs=16, context=32768):
     pieces = Pieces()
     device_weights = {name:b for name,b in raw.items() if b.get("placement") != "host"}
-    dense_buffers, dense_load, dense_layouts = dense_scales(device_weights,pieces,cubin_dir=cubin_dir,bf16_oa=True)
+    dense_buffers, dense_load, dense_layouts = dense_scales(device_weights,pieces,cubin_dir=cubin_dir,fused_attention=True)
     expert_buffers, expert_load, expert_layouts = expert_weights(device_weights,pieces,cubin_dir=cubin_dir)
     serving = build(auxiliary_cubin,Layout(max_tokens=capacity,max_seqs=max_seqs,max_context=context))
     buffers = {**dense_buffers,**expert_buffers,**constants["buffers"]}
@@ -56,6 +56,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
         target = forward(pieces,serving,dense_layouts,expert_layouts,mode=mode,ids="verify_ids" if mode=="verify" else "input_ids",
                          capacity=capacity,pool_tokens=context,constants=constants,cubin_dir=cubin_dir,
                          auxiliary_cubin=auxiliary_cubin,attention_cubin=attention_dir/"libdsv41_paged_decode.2.sm_103a.cubin",
+                         fused_cubin=attention_dir/"libdsv41_fused_decode.2.sm_103a.cubin",
                          head_cubin=head_cubin,dense_cubin=attention_dir/"paged_indexer.cubin",
                          sparse_cubin=attention_dir/"sparse_indexer.cubin",
                          select_cubin=attention_dir/"libdsv41_select.2.sm_103a.cubin",
@@ -75,6 +76,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
     draft = draft_forward(pieces,serving,dense_layouts,expert_layouts,max_seqs=max_seqs,pool_tokens=context,
                           constants=constants,cubin_dir=cubin_dir,auxiliary_cubin=auxiliary_cubin,
                           attention_cubin=attention_dir/"libdsv41_paged_decode.2.sm_103a.cubin",
+                          fused_cubin=attention_dir/"libdsv41_fused_decode.2.sm_103a.cubin",
                           head_cubin=head_cubin,vocab=vocab)
     buffers.update(draft.buffers)
     for name,kind,width in (("draft_ids","workspace",5),("verify_ids","workspace",6),
