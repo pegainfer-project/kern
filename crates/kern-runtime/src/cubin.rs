@@ -76,7 +76,7 @@ pub(crate) fn load_pinned_modules(
         .filter(|p| p.extension().is_some_and(|e| e == "cubin"))
         .collect();
     cubins.sort();
-    if cubins.is_empty() && remote.is_empty() {
+    if cubins.is_empty() && remote.is_empty() && !wanted.is_empty() {
         bail!(KernelArtifact, "no .cubin files in {}", kernels_dir.display());
     }
     let mut modules: Vec<LoadedModule> = Vec::new();
