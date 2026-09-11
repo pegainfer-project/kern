@@ -1340,6 +1340,65 @@
       ],
       "type": "object"
     },
+    "Rows": {
+      "anyOf": [
+        {
+          "items": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "group": {
+              "type": "string"
+            },
+            "ranges": {
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "description": "Name of a numeric constant declared in constants.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  ]
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "group",
+            "ranges"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A row range of a checkpoint tensor: one range, or one per rank of a declared group (a table sharded across the group's devices, each rank loading its slice), e.g. `{\"group\": \"ep\", \"ranges\": [[0, 8], [8, 16]]}`."
+    },
     "Scratch": {
       "additionalProperties": false,
       "description": "A private buffer of one implementation, sized like a workspace buffer.",
@@ -1390,27 +1449,15 @@
           ]
         },
         "rows": {
-          "description": "Half-open row range `[from, to)` of the tensor's first axis; the whole axis when absent, e.g. `[0, 1024]`.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "description": "Name of a numeric constant declared in constants.",
-                "minLength": 1,
-                "type": "string"
-              }
-            ]
-          },
-          "maxItems": 2,
-          "minItems": 2,
-          "type": [
-            "array",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rows"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Half-open row range `[from, to)` of the tensor's first axis, fixed or selected by a declared rank group; the whole axis when absent, e.g. `[0, 1024]`."
         },
         "tensor": {
           "$ref": "#/$defs/TensorSource",

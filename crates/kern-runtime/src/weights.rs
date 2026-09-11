@@ -5,7 +5,7 @@
 //! buffer's segments into byte copies and checks that they tile the buffer
 //! exactly, so the shell that runs them has nothing left to decide.
 
-use kern_manifest::types::{Buffer, DType, TensorSource};
+use kern_manifest::types::{Buffer, DType, Rows, TensorSource};
 
 use crate::error::{bail, Error, Result};
 
@@ -55,7 +55,8 @@ pub(crate) fn dtype_of(st: safetensors::Dtype) -> Option<DType> {
 /// The copies that assemble weight buffer `name` (`bytes` long) from its
 /// segments, looked up by tensor name. Every segment's dtype is the
 /// buffer's, its ranges lie inside the tensor read as `[rows, cols]`, and
-/// the segments add up to the buffer exactly.
+/// the segments add up to the buffer exactly. A rank-selected tensor or
+/// row range is this rank's entry of its table.
 pub(crate) fn plan(
     name: &str,
     b: &Buffer,
@@ -70,20 +71,19 @@ pub(crate) fn plan(
         let ctx = || format!("weight `{name}` bind[{i}] (`{}`)", s.tensor);
         let tensor = match &s.tensor {
             TensorSource::Named(name) => name,
-            TensorSource::Ranked { group, tensors } => {
-                let index =
-                    rank(group).ok_or_else(|| Error::WeightArtifact(format!("{}: no rank for `{group}`", ctx())))?;
-                tensors
-                    .get(index as usize)
-                    .ok_or_else(|| Error::WeightArtifact(format!("{}: rank {index} outside tensor table", ctx())))?
-            }
+            TensorSource::Ranked { group, tensors } => select(&ctx, &rank, group, tensors, "tensor")?,
         };
         let t = lookup(tensor)?;
         if t.dtype != b.dtype {
             bail!(WeightArtifact, "{}: checkpoint tensor is {}, buffer declares {}", ctx(), t.dtype, b.dtype);
         }
         let (rows, cols) = matrix(&t.shape);
-        let [r0, r1] = range(&ctx, "rows", s.rows, rows)?;
+        let row_range = match &s.rows {
+            None => None,
+            Some(Rows::Range(r)) => Some(*r),
+            Some(Rows::Ranked { group, ranges }) => Some(*select(&ctx, &rank, group, ranges, "row range")?),
+        };
+        let [r0, r1] = range(&ctx, "rows", row_range, rows)?;
         let [c0, c1] = range(&ctx, "cols", s.cols, cols)?;
         let (width, pitch) = ((c1 - c0) * elt, cols * elt);
         copies.push(Copy {
@@ -104,6 +104,20 @@ pub(crate) fn plan(
         );
     }
     Ok(copies)
+}
+
+/// This rank's entry of a per-rank table (`what` names the entries).
+fn select<'a, T>(
+    ctx: &dyn Fn() -> String,
+    rank: &dyn Fn(&str) -> Option<u64>,
+    group: &str,
+    table: &'a [T],
+    what: &str,
+) -> Result<&'a T> {
+    let index = rank(group).ok_or_else(|| Error::WeightArtifact(format!("{}: no rank for `{group}`", ctx())))?;
+    table
+        .get(index as usize)
+        .ok_or_else(|| Error::WeightArtifact(format!("{}: rank {index} outside {what} table", ctx())))
 }
 
 /// A tensor as a matrix: its first axis by the product of the rest (a
@@ -147,7 +161,7 @@ mod tests {
     }
 
     fn seg(tensor: &str, rows: Option<[u64; 2]>, cols: Option<[u64; 2]>) -> Segment {
-        Segment { tensor: tensor.to_string().into(), rows, cols }
+        Segment { tensor: tensor.to_string().into(), rows: rows.map(Into::into), cols }
     }
 
     fn lookup(name: &str) -> Result<TensorInfo> {
@@ -196,13 +210,28 @@ mod tests {
     #[test]
     fn rank_selects_one_source_before_planning_copies() {
         let source = TensorSource::Ranked { group: "ep".into(), tensors: vec!["q".into(), "fc".into()] };
-        let b = weight(DType::Bf16, &[4, 4], vec![Segment { tensor: source, rows: Some([0, 4]), cols: Some([0, 4]) }]);
+        let b = weight(
+            DType::Bf16,
+            &[4, 4],
+            vec![Segment { tensor: source, rows: Some([0, 4].into()), cols: Some([0, 4]) }],
+        );
         let first = plan("local", &b, 32, lookup, |_| Some(0)).unwrap();
         let second = plan("local", &b, 32, lookup, |_| Some(1)).unwrap();
         assert_eq!(first, [Copy { dst: 0, blob: 0, src: 0, width: 8, rows: 4, pitch: 8 }]);
         assert_eq!(second, [Copy { dst: 0, blob: 1, src: 100, width: 8, rows: 4, pitch: 16 }]);
         assert!(plan("local", &b, 32, lookup, |_| None).unwrap_err().to_string().contains("no rank"));
         assert!(plan("local", &b, 32, lookup, |_| Some(2)).unwrap_err().to_string().contains("outside tensor table"));
+        // A rank-selected row range shards one tensor: each rank copies its
+        // slice, the last one overlapping so every slice is the same size.
+        let rows = Rows::Ranked { group: "ep".into(), ranges: vec![[0, 3], [3, 6], [5, 8]] };
+        let b = weight(
+            DType::Bf16,
+            &[3, 4],
+            vec![Segment { tensor: "q".to_string().into(), rows: Some(rows), cols: None }],
+        );
+        let slice = |r| plan("shard", &b, 24, lookup, move |_| r).map(|c| c[0].src);
+        assert_eq!((slice(Some(0)).unwrap(), slice(Some(1)).unwrap(), slice(Some(2)).unwrap()), (0, 24, 40));
+        assert!(slice(Some(3)).unwrap_err().to_string().contains("outside row range table"));
         assert_eq!(dtype_of(safetensors::Dtype::I8), Some(DType::I8));
         assert_eq!(dtype_of(safetensors::Dtype::F8_E8M0), Some(DType::Fp8E8m0));
     }

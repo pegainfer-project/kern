@@ -251,8 +251,11 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             if b.kind != BufferKind::Weight || b.export {
                 errs.push(format!("{ctx}: host placement requires a non-exported immutable weight"));
             }
-            if b.bind.iter().any(|s| matches!(s.tensor, TensorSource::Ranked { .. })) {
-                errs.push(format!("{ctx}: shared host weights cannot select tensors by rank"));
+            if b.bind
+                .iter()
+                .any(|s| matches!(s.tensor, TensorSource::Ranked { .. }) || matches!(s.rows, Some(Rows::Ranked { .. })))
+            {
+                errs.push(format!("{ctx}: shared host weights cannot select tensors or rows by rank"));
             }
         }
         // 9c. bind: a weight is its segments, nothing else has any
@@ -283,11 +286,25 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             }
                         }
                     }
-                    for (axis, r) in [("rows", s.rows), ("cols", s.cols)] {
-                        if let Some([from, to]) = r {
-                            if from >= to {
-                                errs.push(format!("{sctx}: {axis} [{from}, {to}) is empty"));
+                    let rows: Vec<[u64; 2]> = match &s.rows {
+                        None => vec![],
+                        Some(Rows::Range(r)) => vec![*r],
+                        Some(Rows::Ranked { group, ranges }) => {
+                            match group_ctx(group, &mut errs, &mut used_groups, &sctx) {
+                                Some(n) if n as usize == ranges.len() => {}
+                                Some(n) => errs.push(format!(
+                                    "{sctx}: group `{group}` needs {n} row ranges, got {}",
+                                    ranges.len()
+                                )),
+                                None => {}
                             }
+                            ranges.clone()
+                        }
+                    };
+                    let ranges = rows.iter().map(|r| ("rows", *r)).chain(s.cols.map(|c| ("cols", c)));
+                    for (axis, [from, to]) in ranges {
+                        if from >= to {
+                            errs.push(format!("{sctx}: {axis} [{from}, {to}) is empty"));
                         }
                     }
                 }

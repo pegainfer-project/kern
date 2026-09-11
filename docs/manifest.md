@@ -280,7 +280,13 @@ kern 没有自己的权重格式。每个 `weight` buffer 声明 `bind`：一列
 ```
 
 张量按 `[dim0, 其余维之积]` 看成矩阵，`rows` / `cols` 是 `[from, to)`，缺省
-全取；连续段一次 memcpy，列块一次 2D copy。runtime 只读 shard 的 header 找
+全取；连续段一次 memcpy，列块一次 2D copy。`tensor` 和 `rows` 都可以按
+rank 选：`{"group": "ep", "tensors": [...]}` 每个 rank 装不同的张量（EP 的
+专家），`"rows": {"group": "ep", "ranges": [[0, R], [R, 2R], ...]}` 每个
+rank 装同一张量的一片（一张跨组分片的大表，配 `export: true` + `peer`
+buffer 让每个 rank 读到整张；末片可以回退重叠，让各片等长，buffer 的
+shape 只有一个）。表长必须等于组大小；host placement 的权重是 rank 间
+共享的，不能按 rank 选。runtime 只读 shard 的 header 找
 张量，shard mmap 后按段拷进显存；张量必须在恰好一份 shard 里，dtype 要等于
 buffer 的，各段字节数之和要正好等于 buffer——差一个字节都是 artifact 错误。
 verifier 只查 `bind` 非空、名字非空、区间非空；形状对账要有 checkpoint 才能

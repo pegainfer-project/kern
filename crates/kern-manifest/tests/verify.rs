@@ -929,6 +929,22 @@ fn ranked_binding_requires_one_name_per_group_member() {
 }
 
 #[test]
+fn ranked_rows_shard_one_tensor_across_a_group() {
+    let mut v = base();
+    v["topology"] = serde_json::json!({"groups": {"ep": 2}});
+    v["buffers"]["w"]["bind"][0]["rows"] = serde_json::json!({"group": "ep", "ranges": [[0, 4], [3, 7]]});
+    assert!(check(v.clone()).is_ok());
+    let mut bad = v.clone();
+    bad["buffers"]["w"]["bind"][0]["rows"]["ranges"] = serde_json::json!([[0, 4]]);
+    assert_err(bad, "needs 2 row ranges");
+    let mut bad = v.clone();
+    bad["buffers"]["w"]["bind"][0]["rows"]["ranges"][1] = serde_json::json!([4, 4]);
+    assert_err(bad, "rows [4, 4) is empty");
+    v["buffers"]["w"]["bind"][0]["rows"]["group"] = "missing".into();
+    assert_err(v, "unknown topology group");
+}
+
+#[test]
 fn host_placement_is_immutable_and_rank_independent() {
     let mut v = base();
     v["buffers"]["w"]["placement"] = serde_json::json!("host");
@@ -938,7 +954,10 @@ fn host_placement_is_immutable_and_rank_independent() {
     v["buffers"]["w"]["export"] = serde_json::json!(false);
     v["topology"] = serde_json::json!({"groups": {"ep": 2}});
     v["buffers"]["w"]["bind"][0]["tensor"] = serde_json::json!({"group": "ep", "tensors": ["w0", "w1"]});
-    assert!(check(v).unwrap_err().to_string().contains("cannot select tensors by rank"));
+    assert!(check(v.clone()).unwrap_err().to_string().contains("cannot select tensors or rows by rank"));
+    v["buffers"]["w"]["bind"][0]["tensor"] = serde_json::json!("w0");
+    v["buffers"]["w"]["bind"][0]["rows"] = serde_json::json!({"group": "ep", "ranges": [[0, 4], [4, 8]]});
+    assert!(check(v).unwrap_err().to_string().contains("cannot select tensors or rows by rank"));
     let mut v = base();
     v["buffers"]["x"]["placement"] = serde_json::json!("host");
     assert!(check(v).unwrap_err().to_string().contains("immutable weight"));

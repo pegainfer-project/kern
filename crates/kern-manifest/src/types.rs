@@ -316,9 +316,9 @@ impl Placement {
 pub struct Segment {
     /// Tensor name in the safetensors header, e.g. `"model.layers.0.self_attn.q_proj.weight"`.
     pub tensor: TensorSource,
-    /// Half-open row range `[from, to)` of the tensor's first axis; the whole axis when absent, e.g. `[0, 1024]`.
+    /// Half-open row range `[from, to)` of the tensor's first axis, fixed or selected by a declared rank group; the whole axis when absent, e.g. `[0, 1024]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rows: Option<[u64; 2]>,
+    pub rows: Option<Rows>,
     /// Half-open column range `[from, to)` over the product of the remaining axes; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<[u64; 2]>,
@@ -331,6 +331,20 @@ pub struct Segment {
 pub enum TensorSource {
     Named(String),
     Ranked { group: String, tensors: Vec<String> },
+}
+
+/// A row range of a checkpoint tensor: one range, or one per rank of a declared group (a table sharded across the group's devices, each rank loading its slice), e.g. `{"group": "ep", "ranges": [[0, 8], [8, 16]]}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum Rows {
+    Range([u64; 2]),
+    Ranked { group: String, ranges: Vec<[u64; 2]> },
+}
+
+impl From<[u64; 2]> for Rows {
+    fn from(range: [u64; 2]) -> Self {
+        Self::Range(range)
+    }
 }
 
 impl From<String> for TensorSource {
