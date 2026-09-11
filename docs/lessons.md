@@ -3,6 +3,32 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-11，DSv4.1 tray 偶发 NVLink barrier 超时（host 表被 NUMA balancing 搬走）
+
+**注册过的主机内存在 GB300 上不是 pinned 的，NUMA balancing 会在 GPU 读的时候搬它。**
+`cuMemHostRegister` 在 Grace 上走 ATS（`VmPin 0`），2×92 GB 的 engram 表每一页都是
+balancing 的候选：扫描把 PMD 标成 PROT_NONE，CPU 装完权重再也不碰，hinting fault 全部
+来自 GPU 读，由 IOMMU page-request 路径在任意 CPU 的 kworker 里处理，那个 CPU 的 node
+就成了迁移目标；一次 512 MiB 拷贝期间读这页的 warp 全停，下一个 kworker 再搬回去。
+lookup 一次取几百个随机行，冷启动第一条 prefill 要 10–15 s，某个 rank 的链超过 60 s，
+DeepGEMM 的 NVLink barrier 就 trap。规则：**host 表 mmap 后 `mbind(MPOL_LOCAL)`**，VMA
+自带策略没有 migrate-on-fault 标志，`task_numa_work` 会跳过；验证看 `/proc/vmstat` 的
+`thp_migration_success` 在服务期间不动，冷启动第一条 prefill 和后面的一样快。
+
+**卡死的进程别上 gdb。** gdb 读目标内存时持有目标的 mmap_lock，目标里任何新线程
+（Rust 线程启动要 mprotect sigaltstack 保护页）和 munmap 都排在它后面变成 D 态，看起来
+像是"锁被内核占了"，其实是 gdb 自己造成的；yama ptrace_scope=1 之下 gdb 只能做启动器，
+卡住后 kill -9 让 tray05 整台失联到重启。规则：看内核栈用 **privileged 容器
+（`docker run --privileged --pid=host`）读 `/proc/<tid>/stack`**，`sysrq w` 把全系统 D 态
+任务连内核线程倒进 dmesg，`/sys/kernel/tracing` 里 migrate / iommu / kprobe 都能开；这些
+都不碰目标的 mmap_lock，进程到 60 s 自己 trap 退出。`pgrep -f` / `ps` / `cmdline` /
+`numa_maps` 会要 mmap_lock，对着卡死的进程一样挂。
+
+**先算再抓。** barrier.cuh 打印的 counter 是它自己加过之后的值，每次 MegaMoE 三个
+barrier，prefill 的 MoE 有自己的 workspace，所以 `counter=883` 和 `403` 都换算成"prefill
+chunk 第 15 个 MoE 的第一个 barrier"，缺席的 rank 一定卡在 layer 14 这一段（engram
+lookup 读主机表）。两个数字就把范围从 673 个 call 缩到 40 个，比再跑十轮统计有用。
+
 ## 2026-09-10，DSv4.1 window ring（per-seq state 第一次走 TMA）
 
 **铺满维要按预留算，不按装载时做出的对象算。** window cache 改成每序列一个
