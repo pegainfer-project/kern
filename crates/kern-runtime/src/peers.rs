@@ -2,12 +2,14 @@
 //!
 //! A manifest with a `topology` is SPMD: every rank loads it with its own
 //! [`Topology`](crate::Topology), its index in each group. `export`
-//! buffers and every state are virtual-memory allocations with a fabric
-//! handle; [`Runtime::export_handles`] hands this rank's out, the caller
-//! carries them to the group over whatever channel it has, and
-//! [`Runtime::import_peers`] maps the other ranks' allocations into this
-//! address space and writes the group's addresses into each `peer`
-//! buffer, the array a kernel indexes by rank. A remote allocation is
+//! buffers and every state are virtual-memory allocations every rank can
+//! map (a fabric handle where the device offers one, the allocation
+//! handle itself otherwise: [`PeerHandle`]); [`Runtime::export_handles`]
+//! hands this rank's out, the caller carries them to the group (within
+//! this process for a tray; over whatever channel it has for fabric
+//! handles), and [`Runtime::import_peers`] maps the other ranks'
+//! allocations into this address space and writes the group's addresses
+//! into each `peer` buffer, the array a kernel indexes by rank. A remote allocation is
 //! mapped once however many peer buffers name it, and the mapping lives
 //! as long as the addresses do.
 //!
@@ -33,16 +35,16 @@ impl Runtime {
         self.ranks.get(group).copied()
     }
 
-    /// Fabric handles for every `export` buffer and every state that has
-    /// one, by name: what the other ranks pass to [`Runtime::import_peers`].
+    /// A handle for every `export` buffer and every state, by name: what
+    /// the other ranks pass to [`Runtime::import_peers`].
     pub fn export_handles(&self) -> Result<BTreeMap<String, PeerHandle>> {
         self.ctx.bind_to_thread()?;
         let mut out = BTreeMap::new();
         for (name, b) in &self.buffers {
             if self.manifest.buffers[name].export {
-                let h = b
-                    .export()?
-                    .ok_or_else(|| Error::Cuda(format!("buffer `{name}`: exported without a fabric handle")))?;
+                let h = b.export()?.ok_or_else(|| {
+                    Error::Cuda(format!("buffer `{name}`: exported but not a virtual-memory allocation"))
+                })?;
                 out.insert(name.clone(), h);
             }
         }
@@ -80,7 +82,7 @@ impl Runtime {
             let own = self.buffers.get(&of).or_else(|| self.states.get(&of)).ok_or_else(|| {
                 Error::Manifest(format!("peer buffer `{name}`: `of` `{of}` is neither a buffer nor a state"))
             })?;
-            let own_bytes = own.export()?.map(|h| h.bytes).unwrap_or(own.bytes);
+            let own_bytes = own.export()?.map(|h| h.bytes()).unwrap_or(own.bytes);
             let own_ptr = own.ptr;
             let mut addrs = Vec::with_capacity(size as usize);
             for (i, m) in members.iter().enumerate() {
@@ -95,8 +97,12 @@ impl Runtime {
                         let Some(h) = m.get(&of) else {
                             bail!(Api, "group `{group}` rank {i}: no handle for `{of}`");
                         };
-                        if h.bytes != own_bytes {
-                            bail!(Api, "group `{group}` rank {i}: `{of}` is {} bytes there, {own_bytes} here", h.bytes);
+                        if h.bytes() != own_bytes {
+                            bail!(
+                                Api,
+                                "group `{group}` rank {i}: `{of}` is {} bytes there, {own_bytes} here",
+                                h.bytes()
+                            );
                         }
                         let buf =
                             device::import(&stream, self.gpu as i32, h, &format!("group `{group}` rank {i} `{of}`"))?;

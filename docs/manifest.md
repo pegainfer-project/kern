@@ -44,8 +44,9 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
   slot 0 永不出租，kernel 可把 line 下标 0 当 null）或 `bytes`（定长），
   三选一。内部布局是 provider 生成器里的算式，以字面量 offset
   传给 provider 自己的 kernel。state 一律走 VMM 分配（`cuMemCreate` +
-  reserve + map），设备支持时带 fabric handle，所以 `peer` buffer 可以
-  `of` 一个 state（P/D push、跨 rank 读 KV 的入口）。
+  reserve + map），别的 rank 可映射（设备支持时经 fabric handle，否则
+  同进程内经 allocation handle，见 runtime.md 多卡一节），所以 `peer`
+  buffer 可以 `of` 一个 state（P/D push、跨 rank 读 KV 的入口）。
 - `buffers`：`dtype + shape + kind`，可选 `domain`（内容的先验，见下）与
   `fill`（在 serving 循环里的角色，见「Serving 协议」）。shape 维度是常量或 var 名；kind 说
   的是"谁供应、活多久"：`input`（runtime 写入）/ `output`（runtime 读回）
@@ -53,8 +54,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
   不保留）/ `carry`（一个 program 写、另一个 program 读的交接棒，跨次
   执行保留；谁先跑是 caller 契约，verifier 只要求它被某个 program 写到
   ——投机解码的 aux 隐状态逼出来的）/ `peer`（runtime 填的地址数组，见
-  下）。任何非 peer buffer 可加 `"export": true`：分配走 VMM 并带 fabric
-  handle，别的 rank 可映射。
+  下）。任何非 peer buffer 可加 `"export": true`：分配走 VMM，别的 rank
+  可映射。
 - `topology`（可选）：`{"groups": {"ep": 4}}`，只声明组名和大小。有它的
   manifest 是 SPMD 的：每个 rank 装同一份，装载时给出自己在每个组里的下标
   （`Runtime::load(.., Some(&Topology))`）。成员是谁、handle 怎么交换是

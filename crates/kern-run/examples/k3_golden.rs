@@ -171,7 +171,8 @@ fn write_handles(w: &mut impl Write, ranks: &[(u64, Handles)]) -> std::io::Resul
         for (name, h) in map {
             w.write_all(&(name.len() as u16).to_le_bytes())?;
             w.write_all(name.as_bytes())?;
-            w.write_all(&h.to_bytes())?;
+            let wire = h.to_bytes().ok_or_else(|| std::io::Error::other(format!("`{name}`: not a fabric handle")))?;
+            w.write_all(&wire)?;
         }
     }
     w.flush()

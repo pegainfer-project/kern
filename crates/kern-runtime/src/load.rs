@@ -20,7 +20,7 @@ use kern_manifest::Verified;
 
 use crate::chunks::Kind;
 use crate::device::{
-    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, Blas, DeviceBuf, Mapper, Physical, Share,
+    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, Blas, DeviceBuf, Mapper, Physical,
 };
 use crate::error::bail;
 use crate::lease::Remaps;
@@ -105,8 +105,8 @@ impl Runtime {
         let vars_max: BTreeMap<_, _> = manifest.vars.iter().map(|(s, v)| (s.clone(), v.max)).collect();
 
         // Buffer sizes are static: shapes only reference vars, sized at max.
-        // Exported buffers come from the virtual-memory API with a fabric
-        // handle; a peer array is an ordinary local buffer the runtime
+        // Exported buffers come from the virtual-memory API so peers can
+        // map them; a peer array is an ordinary local buffer the runtime
         // fills; everything else is pool memory.
         let mut buffers = BTreeMap::new();
         let mut peers = BTreeMap::new();
@@ -115,7 +115,7 @@ impl Runtime {
             let buf = if b.placement == Placement::Host {
                 alloc_host(&stream, host_weights.acquire(name, b, bytes, &ctx)?)?
             } else if b.export {
-                alloc_vmm(&stream, dev, bytes, Share::Required, &format!("buffer `{name}`"))?
+                alloc_vmm(&stream, dev, bytes, &format!("buffer `{name}`"))?
             } else {
                 alloc(&stream, bytes)?
             };
@@ -182,7 +182,7 @@ impl Runtime {
         let mut states = BTreeMap::new();
         for (name, s) in &manifest.states {
             if s.bytes_per_token == 0 && s.bytes_per_seq == 0 {
-                let buf = alloc_vmm(&stream, dev, s.bytes, Share::IfSupported, &format!("state `{name}`"))?;
+                let buf = alloc_vmm(&stream, dev, s.bytes, &format!("state `{name}`"))?;
                 states.insert(name.clone(), buf);
             }
         }
@@ -209,13 +209,6 @@ impl Runtime {
             pool.total(),
             pool.slots(),
         );
-        for p in peers.values() {
-            if let Some(st) = states.get(&p.of) {
-                if !st.is_shareable() {
-                    bail!(Cuda, "state `{}` has no fabric handle on device {dev}, but a peer buffer is `of` it", p.of);
-                }
-            }
-        }
         let resolution = resolved.iter().map(|(n, rk)| (n.clone(), rk.launch_modules())).collect();
         let peer_names: BTreeSet<String> = peers.keys().cloned().collect();
         let place = compile::Ranks { ranks: &ranks, peer_buffers: &peer_names };

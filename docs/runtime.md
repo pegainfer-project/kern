@@ -140,16 +140,21 @@ workspace，可捕获）：K3 的每条稠密投影都是 f32 partial 再由认�
 用 arg 的字节 `offset` 加第 7 参 `ldc` 表达。
 
 **多卡（E0/K0）**：state 一律 VMM 分配（`cuMemCreate` + `cuMemAddressReserve`
-+ `cuMemMap` + `cuMemSetAccess`），设备报 `HANDLE_TYPE_FABRIC_SUPPORTED`
-就带 fabric handle（driver 拒绝则退回本地映射并 warn）；`export: true`
-的 buffer 同样，但拿不到 fabric handle 就报错。manifest 带 `topology` 时
++ `cuMemMap` + `cuMemSetAccess`），`export: true` 的 buffer 同样。设备报
+`HANDLE_TYPE_FABRIC_SUPPORTED` 就带 fabric handle（GB300/NVL72；driver
+拒绝则退回并 warn），否则（HGX B300、没有 IMEX channel 的 tray）不带：
+`PeerHandle` 是 `Fabric`（64 B handle）或 `Local`（allocation handle 本
+身，只在导出进程内有意义，`cuMemMap` 直接收），两条路对 kernel 完全一样
+——peer buffer 里都是本 rank 可寻址的 VA。`KERN_NO_FABRIC=1` 强制走
+`Local`，是在有 fabric 的 tray 上跑 B300 路径门禁的钩子。manifest 带 `topology` 时
 `Runtime::load(.., Some(&Topology))` 给出本 rank 在每个组的下标（大小
 必须与 manifest 一致），`{"rank": g}` 实参在 compile 时烧成常量。
-`export_handles()` 返回每个 export buffer / 每个有 handle 的 state 的
-`PeerHandle`（64 B fabric handle + 映射字节数，`to_bytes()` 72 B 一行，
-传输是 caller 的事：共享盘、TCP 都行）；`import_peers(group, members)`
+`export_handles()` 返回每个 export buffer / 每个 state 的 `PeerHandle`
+（handle + 映射字节数；`Fabric` 有 `to_bytes()` 72 B 一行的线格式，传输
+是 caller 的事：共享盘、TCP 都行；`Local` 没有线格式，只在同一进程里传）；`import_peers(group, members)`
 收全组每个成员的 handle 表（自己那份随意，用本地地址），
-`cuMemImportFromShareableHandle` + reserve + map 后把 `u64[组大小]` 写进
+`Fabric` 经 `cuMemImportFromShareableHandle`、`Local` 直接 reserve + map
+后把 `u64[组大小]` 写进
 该组的每个 `peer` buffer（同一目标只映射一次），映射与 runtime 同寿命。
 所有 peer buffer 填满之前 `run`/`run_range`/`capture`/`time_*` 一律
 `Api` 错误。装载时收到 peer buffer 的每个 kernel launch 都过
