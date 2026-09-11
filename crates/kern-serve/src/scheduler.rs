@@ -599,6 +599,10 @@ impl KernScheduler {
         ledger.admit(id);
         let t0 = Instant::now();
         let start = row.prefix();
+        // The prompt tokens this request did not pay for: its `usage` says so
+        // (`prompt_tokens_details.cached_tokens`), zero included, so a caller
+        // can tell a miss from an engine that does not report hits.
+        ledger.set_cached_tokens(id, start);
         // With a chunk forward every prompt token goes through it when it
         // hands the first generated token back itself; otherwise
         // everything but the last, which is the first step's input. A

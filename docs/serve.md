@@ -141,6 +141,12 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
   再从空闲 slot 拆回来；租约 `Busy` 时按最久未命中淘汰，`Remapping` 时等它落地
   （stats 行的 `slots_used`/`slots`/`remaps`）。
 
+命中数逐请求报给调用方：`usage.prompt_tokens_details.cached_tokens` 就是这条请求
+没有付钱的 prompt token 数（`Row::prefix()`，与 stats 行的 `prefix_hit_tokens`
+同源）。DSv4.1 一次两轮（tray05，prompt 6159 token、生成 96）：第二轮 prompt
+6263 token，报 6254 = 6159 + 96 − 1，快照不复用最后一个 token。未命中时上游的
+序列化器不发 `prompt_tokens_details`，字段是 `null`。
+
 门禁（本机 GB300，warm 服务与 cold 服务各一，greedy，`max_tokens 64`，prompt 为 46 KB
 工程日志）：
 
