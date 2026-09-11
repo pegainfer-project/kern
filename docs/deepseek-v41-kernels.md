@@ -700,3 +700,41 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   passphrase 埋在 10% 处）：三档全部答对；TTFT 22.7 s / 93.4 s / 182.8 s
   （prefill 5.8k → 5.5k tok/s，chunk 128），首 token 后 decode 7.5–7.7
   ms/token；两版数字一致。`--capacity 2097152` 时 1M 请求占 tray 池 20%。
+
+### tuned 核集合落地 master（2026-09-11，tray05）
+
+- 2026-09-10 的调优（dense 逐形状 tile 表、gate split-K 8 / 12 stage、
+  mHC 40 split、split-KV fused attention 10 part、全部 auxiliary 核 PDL）
+  之前只在另一个会话的未提交树里，registry 的 1M / 32k manifest 已经钉了它
+  的 cubin。现在 3-way 合到 master（dde9eb3）：`tools/dsv41/patches/` 收
+  DeepGEMM / FlashMLA 的三个 patch 和来源说明，`auxiliary.cu` 用 master 的
+  ring 签名加 `pdl()` 前奏，`engram_peers.cu` 同样加上，`ops.py` 的 op 带
+  `pdl: true`。`gen.py` 默认 1M / 256 seqs / chunk 2048 重生成三份 manifest
+  （main、`--engram device` 的 hbm、32k），全部 `kern verify` 通过；
+  auxiliary / engram_peers cubin 从 master 源码在 kernel-lab（CUDA 13.0）
+  重编（5b763b24174f / 590c505e63fc），其余 cubin 沿用调优会话的构建。
+- 门禁（`~/bench_results/2026-09-11-dsv41-tuned-land`，v0.2.1 release
+  二进制，16 条 greedy conc1）：main rows1 与 registry 的 tuned 1M manifest
+  16/16 逐字节相同，main rows6、hbm rows1 / rows6（`KERN_NO_FABRIC=1`）都
+  与之相同；hbm 的 128k / 1M needle 答对（TTFT 12.2 s / 102.4 s，chunk 2048
+  下 prefill 10.8k / 9.8k tok/s，比 chunk 128 的 22.7 s / 182.8 s 快近一倍）。
+  step 7.6 ms（未调优 ~10 ms），DSpark round 9.6 ms、每步接受 2.6–2.9。
+- 端到端 rows1 9.27 ms/token 但 step 7.60 ms：`stats` 里每 5 s 只跑 541 步
+  （registry 的 ring 前 manifest 跑 651 步），每步约 1.7 ms 的 host 空档；
+  32k manifest（chunk 128 / 16 seqs）没有这个空档（7.45 ms/token，step
+  7.37）。是随 chunk / seqs 形状增长的每步 host 工作，不是核，也不是逐 rank
+  发射（见下一条）。待做。
+- 32k manifest 与 1M manifest 9/16 条在后段近似平局处换词；同一份 1M
+  manifest 用 chunk 128 / 16 seqs 服务与 chunk 2048 / 256 seqs 逐字节相同，
+  所以不是服务形状而是 manifest 的 buffer 形状（`tokens.max` 128 vs 2048、
+  `seqs.max` 16 vs 256；op 和模块集合完全相同）：某个调优核的工作划分跟着
+  buffer 形状而不是行数走。未调优集合两份 manifest 是逐字节相同的。属于
+  近似平局噪声一类，记录在 registry README，未追根。
+- kern-serve 每 rank 一个常驻发射线程（1ddab00，调优会话的 diff，capture
+  跨 rank 串行化以绕开 CUPTI 的 graph-node tracing 崩溃）：同一门禁 rows1 /
+  rows6 与 release 二进制 16/16 相同，step 7.48 / 9.4 ms，conc1 端到端不变
+  （9.14 ms/token），上面的 host 空档不是它。
+- registry：cubin 5b763b24174f / 590c505e63fc（HF aa23ef6）、三份 manifest
+  （HF 4bceee5，命名 dde9eb3）、README 改成生成器已在 master，`-hbm` 现在
+  也是 tuned 集合、256 seqs / chunk 2048。发版 v0.2.2。
+
