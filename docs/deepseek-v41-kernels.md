@@ -664,3 +664,30 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   属于HTTP平均交付速度；投机模式可能一次交付多个token。
   三组输出有一组文本完全相同，另外两组不完全相同；此性能结果不等于
   声称bitwise/逐token一致，也不替代参考可靠性及质量验收。
+
+### HGX B300 路径：Engram 表分片进 HBM（2026-09-11，tray05）
+
+- 普通 B300（x86 host，无 C2C，无 IMEX channel）卡在两处：peer 内存只
+  会走 fabric handle；两张 Engram 表 `placement: host` 靠 ATS 读。都用
+  能力判断分支解决，GB300 路径一字不改：runtime 里 `PeerHandle` 分
+  `Fabric` / `Local`（设备不报 `HANDLE_TYPE_FABRIC_SUPPORTED` 或
+  `KERN_NO_FABRIC=1` 时，同进程内的 rank 直接 `cuMemMap` 对方的
+  allocation handle，76dc130）；manifest 的 `rows` 可按 rank 选
+  （d322914）；`gen.py --engram device` 把每张表切成四片等长行片
+  （末片回退重叠）导出，配 `peer` 数组，由独立模块 `dsv41_engram_peers`
+  的 `dsv41_lookup_peers` 按行所在 rank 读（cc5e118）。`--engram host`
+  的产物与 registry 的 2026-09-10 manifest 逐字节相同，重编的
+  `dsv41_auxiliary` cubin sha 不变。
+- 每 rank 多 47 GiB HBM（层 1 表 384006168 行、层 14 表 384016682 行，
+  每 rank 约 9600 万行 × 264 B）；32k context 下每卡 188 GiB（host 表
+  版 140 GiB）。B300 一机八卡跑两个 EP4 组、两个进程。
+- 门禁（tray05，16 条 greedy conc1，`~/bench_results/2026-09-11-dsv41-b300-path`）：
+  host 表 + fabric（GB300 默认）与 2026-09-10 基线 16/16 逐字节相同；
+  host 表 + `KERN_NO_FABRIC=1`、HBM 表 + local、HBM 表 + fabric、HBM 表
+  + local rows6 全部 16/16 与之相同；速度不变（rows1 10.2 ms/token，
+  rows6 4.5 ms/token、接受 2.8/步）。lookup 走 NVLink 读 peer 而非 C2C
+  读 host，conc1 下看不出差别。
+- registry 多一份 `manifests/deepseek-v41-flash-hbm.json` + 一个 cubin；
+  它钉的是 2026-09-10 的核集合（master 生成器的产物），tuned 集合的
+  生成器进 master 后再重生成；届时 `engram_peers.cu` 也要跟
+  auxiliary 一样加 PDL 的 `griddepcontrol.wait` / `launch_dependents`。
