@@ -691,3 +691,12 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   它钉的是 2026-09-10 的核集合（master 生成器的产物），tuned 集合的
   生成器进 master 后再重生成；届时 `engram_peers.cu` 也要跟
   auxiliary 一样加 PDL 的 `griddepcontrol.wait` / `launch_dependents`。
+- 1M context（同日，tray05，v0.2.1 release 二进制）：`--context` 只决定
+  page table 的形状（`page_table [seqs, 8192]`、`c*_page_table
+  [tokens, 8192]`，几 MB），token 本身由 kern-serve 的 `--capacity` 付钱
+  （每 rank 904 B/token），所以生成器默认改成模型的 1M。host 表版与 HBM
+  表版各跑 16 条短 prompt（与 32k 版 16/16 逐字节相同）加 128k / 512k /
+  1M 的 needle prompt（`scripts/long_prompt.py`，本地 docs + 源码拼的，
+  passphrase 埋在 10% 处）：三档全部答对；TTFT 22.7 s / 93.4 s / 182.8 s
+  （prefill 5.8k → 5.5k tok/s，chunk 128），首 token 后 decode 7.5–7.7
+  ms/token；两版数字一致。`--capacity 2097152` 时 1M 请求占 tray 池 20%。

@@ -150,7 +150,7 @@ def main():
     parser.add_argument("--engram-cubin",type=Path,help="dsv41_engram_peers cubin, needed with --engram device")
     parser.add_argument("--capacity",type=int,default=128)
     parser.add_argument("--max-seqs",type=int,default=16)
-    parser.add_argument("--context",type=int,default=32768)
+    parser.add_argument("--context",type=int,default=1048576,help="page-table bound per sequence, in tokens (the model's 1M)")
     parser.add_argument("--bundle",type=Path,help="copy pinned cubins to a serving artifact directory")
     args = vars(parser.parse_args())
     binding_file, checkpoint, engram = args.pop("bindings"), args.pop("checkpoint"), args.pop("engram")

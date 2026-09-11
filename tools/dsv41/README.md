@@ -35,7 +35,7 @@ python3 tools/dsv41/gen.py \
   --head-cubin "$HEAD_CUBIN" \
   --copy-cubin "$COPY_CUBIN" \
   --spec-cubin "$SPEC_CUBIN" \
-  --capacity 128 --max-seqs 16 --context 32768 \
+  --capacity 128 --max-seqs 16 --context 1048576 \
   --out model.json --bundle model-cubins
 kern verify model.json
 ```
@@ -52,7 +52,9 @@ the runtime provides over fabric handles where the device has them and over
 local allocation handles otherwise. About 47 GiB more HBM per rank.
 
 `--capacity` bounds live rows, including six verification rows per sequence;
-`--context` bounds each sequence's logical page table. Physical state TMA spans
+`--context` bounds each sequence's logical page table (default the model's
+1M tokens; the bound costs a few MB of page tables, the tokens themselves
+are paid for by the server's `--capacity`). Physical state TMA spans
 are resolved from the runtime allocation. `--bundle` copies cubins by their pinned
 hash, so subsequent kernel builds cannot change an existing serving bundle.
 
