@@ -27,7 +27,7 @@ shell profile; if the directory is not on `PATH` it prints the `export` to
 add. Afterwards it looks at the machine and warns, without failing, about a
 missing driver or cuBLAS.
 
-- `KERN_VERSION=v0.2.1` pins a release
+- `KERN_VERSION=v0.2.2` pins a release
 - `KERN_INSTALL_DIR=/opt/bin` picks the directory
 - `KERN_BASE_URL=…` points at a mirror or an offline copy of the assets
 

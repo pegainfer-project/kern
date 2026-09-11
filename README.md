@@ -80,7 +80,7 @@ The loop runs unattended. The engine goes back to being an engine.
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh   # Linux x86_64 / aarch64, one binary
-kern --version                                          # kern 0.2.1 (<commit>, cuda 13.0)
+kern --version                                          # kern 0.2.2 (<commit>, cuda 13.0)
 ```
 
 Then the [quick start](https://kern-baa.pages.dev/docs/getting-started/):
@@ -89,7 +89,7 @@ plain and with its DFlash2 draft, in four commands.
 
 The binary links no CUDA library; it dlopens the driver and cuBLAS at
 first use, so it needs an NVIDIA driver for CUDA 13 (r580+) and cuBLAS 13
-on the loader path, nothing else. `KERN_VERSION=v0.2.1` pins a release,
+on the loader path, nothing else. `KERN_VERSION=v0.2.2` pins a release,
 `KERN_INSTALL_DIR` picks the directory (default `~/.local/bin`). How a
 release is cut and gated: [docs/release.md](docs/release.md).
 
