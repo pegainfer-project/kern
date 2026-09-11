@@ -29,11 +29,11 @@ def definitions(cubin,*,rows,rows_max,kv_rows_max,page_size=64,pages,page_cols,
           'params':['out buffer<f32>','i32','i32'],
           'args':[{'param':7},{'param':8},{'i32':kv_rows_max}]}
     meta={'module':'dsv41_paged_indexer','entry':'_ZN9deep_gemm5sched31sm100_paged_mqa_logits_metadataILj1ELb0ELb0ELj256ELj148EEEvjjPKjS3_Pj','grid':[1,1,1],
-          'block':[1024,1,1],'shared_mem':(rows_max+33)*4,
+          'block':[1024,1,1],'shared_mem':(rows_max+33)*4,'pdl':True,
           'params':['i32','i32','in buffer<i32>','i64','out buffer<u8>'],
           'args':[{'param':8},{'param':8},{'param':3},{'i64':0},{'scratch':'metadata'}]}
     score={'module':'dsv41_paged_indexer','entry':f'_ZN9deep_gemm22sm100_paged_mqa_logitsILj1ELj32ELj128ELj{page_size}ELb1ELb0ELb0ELj3ELj10ELj256ELj16ELj128ELj256EN7cutlass12float_e2m1_tEffLj2EEEvjjjPKjPT13_S4_S4_S4_14CUtensorMap_stS7_S7_S7_S7_',
-           'grid':[148,1,1],'block':[384,1,1],'shared_mem':202240,
+           'grid':[148,1,1],'block':[384,1,1],'shared_mem':202240,'pdl':True,
            'params':['i32','i32','i32','in buffer<i32>','out buffer<f32>','in buffer<i32>','i64','in buffer<u8>']+['bytes<128>']*5,
            'args':[{'param':8},{'i32':kv_rows_max},{'i32':page_cols},{'param':3},{'param':7},{'param':4},{'i64':0},{'scratch':'metadata'},
                    tm(0,'u4packed',[128,rows_max*32],[64],[128,128],64),

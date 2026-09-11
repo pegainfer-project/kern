@@ -9,11 +9,11 @@ from mhc import pieces
 from test_boundary import check
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--inference',type=pathlib.Path,required=True);p.add_argument('--dump',type=pathlib.Path);a=p.parse_args();sys.path.insert(0,str(a.inference));import model
+    p=argparse.ArgumentParser();p.add_argument('--inference',type=pathlib.Path,required=True);p.add_argument('--dump',type=pathlib.Path);p.add_argument('--cubins',type=pathlib.Path,help='cubin directory (default target/cubins/dsv41)');p.add_argument('--splits',type=int,default=None,help='mHC split count to launch (default: the generator default)');a=p.parse_args();sys.path.insert(0,str(a.inference));import model
     torch.manual_seed(432);torch.empty(1,device='cuda');drv=ctypes.CDLL('libcuda.so.1')
-    stage=check(cu.cuModuleLoad(str(pathlib.Path(__file__).resolve().parents[3]/'target/cubins/dsv41/stage.cubin').encode()))
+    cubins=a.cubins or pathlib.Path(__file__).resolve().parents[3]/'target/cubins/dsv41';stage=check(cu.cuModuleLoad(str(cubins/'stage.cubin').encode()))
     for n,fp8 in [(n,fp8) for n in (1,5,65,128) for fp8 in ('gemm','moe')]:
-        shared_rows=131072;modules,ops=pieces(rows=n,max_tokens=n,fp8=fp8,shared_rows=shared_rows if fp8=='moe' else None);launch=ops['dsv41_mhc']['impl']['launches'][-1]
+        shared_rows=131072;modules,ops=pieces(rows=n,max_tokens=n,fp8=fp8,shared_rows=shared_rows if fp8=='moe' else None,cubin_dir=str(cubins),**({'splits':a.splits} if a.splits else {}));launch=ops['dsv41_mhc']['impl']['launches'][-1]
         x=torch.randn(n,5120,device='cuda',dtype=torch.bfloat16);r=torch.randn(n,4,5120,device='cuda',dtype=torch.bfloat16)
         post=torch.randn(n,4,device='cuda').sigmoid();comb=torch.randn(n,4,4,device='cuda').softmax(-1);pre=torch.randn_like(post).sigmoid()
         fn=torch.randn(24,20480,device='cuda')*.01;scales=torch.randn(3,device='cuda')*.1;bases=torch.randn(24,device='cuda')*.1;norm=torch.randn(5120,device='cuda',dtype=torch.bfloat16)*.1+1
@@ -37,7 +37,7 @@ def main():
                 blob[f['at']:f['at']+len(data)]=data
             return bytes(blob)
         mod=check(cu.cuModuleLoad(str(pathlib.Path(__file__).resolve().parents[3]/modules['dsv41_mhc']['source']).encode()));fun=check(cu.cuModuleGetFunction(mod,launch['entry'].encode()));check(cu.cuFuncSetAttribute(fun,cu.CUfunction_attribute.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,launch['shared_mem']))
-        keep=[ctypes.create_string_buffer(arg(v)) for v in launch['args']];argv=(ctypes.c_void_p*len(keep))(*[ctypes.addressof(v) for v in keep]);res=drv.cuLaunchKernel(ctypes.c_void_p(int(fun)),152,1,1,768,1,1,227328,ctypes.c_void_p(torch.cuda.current_stream().cuda_stream),argv,None);assert res==0,res;torch.cuda.synchronize()
+        keep=[ctypes.create_string_buffer(arg(v)) for v in launch['args']];argv=(ctypes.c_void_p*len(keep))(*[ctypes.addressof(v) for v in keep]);res=drv.cuLaunchKernel(ctypes.c_void_p(int(fun)),launch['grid'][0],1,1,launch['block'][0],1,1,launch['shared_mem'],ctypes.c_void_p(torch.cuda.current_stream().cuda_stream),argv,None);assert res==0,res;torch.cuda.synchronize()
         ref_r=model.Block.hc_post(None,x[None],r[None],post[None],comb[None]);ctx=type('Ctx',(),{'norm_eps':1e-20,'hc_mult':4,'hc_sinkhorn_iters':20,'hc_eps':1e-6})();pr,po,co=model.Block.hc_mixes(ctx,ref_r,fn,scales,bases);collapse=model.Block.hc_pre(None,ref_r,pre[None]);ref_y=model.RMSNorm.forward(type('Norm',(),{'weight':norm,'eps':1e-20})(),collapse)
         if a.dump:
             from replay import dump_case

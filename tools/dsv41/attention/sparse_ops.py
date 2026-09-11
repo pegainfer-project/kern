@@ -22,10 +22,10 @@ def definitions(cubin,*,rows,rows_max,kv_rows_max):
         return {'pack':{'size':128,'fields':[{'at':0,'tensormap':{'param':param,'dtype':dtype,'dims':dims,'strides':strides,'box':box,'swizzle':swizzle,'l2_promotion':256}}]}}
     init={'module':'dsv41_sparse_indexer','entry':'dsv41_sparse_initialize','grid':[{'mul':[rows,64]},1,1],'block':[256,1,1],
           'params':['out buffer<bf16>','out buffer<u8>','i32'],'args':[{'param':8},{'scratch':'workspace'},{'param':9}]}
-    meta={'module':'dsv41_sparse_indexer','entry':META,'grid':[min((rows_max+1)//2,592),1,1],'block':[256,1,1],'shared_mem':33408,
+    meta={'module':'dsv41_sparse_indexer','entry':META,'grid':[min((rows_max+1)//2,592),1,1],'block':[256,1,1],'shared_mem':33408,'pdl':True,
           'params':['i32','i32','in buffer<i32>','in buffer<i32>','i64','i64','i32','i64','in buffer<i32>','out buffer<u8>','inout buffer<u8>'],
           'args':[{'param':9},{'param':10},{'param':5},{'param':6},{'i64':0},{'i64':0},{'i32':0},{'i64':0},{'param':7},{'scratch':'metadata'},{'scratch':'workspace'}]}
-    score={'module':'dsv41_sparse_indexer','entry':SCORE,'grid':[148,1,1],'block':[896,1,1],'shared_mem':230912,
+    score={'module':'dsv41_sparse_indexer','entry':SCORE,'grid':[148,1,1],'block':[896,1,1],'shared_mem':230912,'pdl':True,
            'params':['i32','out buffer<bf16>','in buffer<u8>','in buffer<u8>','in buffer<u8>']+['bytes<128>']*5,
            'args':[{'i32':16384},{'param':8},{'param':2},{'param':3},{'scratch':'metadata'},
                    tm(0,'u4packed',[128,rows_max*32],[64],[128,64],64),

@@ -19,7 +19,8 @@ flow rather than the reference's precision; see the A/B in
 `docs/deepseek-v41-kernels.md`.
 
 Kernel builds and upstream pins are documented in [attention](attention/README.md),
-[MoE](moe/README.md), and [the integration log](../../docs/deepseek-v41-kernels.md).
+[MoE](moe/README.md), [the upstream patches](patches/README.md) the tuned
+modules are built with, and [the integration log](../../docs/deepseek-v41-kernels.md).
 Build those artifacts before generating a manifest. Generate tokenizer/hash and
 RoPE constants with `auxiliary/engram_constants.py`, using its GPU reference mode.
 

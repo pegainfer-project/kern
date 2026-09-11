@@ -10,6 +10,15 @@ nvcc -std=c++20 -O3 -shared -Xcompiler=-fPIC -gencode arch=compute_103a,code=sm_
   -I"$out" -I"$core" -I"$upstream/csrc" -I"$upstream/csrc/kerutils/include" -I"$upstream/csrc/cutlass/include" \
   "$src/fused_probe.cu" -lcuda -o "$out/libdsv41_fused_decode.so"
 (cd "$out" && cuobjdump -xelf all libdsv41_fused_decode.so)
+# Split-KV variant (DecodeWithSplitKV + combine), only from a FlashMLA carrying the split-kv patch
+if [ -f "$core/combine.cuh" ]; then
+  cp "$core/combine.cuh" "$out/combine.cuh"
+  nvcc -std=c++20 -O3 -shared -Xcompiler=-fPIC -gencode arch=compute_103a,code=sm_103a \
+    --expt-relaxed-constexpr --expt-extended-lambda -DNDEBUG \
+    -I"$out" -I"$core" -I"$upstream/csrc" -I"$upstream/csrc/kerutils/include" -I"$upstream/csrc/cutlass/include" \
+    "$src/fused_split_probe.cu" -lcuda -o "$out/libdsv41_fused_split.so"
+  (cd "$out" && cuobjdump -xelf all libdsv41_fused_split.so)
+fi
 
 nvcc -std=c++20 -O3 -shared -Xcompiler=-fPIC -gencode arch=compute_103a,code=sm_103a \
   --expt-relaxed-constexpr --expt-extended-lambda -DNDEBUG \

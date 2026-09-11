@@ -1,0 +1,331 @@
+diff --git a/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/combine.cuh b/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/combine.cuh
+new file mode 100644
+index 0000000..46a9011
+--- /dev/null
++++ b/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/combine.cuh
+@@ -0,0 +1,98 @@
++#pragma once
++// Combine kernel of the split-KV fused decode (see kernel.cuh, FWD_MODE == DecodeWithSplitKV): merges the
++// `parts` partials of every (token, head) with the usual lse weights, applies the attention sink, the conjugate
++// O RoPE (last 64 dims) and the per-32 UE8M0 FP8 cast, and writes exactly the layout of the non-split epilogue:
++// out_fp8 [s_q, n_wv_group(8), d_v/32(16), wv_group_size(8), 32] and packed out_sf u32 [8][32][stride_sf_head_dim].
++// One CTA per (token, 8 heads), one warp per head; a lane holds float4 chunks at lane*4 + i*128 like the upstream
++// combine, so the RoPE pairs of dims 448..511 sit in chunk 3 of lanes 16..31 and every 32-dim quant tile spans 8 lanes.
++#include <cuda_fp8.h>
++#include <math_constants.h>
++#include <cutlass/float8.h>
++
++namespace sm100::prefill::fused_norm_rope_attn_rope_cast_fwd::core_attn {
++
++template<int MAX_PARTS>
++__global__ void __launch_bounds__(256)
++fused_split_combine_kernel(const float* __restrict__ o_accum, const float* __restrict__ lse_accum,
++                           const float* __restrict__ attn_sink, const uint32_t* __restrict__ token_positions,
++                           const float* __restrict__ cos_sin_cache, cutlass::float_e4m3_t* __restrict__ out_fp8,
++                           uint32_t* __restrict__ out_sf, int parts, int stride_o_split, int stride_o_s_q,
++                           int stride_lse_split, int stride_lse_s_q, int stride_sf_wv_group, int stride_sf_head_dim) {
++    static_assert(MAX_PARTS <= 32);
++    const int s_q_idx = blockIdx.x;
++    const int warp_idx = threadIdx.x / 32, lane_idx = threadIdx.x % 32;
++    const int head_idx = blockIdx.z * 8 + warp_idx;
++    __shared__ float scale_buf[8][MAX_PARTS];
++
++    cudaGridDependencySynchronize();
++
++    // Weights of the parts: exp2(lse_p - L), L = log2(sum 2^lse_p) merged with the sink like the non-split epilogue
++    float local_lse = lane_idx < parts ? lse_accum[lane_idx * stride_lse_split + s_q_idx * stride_lse_s_q + head_idx] : -CUDART_INF_F;
++    float max_lse = local_lse;
++    for (int offset = 16; offset >= 1; offset /= 2)
++        max_lse = max(max_lse, __shfl_xor_sync(0xffffffffu, max_lse, offset));
++    float sum_lse = max_lse == -CUDART_INF_F ? 0.0f : exp2f(local_lse - max_lse);
++    for (int offset = 16; offset >= 1; offset /= 2)
++        sum_lse += __shfl_xor_sync(0xffffffffu, sum_lse, offset);
++    float global_lse = sum_lse == 0.0f ? CUDART_INF_F : log2f(sum_lse) + max_lse;
++    if (attn_sink != nullptr) {
++        float sink = __ldg(attn_sink + head_idx) * CUDART_L2E_F;
++        if (global_lse != CUDART_INF_F) {
++            global_lse += log2f(1.0f + exp2f(sink - global_lse));
++        }
++        // No token attended: the non-split epilogue writes zeros (l == 0), keep that
++    }
++    scale_buf[warp_idx][lane_idx < MAX_PARTS ? lane_idx : 0] = exp2f(local_lse - global_lse);
++    __syncwarp();
++
++    float4 acc[4] = {{0.f, 0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 0.f}};
++    const float* o_base = o_accum + (uint64_t)s_q_idx * stride_o_s_q + head_idx * 512 + lane_idx * 4;
++    #pragma unroll 1
++    for (int p = 0; p < parts; ++p) {
++        float w = scale_buf[warp_idx][p];
++        if (w == 0.0f) continue;
++        const float* src = o_base + (uint64_t)p * stride_o_split;
++        #pragma unroll
++        for (int i = 0; i < 4; ++i) {
++            float4 v = *(const float4*)(src + i * 128);
++            acc[i].x += w * v.x; acc[i].y += w * v.y; acc[i].z += w * v.z; acc[i].w += w * v.w;
++        }
++    }
++
++    // Conjugate RoPE on dims 448..511 (chunk 3, lanes 16..31): pair (2m, 2m+1) rotates by angle m of the token's position
++    if (lane_idx >= 16) {
++        uint32_t position = __ldg(token_positions + s_q_idx);
++        const float* cs = cos_sin_cache + (uint64_t)position * 64 + (lane_idx - 16) * 2;
++        float c0 = __ldg(cs), c1 = __ldg(cs + 1), s0 = __ldg(cs + 32), s1 = __ldg(cs + 33);
++        float4 v = acc[3];
++        acc[3] = float4{v.x * c0 + v.y * s0, -v.x * s0 + v.y * c0, v.z * c1 + v.w * s1, -v.z * s1 + v.w * c1};
++    }
++
++    const int wv_group_idx = head_idx / 8, head_idx_in_wv_group = head_idx % 8;
++    cutlass::float_e4m3_t* out_base = out_fp8 + (uint64_t)s_q_idx * (64 * 512) + wv_group_idx * (8 * 512) + head_idx_in_wv_group * 32 + (lane_idx % 8) * 4;
++    #pragma unroll
++    for (int i = 0; i < 4; ++i) {
++        // Quant tile = 32 dims = 8 lanes; the same rounding as the fused epilogue (abs max rounded up to a power of two)
++        float amax = max(max(fabsf(acc[i].x), fabsf(acc[i].y)), max(fabsf(acc[i].z), fabsf(acc[i].w)));
++        amax = max(amax, __shfl_xor_sync(0xffffffffu, amax, 1));
++        amax = max(amax, __shfl_xor_sync(0xffffffffu, amax, 2));
++        amax = max(amax, __shfl_xor_sync(0xffffffffu, amax, 4));
++        amax = max(1e-4f, amax);
++        float sf = amax / 448.0f;
++        uint32_t sf_as_uint32 = *reinterpret_cast<uint32_t*>(&sf);
++        uint32_t exp_sf = (int32_t)((sf_as_uint32 - 1) >> 23) + (1 - 127);
++        uint32_t sf_inv_as_uint32 = (127 - exp_sf) << 23;
++        float sf_inv = *reinterpret_cast<float*>(&sf_inv_as_uint32);
++        float2 lo = {acc[i].x * sf_inv, acc[i].y * sf_inv}, hi = {acc[i].z * sf_inv, acc[i].w * sf_inv};
++        uint32_t packed = (uint32_t)__nv_cvt_float2_to_fp8x2(lo, __NV_SATFINITE, __NV_E4M3)
++                        | ((uint32_t)__nv_cvt_float2_to_fp8x2(hi, __NV_SATFINITE, __NV_E4M3) << 16);
++        int tile_idx = i * 4 + lane_idx / 8;   // dims [tile*32, tile*32+32)
++        *(uint32_t*)(out_base + tile_idx * (32 * 8)) = packed;
++        if (lane_idx % 8 == 0) {
++            int sf_block_idx = head_idx_in_wv_group + tile_idx * 8;
++            *((uint8_t*)(out_sf + s_q_idx + wv_group_idx * stride_sf_wv_group + (sf_block_idx / 4) * stride_sf_head_dim) + sf_block_idx % 4) = (uint8_t)(exp_sf + 127);
++        }
++    }
++}
++
++}
+diff --git a/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/config.h b/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/config.h
+index 1b31a9a..c1221c6 100644
+--- a/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/config.h
++++ b/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/config.h
+@@ -63,7 +63,9 @@ Decoding mode (FWD_MODE == SparseAttnFwdMode::Decode):
+ - EXTRA_MODEL_TYPE == ModelType::V41_FP4 selects an fp4 extra KV cache: every token is 512 e2m1 + 32 e4m3 scales,
+   each page block stores [page_block_size x 256 B data rows] + [page_block_size x 32 B scale rows]. Warpgroup 1 then
+   dequantizes both caches with a common code path (see there) instead of the fp8-only one
+-- Split-KV is not supported (the fused RoPE + FP8-quant epilogue cannot be combined across splits)
++- Split-KV (FWD_MODE == SparseAttnFwdMode::DecodeWithSplitKV): the KV blocks of a token are divided evenly among
++  `num_sm_parts` consecutive CTAs (grid = s_q * num_sm_parts); each writes O / l and lse to `o_accum` / `lse_accum`,
++  and `fused_split_combine_kernel` (combine.cuh) merges the parts and runs the O RoPE + FP8 cast epilogue
+ */
+ 
+ #pragma once
+@@ -92,10 +94,14 @@ static constexpr uint32_t H_Q = CONFIG.H_Q;
+ 
+ using Params = ParamT<FWD_MODE>;
+ 
+-static_assert(FWD_MODE == SparseAttnFwdMode::Prefill || FWD_MODE == SparseAttnFwdMode::Decode);
++static_assert(FWD_MODE == SparseAttnFwdMode::Prefill || FWD_MODE == SparseAttnFwdMode::Decode || FWD_MODE == SparseAttnFwdMode::DecodeWithSplitKV);
+ static_assert(H_Q == 64 || H_Q == 128);
+ 
+ static constexpr bool IS_DECODE = is_decode_v<FWD_MODE>;
++// Split-KV (decode only): the KV blocks of one query token are divided evenly among `num_sm_parts` CTAs, each of
++// which writes its unnormalized O (scaled by 1/l) and its log-sum-exp to `o_accum` / `lse_accum`; the fused epilogue
++// (O RoPE + FP8 cast) then runs in `fused_split_combine_kernel` (combine.cuh) over the parts
++static constexpr bool IS_SPLIT = FWD_MODE == SparseAttnFwdMode::DecodeWithSplitKV;
+ 
+ // Model parameters
+ static constexpr uint32_t D_QK = 512;
+diff --git a/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/kernel.cuh b/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/kernel.cuh
+index b55c085..39eea43 100644
+--- a/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/kernel.cuh
++++ b/csrc/kernels/sm100/prefill/sparse/fused_norm_rope_attn_rope_cast_fwd/core_attn/kernel.cuh
+@@ -134,10 +134,22 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+         // Decoding only:
+         uint32_t extra_topk_length;     // Number of valid extra-topk entries of the current request
+         uint32_t num_orig_slots;        // Number of slots occupied by the orig KV in the unified slot space, i.e. slots < num_orig_slots come from `kv`/`indices` (will be set to -1 if we don't have so many valid indices) while the others come from `extra_kv`/`extra_indices`. 0xFFFFFFFF when there is no extra KV (so that every slot belongs to the orig KV)
++        // Split-KV only: this job covers KV blocks [kv_block_begin, kv_block_begin + num_kv_blocks) of the token's unified
++        // slot space and writes partition `part`. A part with no block of its own (more parts than blocks) runs one block
++        // with every slot masked (mask_all), so that it still produces a well-defined empty partial (l = 0)
++        uint32_t kv_block_begin;
++        uint32_t part;
++        bool mask_all;
+     };
+ 
+     auto _make_outer_loop_args = [&](uint32_t job_idx_mod_2, uint32_t cta_x_idx) -> OuterloopArgs {
+         uint32_t s_q_idx = cta_x_idx / CLUSTER_SIZE;
++        uint32_t part = 0;
++        if constexpr (IS_SPLIT) {
++            // Grid is (s_q * num_sm_parts * CLUSTER_SIZE): consecutive clusters are the parts of one token
++            part = s_q_idx % (uint32_t)params.num_sm_parts;
++            s_q_idx = s_q_idx / (uint32_t)params.num_sm_parts;
++        }
+         if constexpr (IS_DECODE) {
+             uint32_t topk_length = params.topk_length ? (uint32_t)__ldg(params.topk_length + s_q_idx) : (uint32_t)params.topk;
+             uint32_t extra_topk_length = params.extra_topk_length ? (uint32_t)__ldg(params.extra_topk_length + s_q_idx) : (uint32_t)params.extra_topk;
+@@ -151,6 +163,19 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+                 num_kv_blocks = ku::ceil_div(topk_length, (uint32_t)B_TOPK);
+             }
+             num_kv_blocks = std::max(num_kv_blocks, 1u);
++            uint32_t kv_block_begin = 0;
++            bool mask_all = false;
++            if constexpr (IS_SPLIT) {
++                uint32_t parts = (uint32_t)params.num_sm_parts;
++                uint32_t begin = part * num_kv_blocks / parts, end = (part + 1) * num_kv_blocks / parts;
++                if (end > begin) {
++                    kv_block_begin = begin;
++                    num_kv_blocks = end - begin;
++                } else {
++                    num_kv_blocks = 1;
++                    mask_all = true;
++                }
++            }
+             return {
+                 true,
+                 s_q_idx,
+@@ -158,7 +183,10 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+                 topk_length,
+                 num_kv_blocks,
+                 extra_topk_length,
+-                num_orig_slots
++                num_orig_slots,
++                kv_block_begin,
++                part,
++                mask_all
+             };
+         } else {
+             uint32_t topk_length = params.topk_length ? __ldg(params.topk_length + s_q_idx) : params.topk;
+@@ -168,7 +196,8 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+                 s_q_idx,
+                 job_idx_mod_2,
+                 topk_length,
+-                num_kv_blocks
++                num_kv_blocks,
++                0, 0xFFFFFFFFu, 0, 0, false
+             };
+         }
+     };
+@@ -178,18 +207,20 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+     // where LOC (a KVLocation) tells where the tokens of the current block come from. Only the (at most
+     // one) block straddling the orig/extra boundary is invoked with ORIG_AND_EXTRA, so that ORIG-only
+     // and EXTRA-only blocks stay on branch-free fast paths
++    // The callable receives the block index in the token's unified slot space; a split job walks only its own range
+     auto run_along_kv_blocks = [&](const OuterloopArgs &cur_args, auto callable) {
+-        uint32_t num_full_orig_blocks = std::min(cur_args.num_kv_blocks, cur_args.num_orig_slots / B_TOPK);
+-        bool has_mixed_block = num_full_orig_blocks < cur_args.num_kv_blocks && cur_args.num_orig_slots % B_TOPK != 0;
++        uint32_t begin = cur_args.kv_block_begin, end = cur_args.kv_block_begin + cur_args.num_kv_blocks;
++        uint32_t num_full_orig_blocks = std::min(end, cur_args.num_orig_slots / B_TOPK);
++        bool has_mixed_block = num_full_orig_blocks < end && cur_args.num_orig_slots % B_TOPK != 0;
+         CUTE_NO_UNROLL
+-        for (uint32_t kv_block_idx = 0; kv_block_idx < num_full_orig_blocks; ++kv_block_idx) {
++        for (uint32_t kv_block_idx = begin; kv_block_idx < num_full_orig_blocks; ++kv_block_idx) {
+             callable.template operator()<KVLocation::ORIG>(kv_block_idx);
+         }
+-        if (has_mixed_block) {
++        if (has_mixed_block && num_full_orig_blocks >= begin) {
+             callable.template operator()<KVLocation::ORIG_AND_EXTRA>(num_full_orig_blocks);
+         }
+         CUTE_NO_UNROLL
+-        for (uint32_t kv_block_idx = num_full_orig_blocks + has_mixed_block; kv_block_idx < cur_args.num_kv_blocks; ++kv_block_idx) {
++        for (uint32_t kv_block_idx = std::max(begin, num_full_orig_blocks + has_mixed_block); kv_block_idx < end; ++kv_block_idx) {
+             callable.template operator()<KVLocation::EXTRA>(kv_block_idx);
+         }
+     };
+@@ -332,6 +363,57 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+             }
+             smem.bar_li_mi_empty.arrive();
+ 
++            static constexpr uint32_t MMA_ATOM_N = 256;
++            static constexpr uint32_t NUM_MMA_ATOMS = D_VO / MMA_ATOM_N;
++            static constexpr uint32_t NUM_O_TMEM_COLS_PER_ATOM = MMA_ATOM_N / FOLD_FACTOR;
++            static constexpr uint32_t EPILOGUE_TILE_SIZE = O_QUANT_TILE_SIZE;
++            static constexpr uint32_t NUM_EPILOGUE_TILES_PER_ATOM = NUM_O_TMEM_COLS_PER_ATOM / EPILOGUE_TILE_SIZE;
++            static_assert(NUM_O_TMEM_COLS_PER_ATOM % EPILOGUE_TILE_SIZE == 0);  // TODO When FOLD_FACTOR is 4 and MODEL_TYPE is V4 (so NUM_O_TMEM_COLS_PER_ATOM is 128), this isn't hold
++
++            if constexpr (IS_SPLIT) {
++                // Partial epilogue: O / l (fp32) and lse = m + log2(l) of this part. The sink, RoPE and the FP8 cast are
++                // applied by the combine kernel, once, over all parts
++                uint32_t head_idx = cta_idx * H_Q_PER_CTA + idx_in_warpgroup % H_Q_PER_CTA;
++                if (idx_in_warpgroup < H_Q_PER_CTA) {
++                    params.lse_accum[cur_job.part * params.stride_lse_accum_split + cur_job.s_q_idx * params.stride_lse_accum_s_q + head_idx] =
++                        li == 0.0f ? -CUDART_INF_F : log2f(li) + mi;
++                }
++                float output_scale = li == 0.0f ? 0.0f : __fdividef(1.0f, li);
++                float2 output_scale_float2 = {output_scale, output_scale};
++                float *o_base = params.o_accum + (uint64_t)cur_job.part * params.stride_o_accum_split + (uint64_t)cur_job.s_q_idx * params.stride_o_accum_s_q + (uint64_t)head_idx * params.stride_o_accum_h_q;
++
++                smem.bar_tO_full.wait(cur_job.job_idx_mod_2);
++                ku::tcgen05_after_thread_sync();
++                CUTE_UNROLL
++                for (uint32_t mma_atom_idx = 0; mma_atom_idx < NUM_MMA_ATOMS; mma_atom_idx += 1) {
++                    uint32_t head_dim_idx_base =
++                        CLUSTER_SIZE == 1 ?
++                        mma_atom_idx * MMA_ATOM_N + (warp_idx/(H_Q_PER_CTA/32)) * (MMA_ATOM_N/FOLD_FACTOR) :
++                        mma_atom_idx * NUM_O_TMEM_COLS_PER_ATOM + (warp_idx/(H_Q_PER_CTA/32)) * MMA_ATOM_N;
++                    CUTE_UNROLL
++                    for (uint32_t epilogue_tile_idx_in_atom = 0; epilogue_tile_idx_in_atom < NUM_EPILOGUE_TILES_PER_ATOM; ++epilogue_tile_idx_in_atom) {
++                        uint32_t tmem_col_base = tmem_cols::O + mma_atom_idx * NUM_O_TMEM_COLS_PER_ATOM + epilogue_tile_idx_in_atom * EPILOGUE_TILE_SIZE;
++                        float output[EPILOGUE_TILE_SIZE];
++                        ku::tmem_ld_32dp32bNx<EPILOGUE_TILE_SIZE>(tmem_col_base, output);
++                        cutlass::arch::fence_view_async_tmem_load();
++                        if (mma_atom_idx+1 == NUM_MMA_ATOMS && epilogue_tile_idx_in_atom+1 == NUM_EPILOGUE_TILES_PER_ATOM) {
++                            ku::tcgen05_before_thread_sync();
++                            if (!is_last_job) {
++                                arrive_on_cta0_barrier(smem.bar_tO_empty);
++                            }
++                        }
++                        float *dst = o_base + head_dim_idx_base + epilogue_tile_idx_in_atom * EPILOGUE_TILE_SIZE;
++                        CUTE_UNROLL
++                        for (uint32_t j = 0; j < EPILOGUE_TILE_SIZE; j += 4) {
++                            float2 a = ku::float2_mul(*(float2*)(output + j), output_scale_float2);
++                            float2 b = ku::float2_mul(*(float2*)(output + j + 2), output_scale_float2);
++                            *(float4*)(dst + j) = float4{a.x, a.y, b.x, b.y};
++                        }
++                    }
++                }
++                return;
++            }
++
+             if (idx_in_warpgroup < H_Q_PER_CTA) {
+                 uint32_t global_index = cur_job.s_q_idx * H_Q + cta_idx * H_Q_PER_CTA + idx_in_warpgroup;
+                 float cur_lse = fmaf(mi, CUDART_LN2_F, logf(li));
+@@ -344,13 +426,6 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+ 
+             smem.bar_tO_full.wait(cur_job.job_idx_mod_2);
+             ku::tcgen05_after_thread_sync();
+-            
+-            static constexpr uint32_t MMA_ATOM_N = 256;
+-            static constexpr uint32_t NUM_MMA_ATOMS = D_VO / MMA_ATOM_N;
+-            static constexpr uint32_t NUM_O_TMEM_COLS_PER_ATOM = MMA_ATOM_N / FOLD_FACTOR;
+-            static constexpr uint32_t EPILOGUE_TILE_SIZE = O_QUANT_TILE_SIZE;
+-            static constexpr uint32_t NUM_EPILOGUE_TILES_PER_ATOM = NUM_O_TMEM_COLS_PER_ATOM / EPILOGUE_TILE_SIZE;
+-            static_assert(NUM_O_TMEM_COLS_PER_ATOM % EPILOGUE_TILE_SIZE == 0);  // TODO When FOLD_FACTOR is 4 and MODEL_TYPE is V4 (so NUM_O_TMEM_COLS_PER_ATOM is 128), this isn't hold
+             fp8_e4m3 output_fp8[NUM_MMA_ATOMS][NUM_O_TMEM_COLS_PER_ATOM];
+             uint8_t output_sf[NUM_MMA_ATOMS][NUM_O_TMEM_COLS_PER_ATOM / O_QUANT_TILE_SIZE];
+ 
+@@ -823,7 +898,7 @@ void Kernel<CONFIG>::devfunc(const Params &params, const TMAParams &tma_params,
+                             // beyond the end of the indices row (e.g. topk=128 with B_TOPK=96), so an
+                             // unconditional load could read OOB of `indices` / `extra_indices`. Slots
+                             // beyond `valid_len` are masked out anyway, so skip the load for them
+-                            int cur_index = local_pos < valid_len ? __ldg((in_extra ? extra_indices_base : indices_base) + local_pos) : -1;
++                            int cur_index = (local_pos < valid_len && !cur_job.mask_all) ? __ldg((in_extra ? extra_indices_base : indices_base) + local_pos) : -1;
+                             bool is_index_valid = cur_index >= 0;
+                             
+                             // Share coord/scale generation instead of repeating it in all dequant warps.
+@@ -1485,6 +1560,10 @@ void Kernel<CONFIG>::run(const Params &params) {
+     TMAParams tma_params = {};
+     if constexpr (IS_DECODE) {
+         KU_ASSERT(params.b == 1, "Only batch size 1 is supported for the fused decoding kernel");
++        KU_ASSERT(params.enable_split_kv == IS_SPLIT, "enable_split_kv must match the kernel's FWD_MODE");
++        if constexpr (IS_SPLIT) {
++            KU_ASSERT(params.num_sm_parts >= 1 && params.lse_accum != nullptr && params.o_accum != nullptr);
++        }
+         KU_ASSERT(params.model_type == MODEL_TYPE && params.extra_model_type == EXTRA_MODEL_TYPE);
+         if (params.extra_topk > 0) {
+             // A KV block may straddle the orig/extra boundary (see KVLocation::ORIG_AND_EXTRA). Since
+@@ -1602,7 +1681,7 @@ void Kernel<CONFIG>::run(const Params &params) {
+     KU_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+ 
+     cutlass::ClusterLaunchParams launch_params = {
+-        dim3(params.s_q * CLUSTER_SIZE, 1, 1),
++        dim3(params.s_q * (IS_SPLIT ? params.num_sm_parts : 1) * CLUSTER_SIZE, 1, 1),
+         dim3(NUM_THREADS, 1, 1),
+         dim3(CLUSTER_SIZE, 1, 1),
+         smem_size,

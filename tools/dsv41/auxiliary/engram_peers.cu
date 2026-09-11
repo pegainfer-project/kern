@@ -9,7 +9,14 @@
 #include <stdint.h>
 #include <math.h>
 using bf16 = __nv_bfloat16;
+// Programmatic dependent launch, as in auxiliary.cu: wait before touching
+// anything, trigger right after so the next launch's prologue overlaps.
+__device__ __forceinline__ void pdl() {
+  asm volatile("griddepcontrol.wait;" ::: "memory");
+  asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+}
 extern "C" __global__ void dsv41_lookup_peers(bf16* out,const int64_t* ids,const uint8_t* const* tables,const uint8_t* const* scales,int rows,int cols,int dim,int id_stride,int id_offset,int ranks,int64_t per_rank,int64_t total){
+ pdl();
  int t=blockIdx.x, head=blockIdx.y;
  int64_t row=ids[(int64_t)t*id_stride+id_offset+head];
  int64_t r=min(row/per_rank,(int64_t)ranks-1);

@@ -16,7 +16,7 @@ def definitions(cubin: Path, rows="rows", groups="groups", copies=4, hash_cols=2
     modules = {"dsv41_auxiliary": pin(cubin)}
     def op(entry, params, grid, module="dsv41_auxiliary"):
         return {"params": params.split(";"), "impl": {"launches": [{
-            "module": module, "entry": "dsv41_" + entry,
+            "module": module, "entry": "dsv41_" + entry, "pdl": True,
             "block": [256, 1, 1], "grid": grid}]}}
     ops = {
         "engram_history": op("history", "inout state;in buffer<i32>;in buffer<i64>;in buffer<i64>;in buffer<u8>;i32", [{"ceil_div": [rows, 256]}, 1, 1]),

@@ -37,7 +37,12 @@ def forward(pieces, serving, layer, source, layouts, hidden, qr, *, mode,
     buffers, calls = {}, []
 
     def allocate(name, dtype, columns):
-        name = prefix + "." + name
+        # The full-context score rows are the one workspace that scales with
+        # the context; prefill, decode and verify never run concurrently, so
+        # the three modes share it (a mode-less name) instead of each holding
+        # [capacity, context] of their own.
+        shared = name in ("scores", "block_scores")
+        name = (f"index{layer}" if shared else prefix) + "." + name
         buffers[name] = {"dtype":dtype,"kind":"workspace","shape":[capacity,columns]}
         return name
 

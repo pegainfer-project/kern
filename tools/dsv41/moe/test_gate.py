@@ -6,12 +6,12 @@ from gate import pieces
 from test_boundary import check
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--inference',type=pathlib.Path,required=True);p.add_argument('--dump',type=pathlib.Path);p.add_argument('--raw-slab',action='store_true');a=p.parse_args();sys.path.insert(0,str(a.inference));import model
+ p=argparse.ArgumentParser();p.add_argument('--inference',type=pathlib.Path,required=True);p.add_argument('--dump',type=pathlib.Path);p.add_argument('--raw-slab',action='store_true');p.add_argument('--cubins',type=pathlib.Path);p.add_argument('--legacy',action='store_true',help='launch the split-K 1 instances');a=p.parse_args();sys.path.insert(0,str(a.inference));import model
  torch.manual_seed(432);torch.empty(1,device='cuda');drv=ctypes.CDLL('libcuda.so.1')
  for experts in (128,384):
   topk=3 if experts==128 else 6
   for n in (1,5,65,128):
-   modules,ops=pieces(rows=n,experts=experts,max_tokens=n,raw_outputs=a.raw_slab);op=next(iter(ops.values()));launch=op['impl']['launches'][-1]
+   from gate import LEGACY;modules,ops=pieces(rows=n,experts=experts,max_tokens=n,raw_outputs=a.raw_slab,cubin_dir=str(a.cubins) if a.cubins else None,config=LEGACY[experts] if a.legacy else None);op=next(iter(ops.values()));launch=op['impl']['launches'][-1]
    x=torch.randn(n,5120,device='cuda',dtype=torch.bfloat16);weight=torch.randn(experts,5120,device='cuda',dtype=torch.bfloat16)*.03;bias=torch.randn(experts,device='cuda')*.1
    idx=torch.empty(n,topk,device='cuda',dtype=torch.int64);weights=torch.empty(n,topk,device='cuda');params=[x,weight,bias,idx,weights,n,torch.zeros(8192,dtype=torch.int64,device='cuda')]
    scratch={k:torch.zeros(v['shape'],dtype=torch.uint8 if v['dtype']=='u8' else torch.int64,device='cuda') for k,v in op['impl']['scratch'].items()}

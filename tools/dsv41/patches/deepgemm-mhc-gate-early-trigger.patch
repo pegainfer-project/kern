@@ -1,0 +1,24 @@
+diff -ru a/include/deep_gemm/impls/sm100_bf16_mega_gate.cuh b/include/deep_gemm/impls/sm100_bf16_mega_gate.cuh
+--- a/include/deep_gemm/impls/sm100_bf16_mega_gate.cuh
++++ b/include/deep_gemm/impls/sm100_bf16_mega_gate.cuh
+@@ -128,6 +128,8 @@
+     comm::cluster_sync_with_relaxed_arrive();
+ 
+     cudaGridDependencySynchronize();
++    // Let a PDL successor start its own prologue now; its wait still covers this grid's completion.
++    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+ 
+     const auto get_tmem_base_addr = [](const uint32_t& accum_stage_idx) {
+         return accum_stage_idx * UMMA_N;
+diff -ru a/include/deep_gemm/impls/sm100_mega_mhc.cuh b/include/deep_gemm/impls/sm100_mega_mhc.cuh
+--- a/include/deep_gemm/impls/sm100_mega_mhc.cuh
++++ b/include/deep_gemm/impls/sm100_mega_mhc.cuh
+@@ -168,6 +168,8 @@
+ 
+     // Local initialization can overlap the preceding grid, but persistent split barriers cannot.
+     cudaGridDependencySynchronize();
++    // Let a PDL successor start its own prologue now; its wait still covers this grid's completion.
++    asm volatile("griddepcontrol.launch_dependents;" ::: "memory");
+     if (warp_idx == kFirstPostWGIdx * kNumWarpsPerWG + 1 and cute::elect_one_sync()) {
+         for (uint32_t m_block_idx = blockIdx.x; m_block_idx < num_m_blocks; m_block_idx += kNumSMs)
+             sched::mega_mhc::Mix::init(gmem_split_barriers, m_block_idx);

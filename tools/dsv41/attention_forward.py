@@ -57,10 +57,19 @@ def forward(pieces, serving, layer, layouts, source, output, *,
         "ratio":1,"width":0,
     }
     builder = fused_definitions if fused else paged_definitions
+    # Split-KV parts per program: the grid is rows x parts CTAs of one SM
+    # each, so parts follows the program's row bound (decode <= 16 rows,
+    # verify/draft <= 96) rather than the batch; prefill rows already fill
+    # the SMs. Only when the split-kv FlashMLA build sits beside the fused
+    # cubin (bench_results/2026-09-10-dsv41-attn-split).
+    split_cubin = fused_cubin.with_name("libdsv41_fused_split.2.sm_103a.cubin") if fused else None
+    split = ({"decode":10,"verify":10,"draft":2}.get(mode)
+             if split_cubin is not None and split_cubin.is_file() else None)
     modules,ops = builder(
         fused_cubin if fused else attention_cubin,rows=rows,rows_max=capacity,pages=pool_tokens//page,
         extra_pages=pool_tokens//page,page_size=page,extra_page_size=page//extra["ratio"],
-        topk=192 if mode == "draft" else 128,extra_topk=extra["width"])
+        topk=192 if mode == "draft" else 128,extra_topk=extra["width"],
+        **({"split":split,"split_cubin":split_cubin} if split else {}))
     entry = "dsv41_fused_attention" if fused else "dsv41_paged_attention"
     if fused:
         # The byte ABI holds packed E8M0 words; expose I32 storage so O-A
