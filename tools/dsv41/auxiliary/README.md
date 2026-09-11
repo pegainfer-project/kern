@@ -1,8 +1,11 @@
 # Auxiliary kernel contract
 
-`build.py OUTPUT` builds `dsv41_auxiliary.cubin` with CUDA 13 for SM103a.
-`ops.definitions(cubin, rows=..., groups=..., heads=...)` returns schema modules
-and typed ops. Expression-valued rows work for dynamic prefill and speculative
+`build.py OUTPUT` builds `dsv41_auxiliary.cubin` and `dsv41_engram_peers.cubin`
+with CUDA 13 for SM103a (`engram_peers.cu`: the one lookup over Engram tables
+sharded into HBM across the EP group, its own module so a manifest that keeps
+the tables in host memory pins nothing new).
+`ops.definitions(cubin, rows=..., groups=..., heads=..., peers=...)` returns
+schema modules and typed ops. Expression-valued rows work for dynamic prefill and speculative
 rounds. No complete checkpoint export is used.
 
 These are initial standalone implementations, not yet a fused performance result.

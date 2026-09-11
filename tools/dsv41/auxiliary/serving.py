@@ -145,12 +145,20 @@ class Serving:
                 buf(multipliers), buf(primes), buf(offsets), rows, scalar(self.layout.page_size),
                 scalar(self.layout.pages), scalar(2), scalar(8), scalar(4), {"i64": compressed_pad_id})]
 
-    def engram_lookup(self, mode, layer, table, scales, output):
+    def engram_lookup(self, mode, layer, table, scales, output, shard=None):
+        """`shard` = (ranks, rows per rank, total rows) when the table is sharded
+        into HBM across the EP group and read through `<table>.peers`; None
+        when it is one shared host-memory table."""
         if layer not in (1, 14):
             raise ValueError("Engram only appears in target layers1 and14")
-        return [self._call(mode, f"engram{layer}.lookup", "engram_lookup", buf(output),
-            buf(f"{mode}.hashes"), buf(table), buf(scales), scalar(self.rows(mode)),
-            scalar(24), scalar(256), scalar(48), scalar(0 if layer == 1 else 24))]
+        geometry = [scalar(self.rows(mode)), scalar(24), scalar(256), scalar(48), scalar(0 if layer == 1 else 24)]
+        if shard is None:
+            return [self._call(mode, f"engram{layer}.lookup", "engram_lookup", buf(output),
+                buf(f"{mode}.hashes"), buf(table), buf(scales), *geometry)]
+        ranks, per_rank, total = shard
+        return [self._call(mode, f"engram{layer}.lookup", "engram_lookup_peers", buf(output),
+            buf(f"{mode}.hashes"), buf(table + ".peers"), buf(scales + ".peers"), *geometry,
+            scalar(ranks), {"i64": per_rank}, {"i64": total})]
 
     def window_write(self, mode, layer, post_rope_kv):
         """Ring writes: window_slot is the row's position modulo the ring inside its sequence's slot."""
@@ -238,7 +246,7 @@ def rope_name(compress_ratio, *, split=False):
     return f"rope.{family}.{'split' if split else 'interleaved'}"
 
 
-def build(cubin: Path, layout=Layout()):
+def build(cubin: Path, layout=Layout(), peers=None):
     """Return concrete definitions and lowering helpers (weights supplied outside)."""
     variables = {"tokens": {"max": layout.max_tokens}, "seqs": {"max": layout.max_seqs}}
     buffers = {
@@ -272,7 +280,7 @@ def build(cubin: Path, layout=Layout()):
     modules, all_ops = {}, {}
     for mode in ("prefill", "decode", "verify", "draft"):
         rows = Serving.rows(mode)
-        mods, ops = definitions(cubin, rows=rows, groups=rows, seqs="seqs")
+        mods, ops = definitions(cubin, rows=rows, groups=rows, seqs="seqs", peers=peers)
         modules.update(mods)
         all_ops.update({f"{mode}.{name}": op for name, op in ops.items()})
         shapes = {"request": ("i32", ["tokens"]), "position": ("i32", ["tokens"]),

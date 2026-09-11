@@ -23,12 +23,14 @@ class Target:
 def forward(pieces, serving, dense_layouts, expert_layouts, *, mode, ids,
             capacity, pool_tokens, constants, cubin_dir, auxiliary_cubin,
             attention_cubin, head_cubin, dense_cubin, sparse_cubin, select_cubin,
-            candidate_cubin, capture_tap, fused_cubin=None):
+            candidate_cubin, capture_tap, fused_cubin=None, engram=None):
     """Produce all token hidden rows; the caller chooses serving head rows.
 
     capture_tap(layer,materialized_hc) returns a Lowered stage storing the
     attention-input mean in DSpark's concatenated target context allocation.
     Plain modes commit compressor state here; verify returns deferred commits.
+    engram maps a layer to its table's shard geometry when the tables live
+    in HBM (see engram.inject); None reads them from shared host memory.
     """
     if mode not in ("prefill", "decode", "verify"):
         raise ValueError("target mode must be prefill, decode or verify")
@@ -65,7 +67,8 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, mode, ids,
             calls.extend(flush)
             output = prefix + ".engram_residual"
             extend(inject(pieces,serving,layer_id,dense_layouts,state.residual,output,
-                          mode=mode,capacity=capacity,cubin_dir=cubin_dir))
+                          mode=mode,capacity=capacity,cubin_dir=cubin_dir,
+                          shard=engram.get(layer_id) if engram else None))
             state = replace(state,residual=output)
         if layer_id in (37,38,39):
             state, flush = blocks.materialize(state,prefix+f".{layer}.tap_materialize")

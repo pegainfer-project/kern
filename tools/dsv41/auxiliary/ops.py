@@ -7,11 +7,16 @@ def align4(rows):
     return (rows + 3) // 4 * 4 if isinstance(rows, int) else {"mul": [{"ceil_div": [rows, 4]}, 4]}
 
 
-def definitions(cubin: Path, rows="rows", groups="groups", copies=4, hash_cols=24, heads=64, seqs="seqs"):
-    module = {"source": cubin.name, "sha256": hashlib.sha256(cubin.read_bytes()).hexdigest()}
-    def op(entry, params, grid):
+def pin(cubin: Path):
+    return {"source": cubin.name, "sha256": hashlib.sha256(cubin.read_bytes()).hexdigest()}
+
+
+def definitions(cubin: Path, rows="rows", groups="groups", copies=4, hash_cols=24, heads=64, seqs="seqs", peers=None):
+    """Modules and ops; `peers` is the engram-peers cubin for a manifest whose Engram tables are sharded into HBM."""
+    modules = {"dsv41_auxiliary": pin(cubin)}
+    def op(entry, params, grid, module="dsv41_auxiliary"):
         return {"params": params.split(";"), "impl": {"launches": [{
-            "module": "dsv41_auxiliary", "entry": "dsv41_" + entry,
+            "module": module, "entry": "dsv41_" + entry,
             "block": [256, 1, 1], "grid": grid}]}}
     ops = {
         "engram_history": op("history", "inout state;in buffer<i32>;in buffer<i64>;in buffer<i64>;in buffer<u8>;i32", [{"ceil_div": [rows, 256]}, 1, 1]),
@@ -47,4 +52,8 @@ def definitions(cubin: Path, rows="rows", groups="groups", copies=4, hash_cols=2
         "cache_gather": op("cache_gather", "out buffer<bf16>;in state;in buffer<i64>;i32;i32;i32", [rows, 1, 1]),
         "rope": op("rope", "out buffer<bf16>;in buffer<bf16>;in buffer<f32>;in buffer<i32>;i32;i32;i32;i32;i32", [rows, heads, 1]),
     })
-    return {"dsv41_auxiliary": module}, ops
+    if peers is not None:
+        modules["dsv41_engram_peers"] = pin(peers)
+        ops["engram_lookup_peers"] = op("lookup_peers", "out buffer<bf16>;in buffer<i64>;in buffer<u64>;in buffer<u64>;i32;i32;i32;i32;i32;i32;i64;i64",
+                                        [rows, hash_cols, 1], module="dsv41_engram_peers")
+    return modules, ops

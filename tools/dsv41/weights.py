@@ -21,22 +21,49 @@ def raw(tensor, source):
             "kind": "weight", "bind": [{"tensor": source}]}
 
 
-def bindings(tensors, config, ep=4):
+def sharded(tensor, source, ep):
+    """One table split into `ep` equal row slices, one per rank, exported so
+    the group reads the whole table through a peer array. The last slice
+    starts early enough to end at the table's end, so all slices are the
+    buffer's one shape (rows overlap, never run past the table)."""
+    total = tensor["shape"][0]
+    per_rank = -(-total // ep)
+    starts = [min(rank * per_rank, total - per_rank) for rank in range(ep)]
+    return {"dtype": DTYPES[tensor["dtype"]], "shape": [per_rank, *tensor["shape"][1:]],
+            "kind": "weight", "export": True,
+            "bind": [{"tensor": source, "rows": {"group": "ep", "ranges": [[s, s + per_rank] for s in starts]}}]}
+
+
+def peers(of, ep):
+    return {"kind": "peer", "dtype": "u64", "shape": [ep], "of": of, "group": "ep"}
+
+
+def bindings(tensors, config, ep=4, engram="host"):
     """Return (GPU buffers, shared host tensors) for the text and draft model.
 
     Grouped raw expert buffers have shape [local_experts, *checkpoint_shape].
     Their scales retain E8M0 bytes; FP4 weights retain packed signed bytes.
     Host descriptors declare mapped host placement. The serving loader shares
     one checkpoint scope across ranks; these never become HBM weights.
+    The Engram tables are host descriptors (`engram="host"`: one copy in the
+    tray's host memory, read through ATS; a GB300) or sharded into HBM across
+    the EP group with a `<name>.peers` array each (`engram="device"`: a
+    device that cannot read host memory at speed; an HGX B300).
     """
     if ep < 1:
         raise ValueError("EP must be positive")
+    if engram not in ("host", "device"):
+        raise ValueError("engram tables live in host memory or on the devices")
     gpu, host, groups = {}, {}, {}
     for name, tensor in sorted(tensors.items()):
         if name.startswith(("vision.", "aligner.")):
             continue
         if ".engram.embed." in name:
-            host[name] = dict(raw(tensor, name), placement="host")
+            if engram == "host":
+                host[name] = dict(raw(tensor, name), placement="host")
+            else:
+                gpu[name] = sharded(tensor, name, ep)
+                gpu[name + ".peers"] = peers(name, ep)
             continue
         match = EXPERT.fullmatch(name)
         if match is None:

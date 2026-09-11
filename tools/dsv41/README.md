@@ -40,6 +40,17 @@ python3 tools/dsv41/gen.py \
 kern verify model.json
 ```
 
+`--engram host` (the default) keeps the two Engram tables as one shared
+host-memory copy per tray, read by every GPU through ATS: the GB300 manifest.
+`--engram device --engram-cubin "$ENGRAM_PEERS_CUBIN"` shards each table into
+HBM across the EP4 group instead (equal row slices, `export: true`, a `peer`
+array each) and looks rows up through the group's addresses with
+`dsv41_engram_peers`: the manifest for a device that cannot read host memory
+at speed, an HGX B300 (x86 host, no NVLink C2C, no IMEX channel). Everything
+else in the two manifests is identical; both need the peer memory below, which
+the runtime provides over fabric handles where the device has them and over
+local allocation handles otherwise. About 47 GiB more HBM per rank.
+
 `--capacity` bounds live rows, including six verification rows per sequence;
 `--context` bounds each sequence's logical page table. Physical state TMA spans
 are resolved from the runtime allocation. `--bundle` copies cubins by their pinned
@@ -57,7 +68,11 @@ weights = ["/path/to/original/checkpoint"]
 Build the independent server with
 `cargo build --release --manifest-path crates/kern-serve/Cargo.toml`.
 Install `kern-serve` beside `kern` or on PATH, or select it through `KERN_SERVE_BIN`.
-The execution environment must expose its GPUs and IMEX channel for peer memory.
+The execution environment must expose its GPUs; on a GB300 tray it must also
+expose the IMEX channel, which the runtime's fabric handles need. Without one
+(an HGX B300, or `KERN_NO_FABRIC=1` for a check on a GB300) the four ranks
+share buffers through local allocation handles, which is why the serving
+ranks live in one process.
 
 ```bash
 kern server dsv41 --gpus 0,1,2,3 --capacity 32768 --chunk 128 \

@@ -38,14 +38,30 @@ def bundle(manifest, destination, roots):
         module["source"] = output.name
 
 
+def engram_shards(raw):
+    """Layer -> (ranks, rows per rank, total rows) for each Engram table sharded into HBM (see weights.sharded); empty for host tables."""
+    shards = {}
+    for layer in (1,14):
+        spec = raw.get(f"layers.{layer}.engram.embed.weight",{})
+        if spec.get("export"):
+            ranges = spec["bind"][0]["rows"]["ranges"]
+            shards[layer] = (len(ranges),spec["shape"][0],ranges[-1][1])
+    return shards
+
+
 def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
-             head_cubin, copy_cubin, spec_cubin, capacity=128, max_seqs=16, context=32768):
+             head_cubin, copy_cubin, spec_cubin, engram_cubin=None, capacity=128, max_seqs=16, context=32768):
     pieces = Pieces()
-    device_weights = {name:b for name,b in raw.items() if b.get("placement") != "host"}
-    dense_buffers, dense_load, dense_layouts = dense_scales(device_weights,pieces,cubin_dir=cubin_dir,fused_attention=True)
-    expert_buffers, expert_load, expert_layouts = expert_weights(device_weights,pieces,cubin_dir=cubin_dir)
+    projections = {name:b for name,b in raw.items()
+                   if b.get("placement") != "host" and b["kind"] == "weight" and ".engram.embed." not in name}
+    dense_buffers, dense_load, dense_layouts = dense_scales(projections,pieces,cubin_dir=cubin_dir,fused_attention=True)
+    expert_buffers, expert_load, expert_layouts = expert_weights(projections,pieces,cubin_dir=cubin_dir)
     barrier_buffers, barrier_load = barriers(pieces,cubin_dir=cubin_dir)
-    serving = build(auxiliary_cubin,Layout(max_tokens=capacity,max_seqs=max_seqs,max_context=context))
+    engram = engram_shards(raw)
+    if engram and engram_cubin is None:
+        raise ValueError("Engram tables sharded into HBM need --engram-cubin")
+    serving = build(auxiliary_cubin,Layout(max_tokens=capacity,max_seqs=max_seqs,max_context=context),
+                    peers=engram_cubin if engram else None)
     buffers = {**dense_buffers,**expert_buffers,**barrier_buffers,**constants["buffers"]}
     pieces.fixed((constants["modules"],constants["ops"]))
     programs = {"load":{"once":True,"calls":constants["calls"]+dense_load+expert_load+barrier_load}}
@@ -63,7 +79,8 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
                          select_cubin=attention_dir/"libdsv41_select.2.sm_103a.cubin",
                          candidate_cubin=attention_dir/"candidate.cubin",
                          capture_tap=lambda layer,hc: capture(pieces,hc,layer,mode=mode,rows="tokens",
-                                                              capacity=capacity,auxiliary_cubin=auxiliary_cubin))
+                                                              capacity=capacity,auxiliary_cubin=auxiliary_cubin),
+                         engram=engram)
         output = head(pieces,target.normalized,"verify_tokens" if mode=="verify" else "next_token",mode=mode,capacity=capacity,vocab=vocab,
                       head_cubin=head_cubin,copy_cubin=copy_cubin)
         context_stage = publish(pieces,serving,dense_layouts,mode=mode,capacity=capacity,
@@ -99,8 +116,9 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
     for name in sorted(used - buffers.keys()):
         buffers[name] = raw[name]
     for b in list(buffers.values()):
-        if b.get("of"):
+        if b.get("of") in raw:
             used.add(b["of"])
+            buffers.setdefault(b["of"],raw[b["of"]])
         target = b.get("domain",{}).get("index_into")
         if target in raw:
             used.add(target)
@@ -127,12 +145,15 @@ def main():
     source.add_argument("--checkpoint",type=Path,help="read original shard headers directly; no weight export")
     for name in ("constants","cubin-dir","auxiliary-cubin","attention-dir","head-cubin","copy-cubin","spec-cubin","out"):
         parser.add_argument("--"+name,type=Path,required=True)
+    parser.add_argument("--engram",choices=("host","device"),default="host",
+                        help="where the Engram tables live: one copy in host memory (GB300), or sharded into HBM across the EP group (HGX B300)")
+    parser.add_argument("--engram-cubin",type=Path,help="dsv41_engram_peers cubin, needed with --engram device")
     parser.add_argument("--capacity",type=int,default=128)
     parser.add_argument("--max-seqs",type=int,default=16)
     parser.add_argument("--context",type=int,default=32768)
     parser.add_argument("--bundle",type=Path,help="copy pinned cubins to a serving artifact directory")
     args = vars(parser.parse_args())
-    binding_file, checkpoint = args.pop("bindings"), args.pop("checkpoint")
+    binding_file, checkpoint, engram = args.pop("bindings"), args.pop("checkpoint"), args.pop("engram")
     if checkpoint is not None:
         from dsv41_weights import inventory
         from dsv41.weights import bindings as bind
@@ -140,9 +161,11 @@ def main():
         if config.get("model_type") != "deepseek_v41":
             parser.error("expected a deepseek_v41 checkpoint")
         tensors, _ = inventory(checkpoint)
-        gpu, host = bind(tensors,config["text_config"],ep=4)
+        gpu, host = bind(tensors,config["text_config"],ep=4,engram=engram)
         bindings = {"gpu":gpu,"host":host}
     else:
+        if engram != "host":
+            parser.error("--engram device reads the checkpoint (--checkpoint)")
         bindings = json.loads(binding_file.read_text())
     constants_file = args.pop("constants")
     constants = json.loads(constants_file.read_text())
@@ -152,7 +175,8 @@ def main():
     manifest = generate({**bindings["gpu"],**host},constants,**args)
     if destination is not None:
         bundle(manifest,destination,[args["cubin_dir"],args["attention_dir"],constants_file.parent,
-                                     *(args[name].parent for name in ("auxiliary_cubin","head_cubin","copy_cubin","spec_cubin"))])
+                                     *(args[name].parent for name in ("auxiliary_cubin","head_cubin","copy_cubin","spec_cubin","engram_cubin")
+                                       if args[name] is not None)])
     output.write_text(json.dumps(manifest,indent=2)+"\n")
     print({name:len(p["calls"]) for name,p in manifest["programs"].items()})
 
