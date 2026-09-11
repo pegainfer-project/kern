@@ -228,6 +228,29 @@ token 一边走 decode 步一边走 prefill chunk，核和累加顺序不同，�
 试过）再问一轮全是 `prefix_hit=0`，resident 也不命中。记录与脚本在
 `bench_results/2026-09-11-dsv41-host-tier/`。
 
+## 每步的 host 空档（2026-09-11，tray05）
+
+1M context / 每卡 256 seq 的 manifest 上，`stats` 报 `step_ms=7.73`，但 5 秒只跑完
+534 步（每步 9.36 ms）——每步丢了 1.6 ms，32k 的 manifest 上没有。pegainfer 的
+driver 每步调一次 `Scheduler::metrics()`，`KernScheduler::metrics` 读
+`pages_used()` / `pages_total()`，而这两个数当时是把整条页状态数组扫一遍数出来的：
+扫描量正比于池子，池子正比于 context（`--capacity 32768` 1132 页/卡空档 0.06 ms，
+host 表 146k 页 0.13 ms，HBM 表 1.62M 页 0.91 ms，1M/256 seq 3.37M 页 1.64 ms）。
+
+`Pool` 改成写状态时维护计数（`Inner::set_page` / `set_slot` 是唯一的写入口，
+`Tally { live, held }` 随之移动），`total` / `used` / `slots` / `slots_used` /
+`anything_held` 全部只读计数，不再扫描。同一 manifest 的门禁：
+
+| | 步/5s | `step_ms` | 每步实际 | 空档 | tok/s |
+|---|---|---|---|---|---|
+| rows 1，扫描 | 534 | 7.73 | 9.36 | 1.63 | 107 |
+| rows 1，计数 | 669 | 7.41 | 7.47 | 0.07 | 134 |
+| rows 6，扫描 | 439 | 9.68 | 11.39 | 1.71 | 227 |
+| rows 6，计数 | 518 | 9.42 | 9.65 | 0.23 | 274 |
+
+16 条 greedy conc1 的输出两种 rows 都与改前逐字节相同。记录在
+`bench_results/2026-09-11-kern-step-host-gap/`。
+
 ## tray 级（E5 第四块，2026-09-03；t=4 门禁 2026-09-04 过）
 
 `kern-serve --gpus 0,1,2,3` 一个进程驱一个 tray：`tray.rs` 持 n 个 `Runtime`，单线程

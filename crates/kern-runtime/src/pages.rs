@@ -124,13 +124,39 @@ impl Status {
     }
 }
 
+/// How many objects of one kind exist and how many are handed out, kept
+/// as their statuses change. The serving loop reads all four numbers
+/// every step, and a pool is millions of pages at a 1M-token context, so
+/// counting them by scanning is most of the gap between two steps.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Tally {
+    live: usize,
+    held: usize,
+}
+
+impl Tally {
+    fn moved(&mut self, from: Status, to: Status) {
+        fn step(n: &mut usize, was: bool, now: bool) {
+            match (was, now) {
+                (false, true) => *n += 1,
+                (true, false) => *n -= 1,
+                _ => {}
+            }
+        }
+        step(&mut self.live, from.exists(), to.exists());
+        step(&mut self.held, from == Status::Held, to == Status::Held);
+    }
+}
+
 /// The accounting behind one mutex: chunks, every page's and slot's
 /// status, and the remap not yet landed.
 struct Inner {
     chunks: Chunks,
     pages: Vec<Status>,
+    page_tally: Tally,
     /// Slot 0 is `Held` for good: the null line.
     slots: Vec<Status>,
+    slot_tally: Tally,
     free_pages: BTreeSet<i32>,
     free_slots: BTreeSet<i32>,
     /// Built, not yet taken by the shell.
@@ -346,12 +372,22 @@ fn ancestor(chain: &Option<Arc<Node>>, depth: usize) -> Option<Arc<Node>> {
 }
 
 impl Inner {
-    fn count(v: &[Status], f: impl Fn(Status) -> bool) -> usize {
-        v.iter().filter(|&&s| f(s)).count()
+    /// The only way a status changes, so no tally can drift from what the
+    /// vectors say.
+    fn set_page(&mut self, p: usize, to: Status) {
+        self.page_tally.moved(self.pages[p], to);
+        self.pages[p] = to;
     }
 
+    fn set_slot(&mut self, s: usize, to: Status) {
+        self.slot_tally.moved(self.slots[s], to);
+        self.slots[s] = to;
+    }
+
+    /// Slot 0 is held for good, so it never counts as something a caller
+    /// would have to give back.
     fn anything_held(&self) -> bool {
-        self.pages.contains(&Status::Held) || self.slots.iter().skip(1).any(|&s| s == Status::Held)
+        self.page_tally.held > 0 || self.slot_tally.held > 1
     }
 
     /// The `n` lowest absent objects of `v` (skipping slot 0 through
@@ -410,19 +446,19 @@ impl Inner {
             match k {
                 Kind::Page => {
                     self.free_pages.remove(&o);
-                    self.pages[o as usize] = Status::Leaving;
+                    self.set_page(o as usize, Status::Leaving);
                 }
                 Kind::Slot => {
                     self.free_slots.remove(&o);
-                    self.slots[o as usize] = Status::Leaving;
+                    self.set_slot(o as usize, Status::Leaving);
                 }
             }
         }
         for p in pages {
-            self.pages[p] = Status::Arriving;
+            self.set_page(p, Status::Arriving);
         }
         for s in slots {
-            self.slots[s] = Status::Arriving;
+            self.set_slot(s, Status::Arriving);
         }
         self.pending = Some(plan);
         self.remapped = true;
@@ -447,7 +483,9 @@ impl Pool {
         let mut inner = Inner {
             chunks: Chunks::new(chunk, &arenas, chunks),
             pages: vec![Status::Absent; pages_max],
+            page_tally: Tally::default(),
             slots: vec![Status::Absent; slots_max],
+            slot_tally: Tally::default(),
             free_pages: BTreeSet::new(),
             free_slots: BTreeSet::new(),
             pending: None,
@@ -461,7 +499,7 @@ impl Pool {
                 bail!(Api, "{chunks} chunks of {chunk} bytes hold {s} sequence slots, not the {first_slots} asked for");
             }
             inner.chunks.make(Kind::Slot, s, &mut plan);
-            inner.slots[s] = if s == 0 { Status::Held } else { Status::Free };
+            inner.set_slot(s, if s == 0 { Status::Held } else { Status::Free });
             if s > 0 {
                 inner.free_slots.insert(s as i32);
             }
@@ -471,7 +509,7 @@ impl Pool {
                 break;
             }
             inner.chunks.make(Kind::Page, p, &mut plan);
-            inner.pages[p] = Status::Free;
+            inner.set_page(p, Status::Free);
             inner.free_pages.insert(p as i32);
         }
         let pool = Pool { unit, max_pages, tables, seq_tables: seq_tables(m)?, pooled, inner: Mutex::new(inner) };
@@ -493,7 +531,7 @@ impl Pool {
 
     /// Pages that exist now (free or held).
     pub fn total(&self) -> usize {
-        Inner::count(&lock(&self.inner).pages, Status::exists)
+        lock(&self.inner).page_tally.live
     }
 
     /// Pages the arena could hold if every chunk were a page.
@@ -503,7 +541,7 @@ impl Pool {
 
     /// Pages held by a lease or a checkpoint.
     pub fn used(&self) -> usize {
-        Inner::count(&lock(&self.inner).pages, |s| s == Status::Held)
+        lock(&self.inner).page_tally.held
     }
 
     pub fn max_seq_tokens(&self) -> usize {
@@ -522,7 +560,7 @@ impl Pool {
     /// Sequence slots that exist now, slot 0 among them (0 without
     /// per-sequence states).
     pub fn slots(&self) -> usize {
-        Inner::count(&lock(&self.inner).slots, Status::exists)
+        lock(&self.inner).slot_tally.live
     }
 
     /// Slots the arena could hold if every chunk were a slot.
@@ -530,9 +568,9 @@ impl Pool {
         lock(&self.inner).slots.len()
     }
 
-    /// Sequence slots held by a lease or a checkpoint.
+    /// Sequence slots held by a lease or a checkpoint, slot 0 aside.
     pub fn slots_used(&self) -> usize {
-        Inner::count(lock(&self.inner).slots.get(1..).unwrap_or(&[]), |s| s == Status::Held)
+        lock(&self.inner).slot_tally.held.saturating_sub(1)
     }
 
     pub fn seq_tables(&self) -> impl Iterator<Item = &str> {
@@ -559,19 +597,19 @@ impl Pool {
         for (k, o) in plan.made {
             match k {
                 Kind::Page => {
-                    g.pages[o as usize] = Status::Free;
+                    g.set_page(o as usize, Status::Free);
                     g.free_pages.insert(o);
                 }
                 Kind::Slot => {
-                    g.slots[o as usize] = Status::Free;
+                    g.set_slot(o as usize, Status::Free);
                     g.free_slots.insert(o);
                 }
             }
         }
         for (k, o) in plan.unmade {
             match k {
-                Kind::Page => g.pages[o as usize] = Status::Absent,
-                Kind::Slot => g.slots[o as usize] = Status::Absent,
+                Kind::Page => g.set_page(o as usize, Status::Absent),
+                Kind::Slot => g.set_slot(o as usize, Status::Absent),
             }
         }
         g.in_flight = false;
@@ -595,11 +633,11 @@ impl Pool {
         if fresh <= g.free_pages.len() && (!want_slot || !g.free_slots.is_empty()) {
             let taken: Vec<i32> = (0..fresh).map(|_| g.free_pages.pop_first().expect("counted")).collect();
             for &p in &taken {
-                g.pages[p as usize] = Status::Held;
+                g.set_page(p as usize, Status::Held);
             }
             let slot = want_slot.then(|| g.free_slots.pop_first().expect("counted"));
             if let Some(s) = slot {
-                g.slots[s as usize] = Status::Held;
+                g.set_slot(s as usize, Status::Held);
             }
             return Ok((taken, slot));
         }
@@ -620,12 +658,12 @@ impl Pool {
         let mut g = lock(&self.inner);
         for &p in pages {
             debug_assert_eq!(g.pages[p as usize], Status::Held);
-            g.pages[p as usize] = Status::Free;
+            g.set_page(p as usize, Status::Free);
             g.free_pages.insert(p);
         }
         if let Some(s) = slot {
             debug_assert_eq!(g.slots[s as usize], Status::Held);
-            g.slots[s as usize] = Status::Free;
+            g.set_slot(s as usize, Status::Free);
             g.free_slots.insert(s);
         }
     }
@@ -1127,6 +1165,13 @@ mod tests {
             let by = |v: &[Status], s: Status| -> Vec<i32> {
                 v.iter().enumerate().filter(|(_, &x)| x == s).map(|(i, _)| i as i32).collect()
             };
+            // The counters the serving loop reads every step are
+            // maintained, never scanned: they must say what a scan would.
+            let tally = |v: &[Status]| Tally {
+                live: v.iter().filter(|s| s.exists()).count(),
+                held: v.iter().filter(|&&s| s == Status::Held).count(),
+            };
+            assert_eq!((g.page_tally, g.slot_tally), (tally(&g.pages), tally(&g.slots)));
             assert_eq!(by(&g.pages, Status::Held), held);
             assert_eq!(by(&g.pages, Status::Free), g.free_pages.iter().copied().collect::<Vec<_>>());
             assert_eq!(by(&g.slots, Status::Held)[1..], slots[..]);
