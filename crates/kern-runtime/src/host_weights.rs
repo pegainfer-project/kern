@@ -151,6 +151,20 @@ impl HostWeight {
         if unsafe { libc::madvise(ptr, size, libc::MADV_HUGEPAGE) } != 0 {
             bail!(Api, "host weight `{name}`: madvise(MADV_HUGEPAGE): {}", std::io::Error::last_os_error());
         }
+        // The GPUs read this mapping through ATS (registered, not pinned),
+        // so NUMA balancing sees their reads as hinting faults serviced from
+        // a kworker, and migrates the 512 MiB page to that worker's node,
+        // then again to the next one's. A reading kernel stalls for the
+        // whole copy each time, and a chain of them outlasts the 60 s of a
+        // collective's timeout. A policy of the VMA's own carries no
+        // migrate-on-fault flag, so the balancer skips the range;
+        // allocation stays first-touch local.
+        let bound = unsafe {
+            libc::syscall(libc::SYS_mbind, ptr, size, libc::MPOL_LOCAL, std::ptr::null::<u64>(), 0usize, 0u32)
+        };
+        if bound != 0 {
+            bail!(Api, "host weight `{name}`: mbind(MPOL_LOCAL): {}", std::io::Error::last_os_error());
+        }
         let before = anon_huge_pages(name)?;
         // First touch must follow madvise. Fault complete aligned huge pages,
         // including the final padded page; expose only the logical bytes below.
