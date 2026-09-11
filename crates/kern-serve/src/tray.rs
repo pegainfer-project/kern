@@ -74,6 +74,13 @@
 //! rank is enqueued before any is waited for: a rank's kernels wait on its
 //! peers' (an EP dispatch, the tray collectives), so waiting on rank 0
 //! alone would spin until the kernel's timeout.
+//!
+//! The ranks' host work of a step — the input copies and the launch — is
+//! done by one persistent thread per rank ([`Worker`]), so the ranks do it
+//! at the same time and no thread is created per step. The runtimes stay
+//! with the tray on the scheduler thread; a worker is lent its rank for
+//! exactly one job at a time, and [`Staged::run`] does not return before
+//! every worker has replied, so the lend never outlives the step.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -327,20 +334,83 @@ struct Sent(Runtime);
 #[allow(unsafe_code)]
 unsafe impl Send for Sent {}
 
-/// An exclusive runtime borrow may move to one scoped launch thread. Runtime
-/// entry points bind their context, and the scope joins before reuse.
-struct Issuing<'a>(&'a mut Runtime);
+/// A step's host work for one rank, handed to its worker: the inputs to
+/// write and the program to queue, with the rank's runtime to do it on.
+/// The pointer is the tray's exclusive borrow of that rank for the span of
+/// the job: [`Staged::run`] sends one job per rank and does not return
+/// before every worker has replied, and nothing else touches a rank while
+/// a `Staged` lives, so the worker is the only user of the runtime until
+/// it replies. Runtime entry points bind their context to the calling
+/// thread, so a runtime loaded on one thread and driven from another is
+/// sound (see `Sent`).
+struct Job {
+    rank: *mut Runtime,
+    writes: Vec<Write>,
+    program: String,
+    vars: BTreeMap<String, u64>,
+}
 #[allow(unsafe_code)]
-unsafe impl Send for Issuing<'_> {}
+unsafe impl Send for Job {}
 
-impl Issuing<'_> {
-    fn issue(self, program: &str, vars: &BTreeMap<String, u64>) -> kern_runtime::Result<()> {
-        self.0.issue(program, vars)
+/// One rank's launch thread, alive as long as the tray. A step's host work
+/// is a dozen staged copies and a graph launch per rank: serial on one
+/// thread it is the gap between steps four times over, and on threads
+/// spawned per step their creation is most of the gap. A library launch
+/// may also synchronize internally during lazy setup, when a previous
+/// collective on that rank needs its peers to be issuing at the same
+/// time. The thread exits when the tray drops its sender.
+struct Worker {
+    jobs: std::sync::mpsc::Sender<Job>,
+    done: std::sync::mpsc::Receiver<kern_runtime::Result<()>>,
+}
+
+impl Worker {
+    fn spawn(q: usize) -> Result<Worker> {
+        let (jobs, inbox) = std::sync::mpsc::channel::<Job>();
+        let (reply, done) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name(format!("rank-{q}"))
+            .spawn(move || {
+                for job in inbox {
+                    // SAFETY: the tray's contract on `Job`: the runtime is
+                    // ours alone until the reply is sent.
+                    #[allow(unsafe_code)]
+                    let rt = unsafe { &mut *job.rank };
+                    let r = issue(rt, &job.writes, &job.program, &job.vars);
+                    if reply.send(r).is_err() {
+                        break;
+                    }
+                }
+            })
+            .with_context(|| format!("rank {q}: launch thread"))?;
+        Ok(Worker { jobs, done })
     }
+}
+
+/// Write the rank's inputs, then queue the program.
+fn issue(rt: &mut Runtime, writes: &[Write], program: &str, vars: &BTreeMap<String, u64>) -> kern_runtime::Result<()> {
+    for w in writes {
+        match w.exact {
+            true => rt.write_input_at(&w.name, &w.bytes, vars)?,
+            false => rt.write_input(&w.name, &w.bytes)?,
+        }
+    }
+    rt.issue(program, vars)
+}
+
+/// One input of one rank for a step, decided on the host before anything
+/// is written: the domain check reads exact var values (`exact`) or the
+/// bounds (a line table, written whole).
+struct Write {
+    name: String,
+    bytes: Vec<u8>,
+    exact: bool,
 }
 
 pub struct Tray {
     ranks: Vec<Runtime>,
+    /// One launch thread per rank, index-aligned with `ranks`.
+    workers: Vec<Worker>,
     groups: Groups,
     protocol: Protocol,
     /// One page and slot per rank no sequence owns: padding rows write here.
@@ -476,7 +546,8 @@ impl Tray {
                 bail!("rank {q}: capacity {} tokens holds one page; nothing left to serve from", rt.capacity());
             }
         }
-        Ok(Tray { ranks, groups, protocol, pad })
+        let workers = (0..n).map(Worker::spawn).collect::<Result<_>>()?;
+        Ok(Tray { ranks, workers, groups, protocol, pad })
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -642,7 +713,7 @@ impl Tray {
 
     // ---- steps.
 
-    /// Lay a step out on every rank and write its inputs: `per` tokens
+    /// Lay a step out on every rank and decide its inputs: `per` tokens
     /// per cell, rows per rank `bucket` of the most any rank holds. In a
     /// one-row step of a manifest with a span, one cell per tray group may
     /// feed a run of more, all runs of one length (see the module doc).
@@ -686,15 +757,14 @@ impl Tray {
         if let (Some(s), Some(c)) = (&self.protocol.span, run) {
             vars.insert(s.var.clone(), c as u64);
         }
-        for q in 0..self.groups.n {
-            self.stage_rank(q, cells, &layout, &vars)?;
-        }
-        Ok(Staged { tray: self, layout, vars })
+        let writes = (0..self.groups.n).map(|q| self.stage_rank(q, cells, &layout)).collect::<Result<_>>()?;
+        Ok(Staged { tray: self, layout, vars, writes })
     }
 
     /// Rank `q`'s inputs for a step: every fill, the page tables and the
-    /// line tables (see the module doc for which span the group).
-    fn stage_rank(&mut self, q: usize, cells: &[Cell<'_>], l: &Layout, vars: &BTreeMap<String, u64>) -> Result<()> {
+    /// line tables (see the module doc for which span the group). Pure:
+    /// the bytes are written when the step runs, on the rank's own thread.
+    fn stage_rank(&self, q: usize, cells: &[Cell<'_>], l: &Layout) -> Result<Vec<Write>> {
         let (per, b, me, groups) = (l.per, l.b, self.groups.member(q), self.groups);
         let p = &self.protocol;
         let pad = &self.pad[q];
@@ -778,17 +848,13 @@ impl Tray {
             }
             lines.push((name, table));
         }
-        let rt = &mut self.ranks[q];
-        for (f, v) in &writes {
-            rt.write_input_at(&f.name, &f.encode(v), vars)?;
-        }
-        for (name, table) in &tables {
-            rt.write_input_at(name, &le_bytes_i32(table), vars)?;
-        }
-        for (name, table) in &lines {
-            rt.write_input(name, &le_bytes_i32(table))?;
-        }
-        Ok(())
+        let exact = |name: &str, bytes: Vec<u8>| Write { name: name.to_string(), bytes, exact: true };
+        Ok(writes
+            .iter()
+            .map(|(f, v)| exact(&f.name, f.encode(v)))
+            .chain(tables.iter().map(|(name, t)| exact(name, le_bytes_i32(t))))
+            .chain(lines.iter().map(|(name, t)| Write { name: name.to_string(), bytes: le_bytes_i32(t), exact: false }))
+            .collect())
     }
 }
 
@@ -805,6 +871,8 @@ pub struct Staged<'t> {
     tray: &'t mut Tray,
     layout: Layout,
     vars: BTreeMap<String, u64>,
+    /// Each rank's inputs, written when the step runs.
+    writes: Vec<Vec<Write>>,
 }
 
 impl Staged<'_> {
@@ -821,39 +889,40 @@ impl Staged<'_> {
     /// Run `f` on every rank (through its graph when the manifest says
     /// so), then read the error word when the manifest has one.
     pub fn run(&mut self, f: &Forward) -> Result<()> {
-        // A library launch may synchronize internally during lazy setup. A
-        // previous collective on that rank then needs peers to be issuing
-        // concurrently, even though Runtime::issue itself never waits.
-        if self.tray.ranks.iter().all(|rt| rt.uses_cached_graph(&f.name, &self.vars)) {
-            // Graph replay only queues cuGraphLaunch, so steady-state decode
-            // needs no launch threads. Every rank must be ready for this path.
-            for (q, rt) in self.tray.ranks.iter_mut().enumerate() {
-                rt.issue(&f.name, &self.vars).with_context(|| format!("rank {q}"))?;
-            }
-        } else {
-            std::thread::scope(|scope| -> Result<()> {
-                let handles: Vec<_> = self
-                    .tray
-                    .ranks
-                    .iter_mut()
-                    .enumerate()
-                    .map(|(q, rt)| {
-                        let rank = Issuing(rt);
-                        let (program, vars) = (&f.name, &self.vars);
-                        scope.spawn(move || rank.issue(program, vars).with_context(|| format!("rank {q}")))
-                    })
-                    .collect();
-                for handle in handles {
-                    handle.join().map_err(|_| anyhow::anyhow!("rank launch thread panicked"))??;
-                }
-                Ok(())
-            })?;
-        }
-        for (q, rt) in self.tray.ranks.iter().enumerate() {
+        // Every rank's job goes out before any reply is waited for, and
+        // every reply is collected before returning, error or not: a
+        // worker holds its rank until it replies.
+        let tray = &mut *self.tray;
+        let sent: Vec<Result<()>> = tray
+            .ranks
+            .iter_mut()
+            .zip(&mut self.writes)
+            .zip(&tray.workers)
+            .enumerate()
+            .map(|(q, ((rt, writes), w))| {
+                let job =
+                    Job { rank: rt, writes: std::mem::take(writes), program: f.name.clone(), vars: self.vars.clone() };
+                w.jobs.send(job).map_err(|_| anyhow::anyhow!("rank {q}: launch thread gone"))
+            })
+            .collect();
+        let replies: Vec<Result<()>> = sent
+            .into_iter()
+            .zip(&tray.workers)
+            .enumerate()
+            .map(|(q, (s, w))| {
+                s?;
+                w.done
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("rank {q}: launch thread panicked"))?
+                    .with_context(|| format!("rank {q}"))
+            })
+            .collect();
+        replies.into_iter().collect::<Result<()>>()?;
+        for (q, rt) in tray.ranks.iter().enumerate() {
             rt.synchronize().with_context(|| format!("rank {q}"))?;
         }
-        if let Some(e) = self.tray.protocol.any(Fill::Error) {
-            for (q, rt) in self.tray.ranks.iter().enumerate() {
+        if let Some(e) = tray.protocol.any(Fill::Error) {
+            for (q, rt) in tray.ranks.iter().enumerate() {
                 let err = e.decode(&rt.read_output(&e.name)?)[0];
                 if err != 0 {
                     bail!("rank {q}: `{}` reports collective error {err}", f.name);

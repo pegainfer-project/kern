@@ -64,6 +64,12 @@ impl Runtime {
             return self.enqueue(program, vars);
         }
         if !self.is_captured(program, vars) {
+            // One capture + instantiate at a time across ranks: CUPTI's
+            // graph-node tracing (nsys --cuda-graph-trace=node) dereferences
+            // null inside cuGraphInstantiate when several contexts instantiate
+            // concurrently. Steady-state replay stays parallel.
+            static CAPTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _serial = CAPTURE.lock().unwrap_or_else(|e| e.into_inner());
             let t = std::time::Instant::now();
             let calls = prog.call_ranges.len();
             self.capture(program, vars)?;
@@ -138,12 +144,6 @@ impl Runtime {
             .get(program)
             .and_then(|prog| Dense::check(&self.manifest, vars, &prog.vars).ok())
             .is_some_and(|vars| self.graphs.contains_key(&(program.to_string(), vars)))
-    }
-
-    /// Whether `issue` can replay an existing graph without host library
-    /// launches or capture. An eager override always disables this path.
-    pub fn uses_cached_graph(&self, program: &str, vars: &BTreeMap<String, u64>) -> bool {
-        !self.eager && self.programs.get(program).is_some_and(|p| p.graph) && self.is_captured(program, vars)
     }
 
     /// The graph captured for (program, vars), or an `Api` error naming the
