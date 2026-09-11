@@ -8,7 +8,8 @@ from .programs import buf, call, integer
 
 
 def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_tokens,
-            constants, cubin_dir, auxiliary_cubin, attention_cubin, fused_cubin, head_cubin, vocab):
+            constants, cubin_dir, auxiliary_cubin, attention_cubin, fused_cubin, head_cubin, vocab,
+            device_sms=152):
     rows = serving.rows("draft")
     capacity = align4(max_seqs * 5)
     prefix = "draft.blocks"
@@ -17,7 +18,7 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_to
     buffers[embedding] = {"kind":"workspace","dtype":"bf16","shape":[capacity,5120]}
     embedding_op = pieces.add(selected(definitions(head_cubin,seqs=rows),"head_embedding"))["head_embedding"]
     calls.append(call(prefix+".embed",embedding_op,buf("draft_ids"),integer(1),buf("embed.weight"),buf(embedding),integer(5120)))
-    blocks = Blocks(pieces,prefix=prefix,rows=rows,capacity=capacity,cubin_dir=cubin_dir)
+    blocks = Blocks(pieces,prefix=prefix,rows=rows,capacity=capacity,cubin_dir=cubin_dir,device_sms=device_sms)
     state, initial = blocks.initialize(embedding)
     buffers.update(blocks.buffers())
     calls.extend(initial)
@@ -31,10 +32,10 @@ def forward(pieces, serving, dense_layouts, expert_layouts, *, max_seqs, pool_to
                              fused_cubin=fused_cubin,fused_cos_sin=constants["rope"]["window"]["split"])
         def ffn(source, output):
             return moe(pieces,layer,expert_layouts,source,output,rows=rows,capacity=capacity,
-                       workspace=prefix+".moe",experts=128,cubin_dir=cubin_dir)
+                       workspace=prefix+".moe",experts=128,cubin_dir=cubin_dir,device_sms=device_sms)
         state, stage = blocks.layer(state,layer,attn,ffn,
                                     attention_fp8=fp8_input(prefix+".attention",capacity)[1],
-                                    ffn_fp8=moe_fp8_input(prefix+".moe",experts=128,cubin_dir=cubin_dir,rows=rows))
+                                    ffn_fp8=moe_fp8_input(prefix+".moe",experts=128,cubin_dir=cubin_dir,rows=rows,device_sms=device_sms))
         buffers.update(stage.buffers)
         calls.extend(stage.calls)
     collapsed, normalized = prefix+".collapsed", "draft.head_hidden"

@@ -50,7 +50,8 @@ def engram_shards(raw):
 
 
 def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
-             head_cubin, copy_cubin, spec_cubin, engram_cubin=None, capacity=128, max_seqs=16, context=32768):
+             head_cubin, copy_cubin, spec_cubin, engram_cubin=None, capacity=128, max_seqs=16, context=32768,
+             device_sms=152):
     pieces = Pieces()
     projections = {name:b for name,b in raw.items()
                    if b.get("placement") != "host" and b["kind"] == "weight" and ".engram.embed." not in name}
@@ -80,7 +81,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
                          candidate_cubin=attention_dir/"candidate.cubin",
                          capture_tap=lambda layer,hc: capture(pieces,hc,layer,mode=mode,rows="tokens",
                                                               capacity=capacity,auxiliary_cubin=auxiliary_cubin),
-                         engram=engram)
+                         engram=engram,device_sms=device_sms)
         output = head(pieces,target.normalized,"verify_tokens" if mode=="verify" else "next_token",mode=mode,capacity=capacity,vocab=vocab,
                       head_cubin=head_cubin,copy_cubin=copy_cubin)
         context_stage = publish(pieces,serving,dense_layouts,mode=mode,capacity=capacity,
@@ -95,7 +96,7 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
                           constants=constants,cubin_dir=cubin_dir,auxiliary_cubin=auxiliary_cubin,
                           attention_cubin=attention_dir/"libdsv41_paged_decode.2.sm_103a.cubin",
                           fused_cubin=attention_dir/"libdsv41_fused_decode.2.sm_103a.cubin",
-                          head_cubin=head_cubin,vocab=vocab)
+                          head_cubin=head_cubin,vocab=vocab,device_sms=device_sms)
     buffers.update(draft.buffers)
     for name,kind,width in (("draft_ids","workspace",5),("verify_ids","workspace",6),
                             ("draft_tokens","workspace",5),("verify_tokens","output",6)):
@@ -151,6 +152,8 @@ def main():
     parser.add_argument("--capacity",type=int,default=128)
     parser.add_argument("--max-seqs",type=int,default=16)
     parser.add_argument("--context",type=int,default=1048576,help="page-table bound per sequence, in tokens (the model's 1M)")
+    parser.add_argument("--sms",dest="device_sms",type=int,default=152,choices=(148,152),
+                        help="SMs per GPU of the device served: GB300 152, B300 148")
     parser.add_argument("--bundle",type=Path,help="copy pinned cubins to a serving artifact directory")
     args = vars(parser.parse_args())
     binding_file, checkpoint, engram = args.pop("bindings"), args.pop("checkpoint"), args.pop("engram")

@@ -5,13 +5,18 @@ import hashlib
 # (split_k, stages, launch SMs, shared memory) per expert count. 384: upstream's heuristic
 # pick at small token counts, 24 logical CTAs over six worker groups, stages filling smem
 # (`mega_layout.cu`); the 4-stage split-K 1 instance is still in the cubin (LEGACY).
+# The launch SMs are what the config wants, capped by what the device has: the
+# kernel is persistent, so a grid wider than the device never becomes resident.
+# The target's 144 fits every device; the draft's fills it, so the cubin carries
+# one instance per SM count (GB300 152, B300 148).
 CONFIGS={384:(8,12,144,223232),128:(1,4,152,74752)}
 LEGACY={384:(1,4,150,75776),128:(1,4,152,74752)}
 
-def pieces(rows='tokens', experts=384, cubin_dir=None, max_tokens=8192, raw_outputs=False, config=None):
+def pieces(rows='tokens', experts=384, cubin_dir=None, max_tokens=8192, raw_outputs=False, config=None, device_sms=152):
     assert experts in (128,384)
     capacity=rows if isinstance(rows,int) else max_tokens
     split_k,stages,sms,smem=config or CONFIGS[experts]
+    sms=min(sms,device_sms)
     topk=6 if experts==384 else 3;groups=3 if experts==384 else 1
     root=Path(cubin_dir) if cubin_dir else Path(__file__).resolve().parents[3]/'target/cubins/dsv41'
     modules={name:{'source':str((Path(cubin_dir) if cubin_dir else Path('target/cubins/dsv41'))/file),'sha256':hashlib.sha256((root/file).read_bytes()).hexdigest()} for name,file in [('dsv41_gate','mega_gate.cubin'),('dsv41_moe_boundary','boundary.cubin')]}

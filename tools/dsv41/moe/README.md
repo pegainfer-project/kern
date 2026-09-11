@@ -1,6 +1,15 @@
 # V4.1 MoE and mHC operators
 
 Source pin: DeepGEMM PR #432, `ab69f76be5bb9ea3499bc755002b1a876cb0b3d9`.
+
+The Mega kernels (MoE, mHC, the draft gate) are persistent: one CTA per SM,
+and their dispatch and split reductions barrier over all of them, so the SM
+count is a template parameter and the launch grid. An instance built for more
+SMs than the device has waits for CTAs that never become resident, which the
+driver ends as a grid sync timeout. Each cubin therefore carries one instance
+per device kern serves — GB300 152, B300 148 — and `gen.py --sms` picks the
+set the manifest pins, together with the matching `moe_layout_<E>_sm<N>.json`
+(the MoE ring is sized from the pool the persistent grid drains).
 Build with `DEEPGEMM_ROOT=<checkout-with-submodules> tools/dsv41/moe/build.sh`.
 Generated cubins go under ignored `target/cubins/dsv41`, never into the repository.
 

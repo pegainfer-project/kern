@@ -19,7 +19,7 @@ from dsv41.moe_forward import forward as moe, fp8_input as moe_fp8_input
 from dsv41.auxiliary.serving import build,Layout
 
 
-def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, context=32768, fused_cubin=None):
+def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, context=32768, fused_cubin=None, device_sms=152):
     layer, mode = "layers.0", "prefill"
     weights = {n:b for n,b in raw.items() if n.startswith(layer+".")}
     pieces = Pieces()
@@ -28,7 +28,7 @@ def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, 
     barrier_buffers,barrier_load = barriers(pieces,cubin_dir=cubin_dir)
     # One sequence per rank for this integration probe; rows remain dynamic.
     serving = build(auxiliary_cubin,Layout(max_seqs=1,max_tokens=capacity,max_context=context))
-    blocks = Blocks(pieces,prefix=mode,rows="tokens",capacity=capacity,cubin_dir=cubin_dir)
+    blocks = Blocks(pieces,prefix=mode,rows="tokens",capacity=capacity,cubin_dir=cubin_dir,device_sms=device_sms)
     state,init = blocks.initialize("embedding")
     def attn(src,out):
         return attention(pieces,serving,layer,dense_layout,src,out,mode=mode,
@@ -38,10 +38,10 @@ def generate(raw, *, cubin_dir, auxiliary_cubin, attention_cubin, capacity=128, 
                          fused_cos_sin="cos_sin_split" if fused_cubin else None)
     def ffn(src,out):
         return moe(pieces,layer,expert_layout,src,out,rows="tokens",capacity=capacity,
-                   workspace=mode+".moe",cubin_dir=cubin_dir)
+                   workspace=mode+".moe",cubin_dir=cubin_dir,device_sms=device_sms)
     state,lowered = blocks.layer(state,layer,attn,ffn,
                                  attention_fp8=fp8_input(mode+".attn",capacity)[1],
-                                 ffn_fp8=moe_fp8_input(mode+".moe",cubin_dir=cubin_dir,rows="tokens"))
+                                 ffn_fp8=moe_fp8_input(mode+".moe",cubin_dir=cubin_dir,rows="tokens",device_sms=device_sms))
     state,finish = blocks.materialize(state,mode+".finish")
     programs = {
         "load":{"once":True,"calls":dense_load+expert_load+barrier_load},
@@ -85,9 +85,11 @@ def main():
     for n in ("bindings","cubin-dir","auxiliary-cubin","attention-cubin","out"):
         p.add_argument("--"+n,type=Path,required=True)
     p.add_argument("--fused-cubin",type=Path)
+    p.add_argument("--sms",type=int,default=152,choices=(148,152))
     a=p.parse_args()
     m=generate(json.loads(a.bindings.read_text())["gpu"],cubin_dir=a.cubin_dir,
-               auxiliary_cubin=a.auxiliary_cubin,attention_cubin=a.attention_cubin,fused_cubin=a.fused_cubin)
+               auxiliary_cubin=a.auxiliary_cubin,attention_cubin=a.attention_cubin,fused_cubin=a.fused_cubin,
+               device_sms=a.sms)
     a.out.write_text(json.dumps(m,indent=2))
     print("full layer0 calls:",len(m["programs"]["prefill"]["calls"]),flush=True)
 

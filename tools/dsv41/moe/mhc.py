@@ -16,9 +16,13 @@ from pathlib import Path
 import hashlib
 
 SPLITS=40  # upstream's pick for <=3 m-blocks on 152 SMs; 16 is its deterministic-mode default
+# The kernel is persistent and its split reduction barriers over every CTA, so
+# the SM count is a template parameter and the grid is the device's SM count:
+# an instance built for more SMs than the device has waits for CTAs that never
+# become resident. The cubin carries one per device (GB300 152, B300 148).
 SCRATCH_PER_TASK=6656  # layout::mega_mhc::Workspace::get_num_scratch_bytes(1,1)
 
-def pieces(rows='tokens', cubin_dir=None, max_tokens=8192, *, fp8, shared_rows=None, splits=SPLITS):
+def pieces(rows='tokens', cubin_dir=None, max_tokens=8192, *, fp8, shared_rows=None, splits=SPLITS, device_sms=152):
     if fp8 not in ('gemm','moe') or (fp8 == 'moe') != (shared_rows is not None):
         raise ValueError('fp8 output is gemm, or moe with the shared scale rows')
     root=Path(cubin_dir) if cubin_dir else Path(__file__).resolve().parents[3]/'target/cubins/dsv41'
@@ -37,6 +41,6 @@ def pieces(rows='tokens', cubin_dir=None, max_tokens=8192, *, fp8, shared_rows=N
     strides=[1,(capacity+3)//4*4,0] if fp8 == 'gemm' else [5120//128,1,shared_rows]
     norm=pack(88,[pointer(0,14),pointer(8,8),pointer(16,9),{'at':24,'f32':1e-20},{'at':28,'f32':1.},pointer(32,13),pointer(40,16),pointer(48,17),{'at':56,'i64':strides[0]},{'at':64,'i64':strides[1]}]+([pointer(72,18),{'at':80,'i64':strides[2]}] if fp8 == 'moe' else []))
     args=[residual(1),hidden(0),tm(5,'tf32',[5120,24,4],[81920,20480],[32,24,4]),coeff(2,4,0),coeff(3,16,64),coeff(4,4,0),residual(9),hidden(13),mix,norm,{'scratch':'partials'},{'param':15}]
-    entry=f"_ZN9deep_gemm19sm100_mega_mhc_implILj5120ELj{splits}ELj152ELb1ELb1ELb1ELj{0 if fp8 == 'gemm' else 16}EEEv14CUtensorMap_stS1_S1_S1_S1_S1_S1_S1_NS_6layout8mega_mhc7MixArgsENS3_8NormArgsEPvPm"
-    op={'params':params,'impl':{'scratch':{'partials':{'dtype':'u8','shape':[((max_tokens+63)//64)*splits*SCRATCH_PER_TASK]}},'launches':[{'module':'dsv41_mhc','entry':entry,'params':['bytes<128>']*8+['bytes<64>','bytes<88>','out buffer<u8>','inout buffer<u64>'],'args':args,'block':[768,1,1],'grid':[152,1,1],'shared_mem':227328,'pdl':True}]}}
+    entry=f"_ZN9deep_gemm19sm100_mega_mhc_implILj5120ELj{splits}ELj{device_sms}ELb1ELb1ELb1ELj{0 if fp8 == 'gemm' else 16}EEEv14CUtensorMap_stS1_S1_S1_S1_S1_S1_S1_NS_6layout8mega_mhc7MixArgsENS3_8NormArgsEPvPm"
+    op={'params':params,'impl':{'scratch':{'partials':{'dtype':'u8','shape':[((max_tokens+63)//64)*splits*SCRATCH_PER_TASK]}},'launches':[{'module':'dsv41_mhc','entry':entry,'params':['bytes<128>']*8+['bytes<64>','bytes<88>','out buffer<u8>','inout buffer<u64>'],'args':args,'block':[768,1,1],'grid':[device_sms,1,1],'shared_mem':227328,'pdl':True}]}}
     return modules,{'dsv41_mhc':op}

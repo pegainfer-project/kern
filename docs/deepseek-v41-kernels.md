@@ -738,3 +738,30 @@ rank-local 文件。dtype、共享 host 只读映射也尚未接入。程序组�
   （HF 4bceee5，命名 dde9eb3）、README 改成生成器已在 master，`-hbm` 现在
   也是 tuned 集合、256 seqs / chunk 2048。发版 v0.2.2。
 
+### Mega 核的 SM 数与 HGX B300（2026-09-11）
+
+- B300 上部署 `-hbm` manifest，权重加载完、`/v1/models` 正常，第一条请求约 60 s
+  后 500：DeepGEMM grid sync timeout，接着 CUDA/cuBLAS 执行失败和 Xid 43。
+- 原因：三个 Mega 核是 persistent 的，一个 SM 一个 CTA，dispatch 和 split
+  规约在所有 CTA 上做 barrier，所以 SM 数既是模板参数又是 grid。MegaMoE 和
+  mHC 编的是 152，draft gate（128 专家）也是 152；GB300 每卡 152 SM，而
+  B300 SXM6 是 **148**。152 个 CTA 在 148 个 SM 上永远有 4 个驻留不下来，
+  第一个 barrier 就等不到头。target gate 的 144 两边都够。跟 tuned 集合无关：
+  2026-09-10 的集合同样是 152，回退 manifest 救不了。
+- 修法：SM 数变成生成器参数（`gen.py --sms`，152 或 148），穿到这三个核的
+  entry、grid 和 MoE 的 layout；每个 cubin 同时装两套实例（`mega_gate.cubin`
+  本来就装着三种配置，同一个路子）。一份 cubin 供两种设备，manifest 选实例，
+  因为 entry 名和 grid 在 manifest 里是静态的。`dsv41_dense` / `dsv41_oa`
+  同样是 152 CTA，但 1d1d 没有 grid 级 barrier，148 卡上只多排一轮，不改。
+- 148 与 152 的 manifest 只差三个 op（`dsv41_mhc`、`dsv41_mega_moe_e{384,128}`、
+  `dsv41_gate_e128`）的 entry 和 grid，以及随之变化的 op 名字哈希；buffer、
+  state、var、topology 全同。MegaMoE 的 slab 几何两边也相同（ring 26880、
+  stages 11、smem 230100），`moe_layout_<E>_sm<N>.json` 分文件是为了契约，
+  不是因为数字会动。
+- 门禁（tray05，4×GB300，v0.2.1 release 二进制，16 条 greedy conc1，
+  `~/bench_results/2026-09-11-dsv41-b300-sms`）：148 的 manifest 在 152 卡上
+  能跑（grid 比设备窄照样驻留），所以 B300 那条路整条在这里验，和
+  `KERN_NO_FABRIC=1` 验 peer 路径一个办法。m152（152 的 manifest）rows1 / rows6 与 master 上那套 16/16 逐字节
+  相同，h148（B300 的 manifest）rows1 / rows6 同样 16/16 相同；step 两边都是
+  7.7 ms / 9.7 ms，接受 2.6–2.7/步。重编的 cubin sha 变了但数值不变。
+

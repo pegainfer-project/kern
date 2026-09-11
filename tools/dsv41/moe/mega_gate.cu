@@ -8,5 +8,8 @@ void instantiate_dsv41_gate() {
  auto target=reinterpret_cast<void*>(&sm100_bf16_mega_gate_impl<5120,384,16,4,128,1,1,3,150,6,1,true,false,false,false,true,false,false,false>);
  auto target_split=reinterpret_cast<void*>(&sm100_bf16_mega_gate_impl<5120,384,16,12,128,1,8,3,144,6,1,true,false,false,false,true,false,false,false>);
  auto draft=reinterpret_cast<void*>(&sm100_bf16_mega_gate_impl<5120,128,16,4,128,1,1,1,152,3,1,true,false,false,false,true,false,false,false>);
- asm volatile(""::"g"(target),"g"(target_split),"g"(draft));
+ // The draft gate fills the device: one instance per SM count it may run on
+ // (GB300 152, B300 148). The target's 144 fits both.
+ auto draft148=reinterpret_cast<void*>(&sm100_bf16_mega_gate_impl<5120,128,16,4,128,1,1,1,148,3,1,true,false,false,false,true,false,false,false>);
+ asm volatile(""::"g"(target),"g"(target_split),"g"(draft),"g"(draft148));
 }

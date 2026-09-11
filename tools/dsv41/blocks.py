@@ -18,10 +18,10 @@ class Stream:
 
 
 class Blocks:
-    def __init__(self, pieces, *, prefix, rows, capacity, cubin_dir=None):
+    def __init__(self, pieces, *, prefix, rows, capacity, cubin_dir=None, device_sms=152):
         self.prefix, self.rows, self.capacity = prefix, rows, capacity
         self.boundary = pieces.add(boundary.pieces(rows, cubin_dir))
-        self.pieces, self.cubin_dir = pieces, cubin_dir
+        self.pieces, self.cubin_dir, self.device_sms = pieces, cubin_dir, device_sms
 
     def mhc(self, fp8, shared_rows=None):
         """The mHC op storing its normalized output for one consumer kind.
@@ -29,7 +29,8 @@ class Blocks:
         TMA describes allocated capacity; token_count controls live rows.
         """
         return self.pieces.add(mhc.pieces(self.capacity, self.cubin_dir, max_tokens=self.capacity,
-                                          fp8=fp8, shared_rows=shared_rows))["dsv41_mhc"]
+                                          fp8=fp8, shared_rows=shared_rows,
+                                          device_sms=self.device_sms))["dsv41_mhc"]
 
     def name(self, suffix):
         return self.prefix + "." + suffix
