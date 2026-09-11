@@ -24,7 +24,7 @@ kern-runtime = { path = "../kern-runtime" }
 kern-run = { path = "../kern-run" }
 # Pinned to a pegainfer main commit; bump deliberately. Its vLLM crates carry
 # the chat renderers, picked by the checkpoint's model_type.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "a30543d10c21b713895ec317366729c9cd12cea3" }
+pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "139d925e8693dcff412b8501f8db09eb639d0ffd" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
@@ -42,4 +42,4 @@ path = "src/main.rs"
 
 [dev-dependencies]
 # The same vLLM rev pegainfer pins, so the renderer tests read the crate the server runs.
-vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "6ff479e1f798048829f884b4229f28c9b9b0c8d7" }
+vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "89dbb2644552d6e473a7e97da0ce8f0aa8e32c9d" }

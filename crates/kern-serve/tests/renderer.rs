@@ -12,9 +12,6 @@ fn native_nonthinking_user_prompt_matches_supplied_v41_encoding() {
     assert_eq!(actual, "<｜begin▁of▁sentence｜><｜User｜>Hello.<｜Assistant｜></think>");
 }
 
-/// Fixture cases whose reference output upstream vLLM does not reproduce.
-const UPSTREAM_REJECTS: &[&str] = &["mixed-tool-user-sorted", "invalid-json-tool-argument-fallback"];
-
 #[test]
 fn v41_matches_released_reference_text_cases() {
     use serde_json::Value;
@@ -68,21 +65,18 @@ fn v41_matches_released_reference_text_cases() {
             request.chat_options.template_kwargs.insert(key.into(), case[source].clone());
         }
         let rendered = DeepSeekV41ChatRenderer::new().render(&request);
-        // The released encoding.py decodes a tool call's arguments twice and
-        // wraps anything that is still not an object as {"arguments": raw};
-        // upstream vLLM rejects such history instead. The reference text for
-        // these two cases stays in the fixture so the divergence is visible.
-        if UPSTREAM_REJECTS.contains(&case["name"].as_str().unwrap()) {
-            assert!(rendered.is_err(), "{} is expected to be rejected by the upstream renderer", case["name"]);
-        } else if case["error"] == Value::Bool(true) {
+        if case["error"] == Value::Bool(true) {
             assert!(rendered.is_err(), "{} should fail", case["name"]);
         } else {
-            assert_eq!(
-                rendered.unwrap().prompt.into_text().unwrap(),
-                case["expected"].as_str().unwrap(),
-                "{}",
-                case["name"]
+            // The checkpoint oracle decodes double-encoded objects twice.
+            // deepseek-recipe (and vLLM #56260) instead preserves that raw
+            // string as `arguments`; keep the original fixture intact and
+            // require the rest of the rendered conversation to match it.
+            let expected = case["expected"].as_str().unwrap().replace(
+                r#"<｜DSML｜ parameter name="query" string="true">double</｜DSML｜ parameter>"#,
+                r#"<｜DSML｜ parameter name="arguments" string="true">"{\"query\":\"double\"}"</｜DSML｜ parameter>"#,
             );
+            assert_eq!(rendered.unwrap().prompt.into_text().unwrap(), expected, "{}", case["name"]);
         }
     }
 }

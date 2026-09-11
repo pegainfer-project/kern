@@ -18,6 +18,12 @@ API 里的模型名缺省是 manifest 的 `model`，`--served-model-name` 覆盖
 截到第一个 `{ep}`/`*` 分片段之前（`dense-tp4/r{tp}/l*.safetensors` → `dense-tp4`）。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
+当前钉在 pegainfer `139d925e` / vLLM `89dbb264`（2026-09-11）。包含上游 #56260：
+DSV4/V4.1 历史 tool call 的非法 JSON 或非对象参数按原文包在 `arguments` 中，不再拒绝请求。
+双重编码的对象也保留原文，不按 checkpoint 的旧 `encoding.py` 二次解码；renderer 回归测试
+保留旧 oracle fixture，只对这一处已知差异调整期望，仍比较完整对话文本。
+
+
 ## 分工
 
 - **`kern-serve::scheduler::KernScheduler`** 实现 pegainfer 的 `Scheduler`
