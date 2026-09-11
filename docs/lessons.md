@@ -24,6 +24,12 @@ DeepGEMM 的 NVLink barrier 就 trap。规则：**host 表 mmap 后 `mbind(MPOL_
 都不碰目标的 mmap_lock，进程到 60 s 自己 trap 退出。`pgrep -f` / `ps` / `cmdline` /
 `numa_maps` 会要 mmap_lock，对着卡死的进程一样挂。
 
+**有 state 的模型，截断的回答再问一轮不命中。** 快照只在自己的整长上可用，命中要求
+chat template 重新渲染的历史 re-tokenize 出当初生成的那串 id；`max_tokens` 把回答截在词
+中间，重编码就差一个 token，resident 和 host 都不命中，日志里只看得到 `prefix_hit=0`。
+规则：测命中的脚本要断言第一轮 `finish_reason == "stop"`；生产上想让截断的回答也命中，
+得让前端保留生成的 token id 而不是拼文本（router 那条老规矩）。
+
 **先算再抓。** barrier.cuh 打印的 counter 是它自己加过之后的值，每次 MegaMoE 三个
 barrier，prefill 的 MoE 有自己的 workspace，所以 `counter=883` 和 `403` 都换算成"prefill
 chunk 第 15 个 MoE 的第一个 barrier"，缺席的 rank 一定卡在 layer 14 这一段（engram

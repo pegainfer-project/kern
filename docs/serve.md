@@ -208,6 +208,20 @@ resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）
 同一 session 醒来后再睡，host 上按 device 页节点去重的链认不出它（醒来的是新页），会
 再拷一份；旧的那份最冷，缺地方时先走。
 
+## DSv4.1 Flash 的 host 层命中（2026-09-11，tray05）
+
+四卡 EP4、`--capacity 8192 --host-gib 4`：2013 token 的开场白 + 312 token 的回答（EOS
+结束）留下 checkpoint；第二轮立刻问命中 resident（`prefix_hit=2325`，prefill 14 ms）；
+32 条 2.5–3.3k 的 filler 把每张卡的池子打满（`parks=8`，日志 `parked tokens=2325`）后再问
+同一轮，`woken=true`、新租 19 页、prefill 12 ms，**64 token 与 resident 命中逐字相同**。
+新起的 server 上冷 prefill 同一 prompt 在第 35 个 token 处同义替换后重新汇合（回答的 312
+token 一边走 decode 步一边走 prefill chunk，核和累加顺序不同，近平局翻转）。
+
+有 per-seq state 的模型只在快照的整长上可用，所以命中还要求 chat template 重新渲染的
+历史 re-tokenize 出模型当初生成的那串 id：被 max_tokens 截断在词中间的回答（64、400 都
+试过）再问一轮全是 `prefix_hit=0`，resident 也不命中。记录与脚本在
+`bench_results/2026-09-11-dsv41-host-tier/`。
+
 ## tray 级（E5 第四块，2026-09-03；t=4 门禁 2026-09-04 过）
 
 `kern-serve --gpus 0,1,2,3` 一个进程驱一个 tray：`tray.rs` 持 n 个 `Runtime`，单线程
