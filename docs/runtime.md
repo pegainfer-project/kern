@@ -80,8 +80,9 @@ checkpoint drop 时回池，checkpoint 本身不会被 runtime 淘汰。
 纯 host 的 `Prefix` 索引（`kern-pool/prefix.rs`，设计见 `pool.md`）是 token 键的 radix
 tree：`insert(&tokens, cp)` 把 checkpoint 挂在它的 token 路径上（同样的 token 是同一个
 条目），`lookup(tokens)` 给出覆盖 prompt 真前缀（不含最后一个 token）的最长可用条目，
-`Hit` 持有条目的一个 clone；`coldest(tier)` 给最久未命中的条目的键（同一条路径叶子
-先走，drop 叶子才真正还页）；逻辑时钟计数，不读钟，同样的 token 序列给同样的判定。决策（共享哪些页、拷哪一页、
+`Hit` 持有条目的一个 clone；`evict(park)` 拿最久未命中的 resident 条目 park 进 host
+或丢掉（同一条路径叶子先走，drop 叶子才真正还页）；逻辑时钟计数，不读钟，同样的
+token 序列给同样的判定。决策（共享哪些页、拷哪一页、
 拷哪个 slot）由 `Pool` 在 host 上算成 `Copies`，runtime 只在 stream 上执行拷贝。
 kern run / kern test 仍默认 4096（test 的 workload 抽样以 capacity 为界）。
 
@@ -113,8 +114,8 @@ park 能先在四张卡上都找到地方再动一个字节（半途失败的 pa
 之后开始，compute stream 从不等它，decode 步不排在拷贝后面。`Prefix` 表按
 `Tier::{Resident, Parked}` 分层：`lookup` 先挑 resident；纯 KV 的 checkpoint 链在表里
 是一个随页增长的条目（每个深度都登记），所以 parked 的条目部分命中时只醒需要的页；
-`coldest(tier)` / `park(id, |cp| ...)` / `remove(id)` 是调用方腾地方的三个动作；表对它
-存的东西是泛型的（`Prefix<R, P>`，`R: Kept`、`P: Kept` 只要求 `tokens()` / `has_slot()`），
+`evict(Some(|cp| ...))` 是调用方腾地方的一个动作（park 最冷的 resident，host 满了先丢
+最冷的 parked，没有 host 就丢）；表对它存的东西是泛型的（`Prefix<R, P>`，`R: Kept`、`P: Kept` 只要求 `tokens()` / `has_slot()`），
 单卡存 `Checkpoint` / `Parked`，kern-serve 的 tray 存四张卡的元组。实测
 （tray08 GB300 单卡，2026-09-03，`crates/kern-runtime/examples/park_wake.rs`，写入
 按位置的 pattern、park、清零、wake、逐字节比对）：qwen3.8-27b 形状 98k token =

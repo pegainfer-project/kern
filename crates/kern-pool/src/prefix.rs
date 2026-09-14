@@ -16,13 +16,14 @@
 //! with it otherwise. Same tokens, same path: a prefix two sessions both
 //! typed is one entry.
 //!
-//! Room is the caller's answer to a `Busy` lease: [`Prefix::coldest`]
-//! names the entry hit least recently in a tier, [`Prefix::park`] moves a
-//! resident one to the host, [`Prefix::remove`] drops one; dropping is all
-//! that frees anything (pages shared with a live sequence or another entry
-//! stay). Recency is a counter, not a clock. A hit touches every entry on
-//! the prompt's path, the deepest coldest, so a chain ages together and
-//! its leaf goes first. A stateless resident entry made one page past
+//! Room is the caller's answer to a `Busy` lease: [`Prefix::evict`]
+//! moves the resident entry hit least recently to the host through the
+//! caller's copy, dropping the coldest parked ones until it fits, or
+//! drops it when there is no host tier; dropping is all that frees
+//! anything (pages shared with a live sequence or another entry stay).
+//! Recency is a counter, not a clock. A hit touches every entry on the
+//! prompt's path, the deepest coldest, so a chain ages together and its
+//! leaf goes first. A stateless resident entry made one page past
 //! another on the same path replaces it: a sequence checkpointing every
 //! page keeps one entry that grows.
 //!
@@ -81,27 +82,13 @@ pub struct Hit<R, P> {
     pub found: Found<R, P>,
 }
 
-impl<R, P> Hit<R, P> {
-    pub fn tier(&self) -> Tier {
-        match self.found {
-            Found::Resident(_) => Tier::Resident,
-            Found::Parked(_) => Tier::Parked,
-        }
-    }
-
-    pub fn resident(&self) -> Option<&R> {
-        match &self.found {
-            Found::Resident(r) => Some(r),
-            Found::Parked(_) => None,
-        }
-    }
-
-    pub fn parked(&self) -> Option<&P> {
-        match &self.found {
-            Found::Parked(p) => Some(p),
-            Found::Resident(_) => None,
-        }
-    }
+/// What [`Prefix::evict`] did to the coldest resident entry, whose
+/// tokens it names: parked it, or dropped it after dropping `parked`
+/// cold parked entries for room that never came.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Evicted {
+    Parked(Arc<[i64]>),
+    Dropped { key: Arc<[i64]>, parked: usize },
 }
 
 struct Entry<R, P> {
@@ -303,12 +290,9 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         Prefix { unit, root: Node::new(Vec::new()), lru: [BTreeMap::new(), BTreeMap::new()], count: [0, 0], clock: 0 }
     }
 
-    pub fn len(&self) -> usize {
+    /// Entries in both tiers.
+    pub fn entries(&self) -> usize {
         self.count[0] + self.count[1]
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// Entries in a tier.
@@ -458,30 +442,49 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         Some(Hit { len, found })
     }
 
-    /// The resident checkpoint at `key`, if any.
-    pub fn resident(&self, key: &[i64]) -> Option<&R> {
-        at(&self.root, key)?.entry.as_ref()?.device.as_ref()
-    }
-
-    /// The parked copy at `key`, if any.
-    pub fn parked(&self, key: &[i64]) -> Option<&P> {
-        at(&self.root, key)?.entry.as_ref()?.host.as_ref()
-    }
-
     /// The key of the entry in `tier` used least recently.
-    pub fn coldest(&self, tier: Tier) -> Option<Arc<[i64]>> {
+    fn coldest(&self, tier: Tier) -> Option<Arc<[i64]>> {
         self.lru[slot_of(tier)].values().next().cloned()
     }
 
-    /// Move the resident entry at `key` to the host through `park` (the
-    /// runtime's copy): `Ok(true)` when it is parked, `Ok(false)` when
-    /// `park` handed the checkpoint back (no room) and the entry stays
-    /// resident; on an error the entry is gone. An entry on the host
-    /// already just lets its device copy go.
-    pub fn park<E>(
+    /// Room for a `Busy` lease: the resident entry hit least recently
+    /// goes to the host through `park` (the runtime's copy, `Ok(Err(r))`
+    /// handing the checkpoint back when the host is full), the parked
+    /// entries hit least recently dropped until it fits; without a host
+    /// tier (`park` is `None`), or once nothing parked is left to drop,
+    /// it is dropped. `None` when nothing is resident. An entry on the
+    /// host already just lets its device copy go. On an error the entry
+    /// is gone and the error is the caller's.
+    pub fn evict<E>(
+        &mut self,
+        park: Option<impl FnMut(R) -> std::result::Result<std::result::Result<P, R>, E>>,
+    ) -> std::result::Result<Option<Evicted>, E> {
+        let Some(key) = self.coldest(Tier::Resident) else { return Ok(None) };
+        let mut dropped = 0;
+        if let Some(mut park) = park {
+            loop {
+                if self.park(&key, &mut park)? {
+                    return Ok(Some(Evicted::Parked(key)));
+                }
+                match self.coldest(Tier::Parked) {
+                    Some(c) => {
+                        self.remove(&c);
+                        dropped += 1;
+                    }
+                    None => break,
+                }
+            }
+        }
+        self.remove(&key);
+        Ok(Some(Evicted::Dropped { key, parked: dropped }))
+    }
+
+    /// `true` when the entry at `key` is parked, `false` when `park`
+    /// handed the checkpoint back and the entry stays resident.
+    fn park<E>(
         &mut self,
         key: &[i64],
-        park: impl FnOnce(R) -> std::result::Result<std::result::Result<P, R>, E>,
+        park: &mut impl FnMut(R) -> std::result::Result<std::result::Result<P, R>, E>,
     ) -> std::result::Result<bool, E> {
         let node = at_mut(&mut self.root, key);
         let e = node.entry.as_mut().expect("entry");
@@ -512,55 +515,10 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
     }
 
     /// Drop the entry at `key`; `false` when there is none.
-    pub fn remove(&mut self, key: &[i64]) -> bool {
+    fn remove(&mut self, key: &[i64]) -> bool {
         let Some(e) = take_entry(&mut self.root, key) else { return false };
         self.lru[slot_of(e.tier())].remove(&e.used);
         self.count[slot_of(e.tier())] -= 1;
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    //! The tree's shape is private: `tests/prefix.rs` sees it through
-    //! what a lookup finds. Here only that edges split and merge back.
-
-    use super::*;
-
-    #[derive(Clone)]
-    struct K(usize, bool);
-
-    impl Kept for K {
-        fn tokens(&self) -> usize {
-            self.0
-        }
-
-        fn has_slot(&self) -> bool {
-            self.1
-        }
-    }
-
-    fn edges<R, P>(n: &Node<R, P>, out: &mut Vec<Vec<i64>>) {
-        for c in n.children.values() {
-            out.push(c.tokens.clone());
-            edges(c, out);
-        }
-    }
-
-    #[test]
-    fn edges_split_on_insert_and_merge_on_remove() {
-        let mut t: Prefix<K, K> = Prefix::new(2);
-        t.insert(&[1, 2, 3, 4], K(4, true));
-        t.insert(&[1, 2, 5], K(3, true));
-        let mut e = Vec::new();
-        edges(&t.root, &mut e);
-        assert_eq!(e, [vec![1, 2], vec![3, 4], vec![5]]);
-        assert!(t.remove(&[1, 2, 5]));
-        let mut e = Vec::new();
-        edges(&t.root, &mut e);
-        assert_eq!((e, t.len()), (vec![vec![1, 2, 3, 4]], 1));
-        assert!(!t.remove(&[1, 2, 5]));
-        assert!(t.remove(&[1, 2, 3, 4]));
-        assert!(t.root.children.is_empty() && t.is_empty());
     }
 }

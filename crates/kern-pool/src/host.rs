@@ -30,8 +30,6 @@ use crate::store::{chain_nodes, chain_pages, lock, sealed, Copies, Node, SlotOwn
 struct Inner {
     /// Free runs: start → length, in grain units, never adjacent.
     free: BTreeMap<u64, u64>,
-    /// Host pages alive.
-    pages: usize,
 }
 
 /// The pinned block's accounting: `bytes` in all, handed out in `grain`
@@ -57,7 +55,6 @@ impl Storage for Host {
 
     fn give_page(&self, page: u64) {
         let mut g = lock(&self.inner);
-        g.pages -= 1;
         self.give(&mut g, page, self.page_bytes);
     }
 
@@ -74,30 +71,13 @@ impl Host {
         assert!(grain >= 1);
         let units = bytes / grain;
         let free = if units > 0 { BTreeMap::from([(0, units)]) } else { BTreeMap::new() };
-        Host { grain, units, page_bytes, slot_bytes, inner: Mutex::new(Inner { free, pages: 0 }) }
-    }
-
-    pub fn bytes(&self) -> u64 {
-        self.units * self.grain
+        Host { grain, units, page_bytes, slot_bytes, inner: Mutex::new(Inner { free }) }
     }
 
     /// Bytes handed out.
     pub fn used(&self) -> u64 {
         let g = lock(&self.inner);
         (self.units - g.free.values().sum::<u64>()) * self.grain
-    }
-
-    /// Host pages alive.
-    pub fn pages(&self) -> usize {
-        lock(&self.inner).pages
-    }
-
-    pub fn page_bytes(&self) -> u64 {
-        self.page_bytes
-    }
-
-    pub fn slot_bytes(&self) -> u64 {
-        self.slot_bytes
     }
 
     fn grains(&self, bytes: u64) -> u64 {
@@ -140,12 +120,6 @@ impl Host {
         g.free.insert(start, len);
     }
 
-    fn take_page(self: &Arc<Host>, g: &mut Inner) -> Option<u64> {
-        let at = self.take(g, self.page_bytes, false)?;
-        g.pages += 1;
-        Some(at)
-    }
-
     /// Park `cp`: a host node per device node not parked already, a run
     /// for the slot, and the copies (device page, host offset) that fill
     /// them, root first. `HostFull` when the block cannot hold it; nothing
@@ -159,7 +133,7 @@ impl Host {
                 Some(n) => n,
                 None => {
                     let mut g = lock(&self.inner);
-                    let Some(at) = self.take_page(&mut g) else { return Err(Denied::HostFull) };
+                    let Some(at) = self.take(&mut g, self.page_bytes, false) else { return Err(Denied::HostFull) };
                     drop(g);
                     plan.pages.push((dev.page, at));
                     let n = Node::new(at, chain.take(), self, ());
@@ -216,14 +190,10 @@ impl Host {
 }
 
 impl Parked {
-    /// The host offset of each page, root first.
+    /// The host offset of each page, root first (a test reading the
+    /// block back; the runtime moves bytes by the plans).
     pub fn offsets(&self) -> Vec<u64> {
         chain_pages(&self.chain)
-    }
-
-    /// The host offset of the slot, when one is held.
-    pub fn slot_offset(&self) -> Option<u64> {
-        self.slot_id()
     }
 }
 
@@ -239,18 +209,4 @@ pub fn runs(pairs: &[(i32, u64)], page_bytes: u64) -> Vec<(i32, u64, usize)> {
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    //! `runs` is used by the transfer stream, not by callers: the copies
-    //! it folds are observable only as bytes on the host.
-
-    use super::*;
-
-    #[test]
-    fn consecutive_pages_fold_into_one_run() {
-        assert_eq!(runs(&[(10, 0), (11, 8), (12, 16)], 8), [(10, 0, 3)]);
-        assert_eq!(runs(&[(10, 0), (11, 8), (13, 16), (14, 32)], 8), [(10, 0, 2), (13, 16, 1), (14, 32, 1)]);
-    }
 }

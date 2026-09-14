@@ -79,7 +79,7 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::Protocol;
-use kern_pool::{Denied, Found, Kept, Prefix, Tier};
+use kern_pool::{Denied, Evicted, Found, Kept, Prefix, Tier};
 use kern_runtime::Error;
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
@@ -683,26 +683,20 @@ impl KernScheduler {
     /// the host tier when there is one (the coldest parked ones dropped
     /// until it fits), else is dropped. `false` when nothing is resident.
     fn make_room(&mut self) -> Result<bool> {
-        let Some(key) = self.prefix.coldest(Tier::Resident) else { return Ok(false) };
-        if self.policy.host_bytes > 0 {
-            loop {
-                let tray = &mut self.tray;
-                if self.prefix.park(&key, |snap| tray.park(snap))? {
-                    debug!(tokens = key.len(), "parked");
-                    self.stats.parks += 1;
-                    return Ok(true);
-                }
-                match self.prefix.coldest(Tier::Parked) {
-                    Some(c) => {
-                        self.prefix.remove(&c);
-                        self.stats.host_evictions += 1;
-                    }
-                    None => break,
-                }
+        let tray = &mut self.tray;
+        let park = (self.policy.host_bytes > 0).then(|| |snap| tray.park(snap));
+        match self.prefix.evict(park)? {
+            Some(Evicted::Parked(key)) => {
+                debug!(tokens = key.len(), "parked");
+                self.stats.parks += 1;
             }
+            Some(Evicted::Dropped { key, parked }) => {
+                debug!(tokens = key.len(), parked, "dropped");
+                self.stats.evictions += 1;
+                self.stats.host_evictions += parked as u64;
+            }
+            None => return Ok(false),
         }
-        self.prefix.remove(&key);
-        self.stats.evictions += 1;
         Ok(true)
     }
 
@@ -892,7 +886,7 @@ impl KernScheduler {
                 resident_hit_tokens = st.resident_hit_tokens,
                 host_hits = host.map(|_| st.host_hits),
                 host_hit_tokens = host.map(|_| st.host_hit_tokens),
-                checkpoints = self.prefix.len(),
+                checkpoints = self.prefix.entries(),
                 evictions = st.evictions,
                 parked = host.map(|_| self.prefix.count(Tier::Parked)),
                 host_gib = host.map(|(u, _)| round(u as f64 / (1u64 << 30) as f64, 10.0)),

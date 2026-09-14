@@ -28,5 +28,5 @@ pub use chunks::{Kind, Remap};
 pub use error::{Error, Result};
 pub use host::{runs, Host, Parked};
 pub use pages::{chunks_for, page_unit, row_tokens, Checkpoint, Denied, Lease, Pool, Pooled};
-pub use prefix::{Found, Hit, Kept, Prefix, Tier};
+pub use prefix::{Evicted, Found, Hit, Kept, Prefix, Tier};
 pub use store::{Copies, Storage, Store};
