@@ -1,17 +1,13 @@
 [package]
-name = "dsv41-ar-trace"
+name = "kern-pool"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 kern-manifest.workspace = true
-kern-pool.workspace = true
-kern-runtime.workspace = true
-kern-run.workspace = true
 
-anyhow.workspace = true
-serde_json.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

@@ -1,6 +1,11 @@
 //! Opt-in measurement primitives. Preparation is graph ordered but outside
 //! event brackets; every sample restores declared writes to its pre-image.
 //! No samples are discarded. Profiling never changes the serving path.
+//!
+//! This lives inside the runtime, not beside `kern test`, because a sample
+//! is a captured range of the compiled launch list bracketed by external
+//! events, with pre-images copied on the runtime's own stream: none of
+//! that is reachable through the harness surface.
 use std::collections::{BTreeMap, BTreeSet};
 
 use cudarc::driver::{sys, CudaFunction, LaunchConfig, PushKernelArg};

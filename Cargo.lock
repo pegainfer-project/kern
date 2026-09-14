@@ -1049,6 +1049,7 @@ version = "0.2.3"
 dependencies = [
  "anyhow",
  "kern-manifest",
+ "kern-pool",
  "kern-run",
  "kern-runtime",
  "serde_json",
@@ -1061,6 +1062,7 @@ dependencies = [
  "anyhow",
  "hex",
  "kern-manifest",
+ "kern-pool",
  "kern-run",
  "kern-runtime",
  "serde_json",
@@ -2109,6 +2111,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kern-pool"
+version = "0.2.3"
+dependencies = [
+ "kern-manifest",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "kern-run"
 version = "0.2.3"
 dependencies = [
@@ -2116,6 +2126,7 @@ dependencies = [
  "clap",
  "hex",
  "kern-manifest",
+ "kern-pool",
  "kern-runtime",
  "memmap2",
  "serde",
@@ -2135,6 +2146,7 @@ dependencies = [
  "half",
  "hex",
  "kern-manifest",
+ "kern-pool",
  "libc",
  "safetensors",
  "serde_json",
@@ -2151,6 +2163,7 @@ dependencies = [
  "anyhow",
  "clap",
  "kern-manifest",
+ "kern-pool",
  "kern-run",
  "kern-runtime",
  "pegainfer-frontend",

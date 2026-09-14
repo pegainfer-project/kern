@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use kern_manifest::types::Manifest;
-use kern_runtime::Pool;
+use kern_pool::Pool;
 
 fn manifest(json: &str) -> Manifest {
     Manifest::from_json(json).expect("fixture parses")

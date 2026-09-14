@@ -78,7 +78,8 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::Protocol;
-use kern_runtime::{Chain, Denied, Error, Prefix, Tier};
+use kern_pool::{Chain, Denied, Prefix, Tier};
+use kern_runtime::Error;
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
     SpecDecodeCounters, MAX_SPEC_TOKENS,
@@ -666,7 +667,7 @@ impl KernScheduler {
             loop {
                 let tray = &mut self.tray;
                 if self.prefix.park(id, |snap| tray.park(snap))? {
-                    debug!(tokens = self.prefix.parked(id).map_or(0, kern_runtime::Kept::tokens), "parked");
+                    debug!(tokens = self.prefix.parked(id).map_or(0, kern_pool::Kept::tokens), "parked");
                     self.stats.parks += 1;
                     return Ok(true);
                 }

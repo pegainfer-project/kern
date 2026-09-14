@@ -18,16 +18,13 @@ use cudarc::driver::CudaContext;
 use kern_manifest::types::{BufferKind, Manifest, Placement, Provision};
 use kern_manifest::Verified;
 
-use crate::chunks::Kind;
-use crate::device::{
-    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, DeviceBuf, Mapper, Physical,
-};
 use crate::cublas::Blas;
+use crate::device::{alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, DeviceBuf, Mapper, Physical};
 use crate::error::bail;
 use crate::lease::Remaps;
-use crate::pages::{chunks_for, page_unit, Pool};
 use crate::peers::PeerSlot;
 use crate::{compile, cubin, weights, Capacity, Error, Result, Runtime, Topology, HEADROOM};
+use kern_pool::{chunks_for, page_unit, Kind, Pool};
 
 impl Runtime {
     /// Load every `*.cubin` under `kernels_dir`, resolve

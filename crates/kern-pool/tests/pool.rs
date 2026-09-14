@@ -6,7 +6,7 @@ mod common;
 use std::sync::Arc;
 
 use kern_manifest::types::{Dim, Manifest};
-use kern_runtime::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool};
+use kern_pool::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool};
 
 use common::{hybrid, hybrid_pool, land, pool, pool_of, two_paged};
 

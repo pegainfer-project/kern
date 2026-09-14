@@ -271,7 +271,7 @@ pub fn chunks_for(m: &Manifest, tokens: u64, first_slots: u64, chunk: u64) -> u6
 
 /// Tokens one sequence can hold, in whole pages of `unit`: what the
 /// narrowest page-table row references. `None` when nothing is paged.
-pub(crate) fn row_tokens(m: &Manifest, unit: u64) -> Option<u64> {
+pub fn row_tokens(m: &Manifest, unit: u64) -> Option<u64> {
     tables(m).values().map(|t| t.width as u64 * t.stride / unit * unit).min()
 }
 
@@ -578,7 +578,7 @@ impl Pool {
     }
 
     /// Whether any remap was ever planned: the initial layout is gone.
-    pub(crate) fn remapped(&self) -> bool {
+    pub fn remapped(&self) -> bool {
         lock(&self.inner).remapped
     }
 
@@ -938,7 +938,7 @@ impl Lease {
 
     /// Byte range of this sequence's slot in a per-sequence state of
     /// `bytes_per_seq`.
-    pub(crate) fn seq_bytes(&self, bytes_per_seq: u64) -> Option<Range<usize>> {
+    pub fn seq_bytes(&self, bytes_per_seq: u64) -> Option<Range<usize>> {
         let s = self.slot? as u64;
         Some((s * bytes_per_seq) as usize..((s + 1) * bytes_per_seq) as usize)
     }

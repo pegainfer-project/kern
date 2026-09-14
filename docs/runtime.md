@@ -30,7 +30,7 @@ call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scr
 动态 shmem 自动 `cuFuncSetAttribute`）。
 
 **state 内存（K1b）**：定长 state 按声明分配；分页 state（`bytes_per_token`）与
-per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`chunks.rs` 记块，
+per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`kern-pool`：`chunks.rs` 记块，
 `pages.rs` 的 `Pool` 在其上记页与 slot）。每个这样的 state 保留一段虚拟地址
 （`cuMemAddressReserve`，一次保留永不搬，`DeviceBuf::Reserved`），页与 slot 各是
 地址上的一段块区间；物理块 `cuMemCreate` 一次建齐，块大小是 2 MiB 粒度的整数倍、
@@ -77,7 +77,7 @@ slot 原样移交。`Runtime::lease_from(&checkpoint, tokens)` 从 checkpoint �
 checkpoint 自己那页不动），state 拷进新 slot；租约的 `prefix()` = `len`，
 `slot(pos)` 拒绝 `pos < prefix`。谁拿着句柄谁持有：页在最后一个 lease /
 checkpoint drop 时回池，checkpoint 本身不会被 runtime 淘汰。
-纯 host 的 `Prefix` 表（`prefix.rs`）按 token 哈希链索引 checkpoint：`lookup(tokens)`
+纯 host 的 `Prefix` 表（`kern-pool/prefix.rs`）按 token 哈希链索引 checkpoint：`lookup(tokens)`
 给出覆盖 prompt 真前缀（不含最后一个 token）的最长 checkpoint；序列自己带一条
 `Chain`（每 token 折一次，每页记一个头），`insert(&chain, cp)` 读链上对应长度的键，
 每页留一个 checkpoint 也只把每个 token 哈希一次；`insert` 去重，
@@ -107,7 +107,7 @@ park 能先在四张卡上都找到地方再动一个字节（半途失败的 pa
 落地没有，落地了才给出 `Lease`（`Runtime::landed(&waking)` 只问不拿，tray 用它先看齐
 四张卡再一起 awake）——没有 `Lease` 就没有程序能读到还在路上的页，这是类型
 保证的，不靠 compute stream 等事件（`Waking` 提前 drop 会等拷贝完再还页）。host 上
-的页也是链（`host.rs`，一页一个节点，按它拷自的 device 节点编号索引），同一 session
+的页也是链（`kern-pool/host.rs`，一页一个节点，按它拷自的 device 节点编号索引），同一 session
 下一轮再 park 只拷新增的页；一页在 host 上是所有分页 state 的该页首尾相接，slot 同理，
 按 64 KiB 粒度 first-fit（页从低端长、slot 从高端长）。拷贝走单独的 transfer stream
 （`cuMemcpy2DAsync`，连续页折成一次），transfer stream 在 compute stream 已入队的一切

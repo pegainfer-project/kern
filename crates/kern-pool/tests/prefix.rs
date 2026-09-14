@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use kern_runtime::{Chain, Checkpoint, Hit, Host, Parked, Prefix, Tier};
+use kern_pool::{Chain, Checkpoint, Hit, Host, Parked, Prefix, Tier};
 
 use common::{hybrid_pool4, pool4, Rand};
 

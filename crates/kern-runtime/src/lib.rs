@@ -23,22 +23,18 @@
 //! runtime may be loaded on one thread and driven from another.
 //!
 
-mod chunks;
 mod compile;
-mod cublas;
 mod cubin;
+mod cublas;
 mod device;
 mod error;
 mod exec;
 mod harness;
-mod host;
 mod host_weights;
 mod lease;
 mod load;
-mod pages;
 mod park;
 mod peers;
-mod prefix;
 pub mod profile;
 mod weights;
 
@@ -50,20 +46,17 @@ use cudarc::driver::{sys, CudaContext, CudaStream, HostSlice, PinnedHostSlice};
 use kern_manifest::types::{BufferKind, Manifest, Provision, State};
 use kern_manifest::Verified;
 
-pub use chunks::{Kind, Remap};
 use compile::{CompiledProgram, Dense};
-pub use device::PeerHandle;
 use cublas::Blas;
+pub use device::PeerHandle;
 use device::{alloc, DeviceBuf, Pinned};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
-pub use host::{Host, Park, Parked};
 pub use host_weights::HostWeights;
+use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
 use lease::Remaps;
-pub use pages::{chunks_for, page_unit, Checkpoint, Copies, Denied, Lease, Pool, Pooled};
 pub use park::{Room, Waking};
 use peers::PeerSlot;
-pub use prefix::{Chain, Hit, Kept, Prefix, Tier};
 
 /// The CUDA API this binary binds (`13000` is 13.0): fixed by the `cudarc`
 /// feature at build time, so a driver older than it fails to load the
@@ -120,7 +113,7 @@ pub struct Runtime {
     /// paged state's arena spans, the sequence slots a per-sequence one's.
     provision: Provision,
     /// Owner of the states' token slots: hands them out as leases.
-    pool: Arc<pages::Pool>,
+    pool: Arc<Pool>,
     /// The remap thread: runs the pool's plans off the serving thread.
     remaps: Remaps,
     remap_count: u64,
@@ -344,5 +337,5 @@ pub(crate) const HEADROOM: u64 = 1 << 30;
 /// in whole pages — or `None` when nothing is paged per token. What a
 /// single-sequence caller wants as its state capacity.
 pub fn seq_capacity(m: &Manifest) -> Option<u64> {
-    pages::row_tokens(m, page_unit(m))
+    row_tokens(m, page_unit(m))
 }

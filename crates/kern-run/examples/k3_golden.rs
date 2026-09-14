@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 
 use kern_manifest::types::Dim;
-use kern_runtime::Lease;
+use kern_pool::Lease;
 use kern_runtime::{PeerHandle, Runtime, Topology};
 
 const NOISE_FLOOR_ULP: f32 = 2.0;

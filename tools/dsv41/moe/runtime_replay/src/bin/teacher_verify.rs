@@ -1,6 +1,7 @@
 //! Same-history plain vs six-row verification, using independent forked leases.
 use anyhow::{ensure, Context, Result};
-use kern_runtime::{Capacity, HostWeights, Lease, PeerHandle, Runtime, Topology};
+use kern_pool::Lease;
+use kern_runtime::{Capacity, HostWeights, PeerHandle, Runtime, Topology};
 use std::{
     collections::BTreeMap,
     path::PathBuf,

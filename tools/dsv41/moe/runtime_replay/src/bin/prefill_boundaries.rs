@@ -1,6 +1,7 @@
 //! Independent prompt prefill with per-layer numerical boundary snapshots.
 use anyhow::{ensure, Context, Result};
-use kern_runtime::{Capacity, HostWeights, Lease, PeerHandle, Runtime, Topology};
+use kern_pool::Lease;
+use kern_runtime::{Capacity, HostWeights, PeerHandle, Runtime, Topology};
 use std::{
     collections::BTreeMap,
     path::PathBuf,

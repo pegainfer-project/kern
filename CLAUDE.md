@@ -21,6 +21,9 @@ the schema golden, lints) belongs in CI, not here.
 
 - `crates/kern-manifest` — types, schema, `verify`. Verification collects every
   diagnostic; it never stops at the first.
+- `crates/kern-pool` — the states' accounting: chunks, pages and slots,
+  leases, the checkpoint table, the host tier. Pure host code with no CUDA;
+  every decision comes back as a plan the runtime executes.
 - `crates/kern-runtime` — loads a verified manifest, allocates, lowers programs
   to flat launch lists, runs them. The only crate that touches CUDA.
 - `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
@@ -36,15 +39,15 @@ the schema golden, lints) belongs in CI, not here.
 
 ## What we prefer
 
-The runtime is under 3,000 lines and that is a feature. The project's thesis
-(forward is a typed pure function; state lives only at the boundary) applies
-to the code that implements it.
+The runtime is small and that is a feature. The project's thesis (forward is
+a typed pure function; state lives only at the boundary) applies to the code
+that implements it: `kern-pool` decides, `kern-runtime` runs what it decided.
 
 **Functional core, imperative shell.** Logic is `fn(data) -> data`. Effects
 (CUDA, the clock, the ledger, files, logging) sit in a thin layer that does no
 branching. If a function needs a GPU to be tested, the decision it makes
 should move into a pure function that returns a plan; the shell only stages,
-runs and reads back. `Pool` / `Lease` in pages.rs are the model: pure host
+runs and reads back. `Pool` / `Lease` in `kern-pool` are the model: pure host
 code that `Runtime` wraps.
 
 **A type exists because something was checked when it was built.** `Lease`,

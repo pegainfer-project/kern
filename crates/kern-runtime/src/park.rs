@@ -1,5 +1,5 @@
 //! The host tier shell: checkpoints parked in pinned DRAM and woken
-//! back into leases. [`crate::host::Host`] decides where a checkpoint's
+//! back into leases. [`kern_pool::Host`] decides where a checkpoint's
 //! bytes go; this is the runtime running the copies.
 //!
 //! Two streams: every program and every pool copy runs on the compute
@@ -18,12 +18,10 @@ use std::sync::Arc;
 
 use cudarc::driver::sys;
 
-use crate::chunks::Kind;
 use crate::device::{copy_2d, landed, record, wait_then_destroy, Pinned};
 use crate::error::bail;
-use crate::host::{self, Host, Parked};
-use crate::pages::{Checkpoint, Denied, Lease};
 use crate::{Error, Result, Runtime};
+use kern_pool::{runs, Checkpoint, Denied, Host, Kind, Lease, Park, Parked};
 
 /// The host tier's block is handed out in these units.
 const HOST_GRAIN: u64 = 1 << 16;
@@ -34,7 +32,7 @@ const HOST_GRAIN: u64 = 1 << 16;
 pub struct Room {
     cp: Checkpoint,
     parked: Parked,
-    plan: host::Park,
+    plan: Park,
 }
 
 impl Room {
@@ -210,7 +208,7 @@ impl Runtime {
             let st = &self.states[&ar.state];
             match ar.kind {
                 Kind::Page => {
-                    for (p, o, n) in host::runs(pages, page_bytes) {
+                    for (p, o, n) in runs(pages, page_bytes) {
                         let dev = st.ptr + p as u64 * ar.object;
                         let hst = base + o + offsets[a];
                         copy_2d(stream, (dev, ar.object), (hst, page_bytes), ar.object, n as u64, to_host)?;

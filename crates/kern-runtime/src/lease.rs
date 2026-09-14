@@ -18,11 +18,10 @@ use std::thread::JoinHandle;
 
 use cudarc::driver::{sys, CudaContext};
 
-use crate::chunks::Remap;
 use crate::device::{landed, record, Mapper};
 use crate::error::{bail, cuda_check};
-use crate::pages::{Checkpoint, Copies, Denied, Lease};
 use crate::{Error, Result, Runtime};
+use kern_pool::{Checkpoint, Copies, Denied, Lease, Remap};
 
 /// What the remap thread is told: a plan to run once both streams have
 /// passed `after` (recorded events, destroyed by the thread), or to stop.

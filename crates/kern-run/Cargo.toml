@@ -9,6 +9,7 @@ name = "kern"
 
 [dependencies]
 kern-manifest.workspace = true
+kern-pool.workspace = true
 kern-runtime.workspace = true
 
 anyhow.workspace = true

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/kern-manifest",
+    "crates/kern-pool",
     "crates/kern-runtime",
     "crates/kern-run",
     "crates/kern-serve",
@@ -11,7 +12,7 @@ members = [
 # A bare `cargo build` / `test` / `clippy` is the runtime: kern-serve pulls the
 # pegainfer/vLLM serving stack (protoc, libssl, ~500 crates) and the dsv41
 # harnesses need a GPU, so both are built by name.
-default-members = ["crates/kern-manifest", "crates/kern-runtime", "crates/kern-run"]
+default-members = ["crates/kern-manifest", "crates/kern-pool", "crates/kern-runtime", "crates/kern-run"]
 
 [workspace.package]
 version = "0.2.3"
@@ -20,6 +21,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 kern-manifest = { path = "crates/kern-manifest" }
+kern-pool = { path = "crates/kern-pool" }
 kern-runtime = { path = "crates/kern-runtime" }
 kern-run = { path = "crates/kern-run" }
 

@@ -90,10 +90,9 @@ use anyhow::{bail, Context, Result};
 use kern_manifest::protocol::{Axis, Filled, Forward};
 use kern_manifest::types::{Fill, Manifest};
 use kern_manifest::{Protocol, Verified};
+use kern_pool::{Checkpoint, Denied, Kept, Lease, Parked};
 use kern_run::le_bytes_i32;
-use kern_runtime::{
-    Capacity, Checkpoint, Denied, Error, GroupRank, Kept, Lease, Parked, PeerHandle, Room, Runtime, Topology, Waking,
-};
+use kern_runtime::{Capacity, Error, GroupRank, PeerHandle, Room, Runtime, Topology, Waking};
 use tracing::info;
 
 use crate::logline;

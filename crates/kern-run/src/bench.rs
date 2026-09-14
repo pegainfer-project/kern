@@ -9,8 +9,9 @@ use anyhow::{ensure, Context, Result};
 use kern_manifest::protocol::{Axis, Rows};
 use kern_manifest::types::{Arg, BufferKind, Dim, Fill, Manifest};
 use kern_manifest::{Protocol, Verified};
+use kern_pool::Lease;
 use kern_runtime::profile::{Anchor, Probe};
-use kern_runtime::{Capacity, Lease, Runtime};
+use kern_runtime::{Capacity, Runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -305,7 +306,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     }
     let json_bytes = std::fs::read(manifest)?;
     let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?;
-    let unit = kern_runtime::page_unit(&m) as usize;
+    let unit = kern_pool::page_unit(&m) as usize;
     let capacity = workload
         .scenarios
         .iter()

@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let json = std::fs::read_to_string(&manifest)?;
     let m = kern_manifest::Verified::from_json(&json)?;
-    let unit = kern_runtime::page_unit(&m) as usize;
+    let unit = kern_pool::page_unit(&m) as usize;
     let pages = tokens.div_ceil(unit);
     let capacity = ((pages + 1) * unit) as u64;
     let mut rt =

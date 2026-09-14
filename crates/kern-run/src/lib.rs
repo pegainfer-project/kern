@@ -22,7 +22,8 @@ use anyhow::{ensure, Context, Result};
 use kern_manifest::protocol::{Axis, Forward, Rows};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_runtime::{Lease, Runtime};
+use kern_pool::Lease;
+use kern_runtime::Runtime;
 
 /// What `kern --version` prints: the crate version, the commit it was built
 /// from, and the CUDA API the runtime binds; the three facts a bug report

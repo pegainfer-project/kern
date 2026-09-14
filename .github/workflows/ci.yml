@@ -51,7 +51,7 @@ jobs:
       - name: Test
         # The runtime's tests are host-side (Pool, Prefix, Host, values); the
         # GPU gate is `kern test`.
-        run: cargo test -p kern-manifest -p kern-runtime
+        run: cargo test -p kern-manifest -p kern-pool -p kern-runtime
 
       - name: Performance evidence regression tests
         run: python3 -m unittest discover -s tools -p test_profile.py

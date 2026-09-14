@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kern_manifest::types::Manifest;
-use kern_runtime::{Chain, Checkpoint, Denied, Host, Lease, Pool, Prefix, Tier};
+use kern_pool::{Chain, Checkpoint, Denied, Host, Lease, Pool, Prefix, Tier};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

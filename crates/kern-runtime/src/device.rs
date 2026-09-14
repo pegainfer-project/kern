@@ -574,7 +574,7 @@ impl Mapper {
 
     /// Unmap, map, grant access — in that order, so a chunk a plan moves
     /// is off its old position before it is on its new one.
-    pub(crate) fn run(&mut self, plan: &crate::chunks::Remap) -> Result<()> {
+    pub(crate) fn run(&mut self, plan: &kern_pool::Remap) -> Result<()> {
         for &(a, p) in &plan.unmap {
             self.arenas[a].unmap(p)?;
         }

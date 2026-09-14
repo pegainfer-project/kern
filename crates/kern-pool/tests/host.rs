@@ -6,7 +6,7 @@ mod common;
 
 use std::sync::Arc;
 
-use kern_runtime::{Denied, Host, Park, Parked};
+use kern_pool::{Denied, Host, Park, Parked};
 
 use common::Rand;
 

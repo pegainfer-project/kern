@@ -32,7 +32,7 @@ pub enum Error {
     /// The runtime has no slots for a lease: never (longer than a
     /// page-table row, more pages than the pool) or not now (busy).
     #[error("lease denied: {0}")]
-    Denied(#[from] crate::pages::Denied),
+    Denied(#[from] kern_pool::Denied),
 
     /// An input write violates the buffer's declared domain (out-of-range
     /// element, non-monotone sequence). Caller-side bug — the values were
@@ -80,5 +80,14 @@ pub(crate) fn cuda_check(r: sys::CUresult, what: &str) -> Result<()> {
         Ok(())
     } else {
         bail!(Cuda, "{what}: {r:?}")
+    }
+}
+
+impl From<kern_pool::Error> for Error {
+    fn from(e: kern_pool::Error) -> Error {
+        match e {
+            kern_pool::Error::Manifest(s) => Error::Manifest(s),
+            kern_pool::Error::Api(s) => Error::Api(s),
+        }
     }
 }

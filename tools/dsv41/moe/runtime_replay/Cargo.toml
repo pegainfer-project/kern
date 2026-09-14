@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 kern-manifest.workspace = true
+kern-pool.workspace = true
 kern-runtime.workspace = true
 kern-run.workspace = true
 
