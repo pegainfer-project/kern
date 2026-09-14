@@ -190,9 +190,12 @@ attention 的命中被截到 mamba 块边界）。快照放哪由调用方定—
 NUMA 节点上）。租约 `Busy` 时最久未命中的 resident checkpoint 不再直接丢，而是 park
 到这块 host 内存（`Runtime::park`，页和 slot 都拷；host 放不下就先丢最冷的 parked），
 runtime 攥着它直到拷贝落地才还页；命中 parked checkpoint 的 prompt 走 `Runtime::wake`：
-租新页、把前缀拷回来，请求在 `waking` 队列里等 `Runtime::awake` 交出 `Lease`，其间
-decode 步照常走——compute stream 从不等 transfer stream。stats 行多了
-`parked / host_gib / parks / host_evictions / wakes / wake_tokens`。
+取新页、把前缀拷回来，请求在 `waking` 队列里等 `Runtime::awake` 交出 resident 的
+`Checkpoint`，它按醒来的 token 插回索引、请求回到队首按普通命中 `lease_from`（2026-09-14
+起，`pool.md`），其间 decode 步照常走——compute stream 从不等 transfer stream。stats 行多了
+`parked / host_gib / parks / host_evictions / wakes / wake_tokens`，以及按 tier 分的命中
+`resident_hits / resident_hit_tokens / host_hits / host_hit_tokens`（host 层有没有被打到
+一眼可见）。
 
 门禁（tray08 GB300 单卡，qwen3-4b，`--capacity 32768 --host-gib 32`，greedy 64 token，
 prompt 8189 token）：第一次请求 cold prefill；14 个不同的 12–13k 长 filler 把它挤到 host

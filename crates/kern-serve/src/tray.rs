@@ -150,6 +150,12 @@ pub type Snapshot = Group<Checkpoint>;
 pub type Sleeping = Group<Parked>;
 pub type Rising = Group<Waking>;
 
+impl<X: Clone> Clone for Group<X> {
+    fn clone(&self) -> Group<X> {
+        Group { owner: self.owner, me: self.me, parts: self.parts.clone() }
+    }
+}
+
 impl<X> Group<X> {
     pub fn owner(&self) -> Rank {
         self.owner
@@ -691,16 +697,16 @@ impl Tray {
         self.each(rooms, |rt, _, r| rt.park(r.unwrap_or_else(|_| unreachable!("every member found room")))).map(Ok)
     }
 
-    /// Wake the first `len` tokens of `sleeping` into a row with room for
-    /// `tokens`, on every member; the copies are in flight until
+    /// Wake the first `len` tokens of `sleeping` back into a resident
+    /// snapshot, on every member; the copies are in flight until
     /// [`Tray::awake`] says otherwise.
-    pub fn wake(&mut self, sleeping: &Sleeping, len: usize, tokens: usize) -> Result<Rising, Error> {
-        self.each(sleeping.by_ref(), |rt, m, p| rt.wake(p, if m == sleeping.me { len } else { p.tokens() }, tokens))
+    pub fn wake(&mut self, sleeping: &Sleeping, len: usize) -> Result<Rising, Error> {
+        self.each(sleeping.by_ref(), |rt, m, p| rt.wake(p, if m == sleeping.me { len } else { p.tokens() }))
     }
 
-    /// The row of a wake whose copies have all landed; `Err(r)` while any
-    /// is still in flight. Does not block.
-    pub fn awake(&mut self, r: Rising) -> Result<std::result::Result<Row, Rising>, Error> {
+    /// The snapshot of a wake whose copies have all landed; `Err(r)`
+    /// while any is still in flight. Does not block.
+    pub fn awake(&mut self, r: Rising) -> Result<std::result::Result<Snapshot, Rising>, Error> {
         for (m, q) in self.groups.members(r.owner.0).enumerate() {
             if !self.ranks[q].landed(&r.parts[m])? {
                 return Ok(Err(r));

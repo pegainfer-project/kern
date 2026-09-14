@@ -3,6 +3,16 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-14，半页 checkpoint 之后 host 层复用过期副本（kern-pool 重写）
+
+**共享的页谁都不能再写。** `Pool::checkpoint` 在页中间留快照时把那半页原样挂进链，
+lease 接着往同一页写；host 层按页节点去重，第二次 park 认出"已经有一份"就跳过，那份
+是过期的字节（review P1）。追下去这不是一处笔误：接口没把"链上的页是冻结的"放进类型
+里，`Checkpoint::nodes()` 交出的 `(id, page)` 让别处按 id 相等去推内容相等。规则：**一个
+`Node` 存在的那一刻它的页就不再被写**——整页共享、半页拷给新持有者、写者只有 lease
+（`pool.md`）；字节级 property test 在 `tests/pool.rs`，随机序列对着"位置 → 戳"的模型，
+它直接复现 P1。跨模块认"同一份字节"用节点自己持有的 `Arc` / `Weak`，不用 id 表。
+
 ## 2026-09-11，DSv4.1 tray 偶发 NVLink barrier 超时（host 表被 NUMA balancing 搬走）
 
 **注册过的主机内存在 GB300 上不是 pinned 的，NUMA balancing 会在 GPU 读的时候搬它。**

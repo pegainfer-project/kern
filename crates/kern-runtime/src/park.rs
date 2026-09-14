@@ -1,6 +1,6 @@
 //! The host tier shell: checkpoints parked in pinned DRAM and woken
-//! back into leases. [`kern_pool::Host`] decides where a checkpoint's
-//! bytes go; this is the runtime running the copies.
+//! back into resident checkpoints. [`kern_pool::Host`] decides where a
+//! checkpoint's bytes go; this is the runtime running the copies.
 //!
 //! Two streams: every program and every pool copy runs on the compute
 //! stream in order; the host tier's copies ([`Runtime::park`] out,
@@ -8,7 +8,7 @@
 //! never waits for them. The transfer stream starts each batch of copies
 //! after everything the compute stream has enqueued; a parked checkpoint
 //! stays held (its pages and slot out of the pool) until its copy has
-//! landed, and a woken lease is a [`Waking`] until [`Runtime::awake`]
+//! landed, and a woken checkpoint is a [`Waking`] until [`Runtime::awake`]
 //! finds its copy landed, so no program can read pages still in flight.
 //! Parking is two steps, [`Runtime::room`] then [`Runtime::park`], so a
 //! caller parking several checkpoints as one unit can find room for all
@@ -21,7 +21,7 @@ use cudarc::driver::sys;
 use crate::device::{copy_2d, landed, record, wait_then_destroy, Pinned};
 use crate::error::bail;
 use crate::{Error, Result, Runtime};
-use kern_pool::{runs, Checkpoint, Denied, Host, Kind, Lease, Park, Parked};
+use kern_pool::{runs, Checkpoint, Copies, Denied, Host, Kind, Parked};
 
 /// The host tier's block is handed out in these units.
 const HOST_GRAIN: u64 = 1 << 16;
@@ -32,7 +32,7 @@ const HOST_GRAIN: u64 = 1 << 16;
 pub struct Room {
     cp: Checkpoint,
     parked: Parked,
-    plan: Park,
+    plan: Copies<i32, u64>,
 }
 
 impl Room {
@@ -42,12 +42,12 @@ impl Room {
     }
 }
 
-/// A lease being woken: its pages are taken, their bytes still on the way
-/// in. [`Runtime::awake`] turns it into the lease once they have landed;
-/// dropping it earlier waits for them first, so the pages never return to
-/// the pool with a copy still writing them.
+/// A checkpoint being woken: its pages are taken, their bytes still on
+/// the way in. [`Runtime::awake`] turns it into the checkpoint once they
+/// have landed; dropping it earlier waits for them first, so the pages
+/// never return to the pool with a copy still writing them.
 pub struct Waking {
-    lease: Option<Lease>,
+    cp: Option<Checkpoint>,
     event: sys::CUevent,
 }
 
@@ -57,9 +57,9 @@ pub struct Waking {
 unsafe impl Send for Waking {}
 
 impl Waking {
-    /// Positions the lease will hold filled.
-    pub fn prefix(&self) -> usize {
-        self.lease.as_ref().map_or(0, Lease::prefix)
+    /// Tokens the checkpoint will hold.
+    pub fn tokens(&self) -> usize {
+        self.cp.as_ref().map_or(0, Checkpoint::tokens)
     }
 }
 
@@ -83,7 +83,8 @@ impl Runtime {
             bail!(Api, "the host tier is reserved already");
         }
         let pinned = Pinned::alloc(bytes, self.gpu as i32)?;
-        self.host = Some((Arc::new(Host::new(bytes, HOST_GRAIN)), pinned));
+        let (page_bytes, slot_bytes, _) = self.host_layout();
+        self.host = Some((Arc::new(Host::new(bytes, HOST_GRAIN, page_bytes, slot_bytes)), pinned));
         Ok(())
     }
 
@@ -127,8 +128,7 @@ impl Runtime {
         let Some((host, _)) = &self.host else {
             bail!(Api, "no host tier: reserve_host first");
         };
-        let (page_bytes, slot_bytes, _) = self.host_layout();
-        match host.park(&cp.nodes(), page_bytes, cp.seq_slot().map(|s| (s, slot_bytes)), cp.tokens()) {
+        match host.park(&cp) {
             Ok((parked, plan)) => Ok(Ok(Room { cp, parked, plan })),
             Err(Denied::HostFull) => Ok(Err(cp)),
             Err(d) => Err(Error::Denied(d)),
@@ -146,32 +146,30 @@ impl Runtime {
         Ok(parked)
     }
 
-    /// A sequence continuing from the first `len` tokens of a parked
-    /// checkpoint with room for `tokens`: fresh pages with those tokens'
-    /// pages copied back in, a fresh slot with its state when `len` is the
-    /// whole checkpoint (a parked state is usable at its length only). A
-    /// slot-only checkpoint wakes to a slot-only lease. The copies run on
-    /// the transfer stream; [`Runtime::awake`] hands out the lease once
-    /// they have landed.
-    pub fn wake(&mut self, p: &Parked, len: usize, tokens: usize) -> Result<Waking> {
+    /// The first `len` tokens of a parked checkpoint back on the device:
+    /// fresh pages with those tokens' pages copied back in, a fresh slot
+    /// with its state when `len` is the whole checkpoint (a parked state
+    /// is usable at its length only). A slot-only checkpoint wakes to a
+    /// slot-only one. The copies run on the transfer stream;
+    /// [`Runtime::awake`] hands out the checkpoint once they have landed,
+    /// resident and twinned with its host copy, so it parks again for free.
+    pub fn wake(&mut self, p: &Parked, len: usize) -> Result<Waking> {
         self.ctx.bind_to_thread()?;
         self.poll()?;
-        if self.host.is_none() {
+        let Some((host, _)) = &self.host else {
             bail!(Api, "no host tier: reserve_host first");
-        }
+        };
         let unit = self.pool.unit() as usize;
         if len == 0 || len > p.tokens() || (len != p.tokens() && (p.has_slot() || !len.is_multiple_of(unit))) {
             bail!(Api, "waking {len} tokens of a parked checkpoint of {} ({p:?})", p.tokens());
         }
-        let lease = match if p.paged() { self.pool.wake(len, tokens) } else { self.pool.wake_slot(len) } {
-            Ok(l) => l,
+        let (cp, plan) = match Arc::clone(host).wake(p, &self.pool, len) {
+            Ok(x) => x,
             Err(d) => return self.denied(d),
         };
-        let n = if p.paged() { len.div_ceil(unit) } else { 0 };
-        let pairs: Vec<(i32, u64)> = lease.page_ids()[..n].iter().copied().zip(p.pages(n)).collect();
-        let slot = if len == p.tokens() { lease.seq_slot().zip(p.slot()) } else { None };
-        self.transfer(&pairs, slot, false)?;
-        Ok(Waking { lease: Some(lease), event: record(&self.xfer)? })
+        let pairs: Vec<(i32, u64)> = plan.pages.iter().map(|&(o, page)| (page, o)).collect();
+        self.transfer(&pairs, plan.slot.map(|(o, s)| (s, o)), false)?;
+        Ok(Waking { cp: Some(cp), event: record(&self.xfer)? })
     }
 
     /// Whether a wake's copies have landed. Does not block.
@@ -180,16 +178,16 @@ impl Runtime {
         landed(w.event)
     }
 
-    /// The lease of a wake whose copies have landed; `Err(w)` while they
-    /// are still in flight. Does not block.
-    pub fn awake(&self, mut w: Waking) -> Result<std::result::Result<Lease, Waking>> {
+    /// The checkpoint of a wake whose copies have landed; `Err(w)` while
+    /// they are still in flight. Does not block.
+    pub fn awake(&self, mut w: Waking) -> Result<std::result::Result<Checkpoint, Waking>> {
         self.ctx.bind_to_thread()?;
         if !landed(w.event)? {
             return Ok(Err(w));
         }
         unsafe { sys::cuEventDestroy_v2(w.event) };
         w.event = std::ptr::null_mut();
-        Ok(Ok(w.lease.take().expect("a waking lease")))
+        Ok(Ok(w.cp.take().expect("a waking checkpoint")))
     }
 
     /// (device page, host offset) pages and a (device slot, host offset)

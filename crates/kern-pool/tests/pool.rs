@@ -6,14 +6,11 @@ mod common;
 use std::sync::Arc;
 
 use kern_manifest::types::{Dim, Manifest};
+use std::collections::{BTreeMap, BTreeSet};
+
 use kern_pool::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool};
 
-use common::{hybrid, hybrid_pool, land, pool, pool_of, two_paged};
-
-/// The pages a checkpoint holds, root first.
-fn pages_of(cp: &Checkpoint) -> Vec<i32> {
-    cp.nodes().into_iter().map(|(_, page)| page).collect()
-}
+use common::{hybrid, hybrid_pool, hybrid_pool4, land, paged4, pool, pool_of, two_paged, Rand};
 
 #[test]
 fn a_new_pool_maps_every_chunk_in_its_first_plan() {
@@ -253,7 +250,7 @@ fn checkpoint_shares_pages_and_outlives_the_lease() {
     let mut a = p.lease(40).unwrap(); // 3 pages
     let (cp, copies) = p.checkpoint(&mut a, 32).unwrap(); // the first 2
     assert_eq!((cp.tokens(), cp.pages(), cp.seq_slot(), copies), (32, 2, None, Copies::default()));
-    assert_eq!((pages_of(&cp), a.pages(), p.used()), (a.page_ids()[..2].to_vec(), 3, 3));
+    assert_eq!((cp.page_ids(), a.pages(), p.used()), (a.page_ids()[..2].to_vec(), 3, 3));
     drop(a);
     // The checkpoint keeps its 2 pages; the lease's third came back.
     assert_eq!(p.used(), 2);
@@ -273,16 +270,17 @@ fn checkpoints_along_one_lease_share_one_chain() {
     let c1 = p.checkpoint(&mut a, 16).unwrap().0;
     let c2 = p.checkpoint(&mut a, 32).unwrap().0;
     let c3 = p.checkpoint(&mut a, 48).unwrap().0;
-    // A shallower checkpoint taken after a deeper one finds its node up the chain.
-    let c2b = p.checkpoint(&mut a, 20).unwrap().0;
-    let (n1, n2, n2b) = (c1.nodes(), c2.nodes(), c2b.nodes());
-    assert_eq!((n2b[1], n2[0]), (n2[1], n1[0]));
-    assert_eq!(p.used(), 3);
+    // A shallower checkpoint taken after a deeper one shares the whole
+    // pages up the chain and copies the page it ends inside.
+    let (c2b, copies) = p.checkpoint(&mut a, 20).unwrap();
+    assert_eq!((&c2b.page_ids()[..1], c2b.pages(), copies.pages.len()), (&c1.page_ids()[..], 2, 1));
+    assert_ne!(c2b.page_ids()[1], c2.page_ids()[1]);
+    assert_eq!(p.used(), 4);
     drop(a);
     drop(c3);
-    assert_eq!(p.used(), 2);
+    assert_eq!(p.used(), 3);
     drop(c2);
-    assert_eq!(p.used(), 2); // c2b still holds page 2's node
+    assert_eq!(p.used(), 2); // c2b holds page 1's node and its own copy of page 2
     drop(c2b);
     assert_eq!(p.used(), 1);
     drop(c1);
@@ -294,21 +292,25 @@ fn restore_shares_whole_pages_and_copies_the_partial_one() {
     let p = pool();
     let mut a = p.lease(40).unwrap();
     let [a0, a1, _] = a.page_ids()[..] else { panic!() };
-    // 20 tokens: page a0 whole, a1 holds positions 16..20.
-    let (cp, _) = p.checkpoint(&mut a, 20).unwrap();
+    // 20 tokens: page a0 whole, a1 holds positions 16..20, copied into a
+    // page of the checkpoint's own so the lease can go on writing a1.
+    let (cp, copies) = p.checkpoint(&mut a, 20).unwrap();
+    let [c0, c1] = cp.page_ids()[..] else { panic!() };
+    assert_eq!((c0, copies), (a0, Copies { pages: vec![(a1, c1)], slot: None }));
+    assert_ne!(c1, a1);
     drop(a);
     let (b, copies) = p.restore(&cp, cp.tokens(), 40).unwrap();
     let [b0, b1, b2] = b.page_ids()[..] else { panic!() };
-    // Shares a0, gets a fresh copy of a1 (a1 itself stays the checkpoint's), one more fresh page.
+    // Shares a0, gets a fresh copy of c1 (c1 itself stays the checkpoint's), one more fresh page.
     assert_eq!((b0, b.prefix(), b.tokens()), (a0, 20, 48));
-    assert_ne!(b1, a1);
-    assert_eq!(copies, Copies { pages: vec![(a1, b1)], slot: None });
+    assert_ne!(b1, c1);
+    assert_eq!(copies, Copies { pages: vec![(c1, b1)], slot: None });
     assert_eq!(p.used(), 4);
     // Positions from 20 on are the lease's to write, into its own copy.
     assert_eq!(b.slot(20), b1 as i64 * 16 + 4);
     assert_eq!(b.slots(31..33), [b1 as i64 * 16 + 15, b2 as i64 * 16]);
     drop(cp);
-    // a1 is only the checkpoint's: freed with it; a0 is still b's.
+    // c1 is only the checkpoint's: freed with it; a0 is still b's.
     assert_eq!(p.used(), 3);
     drop(b);
     assert_eq!(p.used(), 0);
@@ -317,13 +319,13 @@ fn restore_shares_whole_pages_and_copies_the_partial_one() {
     let (cp, _) = p.checkpoint(&mut a, 32).unwrap();
     drop(a);
     let (b, copies) = p.restore(&cp, cp.tokens(), 33).unwrap();
-    assert_eq!((b.prefix(), &b.page_ids()[..2], b.pages(), copies), (32, &pages_of(&cp)[..], 3, Copies::default()));
+    assert_eq!((b.prefix(), &b.page_ids()[..2], b.pages(), copies), (32, &cp.page_ids()[..], 3, Copies::default()));
     assert_eq!(p.used(), 3);
     drop((b, cp));
     // Restoring shallower than the checkpoint shares its whole pages up to there.
     let mut a = p.lease(40).unwrap();
     let [a0, a1, _] = a.page_ids()[..] else { panic!() };
-    let (cp, _) = p.checkpoint(&mut a, 36).unwrap(); // 3 pages, 4 tokens into the third
+    let (cp, _) = p.checkpoint(&mut a, 36).unwrap(); // 3 pages, the third a copy
     drop(a);
     // 32 tokens: a0 and a1 shared, one fresh page.
     let (c, copies) = p.restore(&cp, 32, 33).unwrap();
@@ -350,6 +352,7 @@ fn restored_lease_refuses_its_prefix() {
     let p = pool();
     let mut a = p.lease(32).unwrap();
     let (cp, _) = p.checkpoint(&mut a, 20).unwrap();
+    drop(a);
     let (b, _) = p.restore(&cp, cp.tokens(), 40).unwrap();
     b.slot(19);
 }
@@ -383,25 +386,15 @@ fn fork_shares_whole_pages_and_copies_the_partial_one_and_the_slot() {
 }
 
 #[test]
-fn wake_is_a_fresh_lease_with_a_prefix() {
-    let p = pool();
-    let l = p.wake(20, 40).unwrap();
-    assert_eq!((l.pages(), l.page_ids().len(), l.prefix(), p.used()), (3, 3, 20, 3));
-    assert_eq!(l.slot(20), l.page_ids()[1] as i64 * 16 + 4);
-    drop(l);
-    assert_eq!(p.used(), 0);
-}
-
-#[test]
 fn hybrid_checkpoint_copies_the_slot_and_retire_moves_it() {
-    // 26 chunks: 4 slots and 7 pages.
-    let p = pool_of(&hybrid(), 8, 26, 4);
+    // 28 chunks: 4 slots and 8 pages.
+    let p = pool_of(&hybrid(), 8, 28, 4);
     let mut a = p.lease(16).unwrap();
-    let sa = a.seq_slot().unwrap();
+    let (a0, sa) = (a.page_ids()[0], a.seq_slot().unwrap());
     let (cp, copies) = p.checkpoint(&mut a, 10).unwrap();
-    let sc = cp.seq_slot().unwrap();
-    assert_ne!(sc, sa);
-    assert_eq!((copies, p.slots_used()), (Copies { pages: vec![], slot: Some((sa, sc)) }, 2));
+    let (c0, sc) = (cp.page_ids()[0], cp.seq_slot().unwrap());
+    assert_ne!((c0, sc), (a0, sa));
+    assert_eq!((copies, p.used(), p.slots_used()), (Copies { pages: vec![(a0, c0)], slot: Some((sa, sc)) }, 2, 2));
     // A slot each for a and cp: one left; a restore takes it and copies the state in.
     let (b, copies) = p.restore(&cp, cp.tokens(), 17).unwrap();
     let sb = b.seq_slot().unwrap();
@@ -411,12 +404,13 @@ fn hybrid_checkpoint_copies_the_slot_and_retire_moves_it() {
     assert_eq!(p.restore(&cp, cp.tokens(), 17).unwrap_err(), Denied::Remapping);
     land(&p);
     let (c, copies) = p.restore(&cp, cp.tokens(), 17).unwrap();
-    assert_eq!((copies.slot, p.slots(), p.slots_used(), p.total()), (Some((sc, 4)), 5, 4, 5));
+    assert_eq!((copies.slot, p.slots(), p.slots_used(), p.total()), (Some((sc, 4)), 5, 4, 6));
     drop((b, c));
-    // Retiring a moves its slot to the checkpoint: no copy; its one page is the same one cp shares.
+    // Retiring a moves its slot and its page to the checkpoint: no copy.
     let a2 = p.retire(a, 10);
-    assert_eq!((a2.seq_slot(), a2.pages(), p.slots_used(), p.used()), (Some(sa), 1, 2, 1));
+    assert_eq!((a2.seq_slot(), a2.page_ids(), p.slots_used(), p.used()), (Some(sa), vec![a0], 2, 2));
     drop(cp);
+    assert_eq!((p.slots_used(), p.used()), (1, 1));
     drop(a2);
     assert_eq!((p.slots_used(), p.used()), (0, 0));
 }
@@ -429,7 +423,7 @@ fn slot_only_leases_move_the_slot_alone() {
     assert_eq!((p.used(), p.slots_used()), (0, 1));
     // A checkpoint copies the slot and holds no page, at any length.
     let (cp, c) = p.checkpoint(&mut l, 5).unwrap();
-    assert_eq!((cp.tokens(), cp.pages(), cp.paged(), cp.nodes().len()), (5, 0, false, 0));
+    assert_eq!((cp.tokens(), cp.pages(), cp.paged(), cp.page_ids().len()), (5, 0, false, 0));
     assert_eq!((c.pages.len(), c.slot.map(|(a, _)| a)), (0, l.seq_slot()));
     // Restoring is at its own length and gives a slot-only lease with that prefix.
     let (r, c) = p.restore(&cp, 5, 100).unwrap();
@@ -447,9 +441,6 @@ fn slot_only_leases_move_the_slot_alone() {
     assert_eq!((cp.tokens(), cp.pages(), cp.seq_slot()), (7, 0, slot));
     drop(cp);
     assert_eq!((p.used(), p.slots_used()), (0, 0));
-    // A woken slot-only lease: a slot and the prefix, no page.
-    let w = p.wake_slot(11).unwrap();
-    assert_eq!((w.pages(), w.prefix(), w.seq_slot().is_some()), (0, 11, true));
 }
 
 #[test]
@@ -472,4 +463,221 @@ fn a_long_chain_drops_without_recursion() {
     assert_eq!(p.used(), 200_000);
     drop(cp);
     assert_eq!(p.used(), 0);
+}
+
+/// The positions and slots of a device, each holding the stamp last
+/// written there.
+#[derive(Default)]
+struct Device {
+    positions: BTreeMap<i64, u32>,
+    slots: BTreeMap<i32, u32>,
+}
+
+impl Device {
+    fn copy(&mut self, unit: usize, c: &Copies) {
+        for &(s, d) in &c.pages {
+            for k in 0..unit as i64 {
+                match self.positions.get(&(s as i64 * unit as i64 + k)).copied() {
+                    Some(v) => self.positions.insert(d as i64 * unit as i64 + k, v),
+                    None => self.positions.remove(&(d as i64 * unit as i64 + k)),
+                };
+            }
+        }
+        if let Some((s, d)) = c.slot {
+            match self.slots.get(&s).copied() {
+                Some(v) => self.slots.insert(d, v),
+                None => self.slots.remove(&d),
+            };
+        }
+    }
+
+    fn at(&self, pages: &[i32], unit: usize, pos: usize) -> Option<u32> {
+        self.positions.get(&(pages[pos / unit] as i64 * unit as i64 + (pos % unit) as i64)).copied()
+    }
+}
+
+fn state_of(content: &[u32]) -> u32 {
+    content.iter().fold(7, |s, &v| s.wrapping_mul(31).wrapping_add(v))
+}
+
+struct Seq {
+    lease: Lease,
+    content: Vec<u32>,
+}
+
+struct Held {
+    cp: Checkpoint,
+    content: Vec<u32>,
+}
+
+/// Write positions `content.len()..upto` of `s`, then its state.
+fn fill(dev: &mut Device, s: &mut Seq, upto: usize, stamp: &mut u32) {
+    for pos in s.content.len()..upto {
+        *stamp += 1;
+        dev.positions.insert(s.lease.slot(pos), *stamp);
+        s.content.push(*stamp);
+    }
+    if let Some(slot) = s.lease.seq_slot() {
+        dev.slots.insert(slot, state_of(&s.content));
+    }
+}
+
+/// Every position and slot a live handle names reads what its writer
+/// put there, and the pool holds exactly what the handles name.
+fn check(dev: &Device, p: &Pool, seqs: &[Seq], cps: &[Held]) {
+    let unit = p.unit() as usize;
+    let (mut pages, mut slots) = (BTreeSet::new(), BTreeSet::new());
+    for s in seqs {
+        let ids = s.lease.page_ids();
+        for (pos, &v) in s.content.iter().enumerate() {
+            assert_eq!(dev.at(ids, unit, pos), Some(v), "lease position {pos}");
+        }
+        if let Some(slot) = s.lease.seq_slot() {
+            assert_eq!(dev.slots.get(&slot), Some(&state_of(&s.content)));
+            slots.insert(slot);
+        }
+        pages.extend(ids.iter().copied());
+    }
+    for c in cps {
+        let ids = c.cp.page_ids();
+        for (pos, &v) in c.content.iter().enumerate() {
+            assert_eq!(dev.at(&ids, unit, pos), Some(v), "checkpoint position {pos}");
+        }
+        if let Some(slot) = c.cp.seq_slot() {
+            assert_eq!(dev.slots.get(&slot), Some(&state_of(&c.content)));
+            slots.insert(slot);
+        }
+        pages.extend(ids);
+    }
+    assert_eq!((p.used(), p.slots_used()), (pages.len(), slots.len()));
+}
+
+/// Random leases, fills, checkpoints, restores, forks, retirements and
+/// drops, every position written by its lease and read back through
+/// every handle that names it: a page is written by the lease it
+/// belongs to and nobody else, so what a checkpoint held stays what
+/// it held however far its sequence runs on. (A half-page checkpoint
+/// that shared the page its lease kept writing was the bug behind
+/// this rewrite.) With a recurrent state a checkpoint is the sequence
+/// as of now and restores at its own length only.
+fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
+    let unit = p.unit() as usize;
+    let max = p.max_seq_tokens();
+    let stateful = p.has_slots();
+    let mut dev = Device::default();
+    let mut seqs: Vec<Seq> = Vec::new();
+    let mut cps: Vec<Held> = Vec::new();
+    let mut rand = Rand::new(seed);
+    let mut stamp = 0;
+    // A checkpoint length: the whole sequence when a state pins it, else anywhere in it.
+    let cut = |rand: &mut Rand, filled: usize| if stateful { filled } else { 1 + rand.next(filled) };
+    for _ in 0..4000 {
+        match rand.next(9) {
+            0 | 1 => match p.lease(1 + rand.next(max)) {
+                Ok(lease) => {
+                    let mut s = Seq { lease, content: Vec::new() };
+                    let upto = rand.next(s.lease.tokens() + 1);
+                    fill(&mut dev, &mut s, upto, &mut stamp);
+                    seqs.push(s);
+                }
+                Err(Denied::Remapping) => land(&p),
+                Err(_) => {}
+            },
+            2 if !seqs.is_empty() => {
+                let i = rand.next(seqs.len());
+                let s = &mut seqs[i];
+                let upto = s.content.len() + rand.next(s.lease.tokens() - s.content.len() + 1);
+                fill(&mut dev, s, upto, &mut stamp);
+            }
+            3 if !seqs.is_empty() => {
+                let i = rand.next(seqs.len());
+                let s = &mut seqs[i];
+                if s.content.is_empty() {
+                    continue;
+                }
+                let len = cut(&mut rand, s.content.len());
+                match p.checkpoint(&mut s.lease, len) {
+                    Ok((cp, copies)) => {
+                        dev.copy(unit, &copies);
+                        cps.push(Held { cp, content: s.content[..len].to_vec() });
+                    }
+                    Err(Denied::Remapping) => land(&p),
+                    Err(_) => {}
+                }
+            }
+            4 if !cps.is_empty() => {
+                let c = &cps[rand.next(cps.len())];
+                let whole = (c.cp.tokens() - 1) / unit;
+                let len = if c.cp.has_slot() || whole == 0 || rand.next(2) == 0 {
+                    c.cp.tokens()
+                } else {
+                    (1 + rand.next(whole)) * unit
+                };
+                if len >= max {
+                    continue;
+                }
+                match p.restore(&c.cp, len, len + 1 + rand.next(max - len)) {
+                    Ok((lease, copies)) => {
+                        dev.copy(unit, &copies);
+                        let mut s = Seq { lease, content: c.content[..len].to_vec() };
+                        let upto = len + rand.next(s.lease.tokens() - len + 1);
+                        fill(&mut dev, &mut s, upto, &mut stamp);
+                        seqs.push(s);
+                    }
+                    Err(Denied::Remapping) => land(&p),
+                    Err(_) => {}
+                }
+            }
+            5 if !seqs.is_empty() => {
+                let i = rand.next(seqs.len());
+                let filled = seqs[i].content.len();
+                if filled == 0 || filled >= max {
+                    continue;
+                }
+                let len = cut(&mut rand, filled);
+                let tokens = len + 1 + rand.next(max - len);
+                match p.fork(&mut seqs[i].lease, len, tokens) {
+                    Ok((lease, copies)) => {
+                        dev.copy(unit, &copies);
+                        let mut s = Seq { lease, content: seqs[i].content[..len].to_vec() };
+                        let upto = len + rand.next(s.lease.tokens() - len + 1);
+                        fill(&mut dev, &mut s, upto, &mut stamp);
+                        seqs.push(s);
+                    }
+                    Err(Denied::Remapping) => land(&p),
+                    Err(_) => {}
+                }
+            }
+            6 if !seqs.is_empty() => {
+                let s = seqs.swap_remove(rand.next(seqs.len()));
+                if s.content.is_empty() {
+                    continue;
+                }
+                let len = cut(&mut rand, s.content.len());
+                let content = s.content[..len].to_vec();
+                cps.push(Held { cp: p.retire(s.lease, len), content });
+            }
+            7 if !seqs.is_empty() => {
+                seqs.swap_remove(rand.next(seqs.len()));
+            }
+            8 if !cps.is_empty() => {
+                cps.swap_remove(rand.next(cps.len()));
+            }
+            _ => {}
+        }
+        check(&dev, &p, &seqs, &cps);
+    }
+    drop((seqs, cps));
+    assert_eq!((p.used(), p.slots_used()), (0, 0));
+}
+
+#[test]
+fn paged_handles_read_what_their_writer_wrote() {
+    // 24 pages of 4 tokens, rows of 8.
+    handles_read_what_their_writer_wrote(pool_of(&paged4(), 4, 24, 0), 0x9E37_79B9_7F4A_7C15);
+}
+
+#[test]
+fn stateful_handles_read_what_their_writer_wrote() {
+    handles_read_what_their_writer_wrote(hybrid_pool4(), 0x2545_F491_4F6C_DD1D);
 }

@@ -7,9 +7,9 @@
 //! Leases `tokens`, fills its pages and its slot with a pattern keyed by
 //! position, checkpoints it, parks the checkpoint (timed to the transfer
 //! stream's completion), zeroes the states once its pages are back in the
-//! pool, wakes it into a fresh lease (timed to the lease being handed
-//! out) and checks the pattern at the new pages. No weights are loaded:
-//! the states are all this touches.
+//! pool, wakes it (timed to the checkpoint being handed out), leases a
+//! sequence from it and checks the pattern at the new pages. No weights
+//! are loaded: the states are all this touches.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -106,22 +106,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A prompt hitting part of a parked checkpoint wakes that part alone.
     let wake_at = wake_at.unwrap_or(tokens);
     let wake_pages = wake_at.div_ceil(unit);
-    let mut waking = rt.wake(&parked, wake_at, tokens + 1)?;
+    let mut waking = rt.wake(&parked, wake_at)?;
     let issued = t.elapsed();
     let woken = loop {
         match rt.awake(waking)? {
-            Ok(l) => break l,
+            Ok(cp) => break cp,
             Err(w) => waking = w,
         }
     };
     let wake = t.elapsed();
+    let row = rt.lease_from(&woken, wake_at, tokens + 1)?;
     println!(
         "wake: {:.1} ms ({:.0} GiB/s), {:.1} ms to issue; prefix {}",
         wake.as_secs_f64() * 1e3,
         gib / wake.as_secs_f64(),
         issued.as_secs_f64() * 1e3,
-        woken.prefix()
+        row.prefix()
     );
+    drop(row);
 
     let mut bad = 0usize;
     for (si, (name, page_bytes, slot_bytes)) in states.iter().enumerate() {
