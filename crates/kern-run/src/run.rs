@@ -49,6 +49,11 @@ pub struct RunOpts {
     #[arg(long)]
     prompt: Option<String>,
 
+    /// The prompt as token ids, bypassing the tokenizer (a served request's
+    /// ids, replayed as they were)
+    #[arg(long, value_delimiter = ',', conflicts_with = "prompt")]
+    prompt_ids: Vec<i64>,
+
     /// Max new tokens to generate
     #[arg(long)]
     steps: Option<usize>,
@@ -107,6 +112,7 @@ struct Opts {
     weights: Vec<PathBuf>,
     tokenizer: PathBuf,
     prompt: String,
+    prompt_ids: Vec<i64>,
     steps: usize,
     gpu: usize,
     capacity: Option<u64>,
@@ -156,6 +162,7 @@ impl RunOpts {
                 .prompt
                 .or_else(|| cfg.and_then(|c| c.run.prompt.clone()))
                 .unwrap_or_else(|| "The capital of France is".into()),
+            prompt_ids: self.prompt_ids,
             steps: self.steps.or_else(|| cfg.and_then(|c| c.run.steps)).unwrap_or(32),
             gpu: self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0),
             capacity: self.capacity.or_else(|| cfg.and_then(|c| c.capacity)),
@@ -293,13 +300,17 @@ fn execute(o: Opts) -> Result<()> {
 
     let tokenizer = tokenizers::Tokenizer::from_file(&o.tokenizer).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
     info!("tokenizer {} · stop tokens {:?}", o.tokenizer.display(), o.stop_tokens);
-    let prompt_ids: Vec<i64> = tokenizer
-        .encode(o.prompt.as_str(), false)
-        .map_err(|e| anyhow::anyhow!("encode: {e}"))?
-        .get_ids()
-        .iter()
-        .map(|&u| u as i64)
-        .collect();
+    let prompt_ids: Vec<i64> = if o.prompt_ids.is_empty() {
+        tokenizer
+            .encode(o.prompt.as_str(), false)
+            .map_err(|e| anyhow::anyhow!("encode: {e}"))?
+            .get_ids()
+            .iter()
+            .map(|&u| u as i64)
+            .collect()
+    } else {
+        o.prompt_ids.clone()
+    };
     ensure!(!prompt_ids.is_empty(), "empty prompt");
     info!("prompt: {} tokens {prompt_ids:?}", prompt_ids.len());
 
