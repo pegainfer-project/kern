@@ -46,7 +46,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
-use cudarc::driver::{sys, CudaContext, CudaStream, PinnedHostSlice};
+use cudarc::driver::{sys, CudaContext, CudaStream, HostSlice, PinnedHostSlice};
 use kern_manifest::types::{BufferKind, Manifest, Provision, State};
 use kern_manifest::Verified;
 
@@ -246,12 +246,12 @@ impl Runtime {
         self.check_domain(name, data, vars)?;
         let dst = self.buffers.get_mut(name).unwrap();
         let pinned = self.staging.get_mut(name).unwrap();
-        // Waits on the pinned slice's event: the previous step's DMA from
-        // this staging must finish before we overwrite it. A prefix write
-        // (variable-length inputs) still DMAs the whole buffer — the stale
-        // tail is never read, grids are bounded by the vars.
+        // The staging waits on its own event before the overwrite and the
+        // guard records it after the copy; only the bytes written go over,
+        // a page table sized for 256 sequences at 1M tokens is 8 MiB.
         pinned.as_mut_slice()?[..data.len()].copy_from_slice(data);
-        self.stream.memcpy_htod(pinned, dst)?;
+        let (src, _record) = unsafe { pinned.stream_synced_slice(&self.stream) };
+        unsafe { cudarc::driver::result::memcpy_htod_async(dst.ptr, &src[..data.len()], self.stream.cu_stream()) }?;
         Ok(())
     }
 
