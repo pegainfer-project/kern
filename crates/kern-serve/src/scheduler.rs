@@ -63,7 +63,9 @@
 //!   with a recurrent state checkpoints only where a request ends (the
 //!   finished sequence's state slots become the snapshot's, nothing is
 //!   copied), so only a prompt that continues an earlier request's whole
-//!   context hits. A `Busy` lease makes room and retries until it fits or
+//!   context hits; a speculative round that accepted past `max_tokens` or
+//!   the stop leaves a state no next turn continues, which is not kept.
+//!   A `Busy` lease makes room and retries until it fits or
 //!   nothing is left: the least recently hit snapshot is parked into the
 //!   host tier (`--host-gib`: pinned DRAM per rank, `Tray::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
@@ -229,6 +231,9 @@ struct Seq {
     /// prompt goes through decode; the outputs of those steps are dropped.
     pending: VecDeque<u32>,
     generated: usize,
+    /// Tokens the client got: `generated` less the stop token and whatever
+    /// a speculative round accepted past `max_tokens` or the stop.
+    emitted: usize,
     max_tokens: usize,
     ignore_eos: bool,
     /// Its KV pages and state slots across the tray; returned when the
@@ -273,6 +278,7 @@ impl Seq {
                 break;
             }
         }
+        self.emitted += out.len();
         if !out.is_empty() {
             ledger.push_tokens(self.id, &out, &[]);
         }
@@ -658,6 +664,7 @@ impl KernScheduler {
             next: q.request.prompt_tokens[n_pre.min(prompt - 1)],
             pending,
             generated: 0,
+            emitted: 0,
             max_tokens,
             ignore_eos: q.request.params.ignore_eos,
             row,
@@ -684,7 +691,7 @@ impl KernScheduler {
     /// until it fits), else is dropped. `false` when nothing is resident.
     fn make_room(&mut self) -> Result<bool> {
         let tray = &mut self.tray;
-        let park = (self.policy.host_bytes > 0).then(|| |snap| tray.park(snap));
+        let park = (self.policy.host_bytes > 0).then_some(|snap| tray.park(snap));
         match self.prefix.evict(park)? {
             Some(Evicted::Parked(key)) => {
                 debug!(tokens = key.len(), "parked");
@@ -718,9 +725,20 @@ impl KernScheduler {
 
     /// A sequence is done: with a recurrent state, its whole context
     /// becomes a snapshot (the slots move, nothing is copied); without
-    /// one, every whole page already is.
+    /// one, every whole page already is. A state holding tokens the client
+    /// never got (a speculative round accepted past `max_tokens` or the
+    /// stop) is a key no next turn can send: it returns to the pool.
     fn finish(&mut self, s: Seq) {
         if self.every_page || s.pos == 0 {
+            return;
+        }
+        // The last token is normally the next input, not in the state
+        // yet; the stop token itself may be in it, and stays: a chat's
+        // next turn ends the answer with it.
+        let visible = s.prompt_len + s.emitted;
+        let past = s.history.get(visible..).unwrap_or_default();
+        if s.pos > visible + 1 || past.iter().any(|&t| !self.policy.stop_tokens.contains(&(t as u32))) {
+            debug!(request = %s.id, tokens = s.pos, visible, "not kept");
             return;
         }
         let snap = self.tray.retire(s.row, s.pos);
