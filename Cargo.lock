@@ -2101,6 +2101,7 @@ dependencies = [
 name = "kern-manifest"
 version = "0.2.3"
 dependencies = [
+ "half",
  "schemars 1.2.2",
  "serde",
  "serde_json",

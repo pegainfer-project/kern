@@ -187,4 +187,4 @@ runtime，PERF 1.8 s。
   eager 执行）、`read_buffer_prefix` / `write_buffer` / `read_state`（任意
   kind）、`time_range`（区间内逐 call event 计时）、`time_captured`
   （graph 中位数）、`check_domain`。元素编解码在
-  `kern_runtime::values`（bf16/f16/f32/fp8e4m3/整数 ↔ f64，ulp 距离）。
+  `kern_manifest::values`（bf16/f16/f32/fp8e4m3/整数 ↔ f64，ulp 距离）。

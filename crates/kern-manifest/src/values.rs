@@ -2,8 +2,8 @@
 //! domain checks on input writes and by `kern test` (synthesis, comparison).
 //! Lossless for every integer dtype below 2^53 and for every float dtype.
 
+use crate::types::DType;
 use half::{bf16, f16};
-use kern_manifest::types::DType;
 
 /// Decode `bytes` (a whole number of elements) into f64.
 pub fn to_f64(dtype: DType, bytes: &[u8]) -> Vec<f64> {

@@ -18,6 +18,7 @@ pub use constants::json_schema;
 
 pub mod protocol;
 pub mod types;
+pub mod values;
 pub mod verify;
 
 pub use protocol::Protocol;

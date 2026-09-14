@@ -43,8 +43,9 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, BufferKind, Call, DType, Dim, Dir, Manifest, ParamType, Provision};
+use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
-use kern_runtime::{values, Capacity, Runtime};
+use kern_runtime::{Capacity, Runtime};
 use serde::Serialize;
 use serde_json::{json, Value};
 

@@ -39,7 +39,6 @@ mod park;
 mod peers;
 mod prefix;
 pub mod profile;
-pub mod values;
 mod weights;
 
 use std::collections::BTreeMap;
@@ -211,7 +210,7 @@ impl Runtime {
         let r = d
             .resolve(&self.manifest, vars, &self.provision)
             .map_err(|e| Error::Domain(format!("buffer `{name}`: {e}")))?;
-        let vals = values::to_f64(b.dtype, data);
+        let vals = kern_manifest::values::to_f64(b.dtype, data);
         let fmt_bound = |v: Option<f64>| v.map_or("∞".to_string(), |x| format!("{x}"));
         for (i, &v) in vals.iter().enumerate() {
             if !r.contains(v) {

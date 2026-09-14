@@ -2,7 +2,7 @@
 //! and ulp distance treats the two zeros as one value.
 
 use kern_manifest::types::DType;
-use kern_runtime::values::{from_f64, to_f64, ulp_distance};
+use kern_manifest::values::{from_f64, to_f64, ulp_distance};
 
 #[test]
 fn floats_roundtrip_within_their_precision() {
