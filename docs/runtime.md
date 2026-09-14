@@ -196,6 +196,11 @@ buffer 反过来，host 字节 CPU memcpy、设备字节 DtoH。runtime 内的�
 `Safetensors`（mmap 的 shard，只读 header，同名张量出现在两份 shard 里就拒绝）；
 权重缓存、对象存储是 caller 侧的实现，下载进 host 内存后走 `Safetensors` 或自己
 实现 `Tensors`。
+连续的设备侧拷贝走 `cuMemcpyAsync`，按 8 条 stream 轮流发：`cuMemcpy2DAsync` 在
+fabric 映射的源上每次约 90 µs 固定开销，DSV4.1 每 rank 24923 次 78.8 GiB 单 stream
+2.3 s、8 条 2D 1.2–2.2 s、8 条 1D 0.5–0.7 s（111–148 GiB/s）；先发完设备拷贝再填
+host placement 的 buffer（第一个到的 rank 填，其余等），engram 一张 94 GiB 表 DtoH
+约 1 s，整段 2.2 s（tray18，2026-09-14）。
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、

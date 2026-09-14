@@ -21,7 +21,7 @@ use kern_manifest::Verified;
 
 use crate::cublas::Blas;
 use crate::device::{
-    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, DeviceBuf, Mapper, Physical, Space,
+    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_1d, copy_2d, Arena, DeviceBuf, Mapper, Physical, Space,
 };
 use crate::error::bail;
 use crate::lease::Remaps;
@@ -267,6 +267,10 @@ impl Runtime {
             bail!(Api, "host weights are an immutable snapshot; use a new runtime and scope to reload");
         }
         self.ctx.bind_to_thread()?;
+        let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+        // Copies of a few MiB each are launch-latency bound on one stream.
+        let lanes = (0..LOAD_LANES).map(|_| self.ctx.new_stream()).collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut planned = Vec::new();
         for (name, b) in &self.manifest.buffers {
             if b.kind != BufferKind::Weight {
                 continue;
@@ -274,20 +278,48 @@ impl Runtime {
             let dst = &self.buffers[name];
             let copies =
                 weights::plan(name, b, dst.bytes, |t| tensors.find(t), |group| self.ranks.get(group).copied())?;
-            match dst.host_weight() {
-                Some(host) => host.initialize(|bytes| copy_to_host(&self.stream, bytes, &copies))?,
-                None => {
-                    for c in &copies {
-                        copy_to_device(&self.stream, dst, c)?;
-                    }
-                }
+            planned.push((dst, copies));
+        }
+        // Device copies go out first and run while a host weight is filled.
+        let t0 = std::time::Instant::now();
+        let (mut device, mut host, mut filled) = ((0u64, 0usize), (0u64, 0usize, 0f64), (0u64, 0f64));
+        for (dst, copies) in planned.iter().filter(|(d, _)| d.host_weight().is_none()) {
+            for c in copies {
+                copy_to_device(&lanes[device.1 % LOAD_LANES], dst, c)?;
+                device.1 += 1;
+            }
+            device.0 += dst.bytes;
+        }
+        for (dst, copies) in planned.iter() {
+            let Some(h) = dst.host_weight() else { continue };
+            let t = std::time::Instant::now();
+            let mine = h.initialize(|bytes| copy_to_host(&self.stream, bytes, copies))?;
+            let secs = t.elapsed().as_secs_f64();
+            host = (host.0 + dst.bytes, host.1 + copies.len(), host.2 + secs);
+            if mine {
+                filled = (filled.0 + dst.bytes, filled.1 + secs);
             }
         }
+        lanes.iter().try_for_each(|s| s.synchronize())?;
         self.stream.synchronize()?;
+        tracing::info!(
+            "gpu {} weights: device {:.1} GiB in {} copies, host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s); {:.1}s in all",
+            self.gpu,
+            gib(device.0),
+            device.1,
+            gib(host.0),
+            host.1,
+            gib(filled.0),
+            filled.1,
+            gib(filled.0) / filled.1.max(1e-9),
+            t0.elapsed().as_secs_f64(),
+        );
         self.host_weights_ready = true;
         Ok(())
     }
 }
+
+const LOAD_LANES: usize = 8;
 
 /// One planned copy into a device buffer. Host bytes go up in one memcpy
 /// when contiguous, else as one 2D copy; device bytes (another process's
@@ -296,6 +328,9 @@ fn copy_to_device(stream: &Arc<CudaStream>, dst: &DeviceBuf, c: &weights::Copy) 
     if let (Blob::Host(src), true) = (c.src, c.pitch == c.width) {
         let mut view = dst.view(c.dst as usize..(c.dst + c.width * c.rows) as usize)?;
         return Ok(stream.memcpy_htod(src, &mut view)?);
+    }
+    if let (Blob::Device { ptr, .. }, true) = (c.src, c.rows == 1 || c.pitch == c.width) {
+        return copy_1d(stream.cu_stream(), dst.ptr + c.dst, ptr, c.width * c.rows);
     }
     copy_2d(
         stream.cu_stream(),

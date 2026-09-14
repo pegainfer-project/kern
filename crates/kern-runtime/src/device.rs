@@ -478,6 +478,11 @@ pub(crate) fn copy_2d(
     cuda_check(unsafe { sys::cuMemcpy2DAsync_v2(&c, stream) }, "cuMemcpy2DAsync")
 }
 
+/// One contiguous device-to-device copy on the stream.
+pub(crate) fn copy_1d(stream: sys::CUstream, dst: u64, src: u64, bytes: u64) -> Result<()> {
+    cuda_check(unsafe { sys::cuMemcpyAsync(dst, src, bytes as usize, stream) }, "cuMemcpyAsync")
+}
+
 /// Another process's allocation mapped into this context: what a weight
 /// cache's bucket becomes once [`crate::Runtime::map`] imports its handle.
 /// Unmapped and released on drop; the owner's allocation outlives it.

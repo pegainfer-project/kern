@@ -229,14 +229,15 @@ impl HostWeight {
     /// Populate the snapshot once. The callback must cover the complete buffer;
     /// the existing weight-plan verifier guarantees that for bound tensors.
     /// A failed initializer leaves the allocation retryable and unready.
-    pub(crate) fn initialize(&self, fill: impl FnOnce(&mut [u8]) -> Result<()>) -> Result<()> {
+    pub(crate) fn initialize(&self, fill: impl FnOnce(&mut [u8]) -> Result<()>) -> Result<bool> {
         let mut ready = self.ready.lock().map_err(|_| Error::Api("host-weight initialization lock poisoned".into()))?;
-        if !*ready {
-            let bytes = unsafe { std::slice::from_raw_parts_mut(self.ptr.cast::<u8>(), self.bytes as usize) };
-            fill(bytes)?;
-            *ready = true;
+        if *ready {
+            return Ok(false);
         }
-        Ok(())
+        let bytes = unsafe { std::slice::from_raw_parts_mut(self.ptr.cast::<u8>(), self.bytes as usize) };
+        fill(bytes)?;
+        *ready = true;
+        Ok(true)
     }
 }
 
