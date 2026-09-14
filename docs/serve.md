@@ -1,8 +1,8 @@
 # `kern-serve`：continuous batching + OpenAI 兼容 endpoint
 
 ```bash
-# 独立 workspace（serving 栈不进 runtime 的依赖图和 CI）；binary 在 crates/kern-serve/target/
-cd crates/kern-serve && cargo build --release
+# workspace 成员但不在 default-members 里（serving 栈不进裸 cargo build / CI 的编译）；需要 protoc、libssl-dev
+cargo build --release -p kern-serve
 target/release/kern-serve --manifest examples/qwen3-4b.json --kernels kernels --weights weights/Qwen3-4B --gpus 3 --port 8000   # --gpus 0,1,2,3 drives a tray
 # state 池默认按显存自动定：权重/激活/scratch 分完后，剩余显存减 1 GiB 全给 state，
 # KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 显式给则照旧。

@@ -232,9 +232,11 @@ churn 请求用 token id 发，把前端 tokenizer 摘出去；先加计时再�
 release 构建直接 panic（"attempted to zero-initialize type … which is invalid"）。
 规则：FFI 结构逐字段写全，宁可啰嗦。
 
-**kern-serve 是独立 workspace，runtime 改了要单独重建。** 修了 device.rs 之后只重建
+**kern-serve 曾是独立 workspace，runtime 改了要单独重建。** 修了 device.rs 之后只重建
 了 kern-runtime 和 examples，kern-serve 还是旧的 runtime，门禁跑到一半 panic。规则：
-**运行门禁前先看 binary 的时间戳**，或者把两个 workspace 的构建写进同一条命令。
+**运行门禁前先看 binary 的时间戳**。2026-09-14 起 kern-serve 是同一个 workspace 的
+成员，`cargo build -p kern-run -p kern-serve` 一条命令、一个 target 目录，这条坑不再有；
+留着是因为"两个 binary 一起跑门禁先对时间戳"仍然成立。
 
 **四层 K3 的 fixture 不在这个仓库。** `k3_golden` 默认的 `tests/fixtures/k3_4l_greedy.json`
 在 pegainfer-k3 里；tray08 的 K3 权重只有 EP8 shard，EP4 在 tray07。规则：门禁命令

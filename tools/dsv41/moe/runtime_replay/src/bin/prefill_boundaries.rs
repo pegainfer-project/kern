@@ -1,5 +1,5 @@
 //! Independent prompt prefill with per-layer numerical boundary snapshots.
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use kern_runtime::{Capacity, HostWeights, Lease, PeerHandle, Runtime, Topology};
 use std::{
     collections::BTreeMap,
@@ -44,16 +44,22 @@ fn stage(rt: &mut Runtime, leases: &[&Lease], positions: &[usize], ids: &[Vec<i6
     }
     Ok(vars)
 }
-fn main()->Result<()> {
- let cfg:serde_json::Value=serde_json::from_slice(&std::fs::read(std::env::args().nth(1).context("usage: prefill_boundaries CONFIG")?)?)?;
- let raw:serde_json::Value=serde_json::from_slice(&std::fs::read(cfg["manifest"].as_str().context("manifest")?)?)?;
- let ids:Vec<i64>=serde_json::from_value(cfg["prompt_ids"].clone())?;
- let out=PathBuf::from(cfg["output"].as_str().context("output")?);std::fs::create_dir_all(&out)?;
- let host=Arc::new(HostWeights::new());let gate=Arc::new(Barrier::new(4));
- let handles:Arc<Mutex<Vec<Option<BTreeMap<String,PeerHandle>>>>>=Arc::new(Mutex::new(vec![None;4]));let mut jobs=vec![];
- for rank in 0..4 {
-  let(cfg,raw,ids,out,host,gate,handles)=(cfg.clone(),raw.clone(),ids.clone(),out.clone(),host.clone(),gate.clone(),handles.clone());
-  jobs.push(std::thread::spawn(move|| {
+fn main() -> Result<()> {
+    let cfg: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(std::env::args().nth(1).context("usage: prefill_boundaries CONFIG")?)?)?;
+    let raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cfg["manifest"].as_str().context("manifest")?)?)?;
+    let ids: Vec<i64> = serde_json::from_value(cfg["prompt_ids"].clone())?;
+    let out = PathBuf::from(cfg["output"].as_str().context("output")?);
+    std::fs::create_dir_all(&out)?;
+    let host = Arc::new(HostWeights::new());
+    let gate = Arc::new(Barrier::new(4));
+    let handles: Arc<Mutex<Vec<Option<BTreeMap<String, PeerHandle>>>>> = Arc::new(Mutex::new(vec![None; 4]));
+    let mut jobs = vec![];
+    for rank in 0..4 {
+        let (cfg, raw, ids, out, host, gate, handles) =
+            (cfg.clone(), raw.clone(), ids.clone(), out.clone(), host.clone(), gate.clone(), handles.clone());
+        jobs.push(std::thread::spawn(move|| {
    let run=||->Result<()> {
     let m=kern_manifest::Verified::from_json(&serde_json::to_string(&raw)?)?;
     let mut rt=Runtime::load_with_host_weights(&m,&PathBuf::from(cfg["kernels"].as_str().unwrap()),rank,Some(Capacity{tokens:Some(cfg["capacity_tokens"].as_u64().unwrap_or(32768)),seqs:1}),Some(&Topology::one("ep",rank as u64,4)),&host)?;
@@ -100,6 +106,9 @@ fn main()->Result<()> {
     gate.wait();Ok(())
    };if let Err(e)=run(){eprintln!("rank{rank}: {e:#}");std::process::exit(1);}
   }));
- }
- for j in jobs {j.join().unwrap();}Ok(())
+    }
+    for j in jobs {
+        j.join().unwrap();
+    }
+    Ok(())
 }

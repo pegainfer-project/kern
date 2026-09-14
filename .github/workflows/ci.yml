@@ -38,16 +38,15 @@ jobs:
           components: rustfmt, clippy
 
       - name: Format check
-        run: |
-          cargo fmt --check
-          rustfmt --check --edition 2021 crates/kern-serve/src/lib.rs crates/kern-serve/src/main.rs
+        run: cargo fmt --check
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Clippy
-        # kern-serve builds only in the kernel-lab container; every other crate
-        # compiles here, cudarc loads libcuda at run time.
-        run: cargo clippy -p kern-manifest -p kern-runtime -p kern-run --all-targets -- -D warnings
+        # The workspace's default members: the runtime compiles anywhere,
+        # cudarc loads libcuda at run time. kern-serve needs protoc and
+        # libssl-dev and is built by the release pipeline.
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
         # The runtime's tests are host-side (Pool, Prefix, Host, values); the
@@ -89,11 +88,12 @@ jobs:
 
   hawk:
     # Workspace-wide visibility lint. Only `unnecessary_restricted_visibility`
-    # is enforced: kern-serve lives outside this workspace and is the main
-    # consumer of the runtime's public API, so hawk's closed world would call
-    # that API dead. A `pub(crate)` cannot cross a crate boundary, so that
-    # class is exact. The other two lints are an audit tool; see the
-    # `hawk` skill. Hawk is built against one exact rustc; bump both together.
+    # is enforced: a `pub(crate)` cannot cross a crate boundary, so that class
+    # is exact. `dead_public` and `unnecessary_public` stay an audit tool until
+    # the public surface is trimmed; see the `hawk` skill. Hawk is built
+    # against one exact rustc; bump both together. Hawk compiles the whole
+    # workspace, kern-serve included, so the job needs the serving stack's
+    # build dependencies and keeps its target directory between runs.
     runs-on: ubuntu-latest
     env:
       HAWK_VERSION: "0.1.14"
@@ -104,6 +104,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/hawk"
+          key: hawk-${{ env.HAWK_VERSION }}
 
       - name: Install cargo-hawk
         run: |
@@ -118,6 +126,6 @@ jobs:
 
       - name: Restricted visibility is the tightest that compiles
         run: |
-          cargo +"$HAWK_RUST" hawk check --color always \
+          cargo +"$HAWK_RUST" hawk check --color always --target-dir target/hawk \
             -A hawk::dead_public -A hawk::unnecessary_public \
             -D hawk::unnecessary_restricted_visibility

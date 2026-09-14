@@ -1,4 +1,4 @@
-/target
+target/
 __pycache__/
 /.venv
 /dumped-kernels
@@ -10,8 +10,6 @@ tools/kernel-capture/libkernelcapture.so
 /.wrangler/
 /test-report.json
 /kernels-qwen38-dflash2
-/crates/kern-serve/target
-/crates/kern-serve/target-lab*
 /docs/node_modules
 /docs/.vitepress/cache
 # K3 kernel harness: built binary, cubins and sweep log are derived; agents' scratch dirs are not deliverables

@@ -68,8 +68,7 @@ kernels = "model-cubins"
 weights = ["/path/to/original/checkpoint"]
 ```
 
-Build the independent server with
-`cargo build --release --manifest-path crates/kern-serve/Cargo.toml`.
+Build the server with `cargo build --release -p kern-serve`.
 Install `kern-serve` beside `kern` or on PATH, or select it through `KERN_SERVE_BIN`.
 The execution environment must expose its GPUs; on a GB300 tray it must also
 expose the IMEX channel, which the runtime's fabric handles need. Without one

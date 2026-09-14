@@ -49,13 +49,13 @@ checkpoints in place, `./target/release/kern run qwen3-4b` works as-is.
 
 ## kern-serve
 
-The HTTP server is a separate workspace (it carries the OpenAI front end and
-its dependencies) and is not in the release archive yet. It builds from the
-same checkout and needs `pkg-config`, `libssl-dev` and `protobuf-compiler`
-on Debian/Ubuntu:
+The HTTP server is a workspace member that a bare `cargo build` skips (it
+carries the OpenAI front end and its dependencies) and is not in the release
+archive yet. It builds from the same checkout and needs `pkg-config`,
+`libssl-dev` and `protobuf-compiler` on Debian/Ubuntu:
 
 ```sh
-cd crates/kern-serve && cargo build --release
+cargo build --release -p kern-serve
 target/release/kern-serve --help
 ```
 

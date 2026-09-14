@@ -25,9 +25,11 @@ the schema golden, lints) belongs in CI, not here.
   to flat launch lists, runs them. The only crate that touches CUDA.
 - `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
   `kern.toml`, the `kern test` harness.
-- `crates/kern-serve` — its own workspace: the pegainfer/vLLM front end plus
-  `KernScheduler`. Builds where protoc and libssl-dev are: the kernel-lab
-  container, the release runner.
+- `crates/kern-serve` — the pegainfer/vLLM front end plus `KernScheduler`.
+  A workspace member outside `default-members`: builds where protoc and
+  libssl-dev are (the kernel-lab container, the release runner), by name.
+- `tools/dsv41/**/Cargo.toml` — GPU harnesses over the runtime's public API;
+  workspace members, built by name.
 - `tools/` — capture, extract, export, manifest generators. Model knowledge
   lives here.
 - GPU tests need a free GPU on a shared tray: `nvidia-smi` before `kern test`.

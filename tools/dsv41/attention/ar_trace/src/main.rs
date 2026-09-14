@@ -1,7 +1,7 @@
 //! A single canonical greedy history on all EP ranks, with target taps.
 //! Uses the serving manifest unchanged and the Runtime's actual page leases.
-use anyhow::{Context, ensure};
-use kern_manifest::{Protocol, Verified, protocol::Axis, types::Fill};
+use anyhow::{ensure, Context};
+use kern_manifest::{protocol::Axis, types::Fill, Protocol, Verified};
 use kern_runtime::{Capacity, HostWeights, PeerHandle, Runtime, Topology};
 use std::{
     collections::BTreeMap,
@@ -25,16 +25,28 @@ fn main() -> anyhow::Result<()> {
     let prompt: Vec<i64> = serde_json::from_value(cfg["prompt_ids"].clone())?;
     let count = cfg["generation_tokens"].as_u64().unwrap_or(64) as usize;
     let teacher = Arc::new(serde_json::from_value::<Option<Vec<i64>>>(cfg["teacher_tokens"].clone())?);
-    ensure!(teacher.as_ref().as_ref().is_none_or(|v| v.len() == count), "teacher_tokens length must equal generation_tokens");
+    ensure!(
+        teacher.as_ref().as_ref().is_none_or(|v| v.len() == count),
+        "teacher_tokens length must equal generation_tokens"
+    );
     ensure!(prompt.len() >= 2 && count >= 6, "need at least 2 prompt and 6 generated tokens");
     let capacity = cfg["capacity_tokens"].as_u64().unwrap_or(32768);
     let draft = cfg["draft_proposals"].as_bool().unwrap_or(false);
     let save_logits = cfg["target_logits"].as_bool().unwrap_or(false);
     let draft_end = if draft {
-        Some(manifest.programs.get("round").context("round program")?.calls.iter()
-            .position(|c| c.label.as_deref() == Some("splice_verify"))
-            .context("round must label its target boundary splice_verify")?)
-    } else { None };
+        Some(
+            manifest
+                .programs
+                .get("round")
+                .context("round program")?
+                .calls
+                .iter()
+                .position(|c| c.label.as_deref() == Some("splice_verify"))
+                .context("round must label its target boundary splice_verify")?,
+        )
+    } else {
+        None
+    };
     let weights: Vec<Vec<PathBuf>> = serde_json::from_value(cfg["weights"].clone())?;
     ensure!(weights.len() == 4, "weights must contain one file/directory list per EP rank");
     let host = Arc::new(HostWeights::new());
