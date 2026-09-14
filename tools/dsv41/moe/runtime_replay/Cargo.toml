@@ -10,6 +10,7 @@ kern-runtime.workspace = true
 kern-run.workspace = true
 
 anyhow.workspace = true
+hex.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 

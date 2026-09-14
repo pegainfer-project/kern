@@ -12,9 +12,6 @@ pegainfer-frontend.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true
-# Weights are mapped, not read: a tray's ranks share the page cache and
-# no rank holds a copy of its shard in DRAM.
-memmap2.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true

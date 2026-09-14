@@ -9,6 +9,7 @@ kern-manifest.workspace = true
 
 cudarc.workspace = true
 half.workspace = true
+hex.workspace = true
 libc.workspace = true
 safetensors.workspace = true
 serde_json.workspace = true

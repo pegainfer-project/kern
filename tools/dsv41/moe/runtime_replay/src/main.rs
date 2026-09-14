@@ -12,7 +12,7 @@ fn stage(source: &Path, dest: &Path) -> anyhow::Result<()> {
         let p = e?.path();
         if p.extension().is_some_and(|e| e == "cubin") {
             let b = std::fs::read(&p)?;
-            let sha = format!("{:x}", sha2::Sha256::digest(&b));
+            let sha = hex::encode(sha2::Sha256::digest(&b));
             let stem = p.file_stem().unwrap().to_string_lossy();
             std::fs::write(dest.join(format!("{stem}-{}.cubin", &sha[..12])), b)?;
         }
