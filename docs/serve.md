@@ -445,10 +445,56 @@ prompt 的序列各喂一段 run（`scheduler::runs`），所有 run 一样长�
     （8 条一样长）；混合长短的公平性是 K5 D2 预算策略的事。
 
 **没测**（按 CLAUDE.md 的门禁排队）：
-1. t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变；
+1. ~~t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变~~（e2e 门禁一节，2026-09-14）；
 2. owner-only 页在 t>1 下：mixed 行、prefix 命中（retire → lease_from）、park / wake 之后 warm == cold；
 3. 全成或全不成：某一卡 `--host-gib` 故意给小，park 整体退回、四卡 host 占用回到原值；
 4. 93 层短 prompt 的 conc1 / conc8 步时对 k3_golden 的 20.8 / 25.5 ms（E3 量到 ITL 32 / 38 ms，含 tray 的 staging 与 HTTP，没拆）。
+
+## e2e 门禁（`tools/e2e`，2026-09-14，tray06 / tray07 / tray09，各 4×GB300）
+
+`python3 tools/e2e/e2e.py` 把一份 kern.toml 的每个 target 过同一组场景（表在 `tools/e2e/README.md`）：
+`kern test`、conc1 对 `kern run`、重复命中、turn2（prompt + 答案 + 追问，发 id）warm 对 `kern run` 与对冷
+server、12 条并发、流式中途挂断、小池子 + `--host-gib 2` 的 park / wake、`--max-seqs 2` 起的 slot 增长、
+投机 manifest 的 `--rows 1`。字节一致是门；单 rank target 的分歧再拿 `kern run --prompt-ids <分歧前的
+上下文> --rows 1 --probe-dir` 倒那一步的 logits，两个 token 都在 top-1 的 4 个 bf16 ULP 内才放过。
+每次 64 个 greedy token（K3 4 层 16 个）。结果与日志：`~/bench_results/2026-09-14-e2e-gate/`。
+
+| target（tray） | rank / rows / checkpoint | conc1 = `kern run` | 命中：重复 / turn2 | warm = `kern run` / = 冷 | 12 并发 · 接受率 | park / wake（小池子） | slot 增长（`--max-seqs 2`） | `--rows 1` = `kern run` |
+|---|---|---|---|---|---|---|---|---|
+| qwen3-4b（tray06） | 1 / 1 / 每页 | 12/12（`kern test` 位一致） | 16,16,16,0 / 80,80,80,64 | 2/4 + 2 近平局 / 同 | 12/12 · — | parks 16、wakes 5、host_hits 5，答案 11/12 + 1 近平局 | — | — |
+| qwen3-4b-dspark（tray06） | 1 / 7 / 每页 | 12/12 | 同上 | 1/4 + 3 近平局 / 同 | 12/12 · 24%（2.47 tok/步） | parks 14、wakes 5 | — | 4/4 |
+| qwen3.8-27b（tray06） | 1 / 1 / 请求结束 | 12/12 | 0×4 / 87,83,87,79 | 4/4 / 4/4 | 12/12 · — | parks 19、wakes 4、host_hits 4，12/12 与 4/4 | remaps 15，slot 5 → 20，12/12 与 turn2 4/4 | — |
+| qwen3.8-27b-dflash2（tray06） | 1 / 8 / 请求结束 | 12/12 | 0×4 / 87,84,88,0（6 个 `not kept`） | 4/4 / 4/4 | 12/12 · 20%（2.37） | parks 15、wakes 4、host_hits 3 | remaps 9，5 → 14 | 4/4 |
+| dsv41-h152（tray09，EP4） | 4 / 6 / 请求结束 | 无 oracle（冷 12 条作基准） | 0×4 / 86,84,0,0（7 个 `not kept`） | — / 4/4（只报） | 12/12（12 条与 conc1 同）· 27%（2.33） | 26 条填满：parks 11、wakes 2、host_hits 2，12/12 与 4/4 | remaps 24，20 → 44（4 卡合计） | — |
+| k3-4l-ep4（tray07，EP4，16 token） | 4 / 1 / 请求结束 | 无 oracle | 0×4 / 38,35,37,31 | — / 0/4（只报，见下） | 12/12（2 条与 conc1 同）· — | 17 条填满：parks 13、wakes 4、host_hits 4，12/12 | remaps 36，20 → 56 | — |
+
+近平局都有 logits 证据（`results/<tray>/<target>/probe-*/`），例如 qwen3-4b turn2 第 56 个 token：top-4
+29.25 / 29.125 / 29.125 / 28.75，server 的在第 2、差 1 ULP。加载：qwen3-4b 10 s、qwen3.8 10 s、DSv4.1 37 s、
+K3 4 层 4 s（`--capacity 262144`）。
+
+过程中改了三处，都是 e2e 写不顺才发现的：
+
+- **kern run 只吃文本**：turn2 按文本发，DSv4.1 上答案文本切回去的 id 与生成的 id 不同（4 条里 3 条命中
+  0）——不是 cache 的错，是 client 造的 prompt 变了。turn2 改发 id，`kern run --prompt-ids` 让 oracle 跑
+  server 跑过的那串。
+- **投机轮多算的 checkpoint**：一轮接受的 token 可以越过 `max_tokens` 或 stop（`emit` 截断，state 里已经
+  有了），请求结束的快照就以这串多出来的 token 为键——下一轮永远发不出这个前缀，快照白占一个 slot 到被
+  淘汰（DSv4.1 4 条 turn2 命中 2 条、dflash2 3 条）。scheduler 现在不留这种快照（`not kept` debug 行），
+  只多一个 stop token 的留着（chat template 下一轮就带着它）。e2e 的 turn2 门：命中要么 ≥ 第一轮 prompt
+  要么 0，0 的条数 ≤ `not kept` 的条数。
+- **scheduler 线程 panic 后端口还开着**：请求全挂到 client 超时（driver 干等了 15 分钟）；现在进程跟着退 101。
+
+近平局的判法也改了一版：投机 manifest 的第 k 步是另一串（`--rows 1` 的 run 在更早的平局上已经分岔），
+拿它的 logits 判分歧是错的；要用"prompt + 分歧前双方一致的 token"作 prompt 单独跑一步。
+
+没有 oracle 的 tray target（EP4 没有 `kern run`），换了数值路径的一致性只报不门：K3 4 层 pruned
+checkpoint 近乎平局遍地（12 条并发只有 1 条与 conc1 同、warm 对 cold 0/4 在第 0–1 个 token 就分），
+同一条路的（重复、abort 后）4/4、1/1 一致照门。K3 4 层用默认预算：256 GiB 切成 131 079 个 2 MiB 块
+（页 64 token × 4 层太小，块取最小对象的一半），每 rank map 40–60 s，一次在 rank 3 的 `cuMemSetAccess`
+OOM——块大小该随预算长，先记着，e2e 里 K3 显式 `--capacity 262144`。
+
+"没测"清单的第 1 条（t=1 qwen3.8-27b conc1 对 `kern run`、K1/K3 门禁）由这一节覆盖；2、3（t>1 的
+owner-only 页、park 的全成或全不成）和 4 仍没测。
 
 ## 没做（按需要加）
 
