@@ -114,8 +114,8 @@ cargo build --release
 Serve a configured target with the independent HTTP server:
 
 ```bash
-cargo build --release --manifest-path crates/kern-serve/Cargo.toml   # or use the kern-serve the release installs
-KERN_SERVE_BIN="$PWD/crates/kern-serve/target/release/kern-serve" \
+cargo build --release -p kern-serve   # or use the kern-serve the release installs
+KERN_SERVE_BIN="$PWD/target/release/kern-serve" \
   ./target/release/kern server qwen3-4b --port 8000
 ```
 

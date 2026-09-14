@@ -1,9 +1,17 @@
 [workspace]
-members = ["crates/kern-manifest", "crates/kern-runtime", "crates/kern-run"]
-# kern-serve is its own workspace: it pulls the pegainfer/vLLM serving stack,
-# which the runtime and its CI never need.
-exclude = ["crates/kern-serve"]
 resolver = "2"
+members = [
+    "crates/kern-manifest",
+    "crates/kern-runtime",
+    "crates/kern-run",
+    "crates/kern-serve",
+    "tools/dsv41/attention/ar_trace",
+    "tools/dsv41/moe/runtime_replay",
+]
+# A bare `cargo build` / `test` / `clippy` is the runtime: kern-serve pulls the
+# pegainfer/vLLM serving stack (protoc, libssl, ~500 crates) and the dsv41
+# harnesses need a GPU, so both are built by name.
+default-members = ["crates/kern-manifest", "crates/kern-runtime", "crates/kern-run"]
 
 [workspace.package]
 version = "0.2.3"
@@ -12,6 +20,15 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 kern-manifest = { path = "crates/kern-manifest" }
+kern-runtime = { path = "crates/kern-runtime" }
+kern-run = { path = "crates/kern-run" }
+
+# Pinned to a pegainfer main commit; bump deliberately. Its vLLM crates carry
+# the chat renderers, picked by the checkpoint's model_type. `vllm-chat` is the
+# same vLLM rev pegainfer pins, so the renderer tests read the crate the
+# server runs.
+pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "139d925e8693dcff412b8501f8db09eb639d0ffd" }
+vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "89dbb2644552d6e473a7e97da0ce8f0aa8e32c9d" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
@@ -19,15 +36,17 @@ clap = { version = "4", features = ["derive"] }
 # machine: `cuda-13000` pins it, and no toolkit is needed to build.
 cudarc = { version = "=0.19.7", features = ["cuda-13000", "f16"] }
 half = "=2.7.1"
+libc = "0.2"
+memmap2 = "0.9"
 safetensors = "=0.7.0"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
 sha2 = "0.10"
 thiserror = "2"
-libc = "0.2"
 tokenizers = "=0.22.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ureq = "2"

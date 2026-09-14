@@ -1,45 +1,27 @@
 [package]
 name = "kern-serve"
-version = "0.2.3"
-edition = "2021"
-license = "Apache-2.0"
-description = "OpenAI-compatible serving over a kern manifest: a continuous-batching scheduler behind the pegainfer frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
-# Its own workspace, on purpose: the serving stack (pegainfer frontend, vLLM
-# Rust server crates) stays out of the runtime's dependency graph and CI.
-[workspace]
-[workspace.lints.clippy]
-disallowed_types = "deny"  # clippy.toml: std hash maps, whose iteration order is random per process
-dbg_macro = "deny"
-todo = "deny"
-type_complexity = "allow"
-needless_range_loop = "allow"
+[dependencies]
+kern-manifest.workspace = true
+kern-runtime.workspace = true
+kern-run.workspace = true
+pegainfer-frontend.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+# Weights are mapped, not read: a tray's ranks share the page cache and
+# no rank holds a copy of its shard in DRAM.
+memmap2.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+vllm-chat.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-kern-manifest = { path = "../kern-manifest" }
-kern-runtime = { path = "../kern-runtime" }
-kern-run = { path = "../kern-run" }
-# Pinned to a pegainfer main commit; bump deliberately. Its vLLM crates carry
-# the chat renderers, picked by the checkpoint's model_type.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "139d925e8693dcff412b8501f8db09eb639d0ffd" }
-
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-# Weights are mapped, not read: a tray's ranks share the page cache and
-# no rank holds a copy of its shard in DRAM.
-memmap2 = "0.9"
-serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[[bin]]
-name = "kern-serve"
-path = "src/main.rs"
-
-[dev-dependencies]
-# The same vLLM rev pegainfer pins, so the renderer tests read the crate the server runs.
-vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "89dbb2644552d6e473a7e97da0ce8f0aa8e32c9d" }

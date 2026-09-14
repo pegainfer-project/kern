@@ -2,28 +2,25 @@
 name = "kern-run"
 version.workspace = true
 edition.workspace = true
-
-[dependencies]
-kern-manifest.workspace = true
-kern-runtime = { path = "../kern-runtime" }
-
-anyhow.workspace = true
-clap.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-toml.workspace = true
-tokenizers.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-sha2.workspace = true
-memmap2 = "0.9"
-
-[lib]
-path = "src/lib.rs"
+license.workspace = true
 
 [[bin]]
 name = "kern"
-path = "src/bin/kern.rs"
+
+[dependencies]
+kern-manifest.workspace = true
+kern-runtime.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokenizers.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

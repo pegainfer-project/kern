@@ -37,8 +37,8 @@ kern --version          # kern 0.2.0 (<commit>, cuda 13.0)
 1. **触发**：push 一个 `v*` tag。改到 workflow 或 `scripts/` 的 PR 也跑 build 与
    打包（不 publish），所以流水线本身的改动在合并前就被 CI 验过。
 2. **构建**：两个 target 各自在 Ubuntu 24.04 runner 上原生编（aarch64 用
-   GitHub 的 arm runner，不交叉），apt 装 protoc 与 libssl-dev，kern-serve 作为
-   独立 workspace `--locked` 另编一次。cudarc 绑定的 CUDA 版本由 Cargo.toml 的
+   GitHub 的 arm runner，不交叉），apt 装 protoc 与 libssl-dev，`--locked` 一次编出
+   kern-run 与 kern-serve。cudarc 绑定的 CUDA 版本由 Cargo.toml 的
    `cuda-13000` feature 钉死，构建机不装 toolkit；`KERN_COMMIT` 传 tag 的 commit。
    tag 名必须等于 workspace version（`v` + `cargo pkgid`），不等就停。
 3. **自检**（`package_release.sh`，在 runner 上跑）：两个 binary `--version` 报的版本 =

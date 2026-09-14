@@ -1,5 +1,5 @@
 //! Same-history plain vs six-row verification, using independent forked leases.
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use kern_runtime::{Capacity, HostWeights, Lease, PeerHandle, Runtime, Topology};
 use std::{
     collections::BTreeMap,
@@ -44,70 +44,154 @@ fn stage(rt: &mut Runtime, leases: &[&Lease], positions: &[usize], ids: &[Vec<i6
     }
     Ok(vars)
 }
-fn boundary_replay(rt:&mut Runtime, raw:&serde_json::Value, program:&str, vars:&BTreeMap<String,u64>, begin:usize,end:usize, mode:&str,row:usize,dir:&std::path::Path,rank:usize,barrier:&Barrier,cachepage:usize,prefix:usize,patch:Option<&str>)->Result<()> {
-    let calls=raw["programs"][program]["calls"].as_array().unwrap();let mut cursor=begin;let mut records=vec![];let mut layer20=false;
-    if rank==0 {std::fs::create_dir_all(dir)?;}
+#[allow(clippy::too_many_arguments)]
+fn boundary_replay(
+    rt: &mut Runtime,
+    raw: &serde_json::Value,
+    program: &str,
+    vars: &BTreeMap<String, u64>,
+    begin: usize,
+    end: usize,
+    mode: &str,
+    row: usize,
+    dir: &std::path::Path,
+    rank: usize,
+    barrier: &Barrier,
+    cachepage: usize,
+    prefix: usize,
+    patch: Option<&str>,
+) -> Result<()> {
+    let calls = raw["programs"][program]["calls"].as_array().unwrap();
+    let mut cursor = begin;
+    let mut records = vec![];
+    let mut layer20 = false;
+    if rank == 0 {
+        std::fs::create_dir_all(dir)?;
+    }
     for i in begin..end {
-        let label=calls[i]["label"].as_str().unwrap();
-        if label.ends_with("layers.20.attn.mhc") {layer20=true;}
-        if label.ends_with("layers.20.ffn.mhc") {layer20=false;}
-        let suffix=if layer20 && label.ends_with(".attention") {Some("target.attention.attention_raw")}
-            else if layer20 && label.ends_with("layers.20.wq_a.gemm") {Some("target.attention.qr_raw")}
-            else if layer20 && label.ends_with("layers.20.wq_b.gemm") {Some("target.attention.q")}
-            else if layer20 && label.ends_with("layers.20.wkv.gemm") {Some("target.attention.kv_raw")}
-            else if layer20 && label.ends_with("layers.20.q_rope") {Some("target.attention.q_rotated")}
-            else if layer20 && label.ends_with("layers.20.kv_rope") {Some("target.attention.kv_rotated")}
-            else if layer20 && label.ends_with("compress20.wkv") {Some("compress20.wkv")}
-            else if layer20 && label.ends_with("compress20.norm") {Some("compress20.latent")}
-            else if layer20 && label.ends_with("compress20.index_k") {Some("compress20.key_raw")}
-            else if layer20 && label.ends_with("compress20.key_quant") {Some("compress20.key_dequant")}
-            else if layer20 && label.ends_with("compressed20.write") {Some("compress20.kv_rope")}
-            else if layer20 && label.ends_with("index20.metadata") {Some("c1_end")}
-            else if layer20 && label.ends_with("index20.query.gemm") {Some("index20.query")}
-            else if layer20 && label.ends_with("index20.quant") {Some("index20.dequant")}
-            else if layer20 && label.ends_with("index20.scale_weights") {Some("index20.weights_f32")}
-            else if layer20 && label.ends_with("index20.score") {Some("index20.scores")}
-            else if layer20 && label.ends_with("index20.select_tokens") {Some("index20.logical")}
-            else if layer20 && label.ends_with("index20.block_scores") {Some("index20.block_scores")}
-            else if layer20 && label.ends_with("index20.filter_blocks") {Some("index20.candidates")}
-            else if layer20 && label.ends_with("compressed.mask") {Some("index20.physical")}
-            else if label.ends_with(".mhc") {Some("target.normalized")}
-            else if label.ends_with(".wo_b.gemm") {Some("target.attention_result")}
-            else if label.ends_with(".experts") {Some("target.ffn_result")}
-            else if label.ends_with(".inject") {Some("target.engram_residual")}
-            else if label.ends_with(".lookup") {Some("engram.embedding")}
-            else if label.ends_with(".hash") {Some("hashes")} else {None};
-        if let Some(suffix)=suffix {
-            barrier.wait();rt.run_range(program,vars,cursor,i+1)?;barrier.wait();cursor=i+1;
-            if rank==0 {
+        let label = calls[i]["label"].as_str().unwrap();
+        if label.ends_with("layers.20.attn.mhc") {
+            layer20 = true;
+        }
+        if label.ends_with("layers.20.ffn.mhc") {
+            layer20 = false;
+        }
+        let suffix = if layer20 && label.ends_with(".attention") {
+            Some("target.attention.attention_raw")
+        } else if layer20 && label.ends_with("layers.20.wq_a.gemm") {
+            Some("target.attention.qr_raw")
+        } else if layer20 && label.ends_with("layers.20.wq_b.gemm") {
+            Some("target.attention.q")
+        } else if layer20 && label.ends_with("layers.20.wkv.gemm") {
+            Some("target.attention.kv_raw")
+        } else if layer20 && label.ends_with("layers.20.q_rope") {
+            Some("target.attention.q_rotated")
+        } else if layer20 && label.ends_with("layers.20.kv_rope") {
+            Some("target.attention.kv_rotated")
+        } else if layer20 && label.ends_with("compress20.wkv") {
+            Some("compress20.wkv")
+        } else if layer20 && label.ends_with("compress20.norm") {
+            Some("compress20.latent")
+        } else if layer20 && label.ends_with("compress20.index_k") {
+            Some("compress20.key_raw")
+        } else if layer20 && label.ends_with("compress20.key_quant") {
+            Some("compress20.key_dequant")
+        } else if layer20 && label.ends_with("compressed20.write") {
+            Some("compress20.kv_rope")
+        } else if layer20 && label.ends_with("index20.metadata") {
+            Some("c1_end")
+        } else if layer20 && label.ends_with("index20.query.gemm") {
+            Some("index20.query")
+        } else if layer20 && label.ends_with("index20.quant") {
+            Some("index20.dequant")
+        } else if layer20 && label.ends_with("index20.scale_weights") {
+            Some("index20.weights_f32")
+        } else if layer20 && label.ends_with("index20.score") {
+            Some("index20.scores")
+        } else if layer20 && label.ends_with("index20.select_tokens") {
+            Some("index20.logical")
+        } else if layer20 && label.ends_with("index20.block_scores") {
+            Some("index20.block_scores")
+        } else if layer20 && label.ends_with("index20.filter_blocks") {
+            Some("index20.candidates")
+        } else if layer20 && label.ends_with("compressed.mask") {
+            Some("index20.physical")
+        } else if label.ends_with(".mhc") {
+            Some("target.normalized")
+        } else if label.ends_with(".wo_b.gemm") {
+            Some("target.attention_result")
+        } else if label.ends_with(".experts") {
+            Some("target.ffn_result")
+        } else if label.ends_with(".inject") {
+            Some("target.engram_residual")
+        } else if label.ends_with(".lookup") {
+            Some("engram.embedding")
+        } else if label.ends_with(".hash") {
+            Some("hashes")
+        } else {
+            None
+        };
+        if let Some(suffix) = suffix {
+            barrier.wait();
+            rt.run_range(program, vars, cursor, i + 1)?;
+            barrier.wait();
+            cursor = i + 1;
+            if rank == 0 {
                 if label.ends_with("compressed20.write") {
-                    for (state,bpt) in [("compressed.20",288),("index_k.20",68)] {
-                        let unit=rt.page() as usize;let packed=if bpt==288 {256}else{64};
-                        let mut data=rt.read_state_at(state,cachepage*unit*bpt,prefix*packed)?;
-                        data.extend(rt.read_state_at(state,cachepage*unit*bpt+unit*packed,prefix*(bpt-packed))?);
-                        std::fs::write(dir.join(format!("{state}.cache.bin")),data)?;
+                    for (state, bpt) in [("compressed.20", 288), ("index_k.20", 68)] {
+                        let unit = rt.page() as usize;
+                        let packed = if bpt == 288 { 256 } else { 64 };
+                        let mut data = rt.read_state_at(state, cachepage * unit * bpt, prefix * packed)?;
+                        data.extend(rt.read_state_at(
+                            state,
+                            cachepage * unit * bpt + unit * packed,
+                            prefix * (bpt - packed),
+                        )?);
+                        std::fs::write(dir.join(format!("{state}.cache.bin")), data)?;
                     }
                 }
-                let name=format!("{mode}.{suffix}");let spec=&raw["buffers"][&name];
-                let width=spec["shape"].as_array().context("boundary shape")?[1..].iter().map(|v|v.as_u64().unwrap() as usize).product::<usize>();
-                let dtype=spec["dtype"].as_str().unwrap();let bytes=match dtype {"bf16"=>2,"f32"|"i32"=>4,"i64"=>8,_=>anyhow::bail!("boundary dtype {dtype}")};
-                let data=rt.read_buffer_prefix(&name,(row+1)*width*bytes)?;
-                let key=label.trim_start_matches("verify.").trim_start_matches("decode.");
-                let file=format!("{key}.bin");std::fs::write(dir.join(&file),&data[row*width*bytes..])?;
-                records.push(serde_json::json!({"label":key,"buffer":suffix,"dtype":dtype,"width":width,"file":file,"call":i}));
+                let name = format!("{mode}.{suffix}");
+                let spec = &raw["buffers"][&name];
+                let width = spec["shape"].as_array().context("boundary shape")?[1..]
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .product::<usize>();
+                let dtype = spec["dtype"].as_str().unwrap();
+                let bytes = match dtype {
+                    "bf16" => 2,
+                    "f32" | "i32" => 4,
+                    "i64" => 8,
+                    _ => anyhow::bail!("boundary dtype {dtype}"),
+                };
+                let data = rt.read_buffer_prefix(&name, (row + 1) * width * bytes)?;
+                let key = label.trim_start_matches("verify.").trim_start_matches("decode.");
+                let file = format!("{key}.bin");
+                std::fs::write(dir.join(&file), &data[row * width * bytes..])?;
+                records.push(
+                    serde_json::json!({"label":key,"buffer":suffix,"dtype":dtype,"width":width,"file":file,"call":i}),
+                );
             }
-            if mode=="verify" && label.ends_with("compress20.wkv") {
-                if let Some(file)=patch {
-                    let source=std::fs::read(file)?;ensure!(source.len()==1024);
-                    let name="verify.compress20.wkv";let mut data=rt.read_buffer_prefix(name,(row+1)*1024)?;
-                    let at=row*1024+296*2;data[at..at+2].copy_from_slice(&source[296*2..297*2]);
-                    rt.write_buffer(name,&data)?;
+            if mode == "verify" && label.ends_with("compress20.wkv") {
+                if let Some(file) = patch {
+                    let source = std::fs::read(file)?;
+                    ensure!(source.len() == 1024);
+                    let name = "verify.compress20.wkv";
+                    let mut data = rt.read_buffer_prefix(name, (row + 1) * 1024)?;
+                    let at = row * 1024 + 296 * 2;
+                    data[at..at + 2].copy_from_slice(&source[296 * 2..297 * 2]);
+                    rt.write_buffer(name, &data)?;
                 }
             }
         }
     }
-    if cursor<end {barrier.wait();rt.run_range(program,vars,cursor,end)?;barrier.wait();}
-    if rank==0 {std::fs::write(dir.join("index.json"),serde_json::to_vec_pretty(&records)?)?;}
+    if cursor < end {
+        barrier.wait();
+        rt.run_range(program, vars, cursor, end)?;
+        barrier.wait();
+    }
+    if rank == 0 {
+        std::fs::write(dir.join("index.json"), serde_json::to_vec_pretty(&records)?)?;
+    }
     Ok(())
 }
 fn main() -> Result<()> {

@@ -5,8 +5,8 @@
 #
 #   scripts/package_release.sh VERSION TARGET OUT_DIR
 #
-# Reads target/release/kern (or $KERN_BIN) and
-# crates/kern-serve/target/release/kern-serve (or $KERN_SERVE_BIN); writes
+# Reads target/release/kern (or $KERN_BIN) and target/release/kern-serve
+# (or $KERN_SERVE_BIN); writes
 # OUT_DIR/kern-TARGET.tar.gz and OUT_DIR/kern-TARGET.tar.gz.sha256. Run it
 # where the binaries were built; the checks run them.
 set -euo pipefail
@@ -17,7 +17,7 @@ target=$2
 out=$3
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 bin=${KERN_BIN:-$root/target/release/kern}
-serve=${KERN_SERVE_BIN:-$root/crates/kern-serve/target/release/kern-serve}
+serve=${KERN_SERVE_BIN:-$root/target/release/kern-serve}
 asset=kern-$target
 
 fail() { echo "package: $*" >&2; exit 1; }
