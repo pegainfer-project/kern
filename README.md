@@ -1,4 +1,6 @@
-# kern
+<p align="center">
+  <img src="docs/assets/logo.svg" width="320" alt="kern">
+</p>
 
 **Why does an inference engine need to understand every model it runs?**
 
