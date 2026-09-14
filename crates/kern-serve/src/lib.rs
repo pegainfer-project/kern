@@ -195,7 +195,11 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             match load() {
                 Ok(sched) => {
                     let _ = ready_tx.send(Ok(sched.facts()));
-                    drive(sched, backend);
+                    // A scheduler that panicked would leave the port open
+                    // and every request hanging: the process goes with it.
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(sched, backend))).is_err() {
+                        std::process::exit(101);
+                    }
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
