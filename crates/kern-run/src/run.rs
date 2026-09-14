@@ -17,11 +17,11 @@ use anyhow::{bail, ensure, Context, Result};
 use clap::Args;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Vars};
+use crate::{Caller, Vars, Weights};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, Dim, Dir};
 use kern_manifest::Verified;
-use kern_runtime::{Capacity, Runtime};
+use kern_runtime::{Capacity, Runtime, Topology};
 use tracing::info;
 
 /// Flags of `kern run`; anything not given comes from the target in
@@ -37,9 +37,10 @@ pub struct RunOpts {
     #[arg(long)]
     kernels: Option<PathBuf>,
 
-    /// Safetensors artifact(s), tensors bound by name across all of them
+    /// Checkpoint directories or .safetensors files, tensors bound by name
+    /// across all of them
     #[arg(long)]
-    weights: Vec<PathBuf>,
+    weights: Vec<String>,
 
     /// HF tokenizer.json
     #[arg(long)]
@@ -104,7 +105,7 @@ pub struct RunOpts {
 struct Opts {
     manifest: PathBuf,
     kernels: PathBuf,
-    weights: Vec<PathBuf>,
+    weights: Weights,
     tokenizer: PathBuf,
     prompt: String,
     steps: usize,
@@ -127,12 +128,14 @@ impl RunOpts {
                 cfg.map_or(crate::config::FILE.to_string(), |c| c.path.display().to_string())
             )
         };
-        let weights = if self.weights.is_empty() {
+        let entries = if self.weights.is_empty() {
             t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
         } else {
             self.weights
         };
-        let ck = crate::checkpoint(&weights);
+        let weights = Weights::parse(&entries)?;
+        let gpu = self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0);
+        let ck = crate::checkpoint(&weights.dirs());
         let stop_tokens: Vec<i64> = ck.stop_tokens.iter().chain(&self.stop_tokens).fold(Vec::new(), |mut v, &id| {
             if !v.contains(&id) {
                 v.push(id);
@@ -157,7 +160,7 @@ impl RunOpts {
                 .or_else(|| cfg.and_then(|c| c.run.prompt.clone()))
                 .unwrap_or_else(|| "The capital of France is".into()),
             steps: self.steps.or_else(|| cfg.and_then(|c| c.run.steps)).unwrap_or(32),
-            gpu: self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0),
+            gpu,
             capacity: self.capacity.or_else(|| cfg.and_then(|c| c.capacity)),
             chunk: self.chunk.or_else(|| cfg.and_then(|c| c.run.chunk)),
             eager: self.eager,
@@ -279,17 +282,9 @@ fn execute(o: Opts) -> Result<()> {
     }
 
     let t0 = Instant::now();
-    let maps = crate::map_weights(&o.weights)?;
-    let blob_len: usize = maps.iter().map(|m| m.len()).sum();
-    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
-    drop(maps);
+    o.weights.bind(&mut rt, &Topology::default())?;
     let n_weights = by_kind.get("weight").map_or(0, |e| e.0);
-    info!(
-        "weights: {n_weights} buffers assembled from {} ({} mapped) in {:?}",
-        o.weights.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" + "),
-        human(blob_len as u64),
-        t0.elapsed()
-    );
+    info!("weights: {n_weights} buffers assembled from {} in {:?}", o.weights, t0.elapsed());
 
     let tokenizer = tokenizers::Tokenizer::from_file(&o.tokenizer).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
     info!("tokenizer {} · stop tokens {:?}", o.tokenizer.display(), o.stop_tokens);

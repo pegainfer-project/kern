@@ -14,13 +14,13 @@ pub mod logline;
 mod scheduler;
 mod tray;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Args;
 use kern_manifest::Verified;
-use kern_runtime::{Capacity, Topology};
+use kern_runtime::{Capacity, Runtime, Topology};
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler,
 };
@@ -34,8 +34,8 @@ use tray::Tray;
 pub struct Artifacts {
     pub manifest: PathBuf,
     pub kernels: PathBuf,
-    /// Weight files; see [`rank_weights`] for `{group}` and `*`.
-    pub weights: Vec<PathBuf>,
+    /// Weight entries, files or a weight cache; see [`kern_run::Weights`].
+    pub weights: Vec<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -92,68 +92,17 @@ pub struct ServeOpts {
     pub host_gib: f64,
 }
 
-/// The checkpoint directory a weights entry names, where the frontend
-/// reads config.json, the tokenizer, the chat template and
-/// generation_config.json: the entry up to its first per-rank component
-/// (`{group}` or `*`), less a `.safetensors` file name.
-fn checkpoint_dir(w: &Path) -> PathBuf {
-    let s = |c: &std::path::Component| c.as_os_str().to_string_lossy().into_owned();
-    let fixed: Vec<String> = w.components().map(|c| s(&c)).take_while(|c| !c.contains(['{', '*'])).collect();
-    let dir = fixed.iter().take(fixed.len() - usize::from(fixed.last().is_some_and(|f| f.ends_with(".safetensors"))));
-    let d: PathBuf = dir.collect();
-    if d.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        d
-    }
-}
-
-/// One rank's weight files from the `--weights` list: every `{group}` in a
-/// path is the rank's index in that topology group (`{ep}`, `{tp}`), and
-/// a `*` in a file name matches that directory's files around it, in name
-/// order. A manifest sharded per rank names its shards this way once for
-/// every rank.
-fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    for p in paths {
-        let mut s = p.to_string_lossy().into_owned();
-        for (g, r) in &topo.groups {
-            s = s.replace(&format!("{{{g}}}"), &r.index.to_string());
-        }
-        if let Some(open) = s.find('{') {
-            let close = s[open..].find('}').map_or(s.len(), |c| open + c + 1);
-            bail!("weights path {s}: `{}` is not a group of the manifest's topology", &s[open..close]);
-        }
-        let p = PathBuf::from(&s);
-        let Some((pre, post)) = p.file_name().and_then(|f| f.to_str()).and_then(|f| f.split_once('*')) else {
-            out.push(p);
-            continue;
-        };
-        let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .with_context(|| format!("weights {s}: listing {}", dir.display()))?
-            .filter_map(|e| e.ok()?.file_name().into_string().ok())
-            .filter(|f| f.len() >= pre.len() + post.len() && f.starts_with(pre) && f.ends_with(post))
-            .collect();
-        if names.is_empty() {
-            bail!("weights {s}: nothing matches");
-        }
-        names.sort_unstable();
-        out.extend(names.into_iter().map(|f| dir.join(f)));
-    }
-    Ok(out)
-}
-
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
+    let weights = kern_run::Weights::parse(&art.weights)?;
     info!(
         manifest = %art.manifest.display(),
         kernels = %art.kernels.display(),
-        weights = %art.weights.iter().map(|w| w.display().to_string()).collect::<Vec<_>>().join(","),
+        %weights,
         kern = %*kern_run::VERSION,
         "loading"
     );
     let gpus = if o.gpus.is_empty() { vec![0] } else { o.gpus.clone() };
-    let model_path = checkpoint_dir(&art.weights[0]);
+    let model_path = weights.dirs().remove(0);
     let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&model_path).into_iter().map(|x| x as u32).collect();
     stop_tokens.extend(&o.stop_tokens);
     stop_tokens.sort_unstable();
@@ -187,8 +136,8 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         .spawn(move || {
             let load = || -> Result<KernScheduler> {
                 let t0 = Instant::now();
-                let weights_of = |topo: &Topology| rank_weights(&art.weights, topo);
-                let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &weights_of, host_bytes, o.eager)?;
+                let bind = |rt: &mut Runtime, topo: &Topology| weights.bind(rt, topo);
+                let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &bind, host_bytes, o.eager)?;
                 info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
                 KernScheduler::new(tray, policy)
             };
@@ -228,46 +177,4 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         let shutdown = vllm::shutdown_token_from_ctrl_c();
         vllm::serve_with_engine_count(engine, &model_path, vec![served_name], o.port, None, 1, shutdown).await
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use kern_runtime::GroupRank;
-
-    #[test]
-    fn checkpoint_dir_is_the_entry_less_shard_name_and_rank_pattern() {
-        let d = |p: &str| checkpoint_dir(Path::new(p)).to_string_lossy().into_owned();
-        assert_eq!(
-            (d("weights/Qwen3-4B"), d("weights/Qwen3-4B/model-00001.safetensors"), d("dense-tp4/r{tp}/l*.safetensors")),
-            ("weights/Qwen3-4B".into(), "weights/Qwen3-4B".into(), "dense-tp4".into())
-        );
-        assert_eq!((d("model.safetensors"), d("r{ep}/x.safetensors")), (".".into(), ".".into()));
-    }
-
-    #[test]
-    fn rank_weights_substitute_groups_and_expand_stars() {
-        let dir = std::env::temp_dir().join(format!("kern-serve-weights-{}", std::process::id()));
-        let shard = dir.join("dense-tp4").join("r2");
-        std::fs::create_dir_all(&shard).unwrap();
-        for f in ["l10.safetensors", "l1.safetensors", "l0.safetensors", "notes.txt"] {
-            std::fs::write(shard.join(f), b"").unwrap();
-        }
-        let mut topo = Topology::one("ep", 3, 4);
-        topo.groups.insert("tp".into(), GroupRank { index: 2, size: 4 });
-        let paths = [dir.join("bookends.safetensors"), dir.join("dense-tp4/r{tp}/l*.safetensors")];
-        let got = rank_weights(&paths, &topo).unwrap();
-        // Name order, not layer order: the runtime binds by tensor name.
-        let want = [
-            dir.join("bookends.safetensors"),
-            shard.join("l0.safetensors"),
-            shard.join("l1.safetensors"),
-            shard.join("l10.safetensors"),
-        ];
-        assert_eq!(got, want);
-        let e = rank_weights(&[dir.join("experts/ep{world}-r{ep}.safetensors")], &topo).unwrap_err();
-        assert!(e.to_string().contains("`{world}` is not a group"), "{e}");
-        let e = rank_weights(&[shard.join("x*.safetensors")], &topo).unwrap_err();
-        assert!(e.to_string().contains("nothing matches"), "{e}");
-    }
 }

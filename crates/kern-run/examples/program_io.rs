@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
     stage_cubins(&cubins, &kernels);
     let mut rt = Runtime::load(&m, &kernels, gpu, None, Some(&Topology::default()))?;
     let maps = kern_run::map_weights(&weights)?;
-    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
+    rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?)?;
     for (name, path) in &ins {
         rt.write_input(name, &std::fs::read(path)?)?;
     }

@@ -81,7 +81,7 @@ fn run_world(
 ) -> kern_runtime::Result<(Vec<u8>, f64)> {
     let mut rt =
         Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(topo))?;
-    rt.load_weights(&[weights])?;
+    rt.load_weights(&kern_runtime::Safetensors::parse(&[weights])?)?;
     rendezvous(&mut rt)?;
     let vars: BTreeMap<String, u64> = [("tokens".to_string(), rows as u64)].into();
     rt.write_input_at("x", &inp.x[row0 * HIDDEN * 2..(row0 + rows) * HIDDEN * 2], &vars)?;

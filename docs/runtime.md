@@ -22,8 +22,8 @@ cubin 算 sha256，**只装载 manifest `modules` 表点名的哈希**（其余�
 `cuFuncGetParamInfo` 参数布局与 manifest params 比对来消歧**（phase-2
 ABI 校验兼做实例选择，绕开了 capture 缺 launch→module 映射的坑）→ 按
 var max 分配全部 buffer / 分配 state（分页与 per-seq 的走下面的块池）→
-按每个 weight buffer 的 `bind` 从 checkpoint shard 里拷张量段拼出 buffer
-（只读 safetensors header，shard mmap；scratch 按 impl 声明另行私有分配）
+按每个 weight buffer 的 `bind` 从 checkpoint 里拷张量段拼出 buffer
+（张量来自一个 `Tensors`，见下「权重来源」；scratch 按 impl 声明另行私有分配）
 → 跑 `once` program 算派生表 → 顺序重放
 call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scratch/
 填字面量后 raw `cuLaunchKernel`（实参 staging 成小端 u64 slot；>48KB
@@ -34,8 +34,10 @@ per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`kern-pool`�
 `pages.rs` 的 `Pool` 在其上记页与 slot）。每个这样的 state 保留一段虚拟地址
 （`cuMemAddressReserve`，一次保留永不搬，`DeviceBuf::Reserved`），页与 slot 各是
 地址上的一段块区间；物理块 `cuMemCreate` 一次建齐，块大小是 2 MiB 粒度的整数倍、
-不超过最小对象的一半、封顶 64 MiB（qwen3.8 24 MiB，qwen3-4b / K3 2 MiB），谁用谁
-map。块留在上次用它的地方：还回的页还是页、还回的 slot 还是 slot；只有一类用光时
+不超过最小对象的一半、封顶 64 MiB（qwen3.8 24 MiB）；最小对象连两个粒度都不到时
+「对象跨两块」本就不成立，直接取封顶 64 MiB（qwen3-4b / K3 / DSV4.1）——driver 对池子
+的每个操作按块数计费且全 tray 串行，DSV4.1 的 102 GiB 从 52245 块 13–16 s 降到 1632
+块 0.5 s（tray18，2026-09-14）。谁用谁 map。块留在上次用它的地方：还回的页还是页、还回的 slot 还是 slot；只有一类用光时
 才从**另一类的空闲对象**上拆块（`Remap`：先 unmap 再 map 再 `cuMemSetAccess`；
 拆最高编号的、补最低编号的空位；跨对象边界的块按使用计数共享，最后一个用户走了
 才 unmap）。计划由 runtime 的后台线程执行：先等 stream 上记的事件（此前入队的
@@ -184,6 +186,21 @@ tray04 4×GB300 实测（2026-09-02）：EP4 每 rank 64 token **227 µs/层**
 （captured），四个 rank 的输出与 EP1（256 token 单卡，733 µs/层）对应行
 **逐字节一致**；EP1 对 host 参考 max |err| 0.015、相对 RMS 1.7e-3，
 917504 个元素无一超 5%+0.05。
+
+**权重来源（`Tensors`）**：`load_weights` 只认一个 trait——按名字给出张量的
+dtype、shape 和字节（`Blob`：本进程内存的一个切片，或本 context 能读的设备
+地址，比如另一个进程的分配经 `Runtime::map` 映射进来）。`plan` 是纯函数，把一个
+buffer 的 `bind` 段变成一列拷贝并核对铺满；shell 按 `Blob` 的两种形态选拷贝：
+host 字节 memcpy / 2D copy 上卡，设备地址 device-to-device；host placement 的
+buffer 反过来，host 字节 CPU memcpy、设备字节 DtoH。runtime 内的实现是
+`Safetensors`（mmap 的 shard，只读 header，同名张量出现在两份 shard 里就拒绝）；
+权重缓存、对象存储是 caller 侧的实现，下载进 host 内存后走 `Safetensors` 或自己
+实现 `Tensors`。
+连续的设备侧拷贝走 `cuMemcpyAsync`，按 8 条 stream 轮流发：`cuMemcpy2DAsync` 在
+fabric 映射的源上每次约 90 µs 固定开销，DSV4.1 每 rank 24923 次 78.8 GiB 单 stream
+2.3 s、8 条 2D 1.2–2.2 s、8 条 1D 0.5–0.7 s（111–148 GiB/s）；先发完设备拷贝再填
+host placement 的 buffer（第一个到的 rank 填，其余等），engram 一张 94 GiB 表 DtoH
+约 1 s，整段 2.2 s（tray18，2026-09-14）。
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、

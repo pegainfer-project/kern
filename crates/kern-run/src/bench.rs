@@ -11,13 +11,13 @@ use kern_manifest::types::{Arg, BufferKind, Dim, Fill, Manifest};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::profile::{Anchor, Probe};
-use kern_runtime::{Capacity, Runtime};
+use kern_runtime::{Capacity, Runtime, Topology};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Config, Target};
-use crate::{le_bytes_i32, Vars};
+use crate::{le_bytes_i32, Vars, Weights};
 
 #[derive(clap::Args, Debug)]
 pub struct BenchOpts {
@@ -32,7 +32,7 @@ pub struct BenchOpts {
     #[arg(long)]
     kernels: Option<PathBuf>,
     #[arg(long)]
-    weights: Vec<PathBuf>,
+    weights: Vec<String>,
     #[arg(long)]
     tokenizer: Option<PathBuf>,
     #[arg(long)]
@@ -285,9 +285,10 @@ fn output_fingerprints(rt: &Runtime, p: &Protocol, batch: usize) -> Result<Vec<V
 pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Result<()> {
     let manifest = o.manifest.as_ref().or(target.map(|t| &t.manifest)).context("--manifest or target required")?;
     let kernels = o.kernels.as_ref().or(target.map(|t| &t.kernels)).context("--kernels or target required")?;
-    let weights = if o.weights.is_empty() { target.map(|t| t.weights.as_slice()).unwrap_or(&[]) } else { &o.weights };
-    ensure!(!weights.is_empty(), "weights required");
-    let ck = crate::checkpoint(weights);
+    let entries = if o.weights.is_empty() { target.map(|t| t.weights.as_slice()).unwrap_or(&[]) } else { &o.weights };
+    let weights = Weights::parse(entries).context("weights required")?;
+    let gpu = o.gpu.or(cfg.and_then(|c| c.gpu)).unwrap_or(0);
+    let ck = crate::checkpoint(&weights.dirs());
     let tokenizer = o
         .tokenizer
         .as_ref()
@@ -320,7 +321,6 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         ensure!(p.forward(s.batch as u64, rows).is_some(), "{}: unsupported batch/program shape", s.id);
         ensure!(s.batch * s.query <= p.rows.max as usize, "{}: row capacity exceeded", s.id);
     }
-    let gpu = o.gpu.or(cfg.and_then(|c| c.gpu)).unwrap_or(0);
     let mut rt = Runtime::load(
         &m,
         kernels,
@@ -328,9 +328,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         Some(Capacity { tokens: Some(capacity as u64), seqs: max_batch as u64 }),
         None,
     )?;
-    let maps = crate::map_weights(weights)?;
-    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
-    drop(maps);
+    weights.bind(&mut rt, &Topology::default())?;
     let corpus = corpus(tokenizer, workload.seed)?;
     let probe = Probe::new(&rt)?;
     eprintln!("calibrating {} · L2 {} MiB", probe.device, probe.l2_bytes >> 20);

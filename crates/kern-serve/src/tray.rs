@@ -84,7 +84,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use kern_manifest::protocol::{Axis, Filled, Forward};
@@ -423,8 +423,8 @@ unsafe impl Send for Tray {}
 impl Tray {
     /// Load the manifest on every GPU of `gpus` with its place in the
     /// topology (`tp` splits the ranks into consecutive groups; every
-    /// other group spans them all), bind each rank's weights
-    /// (`weights_of` names them for a rank's topology), connect the peers,
+    /// other group spans them all), bind each rank's weights (`bind`, given
+    /// the rank's runtime and topology), connect the peers,
     /// run what the manifest runs once, reserve `host_bytes` of pinned
     /// memory per rank and lease the pad.
     pub fn load(
@@ -432,7 +432,7 @@ impl Tray {
         kernels: &Path,
         gpus: &[usize],
         capacity: Capacity,
-        weights_of: &(dyn Fn(&Topology) -> Result<Vec<PathBuf>> + Sync),
+        bind: &(dyn Fn(&mut Runtime, &Topology) -> Result<()> + Sync),
         host_bytes: u64,
         eager: bool,
     ) -> Result<Tray> {
@@ -488,10 +488,7 @@ impl Tray {
                         )
                         .with_context(|| format!("rank {q} on gpu {gpu}"))?;
                         rt.set_eager(eager);
-                        let files = weights_of(&topo)?;
-                        let maps = kern_run::map_weights(&files)?;
-                        let blobs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
-                        rt.load_weights(&blobs).with_context(|| format!("rank {q}: binding weights"))?;
+                        bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
                         Ok(Sent(rt))
                     })
                 })

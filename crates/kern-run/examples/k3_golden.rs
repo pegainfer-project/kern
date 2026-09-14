@@ -613,7 +613,7 @@ fn run_rank(
         })
         .collect::<anyhow::Result<_>>()?;
     let blobs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
-    rt.load_weights(&blobs)?;
+    rt.load_weights(&kern_runtime::Safetensors::parse(&blobs)?)?;
     rendezvous(&mut rt)?;
     // A tray manifest's one-time setup after the peers are mapped (the
     // allreduce's Lamport stages are poisoned, not zeroed).

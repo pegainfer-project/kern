@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
                     Some(Capacity { tokens: Some(capacity), seqs: 1 }),
                     Some(&Topology::one("ep", rank as u64, 4)), &host)?;
                 let maps = kern_run::map_weights(&paths)?;
-                rt.load_weights(&maps.iter().map(|x| &x[..]).collect::<Vec<_>>())?;
+                rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|x| &x[..]).collect::<Vec<_>>())?)?;
                 drop(maps);
                 handles.lock().unwrap()[rank] = Some(rt.export_handles()?);
                 gate.wait();

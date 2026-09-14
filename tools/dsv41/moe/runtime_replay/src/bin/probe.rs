@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     let paths: Vec<_> = io["weights"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
     let maps = kern_run::map_weights(&paths)?;
-    rt.load_weights(&maps.iter().map(|v| &v[..]).collect::<Vec<_>>())?;
+    rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|v| &v[..]).collect::<Vec<_>>())?)?;
     println!("original checkpoint loaded");
     if manifest.programs.contains_key("load") {
         rt.run("load", &vars)?;

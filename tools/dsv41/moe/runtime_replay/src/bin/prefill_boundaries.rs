@@ -65,7 +65,7 @@ fn main() -> Result<()> {
     let m=kern_manifest::Verified::from_json(&serde_json::to_string(&raw)?)?;
     let mut rt=Runtime::load_with_host_weights(&m,&PathBuf::from(cfg["kernels"].as_str().unwrap()),rank,Some(Capacity{tokens:Some(cfg["capacity_tokens"].as_u64().unwrap_or(32768)),seqs:1}),Some(&Topology::one("ep",rank as u64,4)),&host)?;
     let paths:Vec<PathBuf>=serde_json::from_value(cfg["weights"][rank].clone())?;let maps=kern_run::map_weights(&paths)?;
-    rt.load_weights(&maps.iter().map(|m|&m[..]).collect::<Vec<_>>())?;drop(maps);
+    rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|m|&m[..]).collect::<Vec<_>>())?)?;drop(maps);
     handles.lock().unwrap()[rank]=Some(rt.export_handles()?);gate.wait();
     let members=handles.lock().unwrap().iter().map(|h|h.clone().unwrap()).collect::<Vec<_>>();rt.import_peers("ep",&members)?;
     rt.run("load",&BTreeMap::from([("tokens".into(),ids.len() as u64),("seqs".into(),1)]))?;gate.wait();
