@@ -79,12 +79,11 @@ slot 原样移交。`Runtime::lease_from(&checkpoint, tokens)` 从 checkpoint �
 checkpoint 自己那页不动），state 拷进新 slot；租约的 `prefix()` = `len`，
 `slot(pos)` 拒绝 `pos < prefix`。谁拿着句柄谁持有：页在最后一个 lease /
 checkpoint drop 时回池，checkpoint 本身不会被 runtime 淘汰。
-纯 host 的 `Prefix` 表（`kern-pool/prefix.rs`）按 token 哈希链索引 checkpoint：`lookup(tokens)`
-给出覆盖 prompt 真前缀（不含最后一个 token）的最长 checkpoint；序列自己带一条
-`Chain`（每 token 折一次，每页记一个头），`insert(&chain, cp)` 读链上对应长度的键，
-每页留一个 checkpoint 也只把每个 token 哈希一次；`insert` 去重，
-`evict` drop 最久未命中的一个（同一条链最深的先走，drop 叶子才真正还页）；
-逻辑时钟计数，不读钟，同样的 token 序列给同样的判定。决策（共享哪些页、拷哪一页、
+纯 host 的 `Prefix` 索引（`kern-pool/prefix.rs`，设计见 `pool.md`）是 token 键的 radix
+tree：`insert(&tokens, cp)` 把 checkpoint 挂在它的 token 路径上（同样的 token 是同一个
+条目），`lookup(tokens)` 给出覆盖 prompt 真前缀（不含最后一个 token）的最长可用条目，
+`Hit` 持有条目的一个 clone；`coldest(tier)` 给最久未命中的条目的键（同一条路径叶子
+先走，drop 叶子才真正还页）；逻辑时钟计数，不读钟，同样的 token 序列给同样的判定。决策（共享哪些页、拷哪一页、
 拷哪个 slot）由 `Pool` 在 host 上算成 `Copies`，runtime 只在 stream 上执行拷贝。
 kern run / kern test 仍默认 4096（test 的 workload 抽样以 capacity 为界）。
 
