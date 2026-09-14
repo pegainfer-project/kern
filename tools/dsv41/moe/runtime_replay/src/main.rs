@@ -52,7 +52,9 @@ fn main() -> anyhow::Result<()> {
                 if let Some(paths) = io.get("weights").and_then(|v| v.as_array()) {
                     let paths: Vec<PathBuf> = paths.iter().map(|p| PathBuf::from(p.as_str().unwrap())).collect();
                     let maps = kern_run::map_weights(&paths)?;
-                    rt.load_weights(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?;
+                    rt.load_weights(&kern_runtime::Safetensors::parse(
+                        &maps.iter().map(|m| &m[..]).collect::<Vec<_>>(),
+                    )?)?;
                     println!("rank{rank}: checkpoint weights loaded");
                 }
                 handles.lock().unwrap()[rank] = Some(rt.export_handles()?);

@@ -262,6 +262,7 @@ pub(crate) fn alloc_vmm(stream: &Arc<CudaStream>, dev: i32, bytes: u64, what: &s
 /// is a [`DeviceBuf`] so it lives exactly as long as the pointers derived
 /// from it.
 pub(crate) fn import(stream: &Arc<CudaStream>, dev: i32, h: &PeerHandle, what: &str) -> Result<DeviceBuf> {
+    let t0 = std::time::Instant::now();
     let (handle, owns_handle) = match h {
         PeerHandle::Fabric { fabric, .. } => {
             let mut fh = sys::CUmemFabricHandle { data: *fabric };
@@ -291,6 +292,7 @@ pub(crate) fn import(stream: &Arc<CudaStream>, dev: i32, h: &PeerHandle, what: &
         release(handle);
         bail!(Cuda, "{what}: peer handle maps {size} bytes, not a multiple of the {g}-byte granularity");
     }
+    let imported = t0.elapsed();
     let va = match map_handle(dev, handle, size, g) {
         Ok(va) => va,
         Err(e) => {
@@ -298,6 +300,7 @@ pub(crate) fn import(stream: &Arc<CudaStream>, dev: i32, h: &PeerHandle, what: &
             return Err(Error::Cuda(format!("{what}: {e}")));
         }
     };
+    tracing::debug!("{what}: {} GiB imported in {imported:?}, mapped in {:?}", size >> 30, t0.elapsed() - imported);
     let vmm = Vmm { handle, va, size, fabric: false, owns_handle };
     Ok(DeviceBuf { ptr: va, bytes: h.bytes(), span: h.bytes(), stream: stream.clone(), backing: Backing::Vmm(vmm) })
 }
@@ -427,39 +430,85 @@ fn mempolicy(mode: i32, node: Option<u32>) {
 /// `dev.1` apart) and host address `host.0` (rows `host.1` apart), on
 /// `stream`, towards the host or the device: one copy-engine transfer
 /// either way.
+/// Which side of the bus an address is on, for the driver's 2D copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Space {
+    Host,
+    Device,
+}
+
+impl Space {
+    fn memory_type(self) -> sys::CUmemorytype {
+        match self {
+            Self::Host => sys::CUmemorytype::CU_MEMORYTYPE_HOST,
+            Self::Device => sys::CUmemorytype::CU_MEMORYTYPE_DEVICE,
+        }
+    }
+}
+
+/// `rows` rows of `width` bytes, `src.1` apart at `src.0`, landing `dst.1`
+/// apart at `dst.0`; each side says which space it is in.
 pub(crate) fn copy_2d(
     stream: sys::CUstream,
-    dev: (u64, u64),
-    host: (u64, u64),
+    dst: (u64, u64, Space),
+    src: (u64, u64, Space),
     width: u64,
     rows: u64,
-    to_host: bool,
 ) -> Result<()> {
-    let ((dev, dpitch), (host, hpitch)) = (dev, host);
-    let (device, pinned) = (sys::CUmemorytype::CU_MEMORYTYPE_DEVICE, sys::CUmemorytype::CU_MEMORYTYPE_HOST);
-    let (src, dst) = if to_host { (device, pinned) } else { (pinned, device) };
+    let host = |ptr: u64, space: Space| if space == Space::Host { ptr as *mut c_void } else { std::ptr::null_mut() };
+    let device = |ptr: u64, space: Space| if space == Space::Device { ptr } else { 0 };
     let c = sys::CUDA_MEMCPY2D {
         srcXInBytes: 0,
         srcY: 0,
-        srcMemoryType: src,
-        srcHost: if to_host { std::ptr::null() } else { host as *const c_void },
-        srcDevice: if to_host { dev } else { 0 },
+        srcMemoryType: src.2.memory_type(),
+        srcHost: host(src.0, src.2),
+        srcDevice: device(src.0, src.2),
         srcArray: std::ptr::null_mut(),
-        srcPitch: if to_host { dpitch } else { hpitch } as usize,
+        srcPitch: src.1 as usize,
         dstXInBytes: 0,
         dstY: 0,
-        dstMemoryType: dst,
-        dstHost: if to_host { host as *mut c_void } else { std::ptr::null_mut() },
-        dstDevice: if to_host { 0 } else { dev },
+        dstMemoryType: dst.2.memory_type(),
+        dstHost: host(dst.0, dst.2),
+        dstDevice: device(dst.0, dst.2),
         dstArray: std::ptr::null_mut(),
-        dstPitch: if to_host { hpitch } else { dpitch } as usize,
+        dstPitch: dst.1 as usize,
         WidthInBytes: width as usize,
         Height: rows as usize,
     };
     cuda_check(unsafe { sys::cuMemcpy2DAsync_v2(&c, stream) }, "cuMemcpy2DAsync")
 }
 
-/// The allocation granularity for chunks on `dev`.
+/// Another process's allocation mapped into this context: what a weight
+/// cache's bucket becomes once [`crate::Runtime::map`] imports its handle.
+/// Unmapped and released on drop; the owner's allocation outlives it.
+pub struct Mapped(DeviceBuf);
+
+impl Mapped {
+    pub(crate) fn new(buf: DeviceBuf) -> Self {
+        Self(buf)
+    }
+
+    pub fn ptr(&self) -> u64 {
+        self.0.ptr
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.0.bytes
+    }
+}
+
+/// The device's UUID the way the driver's tools print it
+/// (`GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), which a weight cache
+/// daemon keys its per-GPU endpoint by.
+pub fn device_uuid(gpu: usize) -> Result<String> {
+    use cudarc::driver::result;
+    result::init()?;
+    let uuid = result::device::get_uuid(result::device::get(gpu as i32)?)?;
+    let hex: Vec<String> = uuid.bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let (a, b, c, d, e) = (&hex[..4], &hex[4..6], &hex[6..8], &hex[8..10], &hex[10..]);
+    Ok(format!("GPU-{}-{}-{}-{}-{}", a.concat(), b.concat(), c.concat(), d.concat(), e.concat()))
+}
+
 pub(crate) fn chunk_granularity(dev: i32) -> Result<usize> {
     granularity(&alloc_prop(dev, none_handle_type()))
 }

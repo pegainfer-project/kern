@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::device::{self, PeerHandle};
+use crate::device::{self, Mapped, PeerHandle};
 use crate::error::bail;
 use crate::{Error, Result, Runtime};
 
@@ -33,6 +33,14 @@ impl Runtime {
     /// This rank's index in a topology group.
     pub fn rank(&self, group: &str) -> Option<u64> {
         self.ranks.get(group).copied()
+    }
+
+    /// Map another process's allocation into this context: a weight
+    /// cache's bucket, whose fabric handle the daemon published. The
+    /// mapping lives as long as the [`Mapped`] does.
+    pub fn map(&self, handle: &PeerHandle, what: &str) -> Result<Mapped> {
+        self.ctx.bind_to_thread()?;
+        Ok(Mapped::new(device::import(&self.stream, self.gpu as i32, handle, what)?))
     }
 
     /// A handle for every `export` buffer and every state, by name: what

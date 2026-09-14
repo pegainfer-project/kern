@@ -166,7 +166,7 @@ fn run_rank(
     let topo = Topology::one("ep", rank as u64, ranks as u64);
     let mut rt =
         Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(&topo))?;
-    rt.load_weights(&[weights])?;
+    rt.load_weights(&kern_runtime::Safetensors::parse(&[weights])?)?;
     rendezvous(&mut rt)?;
     let mut out = Vec::new();
     for (i, c) in cases.iter().enumerate() {

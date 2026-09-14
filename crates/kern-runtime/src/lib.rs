@@ -2,8 +2,9 @@
 //!
 //! The runtime knows nothing about models. It loads a verified manifest,
 //! resolves each declared kernel against the cubins in a directory, allocates
-//! every buffer/state, binds weight buffers by name from a safetensors blob,
-//! and replays the program's call list. The only kernels it understands
+//! every buffer/state, assembles weight buffers out of a checkpoint's
+//! tensors (a [`Tensors`]: safetensors blobs, or a weight cache's buckets
+//! mapped from another process), and replays the program's call list. The only kernels it understands
 //! natively are `extern:` ops (currently `extern:cublaslt_bf16_tn`).
 //!
 //! Names stop at load time: device pointers are static once buffers, states
@@ -48,8 +49,8 @@ use kern_manifest::Verified;
 
 use compile::{CompiledProgram, Dense};
 use cublas::Blas;
-pub use device::PeerHandle;
 use device::{alloc, DeviceBuf, Pinned};
+pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use host_weights::HostWeights;
@@ -57,6 +58,7 @@ use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
 use lease::Remaps;
 pub use park::{Room, Waking};
 use peers::PeerSlot;
+pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
 
 /// The CUDA API this binary binds (`13000` is 13.0): fixed by the `cudarc`
 /// feature at build time, so a driver older than it fails to load the
@@ -175,6 +177,11 @@ impl Drop for Runtime {
 }
 
 impl Runtime {
+    /// The CUDA device ordinal this runtime is on.
+    pub fn gpu(&self) -> usize {
+        self.gpu
+    }
+
     pub fn module_count(&self) -> usize {
         self.n_modules
     }

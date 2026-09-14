@@ -22,8 +22,8 @@ cubin 算 sha256，**只装载 manifest `modules` 表点名的哈希**（其余�
 `cuFuncGetParamInfo` 参数布局与 manifest params 比对来消歧**（phase-2
 ABI 校验兼做实例选择，绕开了 capture 缺 launch→module 映射的坑）→ 按
 var max 分配全部 buffer / 分配 state（分页与 per-seq 的走下面的块池）→
-按每个 weight buffer 的 `bind` 从 checkpoint shard 里拷张量段拼出 buffer
-（只读 safetensors header，shard mmap；scratch 按 impl 声明另行私有分配）
+按每个 weight buffer 的 `bind` 从 checkpoint 里拷张量段拼出 buffer
+（张量来自一个 `Tensors`，见下「权重来源」；scratch 按 impl 声明另行私有分配）
 → 跑 `once` program 算派生表 → 顺序重放
 call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scratch/
 填字面量后 raw `cuLaunchKernel`（实参 staging 成小端 u64 slot；>48KB
@@ -184,6 +184,16 @@ tray04 4×GB300 实测（2026-09-02）：EP4 每 rank 64 token **227 µs/层**
 （captured），四个 rank 的输出与 EP1（256 token 单卡，733 µs/层）对应行
 **逐字节一致**；EP1 对 host 参考 max |err| 0.015、相对 RMS 1.7e-3，
 917504 个元素无一超 5%+0.05。
+
+**权重来源（`Tensors`）**：`load_weights` 只认一个 trait——按名字给出张量的
+dtype、shape 和字节（`Blob`：本进程内存的一个切片，或本 context 能读的设备
+地址，比如另一个进程的分配经 `Runtime::map` 映射进来）。`plan` 是纯函数，把一个
+buffer 的 `bind` 段变成一列拷贝并核对铺满；shell 按 `Blob` 的两种形态选拷贝：
+host 字节 memcpy / 2D copy 上卡，设备地址 device-to-device；host placement 的
+buffer 反过来，host 字节 CPU memcpy、设备字节 DtoH。runtime 内的实现是
+`Safetensors`（mmap 的 shard，只读 header，同名张量出现在两份 shard 里就拒绝）；
+权重缓存、对象存储是 caller 侧的实现，下载进 host 内存后走 `Safetensors` 或自己
+实现 `Tensors`。
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、

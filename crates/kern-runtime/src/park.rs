@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use cudarc::driver::sys;
 
-use crate::device::{copy_2d, landed, record, wait_then_destroy, Pinned};
+use crate::device::{copy_2d, landed, record, wait_then_destroy, Pinned, Space};
 use crate::error::bail;
 use crate::{Error, Result, Runtime};
 use kern_pool::{runs, Checkpoint, Denied, Host, Kind, Lease, Park, Parked};
@@ -209,16 +209,18 @@ impl Runtime {
             match ar.kind {
                 Kind::Page => {
                     for (p, o, n) in runs(pages, page_bytes) {
-                        let dev = st.ptr + p as u64 * ar.object;
-                        let hst = base + o + offsets[a];
-                        copy_2d(stream, (dev, ar.object), (hst, page_bytes), ar.object, n as u64, to_host)?;
+                        let dev = (st.ptr + p as u64 * ar.object, ar.object, Space::Device);
+                        let hst = (base + o + offsets[a], page_bytes, Space::Host);
+                        let (dst, src) = if to_host { (hst, dev) } else { (dev, hst) };
+                        copy_2d(stream, dst, src, ar.object, n as u64)?;
                     }
                 }
                 Kind::Slot => {
                     if let Some((s, o)) = slot {
-                        let dev = st.ptr + s as u64 * ar.object;
-                        let hst = base + o + offsets[a];
-                        copy_2d(stream, (dev, ar.object), (hst, slot_bytes), ar.object, 1, to_host)?;
+                        let dev = (st.ptr + s as u64 * ar.object, ar.object, Space::Device);
+                        let hst = (base + o + offsets[a], slot_bytes, Space::Host);
+                        let (dst, src) = if to_host { (hst, dev) } else { (dev, hst) };
+                        copy_2d(stream, dst, src, ar.object, 1)?;
                     }
                 }
             }

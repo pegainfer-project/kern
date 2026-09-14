@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use half::bf16;
 use kern_manifest::Verified;
-use kern_runtime::{Capacity, HostWeights, Runtime};
+use kern_runtime::{Capacity, HostWeights, Runtime, Safetensors};
 
 fn checkpoint() -> Vec<u8> {
     let mut header = serde_json::json!({
@@ -54,9 +54,10 @@ fn mapped_weight_rectangle_replay_shared_scope_and_guards() {
     assert!(first.run("probe", &vars).is_err());
     assert!(first.capture("probe", &vars).is_err());
     let data = checkpoint();
-    first.load_weights(&[&data]).unwrap();
-    second.load_weights(&[&data]).unwrap();
-    assert!(first.load_weights(&[&data]).is_err());
+    let tensors = Safetensors::parse(&[&data]).unwrap();
+    first.load_weights(&tensors).unwrap();
+    second.load_weights(&tensors).unwrap();
+    assert!(first.load_weights(&tensors).is_err());
     let identity: Vec<u8> =
         (0..256).flat_map(|i| bf16::from_f32(if i / 16 == i % 16 { 1.0 } else { 0.0 }).to_le_bytes()).collect();
     let expected: Vec<u8> = (0..256)

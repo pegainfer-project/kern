@@ -1,8 +1,9 @@
 //! Load: everything that turns a verified manifest, a kernel directory
 //! and a checkpoint into a [`Runtime`] that can run. Names stop here:
 //! ops resolve to functions, buffers and states to device addresses,
-//! programs to flat launch lists (`compile`), and after `load` returns
-//! the execution path performs no name lookups.
+//! programs to flat launch lists (`compile`), weights to copies out of a
+//! checkpoint (`load_weights`), and after `load` returns the execution
+//! path performs no name lookups.
 //!
 //! The states' budget is decided here too. Buffers, scratch and fixed
 //! states are allocated as declared, at var max; what the paged and
@@ -14,15 +15,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
-use cudarc::driver::CudaContext;
+use cudarc::driver::{CudaContext, CudaStream};
 use kern_manifest::types::{BufferKind, Manifest, Placement, Provision};
 use kern_manifest::Verified;
 
 use crate::cublas::Blas;
-use crate::device::{alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, DeviceBuf, Mapper, Physical};
+use crate::device::{
+    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, DeviceBuf, Mapper, Physical, Space,
+};
 use crate::error::bail;
 use crate::lease::Remaps;
 use crate::peers::PeerSlot;
+use crate::weights::{Blob, Tensors};
 use crate::{compile, cubin, weights, Capacity, Error, Result, Runtime, Topology, HEADROOM};
 use kern_pool::{chunks_for, page_unit, Kind, Pool};
 
@@ -249,63 +253,28 @@ impl Runtime {
     }
 
     /// Assemble every `weight` buffer from the checkpoint tensors its
-    /// `bind` names, out of one or more safetensors blobs (the model's
-    /// shards, a draft's next to them). Only headers are parsed; each
-    /// segment is one copy straight out of the blob. A tensor name that
-    /// appears in more than one blob is ambiguous and refused.
-    pub fn load_weights(&mut self, blobs: &[&[u8]]) -> Result<()> {
+    /// `bind` names, each segment one copy straight out of the tensor's
+    /// bytes, wherever [`Tensors`] says they are: this process's memory
+    /// (safetensors blobs) or memory this device reads from another
+    /// process (a weight cache's buckets, mapped with [`Runtime::map`]).
+    pub fn load_weights(&mut self, tensors: &dyn Tensors) -> Result<()> {
         if self.host_weights_ready && self.buffers.values().any(|b| b.host_weight().is_some()) {
             bail!(Api, "host weights are an immutable snapshot; use a new runtime and scope to reload");
         }
         self.ctx.bind_to_thread()?;
-        let sts = blobs
-            .iter()
-            .map(|b| safetensors::SafeTensors::deserialize(b))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| Error::WeightArtifact(format!("unparseable safetensors: {e}")))?;
-        let lookup = |tensor: &str| -> Result<weights::TensorInfo> {
-            let found: Vec<_> =
-                sts.iter().enumerate().filter_map(|(i, st)| st.tensor(tensor).ok().map(|t| (i, t))).collect();
-            let (blob, t) = match found.as_slice() {
-                [one] => one.clone(),
-                [] => bail!(WeightArtifact, "tensor `{tensor}` is in none of the {} artifact(s)", sts.len()),
-                many => bail!(WeightArtifact, "tensor `{tensor}` is in {} artifacts", many.len()),
-            };
-            let Some(dtype) = weights::dtype_of(t.dtype()) else {
-                bail!(WeightArtifact, "tensor `{tensor}`: dtype {:?} has no manifest dtype", t.dtype());
-            };
-            let base = blobs[blob].as_ptr() as usize;
-            let offset = t.data().as_ptr() as usize - base;
-            Ok(weights::TensorInfo { blob, offset, dtype, shape: t.shape().iter().map(|&d| d as u64).collect() })
-        };
         for (name, b) in &self.manifest.buffers {
             if b.kind != BufferKind::Weight {
                 continue;
             }
             let dst = &self.buffers[name];
-            let copies = weights::plan(name, b, dst.bytes, lookup, |group| self.ranks.get(group).copied())?;
-            if let Some(host) = dst.host_weight() {
-                host.initialize(|bytes| {
-                    copy_host_weights(bytes, blobs, &copies);
-                    Ok(())
-                })?;
-                continue;
-            }
-            for c in copies {
-                let src = &blobs[c.blob][c.src..c.src + (c.pitch * (c.rows - 1) + c.width) as usize];
-                if c.pitch == c.width {
-                    let mut view = dst.view(c.dst as usize..(c.dst + c.width * c.rows) as usize)?;
-                    self.stream.memcpy_htod(src, &mut view)?;
-                } else {
-                    let stream = self.stream.cu_stream();
-                    copy_2d(
-                        stream,
-                        (dst.ptr + c.dst, c.width),
-                        (src.as_ptr() as u64, c.pitch),
-                        c.width,
-                        c.rows,
-                        false,
-                    )?;
+            let copies =
+                weights::plan(name, b, dst.bytes, |t| tensors.find(t), |group| self.ranks.get(group).copied())?;
+            match dst.host_weight() {
+                Some(host) => host.initialize(|bytes| copy_to_host(&self.stream, bytes, &copies))?,
+                None => {
+                    for c in &copies {
+                        copy_to_device(&self.stream, dst, c)?;
+                    }
                 }
             }
         }
@@ -315,21 +284,61 @@ impl Runtime {
     }
 }
 
-/// Execute copies already bounded and laid out by `weights::plan`.
-/// Full-width tensor segments use one memcpy, even for hundreds of millions
-/// of short rows. Rectangular slices retain their source row pitch.
-fn copy_host_weights(dst: &mut [u8], blobs: &[&[u8]], copies: &[weights::Copy]) {
+/// One planned copy into a device buffer. Host bytes go up in one memcpy
+/// when contiguous, else as one 2D copy; device bytes (another process's
+/// allocation mapped here) are a device-to-device copy either way.
+fn copy_to_device(stream: &Arc<CudaStream>, dst: &DeviceBuf, c: &weights::Copy) -> Result<()> {
+    if let (Blob::Host(src), true) = (c.src, c.pitch == c.width) {
+        let mut view = dst.view(c.dst as usize..(c.dst + c.width * c.rows) as usize)?;
+        return Ok(stream.memcpy_htod(src, &mut view)?);
+    }
+    copy_2d(
+        stream.cu_stream(),
+        (dst.ptr + c.dst, c.width, Space::Device),
+        (c.src.ptr(), c.pitch, space(&c.src)),
+        c.width,
+        c.rows,
+    )
+}
+
+/// The planned copies into a host weight (registered host memory every
+/// rank maps). Host bytes are copied by the CPU; device bytes come down
+/// over the stream, which is drained before the initializer returns.
+fn copy_to_host(stream: &Arc<CudaStream>, dst: &mut [u8], copies: &[weights::Copy]) -> Result<()> {
+    let base = dst.as_mut_ptr() as u64;
     for c in copies {
-        if c.pitch == c.width {
-            let len = (c.width * c.rows) as usize;
-            let dest = c.dst as usize;
-            dst[dest..dest + len].copy_from_slice(&blobs[c.blob][c.src..c.src + len]);
-        } else {
-            for row in 0..c.rows {
-                let src = (c.src as u64 + row * c.pitch) as usize;
-                let dest = (c.dst + row * c.width) as usize;
-                dst[dest..dest + c.width as usize].copy_from_slice(&blobs[c.blob][src..src + c.width as usize]);
-            }
+        match c.src {
+            Blob::Host(src) => copy_rows(dst, c, src),
+            Blob::Device { ptr, .. } => copy_2d(
+                stream.cu_stream(),
+                (base + c.dst, c.width, Space::Host),
+                (ptr, c.pitch, Space::Device),
+                c.width,
+                c.rows,
+            )?,
+        }
+    }
+    Ok(stream.synchronize()?)
+}
+
+fn space(b: &Blob) -> Space {
+    match b {
+        Blob::Host(_) => Space::Host,
+        Blob::Device { .. } => Space::Device,
+    }
+}
+
+/// One copy of host bytes into a host buffer: a full-width segment is one
+/// memcpy even for hundreds of millions of short rows; a rectangle keeps
+/// its source pitch.
+fn copy_rows(dst: &mut [u8], c: &weights::Copy, src: &[u8]) {
+    let (width, dest) = (c.width as usize, c.dst as usize);
+    if c.pitch == c.width {
+        dst[dest..dest + src.len()].copy_from_slice(src);
+    } else {
+        for row in 0..c.rows as usize {
+            let from = row * c.pitch as usize;
+            dst[dest + row * width..dest + (row + 1) * width].copy_from_slice(&src[from..from + width]);
         }
     }
 }
@@ -395,27 +404,31 @@ fn fit_budget(ctx: &CudaContext, fixed: u64, page_bytes: u64, first_slots_bytes:
 mod host_copy_tests {
     use super::*;
 
+    fn copy(dst: &mut [u8], c: &weights::Copy) {
+        let Blob::Host(src) = c.src else { unreachable!() };
+        copy_rows(dst, c, src);
+    }
+
     #[test]
     fn contiguous_and_strided_rectangles_preserve_destination_neighbors() {
         let contiguous = [90, 91, 1, 2, 3, 4, 5, 6, 92];
         let strided = [90, 1, 2, 80, 81, 3, 4, 82, 83, 5, 6, 84];
-        let blobs: &[&[u8]] = &[&contiguous, &strided];
-        for (blob, src, pitch) in [(0, 2, 2), (1, 1, 4)] {
+        for (src, pitch) in [(&contiguous[2..8], 2), (&strided[1..11], 4)] {
             let mut dst = [77; 12];
-            copy_host_weights(&mut dst, blobs, &[weights::Copy { dst: 3, blob, src, width: 2, rows: 3, pitch }]);
+            copy(&mut dst, &weights::Copy { dst: 3, src: Blob::Host(src), width: 2, rows: 3, pitch });
             assert_eq!(dst, [77, 77, 77, 1, 2, 3, 4, 5, 6, 77, 77, 77]);
         }
     }
 
     #[test]
-    fn mixed_segments_from_multiple_blobs_assemble_in_order() {
-        let blobs: &[&[u8]] = &[&[90, 1, 2, 3, 4, 91], &[80, 5, 6, 81, 82, 7, 8, 83]];
+    fn mixed_segments_assemble_in_order() {
+        let (a, b) = ([90, 1, 2, 3, 4, 91], [80, 5, 6, 81, 82, 7, 8, 83]);
         let copies = [
-            weights::Copy { dst: 0, blob: 0, src: 1, width: 2, rows: 2, pitch: 2 },
-            weights::Copy { dst: 4, blob: 1, src: 1, width: 2, rows: 2, pitch: 4 },
+            weights::Copy { dst: 0, src: Blob::Host(&a[1..5]), width: 2, rows: 2, pitch: 2 },
+            weights::Copy { dst: 4, src: Blob::Host(&b[1..7]), width: 2, rows: 2, pitch: 4 },
         ];
         let mut dst = [0; 8];
-        copy_host_weights(&mut dst, blobs, &copies);
+        copies.iter().for_each(|c| copy(&mut dst, c));
         assert_eq!(dst, [1, 2, 3, 4, 5, 6, 7, 8]);
     }
 }
