@@ -257,6 +257,24 @@ host 表 146k 页 0.13 ms，HBM 表 1.62M 页 0.91 ms，1M/256 seq 3.37M 页 1.6
 16 条 greedy conc1 的输出两种 rows 都与改前逐字节相同。记录在
 `bench_results/2026-09-11-kern-step-host-gap/`。
 
+## 每步的拆分（2026-09-14，tray18）
+
+打点版 kern-serve（每 rank 三个 CUDA event：写输入前、graph 前、graph 后，加各 host 段的
+`Instant`），1M/256-seq manifest，16 条 greedy conc1，每步均值（µs）：
+
+| | rows 1 | rows 6 | 32k manifest rows 1 |
+|---|---:|---:|---:|
+| 整步 | 7360 | 9340 | 7220 |
+| GPU graph | 7070 | 9033 | 7063 |
+| graph 前的 H2D | 245 | 242 | 88 |
+| host 超出 GPU 的部分（stage 31、launch、wake、读回 18） | ~100 | ~110 | ~80 |
+| 两步之间（driver、metrics、ledger） | 5 | 4 | 8 |
+
+graph 占 96%，步间已无空档。H2D 里 155 µs 是 `write_input_at` 把整块 staging 拷上去：
+page_table 是 256 × 8192 i32 = 8 MiB，每步每卡整块 DMA。改成只拷写入的字节后 H2D
+245 → 109 µs，步时 7.36 → 7.22 / 9.34 → 9.21 ms，输出 16/16 逐字节相同；剩下的 ~100 µs
+是 12 次 DMA 的串行发射延迟。记录在 `bench_results/2026-09-14-dsv41-step-host-split/`。
+
 ## tray 级（E5 第四块，2026-09-03；t=4 门禁 2026-09-04 过）
 
 `kern-serve --gpus 0,1,2,3` 一个进程驱一个 tray：`tray.rs` 持 n 个 `Runtime`，单线程
