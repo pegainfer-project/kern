@@ -188,8 +188,11 @@ impl Runtime {
                 states.insert(name.clone(), buf);
             }
         }
+        let t0 = std::time::Instant::now();
         let (pool, initial) = Pool::new(&manifest, chunk, chunks, first_slots as usize)?;
+        let planned = t0.elapsed();
         let physical = Physical::create(dev, chunk as usize, chunks as usize)?;
+        let created = t0.elapsed() - planned;
         let mut arenas = Vec::with_capacity(pool.pooled().len());
         for a in pool.pooled() {
             let arena = Arena::reserve(dev, chunk as usize, a.positions)?;
@@ -202,14 +205,16 @@ impl Runtime {
             arenas.push(arena);
         }
         let mut mapper = Mapper::new(arenas, physical);
+        let t1 = std::time::Instant::now();
         mapper.run(&initial)?;
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
         tracing::debug!(
-            "state budget {:.1} GiB in {chunks} chunks of {} MiB: {} pages of {page} tokens, {} sequence slots",
+            "state budget {:.1} GiB in {chunks} chunks of {} MiB: {} pages of {page} tokens, {} sequence slots; planned in {planned:?}, created in {created:?}, mapped in {:?}",
             gib(chunks as u64 * chunk),
             chunk >> 20,
             pool.total(),
             pool.slots(),
+            t1.elapsed(),
         );
         let resolution = resolved.iter().map(|(n, rk)| (n.clone(), rk.launch_modules())).collect();
         let peer_names: BTreeSet<String> = peers.keys().cloned().collect();
@@ -347,10 +352,8 @@ fn fmt_groups(t: &kern_manifest::types::Topology) -> String {
     t.groups.iter().map(|(g, n)| format!("{g}={n}")).collect::<Vec<_>>().join(", ")
 }
 
-/// The chunk the pooled states are backed in: a multiple of the
-/// allocation granularity `g`, at most half the smallest page or slot so
-/// an object spans at least two (a chunk shared at a boundary is one of
-/// many), at most 64 MiB. Mapping costs per chunk, so bigger is cheaper.
+/// The chunk the pooled states are backed in, from the smallest page or
+/// slot object and the allocation granularity `g`.
 fn chunk_size(m: &Manifest, page: u64, g: u64) -> u64 {
     let smallest = m
         .states
@@ -360,9 +363,24 @@ fn chunk_size(m: &Manifest, page: u64, g: u64) -> u64 {
             (0, q) if q > 0 => Some(q),
             _ => None,
         })
-        .min()
-        .unwrap_or(g);
-    (smallest / 2 / g).clamp(1, (64 << 20) / g.max(1)).max(1) * g
+        .min();
+    chunk_for(smallest, g)
+}
+
+const CHUNK_MAX: u64 = 64 << 20;
+
+/// A multiple of `g`, at most half the smallest object so an object spans
+/// at least two chunks (one shared at a boundary is then one of many), at
+/// most [`CHUNK_MAX`]. An object too small for even one granule per half
+/// shares its chunk with many others whatever the chunk is, so the chunk
+/// is then the largest: every driver call on the pool costs per chunk.
+fn chunk_for(smallest: Option<u64>, g: u64) -> u64 {
+    let cap = (CHUNK_MAX / g).max(1);
+    let units = match smallest.map_or(0, |s| s / 2 / g) {
+        0 => cap,
+        n => n.min(cap),
+    };
+    units * g
 }
 
 /// State budget in bytes that fits the device: free memory (after every
@@ -398,6 +416,28 @@ fn fit_budget(ctx: &CudaContext, fixed: u64, page_bytes: u64, first_slots_bytes:
         gib(HEADROOM)
     );
     Ok(budget)
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::chunk_for;
+
+    const G: u64 = 2 << 20;
+
+    #[test]
+    fn half_the_smallest_object_in_granules_capped_at_64_mib() {
+        assert_eq!(chunk_for(Some(48 << 20), G), 24 << 20);
+        assert_eq!(chunk_for(Some(5 << 20), G), 2 << 20);
+        assert_eq!(chunk_for(Some(1 << 30), G), 64 << 20);
+    }
+
+    #[test]
+    fn an_object_below_two_granules_takes_the_largest_chunk() {
+        assert_eq!(chunk_for(Some(1 << 10), G), 64 << 20);
+        assert_eq!(chunk_for(Some(4 << 20), G), 2 << 20);
+        assert_eq!(chunk_for(Some((4 << 20) - 1), G), 64 << 20);
+        assert_eq!(chunk_for(None, G), 64 << 20);
+    }
 }
 
 #[cfg(test)]

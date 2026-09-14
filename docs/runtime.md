@@ -34,8 +34,10 @@ per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`kern-pool`�
 `pages.rs` 的 `Pool` 在其上记页与 slot）。每个这样的 state 保留一段虚拟地址
 （`cuMemAddressReserve`，一次保留永不搬，`DeviceBuf::Reserved`），页与 slot 各是
 地址上的一段块区间；物理块 `cuMemCreate` 一次建齐，块大小是 2 MiB 粒度的整数倍、
-不超过最小对象的一半、封顶 64 MiB（qwen3.8 24 MiB，qwen3-4b / K3 2 MiB），谁用谁
-map。块留在上次用它的地方：还回的页还是页、还回的 slot 还是 slot；只有一类用光时
+不超过最小对象的一半、封顶 64 MiB（qwen3.8 24 MiB）；最小对象连两个粒度都不到时
+「对象跨两块」本就不成立，直接取封顶 64 MiB（qwen3-4b / K3 / DSV4.1）——driver 对池子
+的每个操作按块数计费且全 tray 串行，DSV4.1 的 102 GiB 从 52245 块 13–16 s 降到 1632
+块 0.5 s（tray18，2026-09-14）。谁用谁 map。块留在上次用它的地方：还回的页还是页、还回的 slot 还是 slot；只有一类用光时
 才从**另一类的空闲对象**上拆块（`Remap`：先 unmap 再 map 再 `cuMemSetAccess`；
 拆最高编号的、补最低编号的空位；跨对象边界的块按使用计数共享，最后一个用户走了
 才 unmap）。计划由 runtime 的后台线程执行：先等 stream 上记的事件（此前入队的
