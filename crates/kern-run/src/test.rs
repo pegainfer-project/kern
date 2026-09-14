@@ -38,14 +38,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Vars};
+use crate::{Caller, Vars, Weights};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{Arg, BufferKind, Call, DType, Dim, Dir, Manifest, ParamType, Provision};
 use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
-use kern_runtime::{Capacity, Runtime};
+use kern_runtime::{Capacity, Runtime, Topology};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -63,9 +63,10 @@ pub struct TestOpts {
     /// sha256, so one dir holds every version (file names are labels)
     #[arg(long)]
     kernels: Option<PathBuf>,
-    /// Safetensors artifact(s), tensors bound by name across all of them
+    /// Checkpoint directories or .safetensors files, tensors bound by name
+    /// across all of them
     #[arg(long)]
-    weights: Vec<PathBuf>,
+    weights: Vec<String>,
     /// HF tokenizer.json (only needed with --prompt)
     #[arg(long)]
     tokenizer: Option<PathBuf>,
@@ -140,7 +141,7 @@ struct Opts {
     a: PathBuf,
     b: PathBuf,
     kernels: PathBuf,
-    weights: Vec<PathBuf>,
+    weights: Weights,
     tokenizer: Option<PathBuf>,
     prompt: Option<String>,
     prefill: u64,
@@ -169,15 +170,17 @@ impl TestOpts {
             None => anyhow::anyhow!("no --{what}, and no {} found at or above the cwd", crate::config::FILE),
         };
         let test = cfg.map(|c| &c.test);
-        let weights = if self.weights.is_empty() {
+        let entries = if self.weights.is_empty() {
             t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
         } else {
             self.weights
         };
-        let tokenizer = self
-            .tokenizer
-            .or_else(|| t.and_then(|t| t.tokenizer.clone()))
-            .or_else(|| crate::checkpoint(&weights).tokenizer);
+        let weights = Weights::parse(&entries)?;
+        let gpu = self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0);
+        let tokenizer = match self.tokenizer.or_else(|| t.and_then(|t| t.tokenizer.clone())) {
+            Some(tk) => Some(tk),
+            None => crate::checkpoint(&weights.dirs()).tokenizer,
+        };
         Ok(Opts {
             a: self.reference.or_else(|| t.and_then(|t| t.reference.clone())).ok_or_else(|| need("reference"))?,
             b: self.manifest.or_else(|| t.map(|t| t.manifest.clone())).ok_or_else(|| need("manifest"))?,
@@ -189,7 +192,7 @@ impl TestOpts {
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),
             logit_ulp: self.logit_ulp.or_else(|| test.and_then(|x| x.logit_ulp)).unwrap_or(4),
             fuzz: self.fuzz.or_else(|| test.and_then(|x| x.fuzz)).unwrap_or(6),
-            gpu: self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0),
+            gpu,
             capacity: self.capacity.or_else(|| cfg.and_then(|c| c.capacity)).unwrap_or(4096),
             chunk: self.chunk,
             iters: self.iters,
@@ -801,7 +804,7 @@ fn restore_state(
     Ok(())
 }
 
-fn load_side(m: &Verified, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
+fn load_side(m: &Verified, o: &Opts) -> Result<Caller> {
     // The test drives one sequence (`Caller` leases one and writes
     // its lines into every table column), so one slot is all the
     // per-sequence states need. Sizing them for the manifest's whole batch
@@ -809,7 +812,7 @@ fn load_side(m: &Verified, o: &Opts, blobs: &[&[u8]]) -> Result<Caller> {
     // (154 MB of GDN state per slot) a run grew past 700 GB of host memory.
     let seqs = 1;
     let mut rt = Runtime::load(m, &o.kernels, o.gpu, Some(Capacity { tokens: Some(o.capacity), seqs }), None)?;
-    rt.load_weights(blobs)?;
+    o.weights.bind(&mut rt, &Topology::default())?;
     Caller::new(rt)
 }
 
@@ -1562,11 +1565,8 @@ fn execute(o: Opts) -> Result<i32> {
     }
 
     // ---- load A + B
-    let maps = crate::map_weights(&o.weights)?;
-    let refs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
     let t = Instant::now();
-    let mut s = Sides { a: load_side(&ma, &o, &refs)?, b: load_side(&mb, &o, &refs)? };
-    drop(maps);
+    let mut s = Sides { a: load_side(&ma, &o)?, b: load_side(&mb, &o)? };
     let load_t = t.elapsed();
     let prompt_ids = match &o.prompt {
         Some(text) => {

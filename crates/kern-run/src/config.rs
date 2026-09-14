@@ -16,7 +16,7 @@
 //! manifest  = "examples/x.json"        # B: the manifest under work
 //! reference = "ref/x.json"             # A: a copy you trust (kern test)
 //! kernels   = "kernels-x"              # one dir, both versions, by sha
-//! weights   = ["/weights/x.safetensors"]
+//! weights   = ["/weights/x.safetensors"]  # checkpoint dirs / .safetensors files
 //! tokenizer = "/weights/tokenizer.json"  # kern run; kern test only with a prompt
 //!
 //! [kernels]                            # kern kernels
@@ -63,7 +63,7 @@ pub struct Target {
     pub reference: Option<PathBuf>,
     pub kernels: PathBuf,
     #[serde(default)]
-    pub(crate) weights: Vec<PathBuf>,
+    pub(crate) weights: Vec<String>,
     pub(crate) tokenizer: Option<PathBuf>,
 }
 
@@ -122,7 +122,7 @@ impl Config {
             t.manifest = abs(&dir, &t.manifest);
             t.reference = t.reference.as_ref().map(|p| abs(&dir, p));
             t.kernels = abs(&dir, &t.kernels);
-            t.weights = t.weights.iter().map(|p| abs(&dir, p)).collect();
+            t.weights = t.weights.iter().map(|w| abs(&dir, Path::new(w)).to_string_lossy().into_owned()).collect();
             t.tokenizer = t.tokenizer.as_ref().map(|p| abs(&dir, p));
         }
         c.kernels.dumps = c.kernels.dumps.iter().map(|p| abs(&dir, p)).collect();

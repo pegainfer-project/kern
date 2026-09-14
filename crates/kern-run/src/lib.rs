@@ -14,6 +14,9 @@ pub mod config;
 pub mod run;
 pub mod server;
 pub mod test;
+pub mod weights;
+
+pub use weights::Weights;
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -36,17 +39,17 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| {
 /// What a checkpoint directory says besides its tensors: `tokenizer.json`
 /// and the ids that end generation (`generation_config.json`'s
 /// `eos_token_id`, else `config.json`'s; one id or a list). Over several
-/// `--weights` entries the first tokenizer wins and the eos ids are the
-/// union in order; a bare .safetensors file carries neither.
+/// directories ([`Weights::dirs`]) the first tokenizer wins and the eos
+/// ids are the union in order.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
     tokenizer: Option<std::path::PathBuf>,
     stop_tokens: Vec<i64>,
 }
 
-fn checkpoint(paths: &[std::path::PathBuf]) -> Checkpoint {
+fn checkpoint(dirs: &[std::path::PathBuf]) -> Checkpoint {
     let mut c = Checkpoint::default();
-    for d in paths.iter().filter(|p| p.is_dir()) {
+    for d in dirs.iter().filter(|p| p.is_dir()) {
         let t = d.join("tokenizer.json");
         if c.tokenizer.is_none() && t.is_file() {
             c.tokenizer = Some(t);

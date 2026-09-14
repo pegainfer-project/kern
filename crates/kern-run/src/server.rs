@@ -60,9 +60,9 @@ fn arguments(target: &Target, args: &[OsString]) -> Vec<OsString> {
         }
     }
     if !supplied("--weights") {
-        for path in &target.weights {
+        for w in &target.weights {
             out.push("--weights".into());
-            out.push(path.as_os_str().into());
+            out.push(w.into());
         }
     }
     out.extend_from_slice(args);
