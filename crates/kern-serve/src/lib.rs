@@ -145,6 +145,13 @@ fn rank_weights(paths: &[PathBuf], topo: &Topology) -> Result<Vec<PathBuf>> {
 }
 
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
+    info!(
+        manifest = %art.manifest.display(),
+        kernels = %art.kernels.display(),
+        weights = %art.weights.iter().map(|w| w.display().to_string()).collect::<Vec<_>>().join(","),
+        kern = %*kern_run::VERSION,
+        "loading"
+    );
     let gpus = if o.gpus.is_empty() { vec![0] } else { o.gpus.clone() };
     let model_path = checkpoint_dir(&art.weights[0]);
     let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&model_path).into_iter().map(|x| x as u32).collect();
@@ -197,11 +204,14 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         })
         .context("spawning the scheduler thread")?;
 
+    // The port opens once the engine is up: `serving` follows readiness.
+    let (model, model_dir, port) = (served_name.clone(), model_path.clone(), o.port);
     let engine = async move {
         let facts = tokio::task::spawn_blocking(move || ready_rx.recv())
             .await
             .context("scheduler thread died before reporting readiness")?
             .context("scheduler thread died before reporting readiness")??;
+        info!(model = %model, port, model_dir = %model_dir.display(), "serving");
         Ok(LaunchedEngine::Stepped(Engine {
             schedulers: vec![LiveScheduler { handle, join }],
             info: EngineInfo {
@@ -213,7 +223,6 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    info!(model = %served_name, port = o.port, model_dir = %model_path.display(), "serving");
     rt.block_on(async move {
         // Needs the runtime: it spawns the signal listener.
         let shutdown = vllm::shutdown_token_from_ctrl_c();
