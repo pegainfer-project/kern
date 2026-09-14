@@ -56,13 +56,6 @@ pub struct Waking {
 // between threads the same way.
 unsafe impl Send for Waking {}
 
-impl Waking {
-    /// Tokens the checkpoint will hold.
-    pub fn tokens(&self) -> usize {
-        self.cp.as_ref().map_or(0, Checkpoint::tokens)
-    }
-}
-
 impl Drop for Waking {
     fn drop(&mut self) {
         if !self.event.is_null() {

@@ -144,13 +144,7 @@ impl<T: Storage> Store<T> {
         self.len
     }
 
-    /// Pages held (0 for a slot-only store).
-    pub fn pages(&self) -> usize {
-        self.pages
-    }
-
-    /// Whether pages are held at all.
-    pub fn paged(&self) -> bool {
+    pub(crate) fn paged(&self) -> bool {
         self.chain.is_some()
     }
 

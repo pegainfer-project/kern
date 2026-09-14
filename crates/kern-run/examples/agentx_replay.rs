@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kern_manifest::types::Manifest;
-use kern_pool::{Denied, Found, Host, Lease, Pool, Prefix, Tier};
+use kern_pool::{Denied, Evicted, Found, Host, Lease, Pool, Prefix, Tier};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -201,30 +201,20 @@ struct Tally {
 /// when there is a host tier (dropping the coldest parked ones until it
 /// fits), else drop it. `false` when nothing is resident.
 fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, tally: &mut Tally) -> bool {
-    let Some(key) = prefix.coldest(Tier::Resident) else { return false };
-    if let Some(h) = host {
-        loop {
-            // The plan's copies would run on the runtime; here the bytes
-            // are imaginary and the checkpoint goes straight back.
-            let park = |cp| Ok::<_, ()>(h.park(&cp).map(|(p, _)| p).map_err(|_| cp));
-            match prefix.park(&key, park).unwrap() {
-                true => {
-                    tally.parks += 1;
-                    tally.host_peak = tally.host_peak.max(h.used());
-                    return true;
-                }
-                false => match prefix.coldest(Tier::Parked) {
-                    Some(c) => {
-                        prefix.remove(&c);
-                        tally.host_evictions += 1;
-                    }
-                    None => break,
-                },
-            }
+    // The plan's copies would run on the runtime; here the bytes are
+    // imaginary and the checkpoint goes straight back.
+    let park = host.map(|h| move |cp| Ok::<_, ()>(h.park(&cp).map(|(p, _)| p).map_err(|_| cp)));
+    match prefix.evict(park).unwrap() {
+        Some(Evicted::Parked(_)) => {
+            tally.parks += 1;
+            tally.host_peak = tally.host_peak.max(host.map_or(0, |h| h.used()));
         }
+        Some(Evicted::Dropped { parked, .. }) => {
+            tally.evictions += 1;
+            tally.host_evictions += parked as u64;
+        }
+        None => return false,
     }
-    prefix.remove(&key);
-    tally.evictions += 1;
     true
 }
 
@@ -475,7 +465,7 @@ fn main() {
         pct(&mut tally.extend, 0.9),
         pct(&mut tally.extend, 0.99),
         tally.checkpoints,
-        prefix.len(),
+        prefix.entries(),
         tally.evictions,
         tally.waited,
         tally.rejected,

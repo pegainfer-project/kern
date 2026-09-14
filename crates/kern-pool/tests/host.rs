@@ -8,7 +8,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use kern_pool::{Checkpoint, Copies, Denied, Host, Lease, Parked, Pool};
+use kern_pool::{runs, Checkpoint, Copies, Denied, Host, Lease, Parked, Pool};
 
 use common::{hybrid4, hybrid_pool4, land, paged4, pool4, pool_of, Rand};
 
@@ -25,10 +25,10 @@ fn pages_go_low_and_slots_high() {
     let [d0, d1, d2] = cp.page_ids()[..] else { panic!() };
     let (q, plan) = h.park(&cp).unwrap();
     assert_eq!(plan, Copies { pages: vec![(d0, 0), (d1, 4), (d2, 8)], slot: Some((cp.seq_slot().unwrap(), 56)) });
-    assert_eq!((q.tokens(), q.pages(), q.offsets(), q.slot_offset()), (12, 3, vec![0, 4, 8], Some(56)));
-    assert_eq!((h.used(), h.pages()), (20, 3));
+    assert_eq!((q.tokens(), q.offsets(), q.has_slot()), (12, vec![0, 4, 8], true));
+    assert_eq!(h.used(), 20);
     drop(q);
-    assert_eq!((h.used(), h.pages()), (0, 0));
+    assert_eq!(h.used(), 0);
 }
 
 #[test]
@@ -43,15 +43,15 @@ fn a_page_parked_already_is_shared_not_copied() {
     let (b, _) = p.checkpoint(&mut l, 16).unwrap();
     let (qb, plan) = h.park(&b).unwrap();
     assert_eq!(plan.pages, [(l.page_ids()[2], 8), (l.page_ids()[3], 12)]);
-    assert_eq!((h.pages(), qb.offsets(), qa.offsets()), (4, vec![0, 4, 8, 12], vec![0, 4]));
+    assert_eq!((h.used(), qb.offsets(), qa.offsets()), (16, vec![0, 4, 8, 12], vec![0, 4]));
     // Parked twice: the same host pages, nothing copied.
     let (qb2, plan) = h.park(&b).unwrap();
     assert_eq!((plan, qb2.offsets()), (Copies::default(), qb.offsets()));
     drop((qa, qb2));
     // qb holds every page; nothing came back.
-    assert_eq!((h.used(), h.pages()), (16, 4));
+    assert_eq!(h.used(), 16);
     drop(qb);
-    assert_eq!((h.used(), h.pages()), (0, 0));
+    assert_eq!(h.used(), 0);
     // Gone from the host: parking a's pages again copies again.
     let (_, plan) = h.park(&a).unwrap();
     assert_eq!(plan.pages.len(), 2);
@@ -68,9 +68,9 @@ fn full_keeps_nothing_and_frees_make_the_block_whole_again() {
     let (b, _) = p.checkpoint(&mut l, 12).unwrap();
     assert_eq!(h.park(&b).unwrap_err(), Denied::HostFull);
     // The third page went back; qa and its pages are untouched.
-    assert_eq!((h.used(), h.pages()), (16, 2));
+    assert_eq!(h.used(), 16);
     drop(qa);
-    assert_eq!((h.used(), h.pages()), (0, 0));
+    assert_eq!(h.used(), 0);
     drop((l, a, b));
     // Three pages dropped in any order leave one run: a slot the size of the block fits.
     let q = pool4();
@@ -107,17 +107,17 @@ fn wake_is_a_resident_checkpoint_again() {
     drop((l, cp));
     assert_eq!(p.used(), 0);
     let (w, plan) = h.wake(&q, &p, 10).unwrap();
-    assert_eq!((w.tokens(), w.pages(), w.has_slot(), p.used()), (10, 3, false, 3));
+    assert_eq!((w.tokens(), w.page_ids().len(), w.has_slot(), p.used()), (10, 3, false, 3));
     assert_eq!(plan, Copies { pages: q.offsets().into_iter().zip(w.page_ids()).collect(), slot: None });
     // A woken checkpoint restores like any other.
     let (l2, copies) = p.restore(&w, 10, 20).unwrap();
     assert_eq!((l2.prefix(), &l2.page_ids()[..2], copies.pages.len()), (10, &w.page_ids()[..2], 1));
     // And parks for free: its pages are the host's already.
     let (q2, plan) = h.park(&w).unwrap();
-    assert_eq!((plan, q2.offsets(), h.pages()), (Copies::default(), q.offsets(), 3));
+    assert_eq!((plan, q2.offsets(), h.used()), (Copies::default(), q.offsets(), 12));
     // A stateless parked checkpoint wakes at any whole page of it.
     let (w2, plan) = h.wake(&q, &p, 4).unwrap();
-    assert_eq!((w2.tokens(), w2.pages(), plan.pages.len()), (4, 1, 1));
+    assert_eq!((w2.tokens(), w2.page_ids().len(), plan.pages.len()), (4, 1, 1));
     drop((q, q2, w, w2, l2));
     assert_eq!((p.used(), h.used()), (0, 0));
 }
@@ -132,7 +132,7 @@ fn a_stateful_parked_checkpoint_wakes_at_its_length_only() {
     assert!(plan.slot.is_some());
     drop(cp);
     let (w, plan) = h.wake(&q, &p, 10).unwrap();
-    assert_eq!((w.has_slot(), plan.slot.map(|(o, _)| o)), (true, q.slot_offset()));
+    assert_eq!((w.has_slot(), plan.slot.map(|(o, _)| o)), (true, Some(56)));
     let _ = h.wake(&q, &p, 4);
 }
 
@@ -219,7 +219,7 @@ fn parked_bytes_come_back_and_partition_the_block() {
             3 | 4 if !cps.is_empty() => {
                 let (cp, content) = &cps[rand.next(cps.len())];
                 if let Ok((q, plan)) = h.park(cp) {
-                    assert!(plan.pages.len() <= cp.pages());
+                    assert!(plan.pages.len() <= cp.page_ids().len());
                     mem.park(&plan);
                     parked.push((q, content.clone()));
                 }
@@ -293,6 +293,12 @@ fn parked_bytes_come_back_and_partition_the_block() {
             }
             offsets.extend(offs);
         }
-        assert_eq!((p.used(), h.pages(), h.used()), (pages.len(), offsets.len(), offsets.len() as u64 * 4));
+        assert_eq!((p.used(), h.used()), (pages.len(), offsets.len() as u64 * 4));
     }
+}
+
+#[test]
+fn consecutive_pages_fold_into_one_copy() {
+    assert_eq!(runs(&[(10, 0), (11, 8), (12, 16)], 8), [(10, 0, 3)]);
+    assert_eq!(runs(&[(10, 0), (11, 8), (13, 16), (14, 32)], 8), [(10, 0, 2), (13, 16, 1), (14, 32, 1)]);
 }

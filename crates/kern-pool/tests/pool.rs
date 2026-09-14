@@ -8,9 +8,9 @@ use std::sync::Arc;
 use kern_manifest::types::{Dim, Manifest};
 use std::collections::{BTreeMap, BTreeSet};
 
-use kern_pool::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool};
+use kern_pool::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool, Remap};
 
-use common::{hybrid, hybrid_pool, hybrid_pool4, land, paged4, pool, pool_of, two_paged, Rand};
+use common::{hybrid, hybrid4, hybrid_pool, land, paged4, pool, pool_of, two_paged, Rand};
 
 #[test]
 fn a_new_pool_maps_every_chunk_in_its_first_plan() {
@@ -23,9 +23,9 @@ fn a_new_pool_maps_every_chunk_in_its_first_plan() {
     let (p2, plan) = Pool::new(&two_paged(), 8, 18, 0).unwrap();
     assert_eq!((p2.total(), p2.pages_max(), plan.map.len(), plan.unmap.len()), (4, 4, 16, 0));
     assert_eq!(plan.made, [(Kind::Page, 0), (Kind::Page, 1), (Kind::Page, 2), (Kind::Page, 3)]);
-    let names: Vec<(&str, Kind, u64, usize, usize)> =
-        p2.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.object, a.objects, a.positions)).collect();
-    assert_eq!(names, [("draft_kv", Kind::Page, 16, 4, 8), ("kv", Kind::Page, 16, 4, 8)]);
+    let names: Vec<(&str, Kind, u64, usize)> =
+        p2.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.object, a.positions)).collect();
+    assert_eq!(names, [("draft_kv", Kind::Page, 16, 8), ("kv", Kind::Page, 16, 8)]);
     // With slots: every chunk mapped, one access grant per object, nothing unmapped.
     let (p, plan) = Pool::new(&hybrid(), 8, 20, 4).unwrap();
     assert_eq!((plan.map.len(), plan.access.len(), plan.unmap.len(), plan.unmade.len()), (20, 8, 0, 0));
@@ -249,7 +249,7 @@ fn checkpoint_shares_pages_and_outlives_the_lease() {
     let p = pool();
     let mut a = p.lease(40).unwrap(); // 3 pages
     let (cp, copies) = p.checkpoint(&mut a, 32).unwrap(); // the first 2
-    assert_eq!((cp.tokens(), cp.pages(), cp.seq_slot(), copies), (32, 2, None, Copies::default()));
+    assert_eq!((cp.tokens(), cp.page_ids().len(), cp.seq_slot(), copies), (32, 2, None, Copies::default()));
     assert_eq!((cp.page_ids(), a.pages(), p.used()), (a.page_ids()[..2].to_vec(), 3, 3));
     drop(a);
     // The checkpoint keeps its 2 pages; the lease's third came back.
@@ -260,7 +260,7 @@ fn checkpoint_shares_pages_and_outlives_the_lease() {
     // Retiring keeps the pages up to `len` and returns the rest.
     let a = p.lease(48).unwrap();
     let cp = p.retire(a, 17);
-    assert_eq!((cp.tokens(), cp.pages(), p.used()), (17, 2, 2));
+    assert_eq!((cp.tokens(), cp.page_ids().len(), p.used()), (17, 2, 2));
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn checkpoints_along_one_lease_share_one_chain() {
     // A shallower checkpoint taken after a deeper one shares the whole
     // pages up the chain and copies the page it ends inside.
     let (c2b, copies) = p.checkpoint(&mut a, 20).unwrap();
-    assert_eq!((&c2b.page_ids()[..1], c2b.pages(), copies.pages.len()), (&c1.page_ids()[..], 2, 1));
+    assert_eq!((&c2b.page_ids()[..1], c2b.page_ids().len(), copies.pages.len()), (&c1.page_ids()[..], 2, 1));
     assert_ne!(c2b.page_ids()[1], c2.page_ids()[1]);
     assert_eq!(p.used(), 4);
     drop(a);
@@ -419,11 +419,11 @@ fn hybrid_checkpoint_copies_the_slot_and_retire_moves_it() {
 fn slot_only_leases_move_the_slot_alone() {
     let p = hybrid_pool();
     let mut l = p.lease_slot().unwrap();
-    assert_eq!((l.pages(), l.tokens(), l.paged(), l.seq_slot().is_some()), (0, 0, false, true));
+    assert_eq!((l.pages(), l.tokens(), l.seq_slot().is_some()), (0, 0, true));
     assert_eq!((p.used(), p.slots_used()), (0, 1));
     // A checkpoint copies the slot and holds no page, at any length.
     let (cp, c) = p.checkpoint(&mut l, 5).unwrap();
-    assert_eq!((cp.tokens(), cp.pages(), cp.paged(), cp.page_ids().len()), (5, 0, false, 0));
+    assert_eq!((cp.tokens(), cp.page_ids().len()), (5, 0));
     assert_eq!((c.pages.len(), c.slot.map(|(a, _)| a)), (0, l.seq_slot()));
     // Restoring is at its own length and gives a slot-only lease with that prefix.
     let (r, c) = p.restore(&cp, 5, 100).unwrap();
@@ -438,7 +438,7 @@ fn slot_only_leases_move_the_slot_alone() {
     // Retiring hands the slot over as it is.
     let slot = l.seq_slot();
     let cp = p.retire(l, 7);
-    assert_eq!((cp.tokens(), cp.pages(), cp.seq_slot()), (7, 0, slot));
+    assert_eq!((cp.tokens(), cp.page_ids().len(), cp.seq_slot()), (7, 0, slot));
     drop(cp);
     assert_eq!((p.used(), p.slots_used()), (0, 0));
 }
@@ -463,6 +463,86 @@ fn a_long_chain_drops_without_recursion() {
     assert_eq!(p.used(), 200_000);
     drop(cp);
     assert_eq!(p.used(), 0);
+}
+
+/// Which chunk is mapped at each (arena, position), kept from the plans
+/// the pool hands out: a chunk is free or at one position, a plan maps
+/// only free chunks onto empty positions and unmaps only mapped ones,
+/// and what it makes is whole once it lands.
+#[derive(Default)]
+struct Mapping {
+    chunks: usize,
+    at: BTreeMap<(usize, usize), u32>,
+    free: BTreeSet<u32>,
+    /// Objects that exist, by (kind, object).
+    made: BTreeSet<(Kind, i32)>,
+    landed: usize,
+}
+
+impl Mapping {
+    fn new(chunks: u32) -> Mapping {
+        Mapping {
+            chunks: chunks as usize,
+            at: BTreeMap::new(),
+            free: (0..chunks).collect(),
+            made: BTreeSet::new(),
+            landed: 0,
+        }
+    }
+
+    /// Positions `object` of `kind` covers in each arena of that kind.
+    fn positions(p: &Pool, kind: Kind, object: usize) -> Vec<(usize, usize)> {
+        let chunk = p.chunk();
+        p.pooled()
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.kind == kind)
+            .flat_map(|(a, ar)| {
+                let lo = ar.object * object as u64;
+                ((lo / chunk) as usize..((lo + ar.object).div_ceil(chunk)) as usize).map(move |q| (a, q))
+            })
+            .collect()
+    }
+
+    fn land(&mut self, p: &Pool, plan: &Remap) {
+        for &(a, q) in &plan.unmap {
+            let c = self.at.remove(&(a, q)).expect("unmapping a mapped position");
+            assert!(self.free.insert(c), "chunk {c} freed twice");
+        }
+        for &(a, q, c) in &plan.map {
+            assert!(self.free.remove(&c), "chunk {c} mapped while in use");
+            assert!(self.at.insert((a, q), c).is_none(), "position ({a}, {q}) mapped twice");
+        }
+        for &(k, o) in &plan.unmade {
+            assert!(self.made.remove(&(k, o)), "unmaking {k:?} {o} that did not exist");
+        }
+        for &(k, o) in &plan.made {
+            assert!(self.made.insert((k, o)), "making {k:?} {o} twice");
+            for pos in Mapping::positions(p, k, o as usize) {
+                assert!(self.at.contains_key(&pos), "{k:?} {o} landed with position {pos:?} unmapped");
+            }
+        }
+        assert_eq!(self.at.len() + self.free.len(), self.chunks, "a chunk is free or at one position");
+        let count = |k: Kind| self.made.iter().filter(|(kk, _)| *kk == k).count();
+        assert_eq!((p.total(), p.slots()), (count(Kind::Page), count(Kind::Slot)));
+        self.landed += 1;
+    }
+
+    /// Every page and slot a live handle names exists and is whole.
+    fn covers(&self, p: &Pool, pages: &BTreeSet<i32>, slots: &BTreeSet<i32>) {
+        for &page in pages {
+            assert!(self.made.contains(&(Kind::Page, page)), "page {page} held but not made");
+            for pos in Mapping::positions(p, Kind::Page, page as usize) {
+                assert!(self.at.contains_key(&pos), "page {page} held with {pos:?} unmapped");
+            }
+        }
+        for &slot in slots {
+            assert!(self.made.contains(&(Kind::Slot, slot)), "slot {slot} held but not made");
+            for pos in Mapping::positions(p, Kind::Slot, slot as usize) {
+                assert!(self.at.contains_key(&pos), "slot {slot} held with {pos:?} unmapped");
+            }
+        }
+    }
 }
 
 /// The positions and slots of a device, each holding the stamp last
@@ -523,8 +603,9 @@ fn fill(dev: &mut Device, s: &mut Seq, upto: usize, stamp: &mut u32) {
 }
 
 /// Every position and slot a live handle names reads what its writer
-/// put there, and the pool holds exactly what the handles name.
-fn check(dev: &Device, p: &Pool, seqs: &[Seq], cps: &[Held]) {
+/// put there, is mapped whole, and the pool holds exactly what the
+/// handles name.
+fn check(dev: &Device, map: &Mapping, p: &Pool, seqs: &[Seq], cps: &[Held]) {
     let unit = p.unit() as usize;
     let (mut pages, mut slots) = (BTreeSet::new(), BTreeSet::new());
     for s in seqs {
@@ -550,6 +631,7 @@ fn check(dev: &Device, p: &Pool, seqs: &[Seq], cps: &[Held]) {
         pages.extend(ids);
     }
     assert_eq!((p.used(), p.slots_used()), (pages.len(), slots.len()));
+    map.covers(p, &pages, &slots);
 }
 
 /// Random leases, fills, checkpoints, restores, forks, retirements and
@@ -559,8 +641,19 @@ fn check(dev: &Device, p: &Pool, seqs: &[Seq], cps: &[Held]) {
 /// it held however far its sequence runs on. (A half-page checkpoint
 /// that shared the page its lease kept writing was the bug behind
 /// this rewrite.) With a recurrent state a checkpoint is the sequence
-/// as of now and restores at its own length only.
-fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
+/// as of now and restores at its own length only. The remaps planned
+/// along the way land into a model of the chunks: a chunk is free or
+/// at one position, and whatever a handle names is mapped whole.
+fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, first_slots: usize, seed: u64) {
+    let (p, first) = Pool::new(m, chunk, chunks, first_slots).unwrap();
+    let p = Arc::new(p);
+    let mut map = Mapping::new(chunks);
+    map.land(&p, &first);
+    let land = |map: &mut Mapping| {
+        let plan = p.take_pending().expect("a remap planned");
+        p.complete(plan.clone());
+        map.land(&p, &plan);
+    };
     let unit = p.unit() as usize;
     let max = p.max_seq_tokens();
     let stateful = p.has_slots();
@@ -580,7 +673,7 @@ fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
                     fill(&mut dev, &mut s, upto, &mut stamp);
                     seqs.push(s);
                 }
-                Err(Denied::Remapping) => land(&p),
+                Err(Denied::Remapping) => land(&mut map),
                 Err(_) => {}
             },
             2 if !seqs.is_empty() => {
@@ -601,7 +694,7 @@ fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
                         dev.copy(unit, &copies);
                         cps.push(Held { cp, content: s.content[..len].to_vec() });
                     }
-                    Err(Denied::Remapping) => land(&p),
+                    Err(Denied::Remapping) => land(&mut map),
                     Err(_) => {}
                 }
             }
@@ -624,7 +717,7 @@ fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
                         fill(&mut dev, &mut s, upto, &mut stamp);
                         seqs.push(s);
                     }
-                    Err(Denied::Remapping) => land(&p),
+                    Err(Denied::Remapping) => land(&mut map),
                     Err(_) => {}
                 }
             }
@@ -644,7 +737,7 @@ fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
                         fill(&mut dev, &mut s, upto, &mut stamp);
                         seqs.push(s);
                     }
-                    Err(Denied::Remapping) => land(&p),
+                    Err(Denied::Remapping) => land(&mut map),
                     Err(_) => {}
                 }
             }
@@ -665,19 +758,36 @@ fn handles_read_what_their_writer_wrote(p: Arc<Pool>, seed: u64) {
             }
             _ => {}
         }
-        check(&dev, &p, &seqs, &cps);
+        check(&dev, &map, &p, &seqs, &cps);
     }
     drop((seqs, cps));
     assert_eq!((p.used(), p.slots_used()), (0, 0));
+    assert!(!stateful || map.landed > 1, "pages and slots never traded a chunk");
 }
 
 #[test]
 fn paged_handles_read_what_their_writer_wrote() {
     // 24 pages of 4 tokens, rows of 8.
-    handles_read_what_their_writer_wrote(pool_of(&paged4(), 4, 24, 0), 0x9E37_79B9_7F4A_7C15);
+    handles_read_what_their_writer_wrote(&paged4(), 4, 24, 0, 0x9E37_79B9_7F4A_7C15);
 }
 
 #[test]
 fn stateful_handles_read_what_their_writer_wrote() {
-    handles_read_what_their_writer_wrote(hybrid_pool4(), 0x2545_F491_4F6C_DD1D);
+    // 3 slots and 6 pages over 18 chunks: pages and slots trade chunks.
+    handles_read_what_their_writer_wrote(&hybrid4(), 4, 18, 3, 0x2545_F491_4F6C_DD1D);
+}
+
+#[test]
+fn hybrid_handles_read_what_their_writer_wrote() {
+    // 8-byte chunks, 26 of them: 3 slots of 24 bytes, 8 pages of 16, a
+    // spare chunk, so a page or a slot boundary can fall inside a chunk.
+    handles_read_what_their_writer_wrote(&hybrid(), 8, 26, 3, 0x1234_5678_9ABC_DEF1);
+}
+
+#[test]
+fn access_spans_merge_touching_grants_per_arena() {
+    let plan =
+        Remap { access: vec![(1, 4..6), (0, 0..2), (0, 1..3), (0, 3..4), (0, 6..7), (1, 2..4)], ..Remap::default() };
+    assert_eq!(plan.access_spans(), [(0, 0..4), (0, 6..7), (1, 2..6)]);
+    assert_eq!(Remap::default().access_spans(), []);
 }

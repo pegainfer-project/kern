@@ -19,7 +19,7 @@
 use std::ops::Range;
 
 /// What an arena's objects are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     Page,
     Slot,
@@ -52,10 +52,6 @@ pub struct Remap {
 }
 
 impl Remap {
-    pub fn is_empty(&self) -> bool {
-        self.unmap.is_empty() && self.map.is_empty()
-    }
-
     /// The access grants as maximal contiguous spans per arena: one grant
     /// per span costs the driver the same per chunk and nothing per object.
     pub fn access_spans(&self) -> Vec<(usize, Range<usize>)> {
@@ -101,12 +97,6 @@ impl Chunks {
 
     pub fn free(&self) -> usize {
         self.free.len()
-    }
-
-    /// Positions of each arena.
-    #[cfg(test)]
-    fn positions(&self) -> Vec<usize> {
-        self.arenas.iter().map(|a| a.chunk.len()).collect()
     }
 
     /// Positions `object` of arena `a` covers.
@@ -162,90 +152,5 @@ impl Chunks {
             }
         }
         plan.unmade.push((kind, object as i32));
-    }
-
-    /// Every mapped (arena, position, chunk).
-    #[cfg(test)]
-    pub(crate) fn mapped(&self) -> Vec<(usize, usize, u32)> {
-        self.arenas
-            .iter()
-            .enumerate()
-            .flat_map(|(a, ar)| ar.chunk.iter().enumerate().filter_map(move |(p, c)| c.map(|c| (a, p, c))))
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn users(&self, a: usize) -> &[u16] {
-        &self.arenas[a].users
-    }
-
-    #[cfg(test)]
-    pub(crate) fn free_ids(&self) -> &[u32] {
-        &self.free
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Pages of 16 bytes and slots of 24 over 12-byte chunks: pages share
-    /// every other boundary chunk, slots every one.
-    fn chunks() -> Chunks {
-        Chunks::new(12, &[(Kind::Page, 16, 6), (Kind::Slot, 24, 3)], 20)
-    }
-
-    #[test]
-    fn access_spans_merge_touching_grants_per_arena() {
-        let plan = Remap {
-            access: vec![(1, 4..6), (0, 0..2), (0, 1..3), (0, 3..4), (0, 6..7), (1, 2..4)],
-            ..Remap::default()
-        };
-        assert_eq!(plan.access_spans(), [(0, 0..4), (0, 6..7), (1, 2..6)]);
-        assert_eq!(Remap::default().access_spans(), []);
-    }
-
-    #[test]
-    fn intervals_share_boundary_chunks() {
-        let c = chunks();
-        assert_eq!(c.positions(), [8, 6]);
-        assert_eq!((c.interval(0, 0), c.interval(0, 1), c.interval(0, 2)), (0..2, 1..3, 2..4));
-        assert_eq!((c.interval(1, 0), c.interval(1, 1)), (0..2, 2..4));
-        assert_eq!((c.cost(Kind::Page, 0), c.cost(Kind::Slot, 0)), (2, 2));
-    }
-
-    #[test]
-    fn make_and_unmake_count_users() {
-        let mut c = chunks();
-        let mut plan = Remap::default();
-        c.make(Kind::Page, 0, &mut plan);
-        c.make(Kind::Page, 1, &mut plan);
-        // Position 1 is shared: mapped once, used twice.
-        assert_eq!((plan.map.len(), &c.users(0)[..4], c.free()), (3, &[1, 2, 1, 0][..], 17));
-        assert_eq!(plan.access, [(0, 0..2), (0, 1..3)]);
-        assert_eq!(c.cost(Kind::Page, 2), 1);
-        let mut plan = Remap::default();
-        c.unmake(Kind::Page, 0, &mut plan);
-        // Only position 0 comes off; page 1 still exists over position 1.
-        assert_eq!((plan.unmap, &c.users(0)[..3], c.free()), (vec![(0, 0)], &[0, 1, 1][..], 18));
-        assert_eq!(plan.unmade, [(Kind::Page, 0)]);
-        let mut plan = Remap::default();
-        c.unmake(Kind::Page, 1, &mut plan);
-        assert_eq!((plan.unmap.len(), c.free(), c.mapped().len()), (2, 20, 0));
-    }
-
-    #[test]
-    fn a_plan_reuses_the_chunks_it_frees() {
-        let mut c = Chunks::new(12, &[(Kind::Page, 24, 2), (Kind::Slot, 24, 2)], 2);
-        let mut plan = Remap::default();
-        c.make(Kind::Slot, 0, &mut plan);
-        assert_eq!((c.free(), c.cost(Kind::Page, 0)), (0, 2));
-        let mut plan = Remap::default();
-        c.unmake(Kind::Slot, 0, &mut plan);
-        c.make(Kind::Page, 0, &mut plan);
-        let freed: Vec<u32> = plan.map.iter().map(|&(_, _, ch)| ch).collect();
-        assert_eq!((plan.unmap.len(), freed.len(), c.free()), (2, 2, 0));
-        assert_eq!(plan.made, [(Kind::Page, 0)]);
-        assert_eq!(plan.unmade, [(Kind::Slot, 0)]);
     }
 }

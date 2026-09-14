@@ -662,15 +662,6 @@ impl Tray {
         self.each(snap.by_ref(), |rt, m, cp| rt.lease_from(cp, if m == snap.me { len } else { cp.tokens() }, tokens))
     }
 
-    /// A child of `parent` at its first `len` tokens with room for
-    /// `tokens`, on every member. Nothing in `serve` branches a live
-    /// sequence yet; the harness does (`k3_golden --fork`), and a session
-    /// fork request would land here.
-    #[allow(dead_code)]
-    pub fn fork(&mut self, parent: &mut Row, len: usize, tokens: usize) -> Result<Row, Error> {
-        self.each(parent.by_mut(), |rt, _, l| rt.fork(l, len, tokens))
-    }
-
     /// The first `len` tokens of `row` as a snapshot it keeps running past.
     pub fn checkpoint(&mut self, row: &mut Row, len: usize) -> Result<Snapshot, Error> {
         self.each(row.by_mut(), |rt, _, l| rt.checkpoint(l, len))

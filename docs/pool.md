@@ -130,8 +130,11 @@ pub struct Hit<R, P> {
 条目持有 `R` / `P`，`Hit` 持有它们的 clone（`Kept: Clone`，`Store<T>` 和 tray 的
 `Group<X>` 都是）。`make_room` 把条目 park 掉或删掉都不影响手里的 `Hit`（lessons.md
 2026-09-04"make_room 之后旧的命中不能再用"这类错误从类型上消失）。条目按 token 键
-操作：`insert(&key, r)`、`lookup(&tokens)`、`resident(&key)` / `parked(&key)`、
-`coldest(tier) -> Option<Arc<[i64]>>`、`park(&key, f)`、`remove(&key)`。TP 下 `R` / `P`
+操作：`insert(&key, r)`、`lookup(&tokens)`，腾地方只有一个动作 `evict(park)`：最久未命中
+的 resident 条目经调用方的拷贝 `park` 进 host（host 满了先丢最冷的 parked 条目再试，
+丢光了还放不下、或没有 host 层，就丢它），返回 `Evicted::{Parked(key), Dropped {key,
+parked}}` 说明动了谁——scheduler 与 `agentx_replay` 之前各写一份同样的循环，现在
+是表的。哪个条目最冷是表自己的事，外面看不到 LRU。TP 下 `R` / `P`
 是 tray 的 `Group<Checkpoint>` / `Group<Parked>`，索引仍然是 tray 一棵，不变。
 
 ## 3. 操作
@@ -177,8 +180,8 @@ store 让树可以在任意 token 位置分叉而不碰任何一页。
   的 `paged_below` / `resident_below` 子树计数说这样的条目有没有，不用扫；
 - 取最长，同长 resident 优先。
 
-命中触碰路径上的每个条目，根最新、叶最旧，同一条链一起老化、叶先走；`coldest`
-是各 tier 一张按 tick 的 `BTreeMap`。不带 slot 的 resident 条目比同路径上一个
+命中触碰路径上的每个条目，根最新、叶最旧，同一条链一起老化、叶先走；`evict` 取的
+最冷条目来自各 tier 一张按 tick 的 `BTreeMap`。不带 slot 的 resident 条目比同路径上一个
 不带 slot、只在 device 的条目深一页时替换它：纯 KV 序列每页 checkpoint 一次，
 索引里只留一条会长的。
 
