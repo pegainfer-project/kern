@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
         let p = entry?.path();
         if p.extension().is_some_and(|e| e == "cubin") {
             let b = std::fs::read(&p)?;
-            let sha = format!("{:x}", sha2::Sha256::digest(&b));
+            let sha = hex::encode(sha2::Sha256::digest(&b));
             std::fs::write(
                 kernels.join(format!("{}-{}.cubin", p.file_stem().unwrap().to_string_lossy(), &sha[..12])),
                 b,

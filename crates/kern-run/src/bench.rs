@@ -131,7 +131,7 @@ fn series(v: Vec<f64>) -> Value {
     json!({"stats":stats(&v),"samples_us":v})
 }
 fn digest(b: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(b))
+    hex::encode(Sha256::digest(b))
 }
 fn anchors(v: Vec<Anchor>) -> Value {
     Value::Array(

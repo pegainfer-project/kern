@@ -84,7 +84,7 @@ pub(crate) fn load_pinned_modules(
     for (label, path) in local.chain(remote.iter().map(|(r, p)| (r.clone(), p.clone()))) {
         let bytes =
             std::fs::read(&path).map_err(|e| Error::KernelArtifact(format!("reading {}: {e}", path.display())))?;
-        let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+        let sha = hex::encode(sha2::Sha256::digest(&bytes));
         if !wanted.contains(&sha) {
             tracing::debug!("{label} ({}): not pinned by this manifest, not loaded", &sha[..12]);
             continue;
@@ -116,7 +116,7 @@ fn fetch_registry_cubin(reg: &RegistryRef, sha256: &str) -> Result<PathBuf> {
     let blobs = cache_root.join("blobs");
     let cached = blobs.join(&sha);
     if let Ok(data) = std::fs::read(&cached) {
-        if format!("{:x}", sha2::Sha256::digest(&data)) == sha {
+        if hex::encode(sha2::Sha256::digest(&data)) == sha {
             return Ok(cached);
         }
     }
@@ -125,13 +125,13 @@ fn fetch_registry_cubin(reg: &RegistryRef, sha256: &str) -> Result<PathBuf> {
     tracing::info!("fetching {url}");
     let mut req = ureq::get(&url);
     if let Ok(tok) = std::env::var("HF_TOKEN") {
-        req = req.set("Authorization", &format!("Bearer {tok}"));
+        req = req.header("Authorization", format!("Bearer {tok}"));
     }
     let resp = req.call().map_err(|e| Error::KernelArtifact(format!("fetching {url}: {e}")))?;
     let mut data = Vec::new();
-    std::io::Read::read_to_end(&mut resp.into_reader(), &mut data)
+    std::io::Read::read_to_end(&mut resp.into_body().into_reader(), &mut data)
         .map_err(|e| Error::KernelArtifact(format!("reading {url}: {e}")))?;
-    let got = format!("{:x}", sha2::Sha256::digest(&data));
+    let got = hex::encode(sha2::Sha256::digest(&data));
     if got != sha {
         bail!(
             KernelArtifact,

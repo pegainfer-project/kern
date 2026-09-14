@@ -36,20 +36,21 @@ clap = { version = "4", features = ["derive"] }
 # machine: `cuda-13000` pins it, and no toolkit is needed to build.
 cudarc = { version = "=0.19.7", features = ["cuda-13000", "f16"] }
 half = "=2.7.1"
+hex = "0.4"
 libc = "0.2"
 memmap2 = "0.9"
-safetensors = "=0.7.0"
+safetensors = "=0.8.0"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
-tokenizers = "=0.22.2"
+tokenizers = "=0.23.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-toml = "0.9"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ureq = "2"
+ureq = "3"
 
 [workspace.lints.clippy]
 disallowed_types = "deny"  # clippy.toml: std hash maps, whose iteration order is random per process

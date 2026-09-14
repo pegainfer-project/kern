@@ -37,7 +37,7 @@ fn main() {
     }
     let n = gpus.len();
     let bytes = std::fs::read(&cubin).expect("cubin");
-    let sha = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+    let sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
     let kernels = std::env::temp_dir().join(format!("kern-peer-barrier-{}", std::process::id()));
     std::fs::create_dir_all(&kernels).unwrap();
     std::fs::write(kernels.join(format!("peer_barrier-{}.cubin", &sha[..12])), &bytes).unwrap();

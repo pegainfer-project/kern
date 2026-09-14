@@ -122,7 +122,7 @@ fn stage_cubins(cubins: &Path, kernels: &Path) {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "cubin") {
             let bytes = std::fs::read(&path).unwrap();
-            let sha = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+            let sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
             let stem = path.file_stem().unwrap().to_string_lossy();
             std::fs::write(kernels.join(format!("{stem}-{}.cubin", &sha[..12])), &bytes).unwrap();
         }

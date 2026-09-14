@@ -37,7 +37,7 @@ export default defineConfig({
     fs: { allow: [".."] },
   },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: resolve(here, "index.html"),
         schema: resolve(here, "schema/index.html"),
