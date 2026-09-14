@@ -631,8 +631,8 @@ impl Mapper {
             let h = self.physical.handles[c as usize];
             self.arenas[a].map(p, h)?;
         }
-        for (a, r) in &plan.access {
-            self.arenas[*a].access(r.clone())?;
+        for (a, r) in plan.access_spans() {
+            self.arenas[a].access(r)?;
         }
         Ok(())
     }

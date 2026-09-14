@@ -55,6 +55,20 @@ impl Remap {
     pub fn is_empty(&self) -> bool {
         self.unmap.is_empty() && self.map.is_empty()
     }
+
+    /// The access grants as maximal contiguous spans per arena: one grant
+    /// per span costs the driver the same per chunk and nothing per object.
+    pub fn access_spans(&self) -> Vec<(usize, Range<usize>)> {
+        let mut grants: Vec<_> = self.access.iter().map(|(a, r)| (*a, r.start, r.end)).collect();
+        grants.sort_unstable();
+        grants.into_iter().fold(Vec::new(), |mut spans: Vec<(usize, Range<usize>)>, (a, start, end)| {
+            match spans.last_mut() {
+                Some((la, lr)) if *la == a && start <= lr.end => lr.end = lr.end.max(end),
+                _ => spans.push((a, start..end)),
+            }
+            spans
+        })
+    }
 }
 
 /// The chunk pool: `total` chunks of `chunk` bytes, each mapped at one
@@ -179,6 +193,16 @@ mod tests {
     /// every other boundary chunk, slots every one.
     fn chunks() -> Chunks {
         Chunks::new(12, &[(Kind::Page, 16, 6), (Kind::Slot, 24, 3)], 20)
+    }
+
+    #[test]
+    fn access_spans_merge_touching_grants_per_arena() {
+        let plan = Remap {
+            access: vec![(1, 4..6), (0, 0..2), (0, 1..3), (0, 3..4), (0, 6..7), (1, 2..4)],
+            ..Remap::default()
+        };
+        assert_eq!(plan.access_spans(), [(0, 0..4), (0, 6..7), (1, 2..6)]);
+        assert_eq!(Remap::default().access_spans(), []);
     }
 
     #[test]
