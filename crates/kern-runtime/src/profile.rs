@@ -7,7 +7,8 @@ use cudarc::driver::{sys, CudaFunction, LaunchConfig, PushKernelArg};
 use kern_manifest::types::{Arg, BufferKind, Dir};
 
 use crate::compile::{Dense, RVal};
-use crate::device::{gemm_bf16_tn, Events};
+use crate::cublas::gemm_bf16_tn;
+use crate::device::Events;
 use crate::{alloc, cuda_check, DeviceBuf, Result, Runtime};
 
 impl Events {

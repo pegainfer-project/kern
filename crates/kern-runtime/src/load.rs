@@ -20,8 +20,9 @@ use kern_manifest::Verified;
 
 use crate::chunks::Kind;
 use crate::device::{
-    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, Blas, DeviceBuf, Mapper, Physical,
+    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_2d, Arena, DeviceBuf, Mapper, Physical,
 };
+use crate::cublas::Blas;
 use crate::error::bail;
 use crate::lease::Remaps;
 use crate::pages::{chunks_for, page_unit, Pool};

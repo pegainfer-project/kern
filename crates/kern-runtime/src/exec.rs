@@ -26,7 +26,7 @@ use std::os::raw::c_void;
 use cudarc::driver::sys;
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
-use crate::device::{gemm_bf16_tn, gemm_bf16_tn_f32};
+use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 

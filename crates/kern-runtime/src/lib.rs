@@ -25,6 +25,7 @@
 
 mod chunks;
 mod compile;
+mod cublas;
 mod cubin;
 mod device;
 mod error;
@@ -52,7 +53,8 @@ use kern_manifest::Verified;
 pub use chunks::{Kind, Remap};
 use compile::{CompiledProgram, Dense};
 pub use device::PeerHandle;
-use device::{alloc, Blas, DeviceBuf, Pinned};
+use cublas::Blas;
+use device::{alloc, DeviceBuf, Pinned};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use host::{Host, Park, Parked};
