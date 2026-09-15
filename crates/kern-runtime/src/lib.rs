@@ -53,6 +53,7 @@ use device::{alloc, DeviceBuf, Pinned};
 pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
+pub use harness::Scratch;
 pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
 use lease::Remaps;
