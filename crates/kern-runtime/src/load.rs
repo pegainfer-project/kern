@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
 use cudarc::driver::{CudaContext, CudaStream};
-use kern_manifest::types::{BufferKind, Manifest, Placement, Provision};
+use kern_manifest::types::{Buffer, BufferKind, DType, Dim, Manifest, Placement, Provision, Segment};
 use kern_manifest::Verified;
 
 use crate::cublas::Blas;
@@ -62,6 +62,35 @@ impl Runtime {
         topology: Option<&Topology>,
         host_weights: &crate::HostWeights,
     ) -> Result<Runtime> {
+        Self::load_from(manifest, kernels_dir, gpu, capacity, topology, host_weights, None)
+    }
+
+    /// Load a rank over the weights a runtime on the same device left
+    /// behind ([`Runtime::into_resident`]): every weight buffer declared
+    /// as one of them is taken filled instead of allocated, and
+    /// `load_weights` copies only what was not. The caller binds the same
+    /// checkpoint to both runtimes, as the same rank.
+    pub fn load_over(
+        manifest: &Verified,
+        kernels_dir: &std::path::Path,
+        gpu: usize,
+        capacity: Option<Capacity>,
+        topology: Option<&Topology>,
+        host_weights: &crate::HostWeights,
+        resident: Resident,
+    ) -> Result<Runtime> {
+        Self::load_from(manifest, kernels_dir, gpu, capacity, topology, host_weights, Some(resident))
+    }
+
+    fn load_from(
+        manifest: &Verified,
+        kernels_dir: &std::path::Path,
+        gpu: usize,
+        capacity: Option<Capacity>,
+        topology: Option<&Topology>,
+        host_weights: &crate::HostWeights,
+        mut resident: Option<Resident>,
+    ) -> Result<Runtime> {
         let manifest = manifest.clone();
         let mut ranks = BTreeMap::new();
         if let Some(t) = &manifest.topology {
@@ -79,6 +108,14 @@ impl Runtime {
                     bail!(Api, "topology group `{g}`: rank {} outside 0..{size}", r.index);
                 }
                 ranks.insert(g.clone(), r.index);
+            }
+        }
+        if let Some(r) = &resident {
+            if r.gpu != gpu {
+                bail!(Api, "resident weights are on gpu {}; this runtime loads on gpu {gpu}", r.gpu);
+            }
+            if r.ranks != ranks {
+                bail!(Api, "resident weights are rank {:?}'s; this runtime is rank {ranks:?}", r.ranks);
             }
         }
         let dev = gpu as i32;
@@ -112,9 +149,14 @@ impl Runtime {
         // fills; everything else is pool memory.
         let mut buffers = BTreeMap::new();
         let mut peers = BTreeMap::new();
+        let (mut filled, mut kept) = (BTreeSet::new(), 0u64);
         for (name, b) in &manifest.buffers {
             let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), &vars_max)?;
-            let buf = if b.placement == Placement::Host {
+            let buf = if let Some(r) = resident.as_mut().and_then(|r| r.take(name, b, bytes)) {
+                filled.insert(name.clone());
+                kept += bytes;
+                r.on(&stream)
+            } else if b.placement == Placement::Host {
                 alloc_host(&stream, host_weights.acquire(name, b, bytes, &ctx)?)?
             } else if b.export {
                 alloc_vmm(&stream, dev, bytes, &format!("buffer `{name}`"))?
@@ -231,6 +273,8 @@ impl Runtime {
         let mut rt = Runtime {
             host_weights_ready: !manifest.buffers.values().any(|b| b.placement == Placement::Host),
             manifest,
+            filled,
+            kept,
             ctx,
             stream,
             xfer,
@@ -277,7 +321,7 @@ impl Runtime {
         let lanes = (0..LOAD_LANES).map(|_| self.ctx.new_stream()).collect::<std::result::Result<Vec<_>, _>>()?;
         let mut planned = Vec::new();
         for (name, b) in &self.manifest.buffers {
-            if b.kind != BufferKind::Weight {
+            if b.kind != BufferKind::Weight || self.filled.contains(name) {
                 continue;
             }
             let dst = &self.buffers[name];
@@ -308,10 +352,11 @@ impl Runtime {
         lanes.iter().try_for_each(|s| s.synchronize())?;
         self.stream.synchronize()?;
         tracing::info!(
-            "gpu {} weights: device {:.1} GiB in {} copies, host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s); {:.1}s in all",
+            "gpu {} weights: device {:.1} GiB in {} copies ({:.1} GiB resident already), host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s); {:.1}s in all",
             self.gpu,
             gib(device.0),
             device.1,
+            gib(self.kept),
             gib(host.0),
             host.1,
             gib(filled.0),
@@ -320,7 +365,78 @@ impl Runtime {
             t0.elapsed().as_secs_f64(),
         );
         self.host_weights_ready = true;
+        self.filled
+            .extend(self.manifest.buffers.iter().filter(|(_, b)| b.kind == BufferKind::Weight).map(|(n, _)| n.clone()));
         Ok(())
+    }
+
+    /// Bytes of weights this runtime took from a [`Resident`] instead of copying.
+    pub fn kept_bytes(&self) -> u64 {
+        self.kept
+    }
+
+    /// The device weight buffers, filled, out of a runtime that is otherwise
+    /// dropped here: what [`Runtime::load_over`] on the same device takes
+    /// instead of loading again. Buffers whose weights were never bound,
+    /// and host-placed ones (shared through [`crate::HostWeights`]), stay
+    /// behind.
+    pub fn into_resident(mut self) -> Resident {
+        let mut all = std::mem::take(&mut self.buffers);
+        let buffers = self
+            .filled
+            .iter()
+            .filter_map(|n| {
+                let buf = all.remove(n)?;
+                buf.host_weight().is_none().then(|| (n.clone(), (Identity::of(&self.manifest.buffers[n]), buf)))
+            })
+            .collect();
+        Resident { gpu: self.gpu, ranks: self.ranks.clone(), buffers }
+    }
+}
+
+/// Weight buffers that outlived their runtime, waiting for the next one
+/// on the same device. A buffer is handed over when the next manifest
+/// declares it the same way — type, shape, placement, export and the
+/// tensors bound into it — under the same name; a kernel swap changes
+/// none of that. What the next runtime does not take is freed with this.
+pub struct Resident {
+    gpu: usize,
+    ranks: BTreeMap<String, u64>,
+    buffers: BTreeMap<String, (Identity, DeviceBuf)>,
+}
+
+impl Resident {
+    pub fn bytes(&self) -> u64 {
+        self.buffers.values().map(|(_, b)| b.bytes).sum()
+    }
+
+    fn take(&mut self, name: &str, b: &Buffer, bytes: u64) -> Option<DeviceBuf> {
+        let same = self.buffers.get(name).is_some_and(|(id, buf)| *id == Identity::of(b) && buf.bytes == bytes);
+        same.then(|| self.buffers.remove(name)).flatten().map(|(_, buf)| buf)
+    }
+}
+
+/// What decides that two manifests mean the same bytes by a buffer name.
+#[derive(PartialEq, Eq)]
+struct Identity {
+    dtype: DType,
+    shape: Vec<Dim>,
+    kind: BufferKind,
+    placement: Placement,
+    export: bool,
+    bind: Vec<Segment>,
+}
+
+impl Identity {
+    fn of(b: &Buffer) -> Identity {
+        Identity {
+            dtype: b.dtype,
+            shape: b.shape.clone(),
+            kind: b.kind,
+            placement: b.placement,
+            export: b.export,
+            bind: b.bind.clone(),
+        }
     }
 }
 

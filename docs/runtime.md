@@ -203,6 +203,14 @@ fabric 映射的源上每次约 90 µs 固定开销，DSV4.1 每 rank 24923 次 
 2.3 s、8 条 2D 1.2–2.2 s、8 条 1D 0.5–0.7 s（111–148 GiB/s）；先发完设备拷贝再填
 host placement 的 buffer（第一个到的 rank 填，其余等），engram 一张 94 GiB 表 DtoH
 约 1 s，整段 2.2 s（tray18，2026-09-14）。
+同一张卡上接连装两份只差 kernel 的 manifest（`kern test` 的 A 与 B）时权重不必
+装两次：`Runtime::into_resident` 把已绑定的设备权重 buffer 从要丢弃的 runtime
+里拿出来（`Resident`，其余 state、workspace、program 随 runtime 释放），
+`Runtime::load_over` 在分配时按名字认领声明相同的 buffer——dtype、shape、
+placement、export、`bind` 的张量都相同——直接当作已填，`load_weights` 只拷没
+认领的；没被认领的随 `Resident` 释放。调用方保证两边绑的是同一份 checkpoint 的
+同一个 rank（gpu 和 rank 不同时 `load_over` 拒绝）。host placement 的权重不走
+这条路，它们本来就经 `HostWeights` 在同一 scope 内共享。
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、

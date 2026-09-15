@@ -324,6 +324,12 @@ impl DeviceBuf {
         }
     }
 
+    /// The same allocation, its views ordered on `stream` from now on.
+    pub(crate) fn on(mut self, stream: &Arc<CudaStream>) -> DeviceBuf {
+        self.stream = stream.clone();
+        self
+    }
+
     /// A pooled state: `bytes` of its initial layout at `ptr`, `span`
     /// bytes reserved there; the arena behind it is the [`Mapper`]'s.
     pub(crate) fn reserved(stream: &Arc<CudaStream>, ptr: u64, bytes: u64, span: u64) -> DeviceBuf {

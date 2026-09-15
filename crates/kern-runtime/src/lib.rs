@@ -40,7 +40,7 @@ mod peers;
 pub mod profile;
 mod weights;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
@@ -59,6 +59,7 @@ pub use harness::Scratch;
 pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
 use lease::Remaps;
+pub use load::Resident;
 pub use park::{Room, Waking};
 use peers::PeerSlot;
 pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
@@ -128,6 +129,11 @@ pub struct Runtime {
     buffers: BTreeMap<String, DeviceBuf>,
     /// No kernels may read mapped host bytes before checkpoint binding completes.
     host_weights_ready: bool,
+    /// Weight buffers holding their checkpoint bytes: taken from a
+    /// [`Resident`] at load, or copied by `load_weights`.
+    filled: BTreeSet<String>,
+    /// Bytes of them taken from a [`Resident`].
+    kept: u64,
     states: BTreeMap<String, DeviceBuf>,
     /// Persistent pinned staging, one per input buffer: H2D from pageable
     /// memory degrades to a synchronous driver-staged copy (tens of µs per

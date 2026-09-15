@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::types::{DType, Provision};
 use kern_manifest::{Protocol, Verified};
-use kern_runtime::{Capacity, GroupRank, HostWeights, PeerHandle, Runtime, Scratch, Topology};
+use kern_runtime::{Capacity, GroupRank, HostWeights, PeerHandle, Resident, Runtime, Scratch, Topology};
 use kern_test::compare::{Cmp, LogitStats, TOP};
 use kern_test::report::{plural, row, Report, Verdict};
 use kern_test::{At, Options, Side, Vars};
@@ -210,6 +210,15 @@ unsafe impl Send for Lent<'_> {}
 const HUNG: Duration = Duration::from_secs(600);
 
 impl Ranks {
+    /// Every rank's weights, the rest of each rank dropped.
+    fn into_resident(self) -> Vec<Resident> {
+        self.ranks.into_iter().map(|c| c.into_runtime().into_resident()).collect()
+    }
+
+    fn kept_bytes(&self) -> u64 {
+        self.ranks.iter().map(|c| c.rt.kept_bytes()).sum()
+    }
+
     /// `f` on every rank at once; the results in rank order, the first
     /// error if any.
     fn each<T: Send>(&mut self, what: &str, f: impl Fn(&mut Caller) -> Result<T> + Sync) -> Result<Vec<T>> {
@@ -436,11 +445,17 @@ fn gpus_of(given: &[usize], n: usize) -> Result<Vec<usize>> {
     }
 }
 
-/// Load the manifest on every rank's GPU, bind each rank's weights,
-/// connect the peers, run what the manifest runs once.
-fn load_side(m: &Verified, o: &Opts) -> Result<Ranks> {
+/// Load the manifest on every rank's GPU, bind each rank's weights (over
+/// what the last side left resident on it, if anything), connect the
+/// peers, run what the manifest runs once.
+fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Option<Vec<Resident>>) -> Result<Ranks> {
     let n = ranks_of(m)?;
     let gpus = gpus_of(&o.gpus, n)?;
+    let resident: Vec<Option<Resident>> = match resident {
+        Some(r) if r.len() == n => r.into_iter().map(Some).collect(),
+        Some(r) => bail!("{} ranks left their weights resident; this side runs {n}", r.len()),
+        None => (0..n).map(|_| None).collect(),
+    };
     let topology = |q: usize| Topology {
         groups: m
             .topology
@@ -455,22 +470,21 @@ fn load_side(m: &Verified, o: &Opts) -> Result<Ranks> {
     // whole-state read of a span copy 128 slots: on qwen3.8-27b (154 MB of
     // GDN state per slot) a run grew past 700 GB of host memory.
     let capacity = Capacity { tokens: Some(o.capacity), seqs: 1 };
-    let host_weights = HostWeights::new();
     let loaded: Vec<Result<Sent>> = std::thread::scope(|s| {
         let handles: Vec<_> = gpus
             .iter()
+            .zip(resident)
             .enumerate()
-            .map(|(q, &gpu)| {
-                let (topo, host_weights) = (topology(q), &host_weights);
+            .map(|(q, (&gpu, resident))| {
+                let topo = topology(q);
                 s.spawn(move || -> Result<Sent> {
-                    let mut rt = Runtime::load_with_host_weights(
-                        m,
-                        &o.kernels,
-                        gpu,
-                        Some(capacity),
-                        m.topology.is_some().then_some(&topo),
-                        host_weights,
-                    )
+                    let topology = m.topology.is_some().then_some(&topo);
+                    let mut rt = match resident {
+                        Some(r) => Runtime::load_over(m, &o.kernels, gpu, Some(capacity), topology, host_weights, r),
+                        None => {
+                            Runtime::load_with_host_weights(m, &o.kernels, gpu, Some(capacity), topology, host_weights)
+                        }
+                    }
                     .with_context(|| format!("rank {q} on gpu {gpu}"))?;
                     o.weights.bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
                     Ok(Sent(rt))
@@ -581,16 +595,23 @@ fn execute(mut o: Opts) -> Result<i32> {
         None => None,
     };
 
-    // ---- 2. A: load, record, unload; B: load, replay. Never both loaded.
-    let load = |m: &Verified, side: &str| -> Result<(Ranks, f32)> {
+    // ---- 2. A: load, record, keep its weights; B: load over them, replay.
+    // Never both loaded: A's states, workspace and programs are gone
+    // before B allocates its own.
+    let host_weights = HostWeights::new();
+    let load = |m: &Verified, side: &str, resident: Option<Vec<Resident>>| -> Result<(Ranks, f32)> {
         let t = Instant::now();
-        let r = load_side(m, &o).with_context(|| format!("loading {side}"))?;
+        let r = load_side(m, &o, &host_weights, resident).with_context(|| format!("loading {side}"))?;
         let s = t.elapsed().as_secs_f32();
         let gpus = gpus_of(&o.gpus, r.ranks())?;
+        let kept = match r.kept_bytes() {
+            0 => String::new(),
+            b => format!(" · {:.1} GiB of weights kept from A", b as f64 / (1u64 << 30) as f64),
+        };
         out.show(&[row(
             "load",
             format!(
-                "{side}: {} on gpu {}",
+                "{side}: {} on gpu {}{kept}",
                 plural(r.ranks(), "rank"),
                 gpus.iter().map(|g| g.to_string()).collect::<Vec<_>>().join(",")
             ),
@@ -598,10 +619,9 @@ fn execute(mut o: Opts) -> Result<i32> {
         )]);
         Ok((r, s))
     };
-    let (mut side_a, load_a) = load(&ma, "A")?;
+    let (mut side_a, load_a) = load(&ma, "A", None)?;
     let mut rec = kern_test::record(&o.harness, diff, &mb, &mut side_a, &mut |lines: &[String]| out.show(lines))?;
-    drop(side_a);
-    let (mut side_b, load_b) = load(&mb, "B")?;
+    let (mut side_b, load_b) = load(&mb, "B", Some(side_a.into_resident()))?;
     rec.load_s = load_a + load_b;
     let report = kern_test::replay(&o.harness, rec, &mut side_b, &mut |lines: &[String]| out.show(lines))?;
     finish(&o, report)

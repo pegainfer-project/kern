@@ -142,6 +142,10 @@ pub(crate) struct Caller {
 }
 
 impl Caller {
+    pub(crate) fn into_runtime(self) -> Runtime {
+        self.rt
+    }
+
     /// Leases the sequence's slots and writes its row into every page table
     /// once. A table has a row per sequence the manifest allows; this
     /// caller is sequence 0, but every row must hold valid page ids. Line

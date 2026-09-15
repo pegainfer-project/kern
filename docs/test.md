@@ -357,6 +357,13 @@ Engram 表在 HBM）对 B300 的 148-SM 实例**：整块快照时，换 `dsv41_
 | gate（draft 的 `dsv41_gate_e128`） | 1 op / 3 span | 2.6 GB、3949 段 | 19.3 + 14.4 s | 4.4 s | 0.5 · 2.5 s | **PASS，72/72 bit 相同，noise 24/24 clean** | **42 s** |
 | 全套 sm148（mhc ×4、mega_moe ×2、gate ×1） | 7 op / 262 span | 26.4 GB、162k 段 | 20.0 + 17.6 s | 40.3 s（workload 22.7 s） | 30.6 · 15.2 s | PASS：span 上 slab 写集 4M/12M 字节不同，A 对自己同样不同（Mega kernel 的工作区不确定），端到端 64516 行 logits bit 相同 | **113 s** |
 
+装 B 的 14.4 / 17.6 s 里权重占 6–16 s/rank：A 和 B 在同一组卡上，换的是 kernel，
+权重 buffer 的声明一样。现在 record 完把 A 的权重从 runtime 里拿出来留在卡上
+（`Runtime::into_resident`），B 装载时按名字认领声明相同的 buffer
+（`Runtime::load_over`，见 runtime.md「权重来源」），只有声明变了的才走文件：
+两个 target 都是 126 GiB/rank 全部认领，装 B 2.8 s（gate 全程 42 → 33 s，判定不变：
+72/72 bit 相同、noise 24/24 clean；tray06，2026-09-15，`results/*-resident.log`）。
+
 同一份全套换核三跑的路：整块链 479 s（tap 302 s：链长几百、逐段同步拷）→
 扁平 piece 181 s → `changed` 的 host 端按字跳零 113 s（1 GB 的 bitmap 逐块扫
 是 20–40 ms 一次，三千多次就是 record 那 65 s）。剩下的 record 22.7 s 主要是
