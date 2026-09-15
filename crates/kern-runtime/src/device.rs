@@ -131,6 +131,17 @@ pub(crate) fn alloc(stream: &Arc<CudaStream>, bytes: u64) -> Result<DeviceBuf> {
     Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
 }
 
+/// A pool allocation nobody has written: for scratch that is filled
+/// before it is read, so the zeroing pass is not paid.
+pub(crate) fn alloc_uninit(stream: &Arc<CudaStream>, bytes: u64) -> Result<DeviceBuf> {
+    let slice = unsafe { stream.alloc::<u8>(bytes.max(1) as usize) }?;
+    let ptr = {
+        let (p, _sync) = slice.device_ptr(stream);
+        p
+    };
+    Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
+}
+
 /// Stable alias of an immutable host weight in this stream's CUDA context.
 pub(crate) fn alloc_host(stream: &Arc<CudaStream>, weight: Arc<HostWeight>) -> Result<DeviceBuf> {
     stream.context().bind_to_thread()?;

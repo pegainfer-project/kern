@@ -24,6 +24,7 @@
 //! runtime may be loaded on one thread and driven from another.
 //!
 
+mod compare;
 mod compile;
 mod cubin;
 mod cublas;
@@ -47,6 +48,7 @@ use cudarc::driver::{sys, CudaContext, CudaStream, HostSlice, PinnedHostSlice};
 use kern_manifest::types::{BufferKind, Manifest, Provision, State};
 use kern_manifest::Verified;
 
+pub use compare::{ranges_of, At, Cmp, Logit, TOP_MAX};
 use compile::{CompiledProgram, Dense};
 use cublas::Blas;
 use device::{alloc, DeviceBuf, Pinned};
@@ -158,6 +160,8 @@ pub struct Runtime {
     /// Peer mappings kept alive as long as the addresses in `peers`.
     #[allow(dead_code)]
     imports: Vec<DeviceBuf>,
+    /// The harness's comparison kernels, loaded on first use.
+    compare: compare::CompareCell,
 }
 
 impl Drop for Runtime {

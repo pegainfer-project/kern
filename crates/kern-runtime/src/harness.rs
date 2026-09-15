@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use cudarc::driver::sys;
 
 use crate::compile::Dense;
-use crate::device::{alloc, DeviceBuf, Events};
+use crate::device::{alloc_uninit, DeviceBuf, Events};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
@@ -20,7 +20,7 @@ use crate::{Error, Result, Runtime};
 /// image, copied device to device and handed back to any runtime on the
 /// same device. Opaque to the host; what a harness keeps instead of a
 /// `Vec<u8>` so a snapshot or a state sync never crosses the bus.
-pub struct Scratch(DeviceBuf);
+pub struct Scratch(pub(crate) DeviceBuf);
 
 impl Scratch {
     pub fn bytes(&self) -> usize {
@@ -139,10 +139,11 @@ impl Runtime {
         }
     }
 
-    /// Device scratch of `bytes`, zeroed.
+    /// Device scratch of `bytes`, uninitialized: a harness fills it
+    /// before it reads it.
     pub fn scratch(&self, bytes: usize) -> Result<Scratch> {
         self.ctx.bind_to_thread()?;
-        Ok(Scratch(alloc(&self.stream, bytes as u64)?))
+        Ok(Scratch(alloc_uninit(&self.stream, bytes as u64)?))
     }
 
     /// The first `bytes` of a buffer into scratch, device to device (synchronous).
@@ -187,10 +188,10 @@ impl Runtime {
         self.dtod(s.view(0..n)?.ptr(), from.0.view(0..n)?.ptr(), n)
     }
 
-    /// The first `len` bytes of scratch, on the host.
-    pub fn read_scratch(&self, from: &Scratch, len: usize) -> Result<Vec<u8>> {
+    /// Bytes `at` of scratch, on the host.
+    pub fn read_scratch(&self, from: &Scratch, at: std::ops::Range<usize>) -> Result<Vec<u8>> {
         self.ctx.bind_to_thread()?;
-        Ok(self.stream.clone_dtoh(&from.0.view(0..len)?)?)
+        Ok(self.stream.clone_dtoh(&from.0.view(at)?)?)
     }
 
     fn dtod(&self, dst: u64, src: u64, bytes: usize) -> Result<()> {
