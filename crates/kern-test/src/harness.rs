@@ -493,7 +493,7 @@ pub fn record<S: Side>(
                     let mut v = Vec::new();
                     for (name, len, buf) in &sr.inputs[q] {
                         let decl = &ma.buffers[name];
-                        let tapped = a.bytes(buf, *len)?;
+                        let tapped = a.bytes(q, buf, *len)?;
                         if !is_float(decl.dtype) {
                             // sequence layout, indices, page tables: structure,
                             // not values — a random one is a workload no caller

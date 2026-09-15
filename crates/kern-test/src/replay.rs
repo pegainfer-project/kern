@@ -190,7 +190,7 @@ pub fn replay<S: Side>(
     for (q, img) in rec.states.iter().enumerate() {
         for name in &shared {
             let len = b.state_bytes(name)?;
-            let a_bytes = b.bytes(&img[name], len)?;
+            let a_bytes = b.bytes(q, &img[name], len)?;
             let b_bytes = b.read_state(q, name, 0..len)?;
             // KERN_TEST_DUMP=<dir>: both sides' final image of every state, for
             // locating a whole-state difference the spans do not explain.

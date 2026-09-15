@@ -310,8 +310,8 @@ impl Side for Ranks {
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Scratch) -> Result<()> {
         self.rt_mut(rank).load_buffer(buffer, bytes, from).with_context(|| format!("rank {rank}: loading `{buffer}`"))
     }
-    fn bytes(&self, from: &Scratch, len: usize) -> Result<Vec<u8>> {
-        self.rt(0).read_scratch(from, len).with_context(|| format!("reading {len} bytes of scratch"))
+    fn bytes(&self, rank: usize, from: &Scratch, len: usize) -> Result<Vec<u8>> {
+        self.rt(rank).read_scratch(from, len).with_context(|| format!("rank {rank}: reading {len} bytes of scratch"))
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {
         Ok(self.rt(0).state_bytes(state)?)

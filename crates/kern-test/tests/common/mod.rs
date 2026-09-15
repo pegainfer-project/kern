@@ -440,7 +440,7 @@ impl Side for Fake {
         self.ranks[rank].bufs.get_mut(buffer).unwrap()[..bytes].copy_from_slice(&from[..bytes]);
         Ok(())
     }
-    fn bytes(&self, from: &Vec<u8>, len: usize) -> Result<Vec<u8>> {
+    fn bytes(&self, _rank: usize, from: &Vec<u8>, len: usize) -> Result<Vec<u8>> {
         Ok(from[..len].to_vec())
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {

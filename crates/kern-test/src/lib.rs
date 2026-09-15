@@ -107,8 +107,8 @@ pub trait Side {
     fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Self::Buf) -> Result<()>;
     /// The first `bytes` of `from` into a buffer.
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Self::Buf) -> Result<()>;
-    /// The first `len` bytes of `from`, on the host.
-    fn bytes(&self, from: &Self::Buf, len: usize) -> Result<Vec<u8>>;
+    /// The first `len` bytes of `from`, allocated on `rank`, on the host.
+    fn bytes(&self, rank: usize, from: &Self::Buf, len: usize) -> Result<Vec<u8>>;
 
     fn state_bytes(&self, state: &str) -> Result<usize>;
     fn read_state(&self, rank: usize, state: &str, at: Range<usize>) -> Result<Vec<u8>>;
