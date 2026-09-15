@@ -537,13 +537,11 @@ fn dump_rows(rt: &Runtime, leases: &[Lease], pos: &[usize], step: usize, dir: &P
                 let line0 = lease.seq_line(table, 0)? as u64;
                 rt.read_state_at(name, (line0 * (bytes / lines)) as usize, *bytes as usize)?
             } else {
-                // whole pages, in slot order (a page's inner layout is the kernels')
+                // whole pages, in position order (a page's inner layout is the kernels')
                 let page = rt.page() as usize;
-                let mut pages: Vec<usize> = lease.slots(0..pos[r]).iter().map(|&s| s as usize / page).collect();
-                pages.dedup();
                 let mut v = Vec::new();
-                for p in pages {
-                    v.extend(rt.read_state_at(name, p * page * *bytes as usize, page * *bytes as usize)?);
+                for &p in &lease.page_ids()[..pos[r].div_ceil(page)] {
+                    v.extend(rt.read_state_at(name, p as usize * page * *bytes as usize, page * *bytes as usize)?);
                 }
                 v
             };
