@@ -26,15 +26,20 @@ machine. `kern run` is the oracle for single-rank targets; a tray target
 (EP4) has no `kern run`, its cold conc1 answers are the oracle for the
 warm ones. Byte identity of greedy token ids is the gate everywhere; a
 divergence is reported with its position so a near-tie can be argued
-from the logits, never assumed.
+from the logits, never assumed. With `--reference`, a Python module
+whose `generate(ids, max_tokens, manifest)` is the model's exact
+arithmetic (tools/toy/model.py over the toy manifests), every target has
+an oracle, whatever its ranks, and no divergence is excused.
 
 Runs on the machine with the GPUs:
   python3 tools/e2e/e2e.py --gpus 0,1,2,3 --out results/ [--config kern.toml] [--targets a b]
+  python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py --gpus 0 --out results/
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -313,8 +318,27 @@ class Same:
         return s + ("; " + "; ".join(self.notes) if self.notes else "")
 
 
+class Reference:
+    """A Python module's `generate(ids, max_tokens, manifest)`: the model's own
+    arithmetic, exact, so it answers for any target and excuses nothing."""
+
+    available = True
+
+    def __init__(self, module: Path, target: Target):
+        spec = importlib.util.spec_from_file_location(module.stem, module)
+        self.model = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.model)
+        self.manifest = json.loads(target.manifest.read_text())
+
+    def run(self, ids: list[int], steps: int, rows: int | None = None) -> list[int]:
+        return self.model.generate(ids, steps, self.manifest)
+
+    def near_tie(self, context: list[int], a: int, b: int, rows: int) -> str:
+        return f"confident flip: the reference says {b}"
+
+
 class Oracle:
-    """`kern run` answers, cached by (prompt, steps, rows), and the logit margin
+    """`kern run` answers, cached by (ids, steps, rows), and the logit margin
     behind any token of one; only single-rank targets have an oracle, and it
     runs on a GPU the server is not on."""
 
@@ -331,9 +355,9 @@ class Oracle:
     def available(self) -> bool:
         return self.target.ranks == 1 and self.gpu is not None
 
-    def command(self, prompt: str | list[int]) -> list[str]:
+    def command(self, ids: list[int]) -> list[str]:
         cmd = [str(self.a.kern), "--config", str(self.target.config), "run", self.target.name, "--gpu", str(self.gpu)]
-        return cmd + (["--prompt-ids", ",".join(map(str, prompt))] if isinstance(prompt, list) else ["--prompt", prompt])
+        return cmd + ["--prompt-ids", ",".join(map(str, ids))]
 
     def near_tie(self, context: list[int], a: int, b: int, rows: int) -> str | None:
         """Whether the server's `a` and `kern run`'s `b`, the first tokens on
@@ -383,12 +407,12 @@ class Oracle:
         raw = f.read_bytes()[: self.vocab * 2]
         return [struct.unpack("<f", b"\0\0" + raw[i : i + 2])[0] for i in range(0, len(raw), 2)]
 
-    def run(self, prompt: str | list[int], steps: int, rows: int | None = None) -> list[int] | None:
+    def run(self, ids: list[int], steps: int, rows: int | None = None) -> list[int] | None:
         if self.target.ranks != 1 or self.gpu is None:
             return None
-        key = json.dumps([prompt, steps, rows])
+        key = json.dumps([ids, steps, rows])
         if key not in self.cache:
-            cmd = self.command(prompt) + ["--steps", str(steps)]
+            cmd = self.command(ids) + ["--steps", str(steps)]
             if rows is not None:
                 cmd += ["--rows", str(rows)]
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
@@ -429,7 +453,7 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
             r = complete(s.url, p, a.max_tokens)
             cold[p], prompt_ids[p], stop[p] = r["ids"], r["prompt_ids"], r["stop"]
             prompt_max = max(prompt_max, len(r["prompt_ids"]))
-            want = oracle.run(p, a.max_tokens)
+            want = oracle.run(r["prompt_ids"], a.max_tokens)
             if want is not None:
                 same.add(f"prompt {i}", r["prompt_ids"], r["ids"], want)
         if oracle.available:
@@ -597,7 +621,7 @@ def session_rows1(a, t: Target, gpus: list[int], port: int, rep: Report, oracle:
         for i, p in enumerate(PROMPTS[:4]):
             r = complete(s.url, p, a.max_tokens)
             same_spec += r["ids"] == prev["cold"][p]
-            want = oracle.run(p, a.max_tokens, rows=1)
+            want = oracle.run(r["prompt_ids"], a.max_tokens, rows=1)
             if want is not None:
                 same.add(f"prompt {i}", r["prompt_ids"], r["ids"], want)
         if same.n:
@@ -620,7 +644,7 @@ def run_target(a, t: Target, gpus: list[int], out: Path) -> Report:
     out.mkdir(parents=True, exist_ok=True)
     use = gpus[: t.ranks]
     spare = gpus[t.ranks] if len(gpus) > t.ranks else None
-    oracle = Oracle(a, t, spare, out / "oracle.json")
+    oracle = Reference(a.reference, t) if a.reference else Oracle(a, t, spare, out / "oracle.json")
     try:
         kern_test(a, t, use[0], rep, out)
         prev = session_default(a, t, use, a.port, rep, oracle, out)
@@ -645,10 +669,12 @@ def main() -> int:
     ap.add_argument("--load-timeout", type=float, default=2400)
     ap.add_argument("--max-tokens", type=int, default=64, help="tokens generated per request")
     ap.add_argument("--server-flags", default="", help="kern-serve flags for every session, e.g. '--chunk 128 --max-seqs 16'")
+    ap.add_argument("--reference", type=Path, default=None, help="a Python module whose generate(ids, max_tokens, manifest) is the exact oracle (tools/toy/model.py)")
     a = ap.parse_args()
     words = a.server_flags.split()
     a.server_flags = dict(zip(words[::2], words[1::2]))
     a.kern, a.kern_serve = a.kern.resolve(), a.kern_serve.resolve()
+    a.reference = a.reference.resolve() if a.reference else None
     gpus = [int(g) for g in a.gpus.split(",")]
     targets = load_targets(a.config.resolve())
     if a.targets:

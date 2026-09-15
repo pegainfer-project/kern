@@ -12,12 +12,18 @@ python3 tools/e2e/e2e.py --gpus 0,1,2,3 --out results/ [--config kern.toml] [--t
 在有 GPU 的机器上跑。target 的 artifact 不在这台机器上就 skip（不算 fail）；
 需要的 rank 数超过 `--gpus` 也 skip。单 rank 的 target 用 `--gpus` 里的第二张卡跑
 `kern run` 做 oracle（server 占满第一张卡）；tray target（EP4）没有 `kern run`，
-它冷启动的 conc1 答案就是 warm 答案的 oracle。
+它冷启动的 conc1 答案就是 warm 答案的 oracle。`--reference <module.py>` 换成一个
+Python 模块的 `generate(ids, max_tokens, manifest)` 做 oracle：模型自己的算术，精确，
+任何 rank 数都有，分歧一律不放过——`tools/toy` 的 manifest 就这么门（README 在那里）：
+
+```
+python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py --gpus 0 --out results/
+```
 
 | 场景 | 门 | 看什么 |
 |---|---|---|
 | `kern_test` | 有 `reference` 的 target `kern test` 退出码 0 | logit-ulp 规则（docs/test.md） |
-| `conc1_equals_run` | 12 条 prompt 逐条 serve == `kern run`，token id 逐字同 | `return_token_ids` |
+| `conc1_equals_run` | 12 条 prompt 逐条 serve == oracle（`kern run --prompt-ids` 或 `--reference`），token id 逐字同 | `return_token_ids` |
 | `repeat_hit` | 同一条 prompt 再来一次：命中长度 = 分页规则允许的（每页 checkpoint：整页、去掉最后一个 token；request end：0），答案同冷 | `usage.prompt_tokens_details.cached_tokens` |
 | `turn2_hit` / `turn2_warm_equals_run` | prompt 的 id + 答案的 id + 追问的 id，紧接着问（发 id 不发文本：答案文本不一定切回原来的 id）：命中 ≥ 第一轮 prompt，答案 == `kern run --prompt-ids` | 同上 |
 | `concurrent` | 12 条同时发：都结束；spec target 的 `accept_pct` ≥ 20 | stats 行；与 conc1 相同的条数只报不门（batch 组成不是门） |
