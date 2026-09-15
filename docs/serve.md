@@ -496,34 +496,62 @@ OOM——块大小该随预算长，先记着，e2e 里 K3 显式 `--capacity 26
 "没测"清单的第 1 条（t=1 qwen3.8-27b conc1 对 `kern run`、K1/K3 门禁）由这一节覆盖；2、3（t>1 的
 owner-only 页、park 的全成或全不成）和 4 仍没测。
 
-## toy 门禁（`tools/toy`，2026-09-15，tray03 单卡 GB300）
+## toy 门禁（`tools/toy`，2026-09-15，tray03 / tray06 GB300）
 
 真模型的 e2e 一轮 20 分钟、要三台 tray，还有近平局要争。`tools/toy` 是一组不是模型的
-manifest：整数 kernel，每个 token 槽存 64 个位置相关的 mark，下一个 token 由序列所有槽
-所有字的和决定（有 line 的再加上 line 的折叠），Python 参考（`tools/toy/model.py`）逐
-token 精确。kern-serve、kern-pool、runtime 走的是同一条路——它们本来就不认识模型。
-`python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py`
-把同一组场景过一遍，每个门都精确，包括真模型上只能"报不门"的 warm 对 cold、醒来的对 cold。
+manifest：整数 kernel，每个 token 槽开头存 64 个位置相关的 mark、其余到槽尾每个字都是
+头部的函数，下一个 token 由序列所有位置的头字按位置旋转后的和决定（有 line 的再加上
+line 的折叠，line 的尾部同样是折叠值的函数）；尾部哪个字对不上就把和毒掉，页序换了和
+也变。Python 参考（`tools/toy/model.py`）逐 token 精确，只算头字。kern-serve、kern-pool、
+runtime 走的是同一条路——它们本来就不认识模型。
 
-| target | 形状 | 命中：重复 / turn2 | park / wake / host_hit | slot 增长 | 投机 | 时长 |
-|---|---|---|---|---|---|---|
-| toy-paged | 4 KiB/token、页 16 | 96,80,96,64 / 208,208,128,96 | 11 / 4 / 4 | — | — | 18 s |
-| toy-stateful | + 1 MiB/seq line | 0×4 / 170,278,129,165 | 14 / 4 / 4 | 5→20（15 remap） | — | 42 s |
-| toy-spec | 4 行 round | 同 paged | 11 / 4 / 4 | — | 49%（2.46/轮）、rows1 4/4 同 | 28 s |
-| toy-stateful-spec | line + round | 0×4 / 171,279,0,165（3 个 `not kept`） | 11 / 3 / 3 | 5→17（12 remap） | 48%（2.45/轮） | 48 s |
-| toy-big | 64 KiB/token、页 64、281 GiB state | 64×4 / 192,192,128,64 | 11 / 4 / 4 | — | — | 30 s（加载 10 s） |
+```
+python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py --gpus 0,1
+```
 
-五个 target 全部一致（每条 256 token、12 条 prompt、`kern test` A/B 是 256 对 128 线程块的
-两个 cubin，位一致 PASS），整轮 2 分 54 秒，一张卡。stateful-spec 的 turn2 有一条命中 0 配
-3 个 `not kept`，就是上一节那条"投机轮越过 max_tokens 的快照不留"的路，toy 自己撞上了。
-结果与日志：`~/bench_results/2026-09-15-toy-e2e/`。
+把同一组场景过一遍，每个门都精确，包括真模型上只能"报不门"的：并发 12 条对 conc1、warm 对
+cold、醒来的对 cold；第二张卡上 `kern run` 自己也被 reference 门住（`run_equals_reference`），
+五种形状的每个 kernel 都过 `kern test` 的 A/B（256 对 128 线程块的两个 cubin）。
 
-toy 抓到的第一条：master 把 state 块的上限提到 64 MiB（bb50189，DSv4.1 的 836k 页从 13 s 降到
-0.5 s）之后，`--capacity 2832`（177 页 × 64 KiB）变成了整整一个块的 1023 页——`--capacity <tokens>`
-的契约破了，小池子什么都不 park。真模型的页都比 64 MiB 大得多，e2e 看不见；toy 的 4 KiB/token
-一跑就翻。`Pool::new` 现在拿到要的 token 数，页数以它为上限，块的尾巴空着。另一条是 `kern run`
-与 kern-serve 对"权重是文件时 tokenizer / eos 在哪"的规则不一致，master 同日已统一
-（`kern_run::checkpoint_dir`）。
+| target | 形状 | 命中：重复 / turn2 | park / wake / host_hit | slot 增长 | 投机 |
+|---|---|---|---|---|---|
+| toy-paged | 4 KiB/token、页 16 | 96,80,96,64 / 144,160,112,176 | 13 / 4 / 4 | — | — |
+| toy-stateful | + 1 MiB/seq line | 0×4 / 117,219,160,107 | 14 / 4 / 4 | 5→20（15 remap） | — |
+| toy-spec | 4 行 round | 同 paged / 144,160,112,160 | 13 / 4 / 4 | — | 50% 串行、50% 并发（2.49/轮）、rows1 4/4 |
+| toy-stateful-spec | line + round | 0×4 / 117,220,0,0（req-2/3/14/15 `not kept`） | 15 / 2 / 2 | 5→15（10 remap） | 50% / 50%（2.5/轮） |
+| toy-big | 64 KiB/token、页 64、281 GiB state | 64×4 / 128,128,64,128 | 12 / 4 / 4 | — | — |
+
+2026-09-15 tray06，每条 256 token、12 条 prompt，五个 target 全部通过，整轮 3 分 09 秒，两张卡。
+结果与日志：`~/bench_results/2026-09-15-toy-e2e/`（`results/tray06-r8`；qwen3-4b 同日同机 9 门全过，`tray06-r9-qwen3-4b`）。
+
+第一版（tray03，`results/tray03-r4`）的表里五个 target 也"全过"，但并发 12 条那时只报不门，
+toy-stateful 的 12 条并发答案其实**全错**（0/12 与 conc1 同）：`gen.py` 给 prefill 和 decode
+的 `fold` 用的是同一个调用，rows 绑在 `tokens` 变量上，decode 的 tokens 是整批的行数，每个 group
+把别人的行折进了自己的 line。设计评审（Opus）读出来的，把并发在精确 oracle 下改成门就复现
+（`results/tray06-r5-red`，`FAIL: concurrent`），decode 改绑字面量 1 就过。同一轮 TDD 补的门：
+近平局只放过一个 token、之后从 server 选的 token 续算继续比（qwen3-4b 上 repeat 第 46 个 token
+两个 logit 相等 21.5，放过后其余 18 个逐字同）；`turn2_hit` 的 0 命中要配自己第一轮请求的
+`not kept`，不再数条数；投机接受率对串行自己的一半而不是固定 20%，toy 还要落在 40–60；
+单 rank target 没 oracle 是 FAIL 不是只报；一个 target 都没跑退出码非零。这些裁决是纯函数，
+`tools/e2e/test_e2e.py` 在 CI 里跑。driver 自己的两处竞态也是这轮撞出来的：小池子的填充停在
+"日志里有 4 条 `parked`"，读日志的时机决定 turn2 要的 checkpoint park 没 park（一轮 wakes=0），
+改成填到 turn2 命中的那几个长度都 `parked` 为止；`serving` 在 pegainfer 绑端口之前打出，看到就连
+偶发 connection refused，ready 改为端口应答。
+
+toy 抓到的几条：
+
+- master 把 state 块的上限提到 64 MiB（bb50189，DSv4.1 的 836k 页从 13 s 降到 0.5 s）之后，
+  `--capacity 2832`（177 页 × 64 KiB）变成了整整一个块的 1023 页——`--capacity <tokens>` 的契约破了，
+  小池子什么都不 park。真模型的页都比 64 MiB 大得多，e2e 看不见；toy 的 4 KiB/token 一跑就翻。
+  `Pool::new` 现在拿到要的 token 数，页数以它为上限，块的尾巴空着。
+- `kern run` 与 kern-serve 对"权重是文件时 tokenizer / eos 在哪"的规则不一致，master 同日已统一
+  （`kern_run::checkpoint_dir`）。
+- toy-big 加上 `-ref` 之后 `kern test` 炸在 `position past the lease`：perf 的 prefill 扫描点取到
+  manifest 的 `tokens.max`（8192），租约只有 `--capacity` 的 4096 个位置；真模型的 `tokens.max`
+  从没超过 4096。扫描点现在以租约为界。
+- kern-pool 两处（评审读出、集成测试复现）：`Prefix::evict` park 成功那条路把"为腾地方丢掉的
+  parked 条目数"扔了，scheduler 的 `host_evictions` 少计；`lookup` 给一条一页都没共享到的旁路
+  候选盖时间戳，一次什么都没命中的查询把最冷的条目变热、淘汰错人。
 
 toy 不测 kernel 数值和性能，也没有 tray（EP4 的 toy 要一个走 peer 指针的 collective，还没写）。
 

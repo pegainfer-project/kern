@@ -100,8 +100,15 @@ pub struct Lease {
 ```
 
 `Lease` 不泛化：它是唯一被 kernel 寻址的对象（page table 行、slot mapping、line
-index），host 单元从不进表。行由 `extend_row` 铺，位置由 `slot(pos)` 给；`page_ids()`
-留给 harness 读字节，不是句柄。
+index），host 单元从不进表。行由 `extend_row` 铺，位置由 `slot(pos)` 给：`pos` 必须
+过了 `prefix`，也必须过了 `shared` 页——一个 `Node` 存在的那一刻它的页就不再被写，
+封页的租约自己也不例外（`slot` 断言，`tests/pool.rs` 的
+`a_lease_refuses_the_pages_it_sealed`）；`page_ids()` 留给 harness 读字节，不是句柄。
+
+`Pool::new(manifest, chunk, chunks, first_slots, tokens)` 的 `tokens` 是容量的上限：
+页数不超过 `tokens / unit`，块的尾巴空着。块的上限是 64 MiB（`chunk_for`），小页的
+manifest 一个块就装几百页，`--capacity` 若按块取整就没有小池子可测——toy 门禁
+第一天撞上的就是这条。
 
 ### Copies：借用来源的拷贝计划
 

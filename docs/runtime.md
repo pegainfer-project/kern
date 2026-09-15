@@ -77,7 +77,8 @@ state 时把 state 拷进一个新 slot（没有空 slot 报 `Denied::Busy`）�
 slot 原样移交。`Runtime::lease_from(&checkpoint, tokens)` 从 checkpoint 起一条
 新序列：整页共享，`len` 落在页中间时把那一页拷一份（新序列往里追加，
 checkpoint 自己那页不动），state 拷进新 slot；租约的 `prefix()` = `len`，
-`slot(pos)` 拒绝 `pos < prefix`。谁拿着句柄谁持有：页在最后一个 lease /
+`slot(pos)` 拒绝 `pos < prefix`，也拒绝落在已封进链的页里的位置（`checkpoint` 之后
+那些整页有了 `Node`，封它们的租约也不能再写；harness 读字节走 `page_ids()`）。谁拿着句柄谁持有：页在最后一个 lease /
 checkpoint drop 时回池，checkpoint 本身不会被 runtime 淘汰。
 纯 host 的 `Prefix` 索引（`kern-pool/prefix.rs`，设计见 `pool.md`）是 token 键的 radix
 tree：`insert(&tokens, cp)` 把 checkpoint 挂在它的 token 路径上（同样的 token 是同一个
