@@ -190,9 +190,10 @@ attention 的命中被截到 mamba 块边界）。快照放哪由调用方定—
 NUMA 节点上）。租约 `Busy` 时最久未命中的 resident checkpoint 不再直接丢，而是 park
 到这块 host 内存（`Runtime::park`，页和 slot 都拷；host 放不下就先丢最冷的 parked），
 runtime 攥着它直到拷贝落地才还页；命中 parked checkpoint 的 prompt 走 `Runtime::wake`：
-取新页、把前缀拷回来，请求在 `waking` 队列里等 `Runtime::awake` 交出 resident 的
-`Checkpoint`，它按醒来的 token 插回索引、请求回到队首按普通命中 `lease_from`（2026-09-14
-起，`pool.md`），其间 decode 步照常走——compute stream 从不等 transfer stream。stats 行多了
+按请求的最坏长度一次取够页、把前缀拷进去，请求在 `waking` 队列里等 `Runtime::awake` 交出
+这份 `Lease`，落地即开跑（2026-09-15 起，`pool.md`；之前先醒成 `Checkpoint` 插回索引、再
+`lease_from`，两次分配在 DSv4.1 EP4 的第二轮上 wake ↔ park 活锁，见 lessons.md），其间
+decode 步照常走——compute stream 从不等 transfer stream。stats 行多了
 `parked / host_gib / parks / host_evictions / wakes / wake_tokens`，以及按 tier 分的命中
 `resident_hits / resident_hit_tokens / host_hits / host_hit_tokens`（host 层有没有被打到
 一眼可见）。
@@ -220,8 +221,7 @@ decode 抖动（同卡，`--capacity 65536 --host-gib 48`，8 路 stream 各 256
 核只按 head 并行，长上下文下带宽吃不满），prefill-first 的每步又把它排在 decode 前面——
 resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）要解的，不是 K3 的。
 
-同一 session 醒来后再睡，host 上按 device 页节点去重的链认不出它（醒来的是新页），会
-再拷一份；旧的那份最冷，缺地方时先走。
+同一 session 醒来后再睡，醒进 lease 的整页节点带着 host twin，只拷新增的页（`pool.md`）。
 
 ## DSv4.1 Flash 的 host 层命中（2026-09-11，tray05）
 
@@ -454,7 +454,8 @@ prompt 的序列各喂一段 run（`scheduler::runs`），所有 run 一样长�
 
 `python3 tools/e2e/e2e.py` 把一份 kern.toml 的每个 target 过同一组场景（表在 `tools/e2e/README.md`）：
 `kern test`、conc1 对 `kern run`、重复命中、turn2（prompt + 答案 + 追问，发 id）warm 对 `kern run` 与对冷
-server、12 条并发、流式中途挂断、小池子 + `--host-gib 2` 的 park / wake、`--max-seqs 2` 起的 slot 增长、
+server、12 条并发、流式中途挂断、小池子 + `--host-gib 2` 的 park / wake、刚好装一条 turn2 的池子上的 wake
+（`wake_room`）、`--max-seqs 2` 起的 slot 增长、
 投机 manifest 的 `--rows 1`。字节一致是门；单 rank target 的分歧再拿 `kern run --prompt-ids <分歧前的
 上下文> --rows 1 --probe-dir` 倒那一步的 logits，两个 token 都在 top-1 的 4 个 bf16 ULP 内才放过。
 每次 64 个 greedy token（K3 4 层 16 个）。结果与日志：`~/bench_results/2026-09-14-e2e-gate/`。
@@ -467,6 +468,11 @@ server、12 条并发、流式中途挂断、小池子 + `--host-gib 2` 的 park
 | qwen3.8-27b-dflash2（tray06） | 1 / 8 / 请求结束 | 12/12 | 0×4 / 87,84,88,0（6 个 `not kept`） | 4/4 / 4/4 | 12/12 · 20%（2.37） | parks 15、wakes 4、host_hits 3 | remaps 9，5 → 14 | 4/4 |
 | dsv41-h152（tray09，EP4） | 4 / 6 / 请求结束 | 无 oracle（冷 12 条作基准） | 0×4 / 86,84,0,0（7 个 `not kept`） | — / 4/4（只报） | 12/12（12 条与 conc1 同）· 27%（2.33） | 26 条填满：parks 11、wakes 2、host_hits 2，12/12 与 4/4 | remaps 24，20 → 44（4 卡合计） | — |
 | k3-4l-ep4（tray07，EP4，16 token） | 4 / 1 / 请求结束 | 无 oracle | 0×4 / 38,35,37,31 | — / 0/4（只报，见下） | 12/12（2 条与 conc1 同）· — | 17 条填满：parks 13、wakes 4、host_hits 4，12/12 | remaps 36，20 → 56 | — |
+
+2026-09-15 合入前 DSv4.1 EP4 在 tray06 重跑（`--chunk 128 --max-seqs 16`）：第一遍 host 会话在 park_wake 的
+turn2 上挂死——wake ↔ park 活锁（`server-host.log` 236 万行 `parked tokens=86`，见上面 toy 那节和 lessons.md）；
+wake 改成一次分配、行上限减掉 pad 之后 8 门 3 报全过，新加的 `wake_room` parks=1、命中 86、醒进一条 2 页的租约
+（`~/bench_results/2026-09-14-e2e-gate/results/tray06-r7-dsv41-final` → `tray06-r9-dsv41-wake`）。
 
 近平局都有 logits 证据（`results/<tray>/<target>/probe-*/`），例如 qwen3-4b turn2 第 56 个 token：top-4
 29.25 / 29.125 / 29.125 / 28.75，server 的在第 2、差 1 ULP。加载：qwen3-4b 10 s、qwen3.8 10 s、DSv4.1 37 s、
@@ -523,6 +529,8 @@ cold、醒来的对 cold；第二张卡上 `kern run` 自己也被 reference 门
 
 2026-09-15 tray06，每条 256 token、12 条 prompt，五个 target 全部通过，整轮 3 分 09 秒，两张卡。
 结果与日志：`~/bench_results/2026-09-15-toy-e2e/`（`results/tray06-r8`；qwen3-4b 同日同机 9 门全过，`tray06-r9-qwen3-4b`）。
+同日 tray03 加上 `wake_room` 再跑一轮（`results/tray03-r14-wake-green`）：五个 target 全过，带 state 的两个
+parks=1、命中 117、醒进租约，纯 KV 的三个 parks=0 原地续上；qwen3-4b / -dspark 10 门与 11 门全过（`tray03-r14-qwen`）。
 
 第一版（tray03，`results/tray03-r4`）的表里五个 target 也"全过"，但并发 12 条那时只报不门，
 toy-stateful 的 12 条并发答案其实**全错**（0/12 与 conc1 同）：`gen.py` 给 prefill 和 decode
@@ -549,6 +557,11 @@ toy 抓到的几条：
 - toy-big 加上 `-ref` 之后 `kern test` 炸在 `position past the lease`：perf 的 prefill 扫描点取到
   manifest 的 `tokens.max`（8192），租约只有 `--capacity` 的 4096 个位置；真模型的 `tokens.max`
   从没超过 4096。扫描点现在以租约为界。
+- wake ↔ park 活锁（DSv4.1 EP4 的 host 会话先撞到，toy-stateful 上 `wake_room` 场景 30 秒复现，
+  608 万行 `parked`）：命中 parked 条目的请求先醒成快照再租，两次分配；现在 `Host::restore`
+  一次醒进请求自己的租约（`pool.md`、lessons.md）。同一场景顺手抓到第二条：`max_request_tokens`
+  没减 pad 那一页，恰好占满池子的请求既不被拒也永远坐不下；`Tray::max_seq_tokens` 现在以 pad
+  之外的页为界，超过的在租之前就按 ContextLength 拒。
 - kern-pool 两处（评审读出、集成测试复现）：`Prefix::evict` park 成功那条路把"为腾地方丢掉的
   parked 条目数"扔了，scheduler 的 `host_evictions` 少计；`lookup` 给一条一页都没共享到的旁路
   候选盖时间戳，一次什么都没命中的查询把最冷的条目变热、淘汰错人。
