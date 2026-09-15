@@ -202,3 +202,26 @@ fn the_json_summary_names_every_section_and_the_archive_every_finding() {
     assert_eq!(v["diff"]["programs"][0]["spans"], 2);
     assert!(r.detail["local"].as_array().unwrap().len() >= r.summary.local.as_ref().unwrap().findings.len());
 }
+
+#[test]
+fn a_side_of_several_ranks_is_compared_rank_by_rank() {
+    let (r, lines) =
+        test(&Fixture::default().ranks(2), &Fixture::default().ranks(2).scale("scale_rank1_wrong"), &options())
+            .unwrap();
+    let tap = r.summary.tap.as_ref().unwrap();
+    assert_eq!((tap.ranks, tap.spans), (2, 4));
+    let local = r.summary.local.as_ref().unwrap();
+    // every rank's span is compared against its own rank of A; only rank 1 differs
+    assert_eq!((local.compared, local.bit_identical), (24, 12));
+    assert!(local.findings.iter().all(|f| f.span.starts_with("rank 1 ")), "{:#?}", local.findings);
+    assert!(local.outputs.iter().all(|f| f.buffer.starts_with("rank ")), "{:#?}", local.outputs);
+    let lg = r.summary.logits.as_ref().unwrap();
+    assert!(lg.worst_at.starts_with("rank 1 ") && lg.flipped.iter().all(|f| f.row.starts_with("rank 1 ")), "{lg:#?}");
+    assert!(verdict(&r).0 != 0 && line(&lines, "tap").contains("2 ranks"), "{lines:#?}");
+}
+
+#[test]
+fn a_and_b_must_run_as_the_same_number_of_ranks() {
+    let err = test(&Fixture::default().ranks(2), &Fixture::default(), &options()).unwrap_err();
+    assert!(format!("{err:#}").contains("A recorded 2 ranks; B runs as 1"), "{err:#}");
+}

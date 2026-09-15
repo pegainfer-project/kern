@@ -138,11 +138,15 @@ pub struct Tap {
     pub chunk: u64,
     pub decode: usize,
     pub vocab: usize,
-    /// Spans snapshotted (the first run of each program).
+    pub ranks: usize,
+    /// Program runs of the workload, each replayed on B from A's image.
+    pub runs: usize,
+    /// Spans kept with their state write-set (the first run of each program).
     pub spans: usize,
     pub snapshot_bytes: usize,
     pub state_pre_image_bytes: usize,
     pub load_s: f32,
+    pub record_s: f32,
     pub free_run_ms: f32,
     pub elapsed_s: f32,
 }
@@ -150,17 +154,22 @@ pub struct Tap {
 impl Tap {
     pub fn lines(&self) -> Vec<String> {
         let mut s = format!(
-            "seed {} · prefill {} ({}) in chunks of {} · decode {} · vocab {} · {} spans snapshotted ({}) · load {}",
+            "seed {} · prefill {} ({}) in chunks of {} · decode {} · vocab {} · {} runs replayed · {} kept ({}) · load {} · record {}",
             self.seed,
             self.prefill,
             self.how,
             self.chunk,
             self.decode,
             self.vocab,
-            self.spans,
+            self.runs,
+            spans(self.spans),
             kb(self.snapshot_bytes),
-            secs(self.load_s)
+            secs(self.load_s),
+            secs(self.record_s)
         );
+        if self.ranks > 1 {
+            s += &format!(" · {} ranks", self.ranks);
+        }
         if self.state_pre_image_bytes > 0 {
             s += &format!(" · state pre-image {}", kb(self.state_pre_image_bytes));
         }
@@ -304,7 +313,7 @@ impl Logits {
 }
 
 /// A's span re-run from its own snapshot against its own output.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct Noise {
     pub compared: usize,
     pub clean: usize,

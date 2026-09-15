@@ -101,6 +101,18 @@ pub struct Access {
     pub state_writes: BTreeSet<String>,
 }
 
+/// What a buffer argument stands for: itself, or for a `peer` buffer the
+/// exported buffer or state it holds the group's addresses of. A kernel
+/// given the peers reads and writes every rank's copy of the target, this
+/// rank's included, so the target is what the span touches; the address
+/// array itself is a load-time constant.
+fn target(m: &Manifest, buf: &str) -> (String, bool) {
+    match (&m.buffers[buf].kind, &m.buffers[buf].of) {
+        (BufferKind::Peer, Some(of)) => (of.clone(), m.states.contains_key(of)),
+        _ => (buf.to_string(), false),
+    }
+}
+
 pub fn access(m: &Manifest, prog: &str, calls: Range<usize>) -> Access {
     let mut acc = Access::default();
     for c in &m.programs[prog].calls[calls] {
@@ -108,11 +120,18 @@ pub fn access(m: &Manifest, prog: &str, calls: Range<usize>) -> Access {
         for (arg, p) in c.args.iter().zip(&op.params) {
             match (arg, p) {
                 (Arg::Buf { buf, .. }, ParamType::Buf { dir, .. }) => {
-                    if matches!(dir, Dir::In | Dir::InOut) {
-                        acc.reads.insert(buf.clone());
+                    let (name, is_state) = target(m, buf);
+                    let peer = name != *buf;
+                    let (reads, writes) = if is_state {
+                        (&mut acc.state_reads, &mut acc.state_writes)
+                    } else {
+                        (&mut acc.reads, &mut acc.writes)
+                    };
+                    if peer || matches!(dir, Dir::In | Dir::InOut) {
+                        reads.insert(name.clone());
                     }
-                    if matches!(dir, Dir::Out | Dir::InOut) {
-                        acc.writes.insert(buf.clone());
+                    if peer || matches!(dir, Dir::Out | Dir::InOut) {
+                        writes.insert(name);
                     }
                 }
                 (Arg::State { state, .. }, ParamType::State { dir }) => {
@@ -139,11 +158,16 @@ pub fn frontier_inputs(m: &Manifest, prog: &str, calls: Range<usize>) -> BTreeSe
         let op = &m.ops[&c.op];
         for (arg, p) in c.args.iter().zip(&op.params) {
             if let (Arg::Buf { buf, .. }, ParamType::Buf { dir, .. }) = (arg, p) {
-                if matches!(dir, Dir::In | Dir::InOut) && !written.contains(buf) {
-                    inputs.insert(buf.clone());
+                let (name, is_state) = target(m, buf);
+                if is_state {
+                    continue;
                 }
-                if matches!(dir, Dir::Out | Dir::InOut) {
-                    written.insert(buf.clone());
+                let peer = name != *buf;
+                if (peer || matches!(dir, Dir::In | Dir::InOut)) && !written.contains(&name) {
+                    inputs.insert(name.clone());
+                }
+                if peer || matches!(dir, Dir::Out | Dir::InOut) {
+                    written.insert(name);
                 }
             }
         }

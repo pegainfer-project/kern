@@ -109,7 +109,8 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
   embedding 的 token_ids 直接由 next_token 喂，positions/slot_mapping/seq_lens
   可预知提前写，host 滞后一步异步取结果，步间不再 sync。E4 直接依赖它。
 - kern test 后续（harness 已是独立 crate `kern-test`，`Side` 的 `Buf` 是
-  设备侧句柄、state 同步全 D2D，2026-09-15）：
+  设备侧句柄、state 同步全 D2D；先录 A 再放 B、一侧可为多 rank，
+  2026-09-15）：
   - 设备侧比较：compare / 差异 bitmap / logits 行（argmax、margin、
     Δ、KL）各一个 kernel，checked-in PTX + driver JIT（先例
     `kern-runtime/src/profile.ptx`），host 的 `compare` 仍是定义，kernel
@@ -126,4 +127,8 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
     workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
     0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
     domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。
-    多卡时：A、B 共用一个 runtime 装载；rank-local 比较。
+  - 大换核的 `diff` 段：DSv4.1 paged → fused 换了 20 个 op，`diff` 打
+    211 行，其中 program 行把 120 个 span 逐个展开成一行 95 KB——按 op
+    折叠、只点名前几个 span，其余进 `--out`。
+  - 多 rank 下每个 run 的 state 镜像是 rank 数 × capacity 份 D2D 拷贝；
+    只留 write-set 会碰到的 state、镜像只在 kept run 上留。

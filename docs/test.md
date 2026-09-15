@@ -38,18 +38,52 @@ call 一字不动——纯 impl 替换。两份 manifest 共用一个 `--kernels
 extract_kernels.sh` 对 A、B 各跑一次，只增不减）。`--capacity` 会向下
 对齐到 manifest 的页单位，fuzz 的 `slot_mapping` 不会落进半页。
 
-## 设计：tap 一次，之后全是 span 级
+## 设计：先录 A，再放 B，之后全是 span 级
 
-整条流水线只有 **tap** 这一步跑完整 program；之后每一段都只重放 span：
-把快照里的 frontier 输入写回去、`run_range` 跑那几个 call、读写出的
-buffer。成本随 span 大小走，不随模型走——TP8 的大 MoE 换一个 kernel，
-harness 付的是"模型装载一次 + 一次 prefill/decode + N × 几个 call"。
+流水线里跑完整 program 的只有两趟：**record**（A 跑一遍 seeded
+workload，每个 program run 起点的 state 镜像、每个 span 的 frontier 输入
+与参考输出都留在设备上）和 **replay**（B 从 A 的镜像起跑同一 workload，
+每个 span 先写进 A 的输入再跑，之后再从零 state 自由跑一遍给端到端
+logits）。噪声地板、fuzz、计时都在各自那一侧按 span 重放：把 frontier
+输入写回去、`run_range` 跑那几个 call、读写出的 buffer。成本随 span 大小
+走，不随模型走。
+
+**A、B 永不同时在卡上。** 录完 A 就卸掉，再装 B：把卡装满的模型（DSv4.1
+Flash EP4 每 rank 119 GB 权重）也能测，代价是装载两次。录下来的东西
+（`Side::Buf`）是设备侧句柄，活得比分配它的那一侧长：两次装载共用 primary
+context，B 直接 D2D 读 A 的镜像；只有要下判断的字节走 host。A 的噪声地板
+在 A 还在时测（每个保留的 span 重放对自己）；fuzz 的扰动输入和 A 在其上
+的输出也在那时录下，B 之后拿同一份输入重放；A 的计时同理。
 
 **端到端只看 logits，不生成。** 每个 span bit 相同 ⇒ 整体必相同，不需要
 再证；span 有差异时，oracle 是 B 自由跑同一 workload 后每一步的 `logits`
 （manifest 里的 buffer，读出来就行）：Δ 以 logits 自身尺度的 ulp 计，
 argmax 的翻转按 A 自己的 margin 分成 near-tie 与真翻转。裁不了的（没有
 logits 的 program、A 自己不确定）报 INCONCLUSIVE（退出码 2）。
+
+## 多 rank：一侧可以是几张卡
+
+带 `topology` 的 SPMD manifest（`groups.ep = 4`）一侧就是 4 个 rank：
+`kern test --gpu 0,1,2,3`（或 `--gpu 0`，从它起连续取），每个 rank 各自
+一个 runtime、各自的 `{ep}` 权重分片，`export_handles / import_peers` 连
+上 peer buffer，`once` program 跑过，之后每个 rank 是一个 `Caller`，**全部
+喂同一条序列**（EP 下每个 rank 看到的是同一批 token，这正是 serve 里的
+情形）。`Side` 的方法里，动字节的都点名 rank（`read(q, ..)`、
+`load_state(q, ..)`），跑东西的（`run / time / capture`）一律全 rank 同时
+发——span 里的集合通信要等 peer 一起发射才会返回——由 kern-run 里的
+`Ranks` 一 rank 一线程扇出，最慢的 rank 回来才算回来；哪个 rank 报错就
+点它的名，600 s 没回来的 rank 视为挂死（peer 死了它在等），进程退出 2。
+计时取最慢 rank 的每 call 时间：这是一步真正等的。
+
+比较是 **rank-local** 的：B 的 rank q 只对 A 的 rank q，镜像、frontier
+输入、参考输出、write-set 都按 rank 录，报告里的行带 `rank q` 前缀
+（`rank 1 step 0 A[3..4) B[3..4) act: 12/12 differ`），端到端的 output /
+state 也逐 rank 列。A、B 的 rank 数必须相同，否则 replay 直接报错。
+
+静态 diff 里 **peer buffer 算成它 `of` 的那个 buffer / state**：拿到全组
+地址的 kernel 读写的是每个 rank 上那份目标（含自己的），所以目标进 span
+的 frontier 读与写集合，地址数组本身（装载期常量）不进。B 若不再用
+peer（比如换成 fused 核），目标就成了单侧写，报告点名不比较。
 
 ## 结构：kern-test 是独立 crate
 
@@ -99,23 +133,23 @@ bitmap / logits kernel，checked-in PTX + driver JIT，host 的 `compare`
    真文本 prefill，`--prefill/--chunk/--decode-steps` 可以钉死。默认 seed
    固定是为了两次运行可比；覆盖靠换 seed（`--seed`），抓到问题的 seed
    写进报告钉成回归。
-   A、B lockstep：Same 段两边各自跑；**每个 program run 之前 B 的 state 整
-   体拷成 A 的**，每个 Changed 段跑之前从 A 读 frontier 输入（按当前
-   var 值取活跃前缀）**并写进 B**，跑完读 A 的输出做参考、比 B 写出的
-   buffer。所以每一行 span 结果都是 **span-local**：B 拿 A 的输入、A 的
-   state 跑这一刀，差多少就是这一刀自己的事，不混前面层漂移下来的误差
-   （早先不注入时，c7 那种 state 差会让下游每个 buffer 都显示 47/48 spans
-   differ、几十万 ulp，看不出哪一刀是根）。
-   lockstep 结束后 **B 从零 state 自由跑一遍同样的 workload**，什么都不
+   **record**：A 一个 run 一个 run 地跑，每个 run 之前把共有 state 全量
+   D2D 存成镜像，每个 span 之前把 frontier 输入（按当前 var 值取活跃前
+   缀）D2D 存下，跑完读参考输出；**replay**：B 每个 run 先装 A 的镜像，
+   每个 span 先装 A 的输入再跑，比 B 写出的 buffer。所以每一行 span 结果
+   都是 **span-local**：B 拿 A 的输入、A 的 state 跑这一刀，差多少就是这
+   一刀自己的事，不混前面层漂移下来的误差（早先不注入时，c7 那种 state
+   差会让下游每个 buffer 都显示 47/48 spans differ、几十万 ulp，看不出哪
+   一刀是根）。
+   replay 结束后 **B 从零 state 自由跑一遍同样的 workload**，什么都不
    注入——表末的 `end-to-end` 行（output 类 buffer + 每个 state 全量字节
    差）就是调用方真正会拿到的东西。**state 按 span 的 write-set 比**：A 跑前后各读一次 state，差异的字节区间就是这个 span 的
    write-set（pre-image）；先把 A 的 pre-image 写进 B 再跑 B，然后只在
    write-set 上比 A、B 的 post-image，另报 B 在 write-set 之外写了多少
    字节。整个 state 不能拿来比——其余字节是别的层的历史，B 的历史又是
-   B 自己的。第一个 prefill chunk 和 decode step 的每个 span 都存成快照
-   （输入 + 参考输出 + 参考 state + pre-image），后面的段全靠它。最后比
-   output 类 buffer。
-2b. **LOGITS（端到端判据）**：lockstep 里每个 run 之后读 A 的 `logits*`
+   B 自己的。第一个 prefill chunk 和 decode step 的每个 span 存 write-set
+   （前后像），后面的段全靠它。最后比 output 类 buffer。
+2b. **LOGITS（端到端判据）**：record 里每个 run 之后读 A 的 `logits*`
    buffer（manifest 里本来就有，`logits`、spec 的 `logits_blk`），自由跑
    里读 B 的，逐 run（`logits_blk` 逐行）比：argmax 是否一致、A 的
    top-1 − top-2 margin、max |Δ|、KL(A‖B)。**尺度是 A 的 top logit 的
@@ -146,8 +180,9 @@ bitmap / logits kernel，checked-in PTX + driver JIT，host 的 `compare`
    全是这么来的）。不再从 N(0,1) 合成：核只在它被造出来的分布里测。两边
    重放同一个 span，
    比写出的 buffer；写出的 buffer 若声明了 domain，则检查每个元素落在域内
-   （后置条件；A 违反说明参考本身有问题）。写出的 state 也比（A、B 全
-   量，两边此时起点相同）。B 崩溃（IMA）直接 FAIL。
+   （后置条件；A 违反说明参考本身有问题）。写出的 state 也比（在 span
+   的 write-set 上，两边此时起点相同）。扰动输入在 record 时生成、A 跑过
+   就留下，replay 时 B 拿同一份；B 崩溃（IMA）直接 FAIL。
 5. **PERF**：每个变了的 program 整步 eager 跑 N 次，逐 call event 计时
    取最小——同一份数据既给**整步**（Σ 全部）又给 **Σ spans**（换掉的那
    块）。表里 `B measured` 旁边就是 **`B derived`** = `A − Σspan_A +
@@ -215,10 +250,11 @@ runtime，PERF 1.8 s。
 
 ## 位置
 
-- 静态 diff、frontier、快照、fuzz、比较、报告全在 `crates/kern-test`
-  （`diff.rs` / `compare.rs` / `workload.rs` / `report.rs` / `harness.rs`，
-  `lib.rs` 的 `Side` trait 是与设备之间唯一的边界）；`kern test` 子命令、
-  `Side` 的真实现（`Caller` 之上，`Buf = Scratch`）和 kern.toml 解析在
+- 静态 diff、frontier、录制、重放、fuzz、比较、报告全在 `crates/kern-test`
+  （`diff.rs` / `compare.rs` / `workload.rs` / `report.rs` / `harness.rs`
+  录 A、`replay.rs` 放 B 并判定，`lib.rs` 的 `Side` trait 是与设备之间唯
+  一的边界）；`kern test` 子命令、`Side` 的真实现（`Ranks`：每 rank 一个
+  `Caller`，`Buf = Scratch`）和 kern.toml 解析在
   `crates/kern-run/src/test.rs`（caller 契约在 `crates/kern-run/src/lib.rs`，
   和 `kern run` 共用）。
 - runtime 只加了不在服务路径上的原语：`run_range`（按 call 区间
