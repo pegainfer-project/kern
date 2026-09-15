@@ -204,17 +204,19 @@ fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, tally: &mut Tally) -
     // The plan's copies would run on the runtime; here the bytes are
     // imaginary and the checkpoint goes straight back.
     let park = host.map(|h| move |cp| Ok::<_, ()>(h.park(&cp).map(|(p, _)| p).map_err(|_| cp)));
-    match prefix.evict(park).unwrap() {
-        Some(Evicted::Parked(_)) => {
+    let dropped = match prefix.evict(park).unwrap() {
+        Some(Evicted::Parked { dropped, .. }) => {
             tally.parks += 1;
             tally.host_peak = tally.host_peak.max(host.map_or(0, |h| h.used()));
+            dropped
         }
-        Some(Evicted::Dropped { parked, .. }) => {
+        Some(Evicted::Dropped { dropped, .. }) => {
             tally.evictions += 1;
-            tally.host_evictions += parked as u64;
+            dropped
         }
         None => return false,
-    }
+    };
+    tally.host_evictions += dropped as u64;
     true
 }
 

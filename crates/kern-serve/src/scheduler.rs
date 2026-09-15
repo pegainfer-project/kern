@@ -692,18 +692,20 @@ impl KernScheduler {
     fn make_room(&mut self) -> Result<bool> {
         let tray = &mut self.tray;
         let park = (self.policy.host_bytes > 0).then_some(|snap| tray.park(snap));
-        match self.prefix.evict(park)? {
-            Some(Evicted::Parked(key)) => {
-                debug!(tokens = key.len(), "parked");
+        let dropped = match self.prefix.evict(park)? {
+            Some(Evicted::Parked { key, dropped }) => {
+                debug!(tokens = key.len(), dropped, "parked");
                 self.stats.parks += 1;
+                dropped
             }
-            Some(Evicted::Dropped { key, parked }) => {
-                debug!(tokens = key.len(), parked, "dropped");
+            Some(Evicted::Dropped { key, dropped }) => {
+                debug!(tokens = key.len(), dropped, "dropped");
                 self.stats.evictions += 1;
-                self.stats.host_evictions += parked as u64;
+                dropped
             }
             None => return Ok(false),
-        }
+        };
+        self.stats.host_evictions += dropped as u64;
         Ok(true)
     }
 

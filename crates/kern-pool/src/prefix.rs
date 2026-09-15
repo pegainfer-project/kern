@@ -83,12 +83,12 @@ pub struct Hit<R, P> {
 }
 
 /// What [`Prefix::evict`] did to the coldest resident entry, whose
-/// tokens it names: parked it, or dropped it after dropping `parked`
-/// cold parked entries for room that never came.
+/// tokens it names: parked it, or dropped it; either after dropping
+/// `dropped` cold parked entries for the room.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Evicted {
-    Parked(Arc<[i64]>),
-    Dropped { key: Arc<[i64]>, parked: usize },
+    Parked { key: Arc<[i64]>, dropped: usize },
+    Dropped { key: Arc<[i64]>, dropped: usize },
 }
 
 struct Entry<R, P> {
@@ -464,7 +464,7 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         if let Some(mut park) = park {
             loop {
                 if self.park(&key, &mut park)? {
-                    return Ok(Some(Evicted::Parked(key)));
+                    return Ok(Some(Evicted::Parked { key, dropped }));
                 }
                 match self.coldest(Tier::Parked) {
                     Some(c) => {
@@ -476,7 +476,7 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
             }
         }
         self.remove(&key);
-        Ok(Some(Evicted::Dropped { key, parked: dropped }))
+        Ok(Some(Evicted::Dropped { key, dropped }))
     }
 
     /// `true` when the entry at `key` is parked, `false` when `park`
@@ -515,10 +515,9 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
     }
 
     /// Drop the entry at `key`; `false` when there is none.
-    fn remove(&mut self, key: &[i64]) -> bool {
-        let Some(e) = take_entry(&mut self.root, key) else { return false };
+    fn remove(&mut self, key: &[i64]) {
+        let Some(e) = take_entry(&mut self.root, key) else { return };
         self.lru[slot_of(e.tier())].remove(&e.used);
         self.count[slot_of(e.tier())] -= 1;
-        true
     }
 }

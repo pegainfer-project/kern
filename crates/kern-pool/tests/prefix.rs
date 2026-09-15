@@ -128,10 +128,10 @@ fn the_coldest_goes_first_and_a_hit_touches_its_path() {
     assert_eq!(t.lookup(&c[..7]).map(|h| h.len), Some(4));
     assert_eq!(t.lookup(&[&c[..], &[0]].concat()).map(|h| h.len), Some(8));
     // Dropping the coldest (a) frees only what no lease still holds.
-    assert_eq!(drop_coldest(&mut t), Some(Evicted::Dropped { key: Arc::from(&a[..]), parked: 0 }));
+    assert_eq!(drop_coldest(&mut t), Some(Evicted::Dropped { key: Arc::from(&a[..]), dropped: 0 }));
     assert_eq!((t.entries(), p.used(), find(&mut t, &toks(9))), (1, 3, Some((4, Tier::Resident))));
     assert_eq!(find(&mut t, &[&c[..], &[0]].concat()), Some((8, Tier::Resident)));
-    assert_eq!(drop_coldest(&mut t), Some(Evicted::Dropped { key: Arc::from(&c[..]), parked: 0 }));
+    assert_eq!(drop_coldest(&mut t), Some(Evicted::Dropped { key: Arc::from(&c[..]), dropped: 0 }));
     assert_eq!((t.entries(), p.used(), drop_coldest(&mut t)), (0, 3, None));
     drop(l);
     assert_eq!(p.used(), 0);
@@ -207,7 +207,7 @@ fn parked_entries_are_found_after_resident_ones() {
     t.insert(&key, p.checkpoint(&mut l, 12).unwrap().0);
     drop(l);
     assert_eq!(p.used(), 3);
-    assert_eq!(park(&mut t, &h), Some(Evicted::Parked(Arc::from(&key[..]))));
+    assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&key[..]), dropped: 0 }));
     assert_eq!((p.used(), t.count(Tier::Parked), t.count(Tier::Resident)), (0, 1, 0));
     let hit = t.lookup(&toks(13)).unwrap();
     assert_eq!((hit.len, tier(&hit), parked(&hit).map(|q| q.offsets())), (12, Tier::Parked, Some(vec![0, 4, 8])));
@@ -219,7 +219,7 @@ fn parked_entries_are_found_after_resident_ones() {
     // Resident and parked: the resident one is found first.
     let mut l = p.lease(12).unwrap();
     t.insert(&key, p.checkpoint(&mut l, 12).unwrap().0);
-    assert_eq!(park(&mut t, &h), Some(Evicted::Parked(Arc::from(&key[..]))));
+    assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&key[..]), dropped: 0 }));
     t.insert(&toks(8), p.checkpoint(&mut l, 8).unwrap().0);
     assert_eq!(find(&mut t, &toks(9)), Some((8, Tier::Resident)));
     assert_eq!(find(&mut t, &toks(13)), Some((12, Tier::Parked)));
@@ -239,7 +239,7 @@ fn parked_entries_are_found_after_resident_ones() {
         .unwrap();
     assert_eq!(
         (evicted, copied, t.count(Tier::Parked), h.used()),
-        (Some(Evicted::Parked(Arc::from(&key[..]))), None, 1, 12)
+        (Some(Evicted::Parked { key: Arc::from(&key[..]), dropped: 0 }), None, 1, 12)
     );
     drop(l);
     assert_eq!(p.used(), 0);
@@ -253,7 +253,7 @@ fn a_stateful_park_keeps_its_slot_and_its_length() {
     let l = p.lease(12).unwrap();
     t.insert(&toks(10), p.retire(l, 10));
     assert_eq!((p.used(), p.slots_used()), (3, 1));
-    assert_eq!(park(&mut t, &h), Some(Evicted::Parked(Arc::from(&toks(10)[..]))));
+    assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&toks(10)[..]), dropped: 0 }));
     assert_eq!((p.used(), p.slots_used(), h.used()), (0, 0, 20));
     let hit = t.lookup(&toks(12)).unwrap();
     assert_eq!((hit.len, parked(&hit).map(|q| q.has_slot())), (10, Some(true)));
@@ -273,15 +273,15 @@ fn a_full_host_drops_its_coldest_and_a_failed_copy_drops_the_entry() {
     c[0] = -1;
     t.insert(&c, p.checkpoint(&mut l2, 4).unwrap().0);
     // a (the coldest) fills the block.
-    assert_eq!(park(&mut t, &h), Some(Evicted::Parked(Arc::from(&a[..]))));
+    assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&a[..]), dropped: 0 }));
     assert_eq!((h.used(), t.count(Tier::Parked)), (4, 1));
-    // c fits once a is dropped from the host.
-    assert_eq!(park(&mut t, &h), Some(Evicted::Parked(Arc::from(&c[..]))));
+    // c fits once a is dropped from the host: one parked entry gone for it.
+    assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&c[..]), dropped: 1 }));
     assert_eq!((h.used(), t.count(Tier::Parked), t.entries()), (4, 1, 1));
     assert_eq!(find(&mut t, &[&c[..], &[0]].concat()), Some((4, Tier::Parked)));
     // b is two pages: the block never holds it, c is dropped for nothing, then b.
     t.insert(&b, p.checkpoint(&mut l, 8).unwrap().0);
-    assert_eq!(park(&mut t, &h), Some(Evicted::Dropped { key: Arc::from(&b[..]), parked: 1 }));
+    assert_eq!(park(&mut t, &h), Some(Evicted::Dropped { key: Arc::from(&b[..]), dropped: 1 }));
     assert_eq!((h.used(), t.entries()), (0, 0));
     // The copy failed: the entry is gone and the error is the caller's.
     t.insert(&b, p.checkpoint(&mut l, 8).unwrap().0);
@@ -393,22 +393,23 @@ fn lookup_matches_the_brute_force_model() {
                     let parked_before = model.iter().filter(|e| !e.resident).count();
                     match &got {
                         None => assert!(model.iter().all(|e| !e.resident)),
-                        Some(Evicted::Parked(key)) => {
+                        Some(Evicted::Parked { key, dropped }) => {
                             let e = model.iter_mut().find(|e| e.tokens[..] == key[..]).expect("an entry");
                             assert!(e.resident && (host == 0 || e.host), "parked {key:?}");
+                            assert_eq!(*dropped, 0);
                             e.resident = false;
                             e.host = true;
                         }
-                        Some(Evicted::Dropped { key, parked }) => {
+                        Some(Evicted::Dropped { key, dropped }) => {
                             let e = model.iter().find(|e| e.tokens[..] == key[..]).expect("an entry");
                             assert!(e.resident && !e.host || host == 2, "dropped {key:?}");
-                            assert_eq!(*parked, if host == 2 { 0 } else { parked_before });
+                            assert_eq!(*dropped, if host == 2 { 0 } else { parked_before });
                             model.retain(|e| e.tokens[..] != key[..] && (host == 2 || e.resident));
                         }
                     }
                     out.push((
                         got.map_or(0, |e| match e {
-                            Evicted::Parked(k) => k.len(),
+                            Evicted::Parked { key, .. } => key.len(),
                             Evicted::Dropped { key, .. } => key.len() + 100,
                         }),
                         Tier::Parked,
