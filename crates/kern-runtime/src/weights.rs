@@ -183,8 +183,11 @@ fn header(read: impl Fn(usize, &mut [u8]) -> Option<()>, len: usize) -> Result<(
     let bad = |what: &str| Error::WeightArtifact(format!("unparseable safetensors: {what}"));
     let mut n = [0u8; 8];
     read(0, &mut n).ok_or_else(|| bad("no header length"))?;
-    let n = u64::from_le_bytes(n) as usize;
-    let mut json = vec![0u8; n];
+    let n = u64::from_le_bytes(n);
+    if n > len.saturating_sub(8) as u64 {
+        return Err(bad("header longer than the artifact"));
+    }
+    let mut json = vec![0u8; n as usize];
     read(8, &mut json).ok_or_else(|| bad("header longer than the artifact"))?;
     let data = 8 + n;
     let entries: BTreeMap<String, serde_json::Value> =
