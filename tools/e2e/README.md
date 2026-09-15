@@ -30,7 +30,7 @@ python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/mod
 | `repeat_hit` | 同一条 prompt 再来一次：命中长度 = 分页规则允许的（每页 checkpoint：整页、去掉最后一个 token；request end：0），答案同冷 | `usage.prompt_tokens_details.cached_tokens` |
 | `turn2_hit` / `turn2_warm_equals_run` | prompt 的 id + 答案的 id + 追问的 id，紧接着问（发 id 不发文本：答案文本不一定切回原来的 id）：命中 ≥ 第一轮 prompt，答案 == `kern run --prompt-ids` | 同上 |
 | `concurrent` | 12 条同时发：都结束；精确 oracle 下答案 == conc1（`kern run` 做 oracle 时相同条数只报：batch 组成会换归约序） | |
-| `spec_acceptance` | spec target 并发那个 5 s 窗口的 `accept_pct` ≥ 单条串行时的一半；精确 oracle 给了区间（toy：40–60）串行的还要落在区间里 | stats 行 |
+| `spec_acceptance` | spec target 并发那个 5 s 窗口的 `accept_pct` ≥ 串行阶段（同样 12 条 prompt，各窗口按 steps 加权）的 0.9 倍——batch 只换归约序，不换一条序列接受什么；精确 oracle 给了区间（toy：40–60）串行的还要落在区间里 | stats 行 |
 | `abort` | 流式请求读 3 个 chunk 就挂断，之后的请求答案同冷 | |
 | `turn2_warm_equals_cold` | 新起一个 server 冷答 turn2 == 上面的 warm 答案 | |
 | `park_wake` | 每 rank `--capacity` 只够它那份（4 条最长请求）、`--host-gib 2`、`--max-seqs 4`：12 条 prompt（答案同冷）加编号变体填到 server 记下 4 次 `parked`（上限 48 × ranks 条，有 state 的 manifest 首批 slot 的块也能当页用，光靠页数算不准）→ parks ≥ 1；再问 turn2 → wakes ≥ 1、host_hits ≥ 1，答案同冷 | stats 行 `parks/wakes/host_hits`，`admitted ... woken=true`，`parked` 行 |

@@ -531,7 +531,7 @@ toy-stateful 的 12 条并发答案其实**全错**（0/12 与 conc1 同）：`g
 （`results/tray06-r5-red`，`FAIL: concurrent`），decode 改绑字面量 1 就过。同一轮 TDD 补的门：
 近平局只放过一个 token、之后从 server 选的 token 续算继续比（qwen3-4b 上 repeat 第 46 个 token
 两个 logit 相等 21.5，放过后其余 18 个逐字同）；`turn2_hit` 的 0 命中要配自己第一轮请求的
-`not kept`，不再数条数；投机接受率对串行自己的一半而不是固定 20%，toy 还要落在 40–60；
+`not kept`，不再数条数；投机接受率对串行自己（同样 12 条 prompt，按 steps 加权）的 0.9 倍而不是固定 20%，toy 还要落在 40–60；
 单 rank target 没 oracle 是 FAIL 不是只报；一个 target 都没跑退出码非零。这些裁决是纯函数，
 `tools/e2e/test_e2e.py` 在 CI 里跑。driver 自己的两处竞态也是这轮撞出来的：小池子的填充停在
 "日志里有 4 条 `parked`"，读日志的时机决定 turn2 要的 checkpoint park 没 park（一轮 wakes=0），

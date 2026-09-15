@@ -76,7 +76,9 @@ class VerdictTest(unittest.TestCase):
         self.assertFalse(e2e.turn2_hit([(80, 90, ["req-0", "req-12"])], floor, set()))
 
     def test_acceptance_is_held_to_the_unloaded_rate(self):
-        self.assertEqual([e2e.acceptance_holds(b, u) for b, u in ((48, 47), (48, 30), (48, 20), (None, 30), (30, None), (0, 0))], [True, True, False, False, False, False])
+        self.assertEqual([e2e.acceptance_holds(b, u) for b, u in ((48, 47), (48, 43.2), (48, 40), (None, 30), (30, None), (0, 0))], [True, True, False, False, False, False])
+        self.assertEqual(e2e.accept_rate([{"accept_pct": 20, "steps": 100}, {"accept_pct": 40, "steps": 300}, {"steps": 50}]), 35.0)
+        self.assertIsNone(e2e.accept_rate([{"steps": 50}]))
         self.assertEqual([e2e.acceptance_holds(b, b, (40, 60)) for b in (48, 33, 70)], [True, False, False])
 
     def test_a_single_rank_target_without_an_oracle_is_not_a_pass(self):

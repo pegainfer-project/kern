@@ -380,10 +380,19 @@ def turn2_hit(cached: list[tuple[int, int, list[str]]], floor, unkept: set[str])
     return all(c >= floor(n) or (c == 0 and set(reqs) <= unkept) for c, n, reqs in cached) and any(c > 0 for c, _, _ in cached)
 
 
+def accept_rate(windows: list[dict]) -> float | None:
+    """The acceptance rate over stats windows, weighted by their steps: the
+    same prompts as the burst, not whichever a single window caught."""
+    pairs = [(w["accept_pct"], w.get("steps", 0)) for w in windows if w.get("accept_pct") is not None]
+    steps = sum(n for _, n in pairs)
+    return round(sum(p * n for p, n in pairs) / steps, 1) if steps else None
+
+
 def acceptance_holds(baseline: float | None, burst: float | None, bounds: tuple[float, float] | None = None) -> bool:
-    """A speculative acceptance rate under load within half of the rate one
-    request at a time, that rate inside the bounds an exact oracle states."""
-    return bool(baseline) and burst is not None and burst >= baseline / 2 and (bounds is None or bounds[0] <= baseline <= bounds[1])
+    """A speculative acceptance rate under load within a tenth of the rate
+    one request at a time (a batch changes reduction order, not what a
+    sequence accepts), that rate inside the bounds an exact oracle states."""
+    return bool(baseline) and burst is not None and burst >= baseline * 0.9 and (bounds is None or bounds[0] <= baseline <= bounds[1])
 
 
 class Reference:
@@ -578,7 +587,7 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
             results[p] = s.complete(p, a.max_tokens)
 
         windows = len(s.lines("stats"))
-        baseline = max(s.lines("stats")[:windows], key=lambda w: w.get("steps", 0), default={})
+        baseline = accept_rate(s.lines("stats")[:windows])
         threads = [threading.Thread(target=one, args=(p,)) for p in PROMPTS]
         t0 = time.monotonic()
         for th in threads:
@@ -605,8 +614,8 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
             # The 5 s window that held the burst; a later one may hold only
             # the flush request.
             burst = max(s.lines("stats")[windows:], key=lambda w: w.get("steps", 0), default={})
-            pct, base = burst.get("accept_pct"), baseline.get("accept_pct")
-            rep.add("spec_acceptance", acceptance_holds(base, pct, oracle.accept_pct), f"rows={rows} accept_pct {pct} under the burst ({burst.get('accepted')} tokens/round) vs {base} one at a time" + (f", expected within {oracle.accept_pct}" if oracle.accept_pct else ""))
+            pct = burst.get("accept_pct")
+            rep.add("spec_acceptance", acceptance_holds(baseline, pct, oracle.accept_pct), f"rows={rows} accept_pct {pct} under the burst ({burst.get('accepted')} tokens/round) vs {baseline} one at a time" + (f", expected within {oracle.accept_pct}" if oracle.accept_pct else ""))
         # abort: hang up mid-stream, then a plain request.
         got = s.hang_up(PROMPTS[5], 3)
         time.sleep(1)
