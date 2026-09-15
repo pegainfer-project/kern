@@ -95,7 +95,8 @@ def manifest(
 
     buf, state, var = (lambda n: {"buf": n}), (lambda n: {"state": n}), (lambda n: {"var": n})
     write = {"op": "write", "args": [buf("token_ids"), buf("positions"), buf("slot_mapping"), state("kv"), buf("salt")]}
-    fold = {"op": "fold", "args": [buf("token_ids"), buf("positions"), buf("mem.line"), state("mem"), buf("salt"), var("tokens")]}
+    # A fold takes the group's rows: the whole prompt in prefill, one in a step.
+    fold = lambda rows: {"op": "fold", "args": [buf("token_ids"), buf("positions"), buf("mem.line"), state("mem"), buf("salt"), rows]}
     predict = {
         "op": "predict",
         "args": [buf("seq_lens"), buf("block_table"), state("kv")] + ([buf("mem.line"), state("mem")] if lined else []) + [buf("salt"), buf("next_token")],
@@ -110,8 +111,8 @@ def manifest(
     # token folds in order); a paged one leaves the last prompt token to
     # the first step, as an attention model's prefill does.
     programs = {
-        "prefill": {"batch": {"groups": 1, "rows": "tokens"}, "calls": [write, fold, predict] if lined else [write]},
-        "decode": {"batch": {"groups": seqs_max, "rows": 1}, "graph": True, "calls": [write, fold, predict] if lined else [write, predict]},
+        "prefill": {"batch": {"groups": 1, "rows": "tokens"}, "calls": [write, fold(var("tokens")), predict] if lined else [write]},
+        "decode": {"batch": {"groups": seqs_max, "rows": 1}, "graph": True, "calls": [write, fold(i32(1)), predict] if lined else [write, predict]},
     }
     if rows > 1:
         programs["round"] = {"batch": {"groups": seqs_max, "rows": rows}, "graph": True, "calls": [round_]}
