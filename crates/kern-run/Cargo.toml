@@ -11,6 +11,7 @@ name = "kern"
 kern-manifest.workspace = true
 kern-pool.workspace = true
 kern-runtime.workspace = true
+kern-test.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true

@@ -26,8 +26,11 @@ the schema golden, lints) belongs in CI, not here.
   every decision comes back as a plan the runtime executes.
 - `crates/kern-runtime` — loads a verified manifest, allocates, lowers programs
   to flat launch lists, runs them. The only crate that touches CUDA.
+- `crates/kern-test` — the `kern test` harness: static diff, tap, noise
+  floor, fuzz, perf, verdict, spoken to a `Side`. Pure host code with no
+  CUDA; its tests drive a fake side.
 - `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
-  `kern.toml`, the `kern test` harness.
+  `kern.toml`, the real `Side` over `Runtime`.
 - `crates/kern-serve` — the pegainfer/vLLM front end plus `KernScheduler`.
   A workspace member outside `default-members`: builds where protoc and
   libssl-dev are (the kernel-lab container, the release runner), by name.

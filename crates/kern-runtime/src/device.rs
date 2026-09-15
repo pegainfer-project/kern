@@ -673,6 +673,12 @@ pub(crate) struct BufView {
     stream: Arc<CudaStream>,
 }
 
+impl BufView {
+    pub(crate) fn ptr(&self) -> u64 {
+        self.ptr
+    }
+}
+
 impl DeviceSlice<u8> for BufView {
     fn len(&self) -> usize {
         self.len

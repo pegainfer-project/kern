@@ -154,7 +154,8 @@ golden-checked in CI:
 | --- | --- |
 | `crates/kern-manifest` | Schema + verifier (pure, no CUDA) |
 | `crates/kern-runtime` | The executor: fetch, verify, replay, CUDA graphs |
-| `crates/kern-run` | `kern run` (generation) and `kern test` (A/B evidence) over the example manifests |
+| `crates/kern-test` | The `kern test` harness: diff, tap, noise, fuzz, perf, verdict over a `Side` (pure, no CUDA) |
+| `crates/kern-run` | The `kern` binary: `run` (generation), `test` (the harness over `Runtime`), `kernels` |
 | `examples/` | Generated manifests — the artifact a provider ships (`*-silu-mined.json` is the `kern test` fixture) |
 | `docs/` | [design](docs/design.md) · [manifest](docs/manifest.md) · [kernel mining](docs/kernel-mining.md) · [runtime](docs/runtime.md) · [test](docs/test.md) · [spec decode](docs/spec-decode.md) · [roadmap](docs/roadmap.md) · [release](docs/release.md) |
 

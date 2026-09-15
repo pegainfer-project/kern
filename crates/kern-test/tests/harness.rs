@@ -1,0 +1,204 @@
+//! Every verdict row through the fake side: one fixture per row, and the
+//! facts the report states on the way there.
+
+mod common;
+
+use common::{options, test, verdict, Fixture};
+
+fn run(b: Fixture) -> (kern_test::Report, Vec<String>) {
+    test(&Fixture::default(), &b, &options()).expect("harness runs")
+}
+
+fn line<'a>(lines: &'a [String], key: &str) -> &'a str {
+    lines
+        .iter()
+        .find(|l| l.starts_with(key))
+        .map(String::as_str)
+        .unwrap_or_else(|| panic!("no `{key}` line in {lines:#?}"))
+}
+
+#[test]
+fn a_no_op_swap_is_bit_identical_at_every_span() {
+    let (r, lines) = run(Fixture::default().scale("scale_same"));
+    assert_eq!(verdict(&r), (0, "bit-identical at every span, real and perturbed inputs".into()));
+    let local = r.summary.local.as_ref().unwrap();
+    // two layers × (2 prefill chunks + 4 decode steps) spans compared, all identical
+    assert_eq!((local.compared, local.bit_identical, local.findings.len()), (12, 12, 0));
+    assert_eq!(r.summary.tap.as_ref().unwrap().spans, 4);
+    assert!(line(&lines, "diff").contains("scale impl extern:scale → extern:scale_same"), "{lines:#?}");
+    assert!(line(&lines, "fuzz").starts_with("fuzz      24/24 bit-identical"), "{lines:#?}");
+}
+
+#[test]
+fn signed_zeros_are_value_identical() {
+    let (r, _) = run(Fixture::default().scale("scale_negzero"));
+    assert_eq!(verdict(&r), (0, "value-identical at every span (only signed zeros differ)".into()));
+    let local = r.summary.local.as_ref().unwrap();
+    assert!(local.value_identical > 0 && local.bit_identical + local.value_identical == local.compared);
+}
+
+#[test]
+fn a_difference_the_head_never_reads_leaves_the_logits_bit_identical() {
+    let (r, lines) = run(Fixture::default().scale("scale_dim3"));
+    assert_eq!(verdict(&r), (0, "spans differ, but the end-to-end logits are bit-identical on all 9 rows".into()));
+    assert!(line(&lines, "local").contains("output next_token bit-identical"), "{lines:#?}");
+    // the state carries the difference, and the report says so without judging it
+    assert!(line(&lines, "local").contains("state kv") && line(&lines, "local").contains("bytes differ"), "{lines:#?}");
+}
+
+#[test]
+fn a_rounding_change_passes_on_logit_evidence() {
+    let (r, _) = run(Fixture::default().scale("scale_round"));
+    let (code, head) = verdict(&r);
+    assert_eq!((code, head.as_str()), (0, "logit evidence"), "{}", r.summary.verdict.summary);
+    let lg = r.summary.logits.as_ref().unwrap();
+    assert!(lg.differ > 0 && lg.max_ulp <= 4.0 && lg.flips == lg.near_ties, "{lg:?}");
+}
+
+#[test]
+fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
+    // A is ±3% on every `scale` call, the sign flipping on each repeat of
+    // an input; B is the exact op. Fuzz is off: with a noisy A, perturbed
+    // inputs are never value-identical.
+    let mut o = options();
+    o.fuzz = 0;
+    let (r, lines) = test(&Fixture::default().scale("scale_noisy"), &Fixture::default(), &o).unwrap();
+    assert_eq!(verdict(&r), (0, "differences at every span lie within A's own noise floor".into()), "{lines:#?}");
+    assert!(line(&lines, "noise").contains("A is not deterministic"), "{lines:#?}");
+    let n = r.summary.noise.as_ref().unwrap();
+    assert!(n.compared == 4 && n.clean < n.compared, "{n:?}");
+}
+
+#[test]
+fn a_wide_argmax_flip_fails() {
+    let (r, lines) = run(Fixture::default().head("head_swap"));
+    let v = &r.summary.verdict;
+    assert!(v.code == 1 && v.summary.starts_with("B changes the argmax end-to-end at prefill chunk 0"), "{lines:#?}");
+    let lg = r.summary.logits.as_ref().unwrap();
+    assert!(lg.flips > lg.near_ties, "{lg:?}");
+    assert!(lines.iter().any(|l| l.starts_with("logits    ✗ flip")), "{lines:#?}");
+}
+
+#[test]
+fn a_value_outside_the_declared_domain_fails() {
+    let (r, lines) = run(Fixture::default().head("head_bad"));
+    assert_eq!(verdict(&r), (1, "B violates a declared domain (or crashed) under fuzz".into()));
+    assert!(line(&lines, "fuzz      ✗ domain").contains("B next_token[0] = 99 outside domain"), "{lines:#?}");
+}
+
+#[test]
+fn a_crash_under_fuzz_is_an_error_naming_the_span_and_the_mode() {
+    let err = test(&Fixture::default(), &Fixture::default().scale("scale_crash"), &options()).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("B crashed under fuzz (jitter) at prefill span A[1..2) B[1..2)"), "{msg}");
+    assert!(msg.contains("illegal memory access"), "{msg}");
+}
+
+#[test]
+fn a_changed_program_the_driver_cannot_stage_is_inconclusive() {
+    let (r, lines) =
+        test(&Fixture::default().probe(), &Fixture::default().probe().scale("scale_same"), &options()).unwrap();
+    assert_eq!(verdict(&r), (2, "a changed program was not tapped — the workload driver can't stage it".into()));
+    assert_eq!(r.summary.local.as_ref().unwrap().undriven, ["probe"]);
+    assert!(line(&lines, "local     ✗ probe").contains("changed but not tapped"), "{lines:#?}");
+}
+
+#[test]
+fn logits_moving_past_the_limit_without_a_flip_are_inconclusive() {
+    let (r, _) = run(Fixture::default().scale("scale_drift"));
+    let v = &r.summary.verdict;
+    assert!(v.code == 2 && v.summary.starts_with("spans differ; end-to-end logits move up to"), "{}", v.summary);
+    let lg = r.summary.logits.as_ref().unwrap();
+    assert!(lg.max_ulp > 4.0 && lg.flips == lg.near_ties, "{lg:?}");
+}
+
+#[test]
+fn without_a_logits_buffer_there_is_no_oracle() {
+    let (r, lines) = test(
+        &Fixture::default().logits("scores"),
+        &Fixture::default().logits("scores").scale("scale_round"),
+        &options(),
+    )
+    .unwrap();
+    assert_eq!(
+        verdict(&r),
+        (2, "spans differ beyond bit/value identity and no driven program writes logits — no oracle".into())
+    );
+    assert!(line(&lines, "logits").contains("none: no driven program writes a `logits*` buffer"), "{lines:#?}");
+}
+
+#[test]
+fn a_change_at_one_layer_is_named_at_that_layer_only() {
+    let (r, lines) = run(Fixture::default().alt(1, "scale_wrong"));
+    assert!(line(&lines, "diff").contains("scale_alt added extern:scale_wrong"), "{lines:#?}");
+    // one span per program: layer 1's scale call (embed, scale0, mix0 before it)
+    assert_eq!(r.summary.diff.spans["prefill"].len(), 1);
+    assert_eq!(
+        (r.summary.diff.spans["prefill"][0].a.clone(), r.summary.diff.spans["prefill"][0].b.clone()),
+        (3..4, 3..4)
+    );
+    let local = r.summary.local.as_ref().unwrap();
+    assert!(local.findings.iter().all(|f| f.span.starts_with("chunk") || f.span.starts_with("step")));
+    assert!(local.findings.iter().all(|f| f.span.contains("A[3..4) B[3..4)")), "{:#?}", local.findings);
+    assert_eq!(local.compared, local.findings.len() + local.omitted);
+}
+
+#[test]
+fn nan_on_one_side_is_counted_and_never_passes_as_logit_evidence() {
+    let (r, lines) = run(Fixture::default().scale("scale_nan"));
+    let local = r.summary.local.as_ref().unwrap();
+    assert!(local.findings.iter().all(|f| f.cmp.as_ref().unwrap().nan_only_one_side == 1), "{:#?}", local.findings);
+    assert!(line(&lines, "local     ✗").contains("· 1 nan"), "{lines:#?}");
+    // a NaN row has no finite delta to measure against the limit: it is an
+    // infinite one, not a zero one
+    let lg = r.summary.logits.as_ref().unwrap();
+    assert!(lg.max_ulp.is_infinite(), "{lg:?}");
+    assert_eq!(verdict(&r).0, 2, "{}", r.summary.verdict.summary);
+}
+
+#[test]
+fn a_write_outside_the_reference_write_set_is_reported() {
+    let (r, lines) = run(Fixture::default().mix("mix_leak"));
+    let local = r.summary.local.as_ref().unwrap();
+    let leak = local.findings.iter().find(|f| f.buffer == "state kv").expect("a state finding");
+    assert!(leak.what.contains("outside A's write-set"), "{leak:?}");
+    assert!(lines.iter().any(|l| l.contains("B wrote") && l.contains("outside A's write-set")), "{lines:#?}");
+}
+
+#[test]
+fn perf_reports_every_driven_program_and_never_the_verdict() {
+    let mut o = options();
+    o.perf = true;
+    o.graph_step = true;
+    o.sweep = true;
+    let (r, lines) = test(&Fixture::default(), &Fixture::default().scale("scale_same"), &o).unwrap();
+    assert_eq!(verdict(&r).0, 0);
+    let perf = r.summary.perf.as_ref().unwrap();
+    let programs: Vec<&str> = perf.steps.iter().map(|s| s.program.as_str()).collect();
+    assert_eq!(programs, ["decode", "prefill"]);
+    assert_eq!(perf.steps[0].spans, 2);
+    assert!(perf.steps[0].graph_ms.is_some() && perf.steps[1].graph_ms.is_none());
+    assert_eq!(perf.sweep.iter().map(|p| p.rows).collect::<Vec<_>>(), [1, 3, 8]);
+    assert_eq!(perf.roofline.len(), 2);
+    assert!(lines.iter().any(|l| l.starts_with("sweep     prefill")), "{lines:#?}");
+}
+
+#[test]
+fn identical_manifests_have_nothing_to_test() {
+    let (ma, mb) = (Fixture::default().manifest(), Fixture::default().manifest());
+    let d = kern_test::diff::diff(&ma, &mb);
+    assert!(d.spans.is_empty() && d.ops.is_empty() && d.programs.is_empty());
+    assert_eq!(d.lines(), ["diff      no interface or implementation differs"]);
+}
+
+#[test]
+fn the_json_summary_names_every_section_and_the_archive_every_finding() {
+    let (r, _) = run(Fixture::default().scale("scale_round"));
+    let v = serde_json::to_value(&r.summary).unwrap();
+    for k in ["a", "b", "diff", "tap", "local", "logits", "noise", "fuzz", "verdict"] {
+        assert!(v.get(k).is_some(), "no `{k}` in {v}");
+    }
+    assert!(v.get("perf").is_none());
+    assert_eq!(v["diff"]["programs"][0]["spans"], 2);
+    assert!(r.detail["local"].as_array().unwrap().len() >= r.summary.local.as_ref().unwrap().findings.len());
+}
