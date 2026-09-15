@@ -496,6 +496,37 @@ OOM——块大小该随预算长，先记着，e2e 里 K3 显式 `--capacity 26
 "没测"清单的第 1 条（t=1 qwen3.8-27b conc1 对 `kern run`、K1/K3 门禁）由这一节覆盖；2、3（t>1 的
 owner-only 页、park 的全成或全不成）和 4 仍没测。
 
+## toy 门禁（`tools/toy`，2026-09-15，tray03 单卡 GB300）
+
+真模型的 e2e 一轮 20 分钟、要三台 tray，还有近平局要争。`tools/toy` 是一组不是模型的
+manifest：整数 kernel，每个 token 槽存 64 个位置相关的 mark，下一个 token 由序列所有槽
+所有字的和决定（有 line 的再加上 line 的折叠），Python 参考（`tools/toy/model.py`）逐
+token 精确。kern-serve、kern-pool、runtime 走的是同一条路——它们本来就不认识模型。
+`python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py`
+把同一组场景过一遍，每个门都精确，包括真模型上只能"报不门"的 warm 对 cold、醒来的对 cold。
+
+| target | 形状 | 命中：重复 / turn2 | park / wake / host_hit | slot 增长 | 投机 | 时长 |
+|---|---|---|---|---|---|---|
+| toy-paged | 4 KiB/token、页 16 | 96,80,96,64 / 208,208,128,96 | 11 / 4 / 4 | — | — | 18 s |
+| toy-stateful | + 1 MiB/seq line | 0×4 / 170,278,129,165 | 14 / 4 / 4 | 5→20（15 remap） | — | 42 s |
+| toy-spec | 4 行 round | 同 paged | 11 / 4 / 4 | — | 49%（2.46/轮）、rows1 4/4 同 | 28 s |
+| toy-stateful-spec | line + round | 0×4 / 171,279,0,165（3 个 `not kept`） | 11 / 3 / 3 | 5→17（12 remap） | 48%（2.45/轮） | 48 s |
+| toy-big | 64 KiB/token、页 64、281 GiB state | 64×4 / 192,192,128,64 | 11 / 4 / 4 | — | — | 30 s（加载 10 s） |
+
+五个 target 全部一致（每条 256 token、12 条 prompt、`kern test` A/B 是 256 对 128 线程块的
+两个 cubin，位一致 PASS），整轮 2 分 54 秒，一张卡。stateful-spec 的 turn2 有一条命中 0 配
+3 个 `not kept`，就是上一节那条"投机轮越过 max_tokens 的快照不留"的路，toy 自己撞上了。
+结果与日志：`~/bench_results/2026-09-15-toy-e2e/`。
+
+toy 抓到的第一条：master 把 state 块的上限提到 64 MiB（bb50189，DSv4.1 的 836k 页从 13 s 降到
+0.5 s）之后，`--capacity 2832`（177 页 × 64 KiB）变成了整整一个块的 1023 页——`--capacity <tokens>`
+的契约破了，小池子什么都不 park。真模型的页都比 64 MiB 大得多，e2e 看不见；toy 的 4 KiB/token
+一跑就翻。`Pool::new` 现在拿到要的 token 数，页数以它为上限，块的尾巴空着。另一条是 `kern run`
+与 kern-serve 对"权重是文件时 tokenizer / eos 在哪"的规则不一致，master 同日已统一
+（`kern_run::checkpoint_dir`）。
+
+toy 不测 kernel 数值和性能，也没有 tray（EP4 的 toy 要一个走 peer 指针的 collective，还没写）。
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
