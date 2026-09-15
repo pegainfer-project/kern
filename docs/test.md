@@ -323,7 +323,12 @@ A 的 token 在 B 里排第 2；step 1/3/5 的 verify 行 KL 4–12 是 draft �
 noise 0.55 s，perf 约 3 s——余下全是 fuzz 的 A 侧：每轮把 kept span
 的输入读回 host，单线程逐元素解码、扰动（jitter / noise 每元素 20 ns）、
 编码、写回，6 轮 21 G 个 bf16 约 330 s。fuzz 随后整段删除（见"四段"），
-删后预期全程约 100 s，其中 68 s 是装两次模型。
+删后同 tray 第三跑（`results/ab3.log`）：**全程 74.5 s**——装 A 33.6 s、
+record 5.3 s（workload 1.1 s）、装 B 31.3 s、tap 0.8 s、logits 0.2 s、
+noise 0.55 s、perf 3.3 s；判定、计数、perf 与前两跑逐项相同。state 镜像
+从 84 GB 变成 339.5 MB（12 MB/rank/run，即活跃部分）：master 的 pool 改
+按 capacity 的 token 数分配 state，与 harness 无关。一次四 rank 的
+DSv4.1 换核验证现在是两次装载加 10 秒。
 
 ## 位置
 
