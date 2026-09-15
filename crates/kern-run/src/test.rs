@@ -296,40 +296,47 @@ impl Side for Ranks {
         self.each(&what, |c| Ok(c.rt.run_range(program, vars, calls.start, calls.end)?)).map(drop)
     }
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
-        Ok(self.rt(rank).read_buffer_prefix(buffer, bytes)?)
+        self.rt(rank).read_buffer_prefix(buffer, bytes).with_context(|| format!("rank {rank}: reading `{buffer}`"))
     }
     fn write(&mut self, rank: usize, buffer: &str, bytes: &[u8]) -> Result<()> {
-        Ok(self.rt_mut(rank).write_buffer(buffer, bytes)?)
+        self.rt_mut(rank).write_buffer(buffer, bytes).with_context(|| format!("rank {rank}: writing `{buffer}`"))
     }
     fn alloc(&self, rank: usize, bytes: usize) -> Result<Scratch> {
-        Ok(self.rt(rank).scratch(bytes)?)
+        self.rt(rank).scratch(bytes).with_context(|| format!("rank {rank}: scratch of {bytes} bytes"))
     }
     fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Scratch) -> Result<()> {
-        Ok(self.rt(rank).save_buffer(buffer, bytes, into)?)
+        self.rt(rank).save_buffer(buffer, bytes, into).with_context(|| format!("rank {rank}: saving `{buffer}`"))
     }
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Scratch) -> Result<()> {
-        Ok(self.rt_mut(rank).load_buffer(buffer, bytes, from)?)
+        self.rt_mut(rank).load_buffer(buffer, bytes, from).with_context(|| format!("rank {rank}: loading `{buffer}`"))
     }
     fn bytes(&self, from: &Scratch, len: usize) -> Result<Vec<u8>> {
-        Ok(self.rt(0).read_scratch(from, len)?)
+        self.rt(0).read_scratch(from, len).with_context(|| format!("reading {len} bytes of scratch"))
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {
         Ok(self.rt(0).state_bytes(state)?)
     }
     fn read_state(&self, rank: usize, state: &str, at: Range<usize>) -> Result<Vec<u8>> {
-        Ok(self.rt(rank).read_state_at(state, at.start, at.len())?)
+        self.rt(rank)
+            .read_state_at(state, at.start, at.len())
+            .with_context(|| format!("rank {rank}: reading state `{state}` at {at:?}"))
     }
     fn write_state(&mut self, rank: usize, state: &str, at: usize, bytes: &[u8]) -> Result<()> {
-        Ok(self.rt_mut(rank).write_state_at(state, at, bytes)?)
+        self.rt_mut(rank)
+            .write_state_at(state, at, bytes)
+            .with_context(|| format!("rank {rank}: writing state `{state}` at {at}"))
     }
     fn save_state(&self, rank: usize, state: &str, into: &mut Scratch) -> Result<()> {
-        Ok(self.rt(rank).save_state(state, into)?)
+        self.rt(rank).save_state(state, into).with_context(|| format!("rank {rank}: saving state `{state}`"))
     }
     fn load_state(&mut self, rank: usize, state: &str, from: &Scratch) -> Result<()> {
-        Ok(self.rt_mut(rank).load_state(state, from)?)
+        self.rt_mut(rank).load_state(state, from).with_context(|| format!("rank {rank}: loading state `{state}`"))
     }
     fn zero_states(&mut self) -> Result<()> {
-        self.ranks.iter_mut().try_for_each(|c| Ok(c.rt.zero_states()?))
+        self.ranks
+            .iter_mut()
+            .enumerate()
+            .try_for_each(|(q, c)| c.rt.zero_states().with_context(|| format!("rank {q}: zeroing states")))
     }
     fn time(&mut self, program: &str, vars: &Vars, calls: Range<usize>, iters: usize) -> Result<Vec<f32>> {
         let what = format!("timing `{program}` calls {}..{}", calls.start, calls.end);
