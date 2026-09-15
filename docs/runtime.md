@@ -105,11 +105,12 @@ Grace 各挂两张卡，本地 DRAM 拷贝 180 / 197 GiB/s（park / wake），�
 只在 host 块上找地方（放不下时把 checkpoint 原样退回，调用方淘汰点什么再试；`Room`
 drop 即退地），`Runtime::park(room) -> Parked` 才拷页和 slot——分开是为了 tray 级的
 park 能先在四张卡上都找到地方再动一个字节（半途失败的 park 无法撤销）；runtime 攥着
-这个 checkpoint 直到拷贝落地，页和 slot 才回池，前缀一直可查；`Runtime::wake(&parked, len) -> Waking` 取新页并把前 `len` 个 token
-的页（和 slot）拷回来，`Runtime::awake(waking) -> Result<Checkpoint, Waking>` 不阻塞地问拷贝
-落地没有，落地了才给出 resident 的 `Checkpoint`（`Runtime::landed(&waking)` 只问不拿，tray 用它先看齐
-四张卡再一起 awake），之后照常 `lease_from`——没有 `Checkpoint` 就没有程序能读到还在路上的页，这是类型
-保证的，不靠 compute stream 等事件（`Waking` 提前 drop 会等拷贝完再还页）。host 上
+这个 checkpoint 直到拷贝落地，页和 slot 才回池，前缀一直可查；`Runtime::wake(&parked, len, tokens) -> Waking`
+按 `tokens` 一次取够页（`Host::restore`，与 `lease_from` 同形）并把前 `len` 个 token 的页（和 slot）
+拷进去，`Runtime::awake(waking) -> Result<Lease, Waking>` 不阻塞地问拷贝落地没有，落地了才交出
+这份 `Lease`（`Runtime::landed(&waking)` 只问不拿，tray 用它先看齐四张卡再一起 awake）——没有
+`Lease` 就没有程序能读到还在路上的页，这是类型保证的，不靠 compute stream 等事件（`Waking`
+提前 drop 会等拷贝完再还页）；一个请求的房间只问一次（2026-09-15，lessons.md）。host 上
 的页也是链（`kern-pool/host.rs`，一页一个节点，device 节点记着它 host 副本的 `Weak`），同一 session
 下一轮再 park 只拷新增的页，醒来的再睡一个字节不拷；一页在 host 上是所有分页 state 的该页首尾相接，slot 同理，
 按 64 KiB 粒度 first-fit（页从低端长、slot 从高端长）。拷贝走单独的 transfer stream

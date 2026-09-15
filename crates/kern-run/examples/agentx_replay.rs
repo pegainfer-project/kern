@@ -352,15 +352,14 @@ fn main() {
                 let attempt = match prefix.lookup(&toks[..r.input]) {
                     Some(h) => match h.found {
                         Found::Resident(cp) => pool.restore(&cp, h.len, worst).map(|(l, _)| l),
-                        // Woken, the checkpoint is resident (and still on
-                        // the host): indexed, then continued from like any other.
+                        // Woken straight into the lease; the parked
+                        // checkpoint stays on the host.
                         Found::Parked(p) => {
-                            host.as_ref().expect("a parked hit").wake(&p, &pool, h.len).and_then(|(cp, _)| {
+                            host.as_ref().expect("a parked hit").restore(&p, &pool, h.len, worst).map(|(l, _)| {
                                 woken = true;
                                 tally.wakes += 1;
                                 tally.wake_tokens += h.len as u64;
-                                prefix.insert(&toks[..h.len], cp.clone());
-                                pool.restore(&cp, h.len, worst).map(|(l, _)| l)
+                                l
                             })
                         }
                     },

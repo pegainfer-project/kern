@@ -106,16 +106,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A prompt hitting part of a parked checkpoint wakes that part alone.
     let wake_at = wake_at.unwrap_or(tokens);
     let wake_pages = wake_at.div_ceil(unit);
-    let mut waking = rt.wake(&parked, wake_at)?;
+    let mut waking = rt.wake(&parked, wake_at, tokens + 1)?;
     let issued = t.elapsed();
-    let woken = loop {
+    let row = loop {
         match rt.awake(waking)? {
-            Ok(cp) => break cp,
+            Ok(l) => break l,
             Err(w) => waking = w,
         }
     };
     let wake = t.elapsed();
-    let row = rt.lease_from(&woken, wake_at, tokens + 1)?;
     println!(
         "wake: {:.1} ms ({:.0} GiB/s), {:.1} ms to issue; prefix {}",
         wake.as_secs_f64() * 1e3,
@@ -123,13 +122,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         issued.as_secs_f64() * 1e3,
         row.prefix()
     );
-    drop(row);
 
     let mut bad = 0usize;
     for (si, (name, page_bytes, slot_bytes)) in states.iter().enumerate() {
         let base = (si as u64) << 48;
         if *page_bytes > 0 {
-            for (k, &page) in woken.page_ids()[..wake_pages].iter().enumerate() {
+            for (k, &page) in row.page_ids()[..wake_pages].iter().enumerate() {
                 let off = page as usize * *page_bytes as usize;
                 let got = rt.read_state_at(name, off, *page_bytes as usize)?;
                 if got != pattern(base + k as u64 * page_bytes, *page_bytes as usize) {
@@ -140,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        if let (true, Some(slot), true) = (*slot_bytes > 0, woken.seq_slot(), wake_at == tokens) {
+        if let (true, Some(slot), true) = (*slot_bytes > 0, row.seq_slot(), wake_at == tokens) {
             let got = rt.read_state_at(name, slot as usize * *slot_bytes as usize, *slot_bytes as usize)?;
             if got != pattern(base + (1 << 40), *slot_bytes as usize) {
                 bad += 1;

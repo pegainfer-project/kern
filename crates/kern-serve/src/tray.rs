@@ -685,16 +685,18 @@ impl Tray {
         self.each(rooms, |rt, _, r| rt.park(r.unwrap_or_else(|_| unreachable!("every member found room")))).map(Ok)
     }
 
-    /// Wake the first `len` tokens of `sleeping` back into a resident
-    /// snapshot, on every member; the copies are in flight until
-    /// [`Tray::awake`] says otherwise.
-    pub fn wake(&mut self, sleeping: &Sleeping, len: usize) -> Result<Rising, Error> {
-        self.each(sleeping.by_ref(), |rt, m, p| rt.wake(p, if m == sleeping.me { len } else { p.tokens() }))
+    /// A row continuing from the first `len` tokens of `sleeping` with
+    /// room for `tokens`, on the snapshot's owner, its bytes on the way in
+    /// from every member's host tier; the peers continue their slots at
+    /// the snapshot's length. The copies are in flight until
+    /// [`Tray::awake`] hands the row out.
+    pub fn wake(&mut self, sleeping: &Sleeping, len: usize, tokens: usize) -> Result<Rising, Error> {
+        self.each(sleeping.by_ref(), |rt, m, p| rt.wake(p, if m == sleeping.me { len } else { p.tokens() }, tokens))
     }
 
-    /// The snapshot of a wake whose copies have all landed; `Err(r)`
-    /// while any is still in flight. Does not block.
-    pub fn awake(&mut self, r: Rising) -> Result<std::result::Result<Snapshot, Rising>, Error> {
+    /// The row of a wake whose copies have all landed; `Err(r)` while any
+    /// is still in flight. Does not block.
+    pub fn awake(&mut self, r: Rising) -> Result<std::result::Result<Row, Rising>, Error> {
         for (m, q) in self.groups.members(r.owner.0).enumerate() {
             if !self.ranks[q].landed(&r.parts[m])? {
                 return Ok(Err(r));

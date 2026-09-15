@@ -66,8 +66,8 @@ host 层按 node 去重就读到过期字节；这是 review 的 P1。
 `twin` 是 device 节点对它 host 副本的弱引用。park 时逐节点看 twin：活着就复用，否则
 分配、拷贝、记下。用节点自己的字段而不是按 id 的表，两个原因：id 表的 key 可以在内容
 变了之后仍然相等（这次的 bug），用指针当 key 又有 ABA；节点持有自己的链接，两者都没有。
-wake 出来的 device 节点在创建时就带上 twin，所以同一 session 醒来再睡不再拷第二份
-（lessons.md 2026-09-03 记的那条缺口）。
+wake（`Host::restore`）进 lease 的整页节点在创建时就带上 twin，所以同一 session 醒来再睡
+不再拷第二份（lessons.md 2026-09-03 记的那条缺口）。
 
 ### Store<T>：一个前缀在一个 tier 里的字节
 
@@ -154,7 +154,7 @@ parked}}` 说明动了谁——scheduler 与 `agentx_replay` 之前各写一份�
 | `Pool::restore(&Checkpoint, len, tokens)` | `-> (Lease, Copies)` | 整页共享，半页拷给 lease | 拷进新 slot |
 | `Pool::fork(&mut Lease, len, tokens)` | `-> (Lease, Copies)` | 整页共享，半页拷给孩子 | 拷进新 slot |
 | `Host::park(&Checkpoint)` | `-> (Parked, Copies<i32, u64>)` | 沿链走，twin 活着的复用，其余分配并拷 | 拷 |
-| `Host::wake(&Parked, &Pool, len)` | `-> (Checkpoint, Copies<u64, i32>)` | 前 ceil(len/unit) 页拷回，新节点带 twin | `len` 是整长时拷 |
+| `Host::restore(&Parked, &Pool, len, tokens)` | `-> (Lease, Copies<u64, i32>)` | 按 `tokens` 一次取够页，前 ceil(len/unit) 页从 host 拷进去，整页封成带 twin 的节点，半页归 lease | `len` 是整长时拷进新 slot |
 
 三条规则贯穿全部操作：**整页共享、半页拷给新持有者、写者只有 lease。** `restore` 和
 `fork` 本来就这样，`checkpoint` 是唯一的例外，改成一致。半页拷贝只在页中间
@@ -162,12 +162,17 @@ checkpoint 时发生；scheduler 只在页边界（纯 KV）或请求结束（`r
 产路径零拷贝不变。K1c 的显式断点（system prompt 末尾，带 state 的模型）正是需要页中
 间 checkpoint 的地方，付一次页拷贝。
 
-**wake 回到 resident。** 之前 wake 直接拷进一个新 `Lease`，parked 条目留在 host，同一
-前缀再来一个请求再拷一次。现在 wake 得到一个 `Checkpoint`，scheduler 把它按醒来的
-token 插回索引（条目同时在两个 tier 都有），请求回到队首、按普通 resident 命中
-`restore`。多付一次半页拷贝和一次 slot 拷贝（qwen3.8 的 154 MB slot 在 HBM 内约
-50 µs），换来醒着的前缀可被多个请求共享、再睡零拷贝。runtime 的 `Waking` / `awake`
-模式不变，只是 `awake` 交出的是 `Checkpoint`。
+**wake 直接醒进请求的租约。** 2026-09-14 的版本让 wake 得到一个 `Checkpoint`，scheduler
+把它插回索引、请求回到队首再按 resident 命中 `restore`：两次分配、两次"够不够"的判断，
+没有谁把它们合起来看。DSv4.1 EP4（`--chunk 128 --max-seqs 16`）第二轮命中 parked 条目就
+活锁——醒来的快照加半页拷贝加续写比池子多一页，`Busy` → `make_room` 能 park 的只有
+刚醒的那条 → 再醒 → 再 park（一次 host session 打出 236 万行 `parked tokens=86`；toy-stateful
+上 e2e 的 `wake_room` 场景 608 万行）。现在 `Host::restore(&Parked, &Pool, len, tokens)` 与
+`Pool::restore` 同形：按 `tokens` 一次取够页，前 ceil(len/unit) 页从 host 拷进这些页里，
+整页封成带 twin 的节点（再睡零拷贝），半页是 lease 自己的；runtime 的 `Waking` / `awake`
+交出的是 `Lease`，tray 的 `Rising` 落地即 `Row`，scheduler 落地即 admit。parked 条目原样
+留在索引里，请求结束时更长的上下文照常成 resident 条目。没了的东西：`Host::wake`、醒来
+的快照进索引、scheduler 的 `woken` 名单、`Got::Rising` 里带的 key。
 
 ## 4. 索引：token radix tree
 

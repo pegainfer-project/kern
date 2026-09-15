@@ -579,7 +579,7 @@ impl Pool {
         g.in_flight = false;
     }
 
-    fn pages_for(&self, tokens: usize) -> std::result::Result<usize, Denied> {
+    pub(crate) fn pages_for(&self, tokens: usize) -> std::result::Result<usize, Denied> {
         let need = tokens.div_ceil(self.unit as usize);
         if need > self.max_pages {
             return Err(Denied::ExceedsRow { limit: self.max_seq_tokens() });
@@ -818,6 +818,17 @@ pub struct Lease {
 }
 
 impl Lease {
+    pub(crate) fn new(
+        chain: Option<Arc<Node<Pool>>>,
+        shared: usize,
+        pages: Vec<i32>,
+        slot: Option<Arc<SlotOwn<Pool>>>,
+        prefix: usize,
+        pool: &Arc<Pool>,
+    ) -> Lease {
+        Lease { chain, shared, pages, slot, prefix, pool: Arc::clone(pool) }
+    }
+
     /// The chain through the first `keep` pages (at least 1), moving own
     /// pages into nodes as needed.
     fn share(&mut self, keep: usize) -> Arc<Node<Pool>> {

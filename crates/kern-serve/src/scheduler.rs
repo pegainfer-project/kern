@@ -70,10 +70,14 @@
 //!   host tier (`--host-gib`: pinned DRAM per rank, `Tray::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
 //!   it is full) or, without one, dropped. A prompt hitting a parked
-//!   snapshot wakes it (`Tray::wake`): the copies ride the transfer
-//!   streams and the request waits in `waking` until `Tray::awake` hands
-//!   the snapshot back, resident again and indexed, and the request goes
-//!   to the head of the line to start from it; no step queues behind them.
+//!   snapshot wakes it (`Tray::wake`) straight into its own row: one
+//!   lease sized for the request, the prefix's pages copied in over the
+//!   transfer streams, so room is decided once (waking the prefix and then
+//!   leasing from it would ask twice, and the second ask could park what
+//!   the first woke, without end). The request waits in `waking` until
+//!   `Tray::awake` hands the row back and starts from it; no step queues
+//!   behind them. The parked snapshot stays parked; the request's own
+//!   finish indexes the longer context resident.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -81,7 +85,7 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::Protocol;
-use kern_pool::{Denied, Evicted, Found, Kept, Prefix, Tier};
+use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
 use kern_runtime::Error;
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
@@ -315,11 +319,8 @@ pub struct KernScheduler {
     /// Draft acceptance, for a plan whose steps take several rows.
     counters: Option<SpecDecodeCounters>,
     waiting: VecDeque<QueuedRequest>,
-    /// Requests whose woken snapshots are still on the way in, with the
-    /// tokens the snapshot holds.
-    waking: VecDeque<(QueuedRequest, Rising, Vec<i64>)>,
-    /// Requests back in `waiting` with their snapshot woken.
-    woken: Vec<RequestId>,
+    /// Requests whose rows are still on the way in from the host tier.
+    waking: VecDeque<(QueuedRequest, Rising)>,
     running: Vec<Seq>,
     /// Snapshots of finished prefixes, for the next prompt that shares
     /// one (see the module doc).
@@ -399,8 +400,8 @@ pub struct Facts {
 /// What a lease attempt handed out.
 enum Got {
     Row(Row),
-    /// A wake in flight and the tokens it brings back.
-    Rising(Rising, Vec<i64>),
+    /// A row in flight from the host tier.
+    Rising(Rising),
 }
 
 impl KernScheduler {
@@ -427,7 +428,6 @@ impl KernScheduler {
             counters,
             waiting: VecDeque::new(),
             waking: VecDeque::new(),
-            woken: Vec::new(),
             running: Vec::new(),
             prefix,
             every_page,
@@ -492,7 +492,7 @@ impl KernScheduler {
         for s in &self.running {
             rows[s.row.owner().index()] += 1;
         }
-        for (_, r, _) in &self.waking {
+        for (_, r) in &self.waking {
             rows[r.owner().index()] += 1;
         }
         rows
@@ -501,33 +501,29 @@ impl KernScheduler {
     /// Admit waiting requests in order and prefill each (single sequence,
     /// chunked); one that cannot be seated stops the scan.
     fn admit(&mut self, ledger: &mut RequestLedger) -> Result<()> {
-        // Wakes land in order: the first still in flight stops the scan.
-        // A landed snapshot is indexed and its request goes back to the
-        // head of the line, in order, to start from it as a resident hit.
-        let mut landed: Vec<QueuedRequest> = Vec::new();
-        while let Some((q, r, key)) = self.waking.pop_front() {
+        // Wakes land in order: the first still in flight stops the scan;
+        // a landed one starts from its row ahead of the line.
+        while let Some((q, r)) = self.waking.pop_front() {
             match self.tray.awake(r)? {
-                Ok(snap) => {
+                Ok(row) => {
                     self.stats.wakes += 1;
-                    self.stats.wake_tokens += snap.tokens() as u64;
-                    self.prefix.insert(&key, snap);
-                    self.woken.push(q.id);
-                    landed.push(q);
+                    self.stats.wake_tokens += row.prefix() as u64;
+                    if ledger.is_aborted(q.id) {
+                        ledger.retire(q.id);
+                        continue;
+                    }
+                    self.admit_one(q, row, true, ledger)?;
                 }
                 Err(r) => {
-                    self.waking.push_front((q, r, key));
+                    self.waking.push_front((q, r));
                     break;
                 }
             }
-        }
-        for q in landed.into_iter().rev() {
-            self.waiting.push_front(q);
         }
         while let Some(q) = self.waiting.front() {
             let id = q.id;
             if ledger.is_aborted(id) {
                 ledger.retire(id);
-                self.woken.retain(|&w| w != id);
                 self.waiting.pop_front();
                 continue;
             }
@@ -554,14 +550,14 @@ impl KernScheduler {
             if owner.is_some_and(|o| rows[o.index()] >= cap) {
                 break;
             }
+            // Room made for a retry may have parked or dropped the
+            // snapshot hit above: look it up again where it is now.
             let got = loop {
-                // Room made for a retry may have parked or dropped the
-                // snapshot hit above: look it up again where it is now.
                 let tray = &mut self.tray;
                 let attempt = match self.prefix.lookup(&ids) {
                     Some(h) => match h.found {
                         Found::Resident(snap) => tray.lease_from(&snap, h.len, worst).map(Got::Row),
-                        Found::Parked(p) => tray.wake(&p, h.len).map(|r| Got::Rising(r, ids[..h.len].to_vec())),
+                        Found::Parked(p) => tray.wake(&p, h.len, worst).map(Got::Rising),
                     },
                     None => tray.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(Got::Row),
                 };
@@ -572,10 +568,10 @@ impl KernScheduler {
             };
             let row = match got {
                 Ok(Got::Row(row)) => row,
-                Ok(Got::Rising(r, key)) => {
-                    // Its copies are in flight; it is admitted once they land.
+                Ok(Got::Rising(r)) => {
+                    // Its copies are in flight; it starts once they land.
                     let q = self.waiting.pop_front().unwrap();
-                    self.waking.push_back((q, r, key));
+                    self.waking.push_back((q, r));
                     continue;
                 }
                 Err(Error::Denied(Denied::Busy)) => break, // wait for pages / a slot
@@ -593,17 +589,16 @@ impl KernScheduler {
                 Err(e) => return Err(e.into()),
             };
             let q = self.waiting.pop_front().unwrap();
-            self.admit_one(q, row, ledger)?;
+            self.admit_one(q, row, false, ledger)?;
         }
         Ok(())
     }
 
-    /// Start `q` running in `row` (past the row's prefix): through the
-    /// chunk forward when the manifest has one, else with the prompt
-    /// queued for the steps.
-    fn admit_one(&mut self, q: QueuedRequest, row: Row, ledger: &mut RequestLedger) -> Result<()> {
+    /// Start `q` running in `row` (past the row's prefix, `woken` from
+    /// the host tier or resident): through the chunk forward when the
+    /// manifest has one, else with the prompt queued for the steps.
+    fn admit_one(&mut self, q: QueuedRequest, row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<()> {
         let id = q.id;
-        let woken = self.woken.iter().position(|&w| w == id).map(|i| self.woken.swap_remove(i)).is_some();
         let prompt = q.request.prompt_tokens.len();
         let max_tokens = q.request.max_tokens;
         let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();

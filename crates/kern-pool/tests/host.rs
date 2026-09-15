@@ -1,7 +1,7 @@
 //! The host tier through its public API: parking places pages at the low
-//! end and slots at the high end, shares a page parked already, wakes a
-//! checkpoint back onto fresh device pages, and gives everything back
-//! when the last holder drops.
+//! end and slots at the high end, shares a page parked already, restores a
+//! parked checkpoint into one lease on fresh device pages, and gives
+//! everything back when the last holder drops.
 
 mod common;
 
@@ -98,7 +98,7 @@ fn full_keeps_nothing_and_frees_make_the_block_whole_again() {
 }
 
 #[test]
-fn wake_is_a_resident_checkpoint_again() {
+fn a_parked_checkpoint_restores_into_one_lease() {
     let p = pool4();
     let h = host(16);
     let mut l = p.lease(10).unwrap();
@@ -106,34 +106,35 @@ fn wake_is_a_resident_checkpoint_again() {
     let (q, _) = h.park(&cp).unwrap();
     drop((l, cp));
     assert_eq!(p.used(), 0);
-    let (w, plan) = h.wake(&q, &p, 10).unwrap();
-    assert_eq!((w.tokens(), w.page_ids().len(), w.has_slot(), p.used()), (10, 3, false, 3));
-    assert_eq!(plan, Copies { pages: q.offsets().into_iter().zip(w.page_ids()).collect(), slot: None });
-    // A woken checkpoint restores like any other.
-    let (l2, copies) = p.restore(&w, 10, 20).unwrap();
-    assert_eq!((l2.prefix(), &l2.page_ids()[..2], copies.pages.len()), (10, &w.page_ids()[..2], 1));
-    // And parks for free: its pages are the host's already.
-    let (q2, plan) = h.park(&w).unwrap();
-    assert_eq!((plan, q2.offsets(), h.used()), (Copies::default(), q.offsets(), 12));
-    // A stateless parked checkpoint wakes at any whole page of it.
-    let (w2, plan) = h.wake(&q, &p, 4).unwrap();
-    assert_eq!((w2.tokens(), w2.page_ids().len(), plan.pages.len()), (4, 1, 1));
-    drop((q, q2, w, w2, l2));
+    // One allocation: the pages the continuation needs, the first three copied in.
+    let (mut w, plan) = h.restore(&q, &p, 10, 20).unwrap();
+    assert_eq!((w.prefix(), w.pages(), w.tokens(), p.used()), (10, 5, 20, 5));
+    assert_eq!(plan, Copies { pages: q.offsets().into_iter().zip(w.page_ids().iter().copied()).collect(), slot: None });
+    // Its whole pages are sealed, twinned with the host's: the next
+    // checkpoint parks them for free and copies only the half page.
+    let (cp2, copies) = p.checkpoint(&mut w, 10).unwrap();
+    assert_eq!((copies.pages.len(), &cp2.page_ids()[..2]), (1, &w.page_ids()[..2]));
+    let (q2, plan) = h.park(&cp2).unwrap();
+    assert_eq!((plan.pages.len(), &q2.offsets()[..2], h.used()), (1, &q.offsets()[..2], 16));
+    // A stateless parked checkpoint restores at any whole page of it.
+    let (w2, plan) = h.restore(&q, &p, 4, 8).unwrap();
+    assert_eq!((w2.prefix(), w2.pages(), plan.pages.len()), (4, 2, 1));
+    drop((q, q2, w, w2, cp2));
     assert_eq!((p.used(), h.used()), (0, 0));
 }
 
 #[test]
-#[should_panic(expected = "waking 4 tokens of a parked checkpoint of 10 (with a slot)")]
-fn a_stateful_parked_checkpoint_wakes_at_its_length_only() {
+#[should_panic(expected = "restoring 4 tokens of a parked checkpoint of 10 (with a slot)")]
+fn a_stateful_parked_checkpoint_restores_at_its_length_only() {
     let p = hybrid_pool4();
     let h = host(16);
     let cp = p.retire(p.lease(10).unwrap(), 10);
     let (q, plan) = h.park(&cp).unwrap();
     assert!(plan.slot.is_some());
     drop(cp);
-    let (w, plan) = h.wake(&q, &p, 10).unwrap();
-    assert_eq!((w.has_slot(), plan.slot.map(|(o, _)| o)), (true, Some(56)));
-    let _ = h.wake(&q, &p, 4);
+    let (w, plan) = h.restore(&q, &p, 10, 11).unwrap();
+    assert_eq!((w.seq_slot().is_some(), plan.slot.map(|(o, _)| o)), (true, Some(56)));
+    let _ = h.restore(&q, &p, 4, 11);
 }
 
 /// Bytes on the device and on the host, by position and by offset.
@@ -173,7 +174,7 @@ impl Memory {
     }
 }
 
-/// Random checkpoints parked, woken, restored and dropped with every
+/// Random checkpoints parked, restored from either tier and dropped with every
 /// byte read back through every handle: a parked page is what the
 /// checkpoint held when it was parked and what wakes is the same; the
 /// block holds exactly the pages the parked handles name, disjoint.
@@ -228,13 +229,21 @@ fn parked_bytes_come_back_and_partition_the_block() {
                 let (q, content) = &parked[rand.next(parked.len())];
                 let whole = (q.tokens() - 1) / 4;
                 let len = if whole == 0 || rand.next(2) == 0 { q.tokens() } else { (1 + rand.next(whole)) * 4 };
-                match h.wake(q, &p, len) {
-                    Ok((cp, plan)) => {
-                        mem.wake(&plan);
-                        cps.push((cp, content[..len].to_vec()));
+                if len < 32 {
+                    match h.restore(q, &p, len, len + 1 + rand.next(32 - len)) {
+                        Ok((l, plan)) => {
+                            mem.wake(&plan);
+                            let mut content = content[..len].to_vec();
+                            for pos in len..l.tokens() {
+                                stamp += 1;
+                                mem.device.insert(l.slot(pos), stamp);
+                                content.push(stamp);
+                            }
+                            seqs.push((l, content));
+                        }
+                        Err(Denied::Remapping) => land(&p),
+                        Err(_) => {}
                     }
-                    Err(Denied::Remapping) => land(&p),
-                    Err(_) => {}
                 }
             }
             6 if !cps.is_empty() => {

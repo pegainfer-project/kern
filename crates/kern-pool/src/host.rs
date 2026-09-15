@@ -7,24 +7,25 @@
 //! host node per device node, and a device node remembers its host twin:
 //! a checkpoint whose pages were parked once already (an earlier turn of
 //! the same session, or a wake) copies only the pages past them, and a
-//! host page returns when its last parked holder drops. Waking copies the
-//! first `len` tokens' pages back into fresh device pages — a resident
-//! [`Checkpoint`] again, its nodes twinned with the host ones, so the
-//! prefix is shared by every sequence that continues from it and parks
-//! for free next time.
+//! host page returns when its last parked holder drops. Waking is
+//! [`Host::restore`]: the first `len` tokens' pages copied straight into
+//! a [`Lease`] sized for the sequence continuing from them — one
+//! allocation, the room decision made once — its whole pages sealed and
+//! twinned with the host ones, so the sequence's next checkpoint parks
+//! them for free. The parked checkpoint stays where it is.
 //!
 //! A page on the host is every paged state's page back to back, in arena
 //! order; a slot every per-sequence state's slot likewise. [`Host`] is the
 //! allocator, pure host code over byte offsets in `grain` units: pages
 //! taken from the low end, slots from the high end, first fit, free runs
 //! coalesced. The runtime owns the pinned block and runs the copies a plan
-//! names ([`Host::park`] says what to copy out, [`Host::wake`] what to
+//! names ([`Host::park`] says what to copy out, [`Host::restore`] what to
 //! copy back in); [`runs`] folds consecutive pages into one copy each.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::pages::{Checkpoint, Denied, Pool};
+use crate::pages::{Checkpoint, Denied, Lease, Pool};
 use crate::store::{chain_nodes, chain_pages, lock, sealed, Copies, Node, SlotOwn, Storage, Store};
 
 struct Inner {
@@ -155,37 +156,48 @@ impl Host {
         Ok((Store { len: cp.len, pages: cp.pages, chain, slot }, plan))
     }
 
-    /// The first `len` tokens of `p` back on the device as a checkpoint:
-    /// fresh pages with those tokens' pages copied in, each twinned with
-    /// its host node, and a fresh slot with the state when `len` is the
-    /// whole checkpoint (a parked state is usable at its length only;
-    /// a shorter `len` is a whole number of pages of a stateless one).
-    /// The copies are (host offset, device page). A slot-only checkpoint
-    /// wakes to a slot-only one.
-    pub fn wake(
+    /// A sequence continuing from the first `len` tokens of `p` with room
+    /// for `tokens` (more than `len`), those tokens' bytes on the way in:
+    /// fresh pages, the ones `len` fills copied from the host — the whole
+    /// ones sealed and twinned with their host pages — and a fresh slot
+    /// with the state when `len` is the whole checkpoint (a parked state
+    /// is usable at its length only; a shorter `len` is a whole number of
+    /// pages of a stateless one). The copies are (host offset, device
+    /// page). The lease names positions from `len` on. A slot-only
+    /// checkpoint restores to a slot-only lease at its own length;
+    /// `tokens` is not its business.
+    pub fn restore(
         self: &Arc<Host>,
         p: &Parked,
         pool: &Arc<Pool>,
         len: usize,
-    ) -> std::result::Result<(Checkpoint, Copies<u64, i32>), Denied> {
+        tokens: usize,
+    ) -> std::result::Result<(Lease, Copies<u64, i32>), Denied> {
         let unit = pool.unit() as usize;
         assert!(
             len >= 1 && (len == p.len || (p.paged() && !p.has_slot() && len < p.len && len.is_multiple_of(unit))),
-            "waking {len} tokens of a parked checkpoint of {} ({} slot)",
+            "restoring {len} tokens of a parked checkpoint of {} ({} slot)",
             p.len,
             if p.has_slot() { "with a" } else { "no" }
         );
-        let n = if p.paged() { len.div_ceil(unit) } else { 0 };
-        let (fresh, slot) = pool.take(n)?;
+        let need = if p.paged() {
+            assert!(tokens > len, "restoring {len} tokens into room for {tokens}");
+            pool.pages_for(tokens)?
+        } else {
+            0
+        };
+        let (fresh, slot) = pool.take(need)?;
         let hosts = chain_nodes(&p.chain);
-        let mut chain: Option<Arc<Node<Pool>>> = None;
-        let mut plan = Copies::default();
-        for (h, &page) in hosts.iter().zip(&fresh) {
-            plan.pages.push((h.page, page));
-            chain = Some(Node::new(page, chain.take(), pool, Mutex::new(Arc::downgrade(h))));
-        }
-        plan.slot = p.slot_id().zip(slot.as_ref().map(|s| s.id));
-        Ok((Store { len, pages: n, chain, slot }, plan))
+        let full = len / unit;
+        let chain = hosts[..full]
+            .iter()
+            .zip(&fresh)
+            .fold(None, |chain, (h, &page)| Some(Node::new(page, chain, pool, Mutex::new(Arc::downgrade(h)))));
+        let plan = Copies {
+            pages: hosts.iter().take(len.div_ceil(unit)).zip(&fresh).map(|(h, &page)| (h.page, page)).collect(),
+            slot: p.slot_id().zip(slot.as_ref().map(|s| s.id)),
+        };
+        Ok((Lease::new(chain, full, fresh, slot, len, pool), plan))
     }
 }
 

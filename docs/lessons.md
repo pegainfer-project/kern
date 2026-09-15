@@ -3,6 +3,19 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-15，DSv4.1 EP4 第二轮 wake ↔ park 活锁
+
+**一个请求的房间只问一次。** 命中 parked 条目的请求先 `wake` 成 `Checkpoint`、插回索引、
+回到队首再 `lease_from`：两次分配、两次"够不够"。DSv4.1 EP4（`--chunk 128 --max-seqs 16`）
+的第二轮，醒来的快照加半页拷贝加续写比池子多一页，第二次 `Busy` 时 `make_room` 能 park
+的 resident 只有刚醒的那条，于是醒 → park → 醒，一次 host session 打出 236 万行
+`parked tokens=86`。四卡真模型跑一次才撞到；toy-stateful 单卡上 e2e 的 `wake_room` 场景
+（池子刚好装一条 turn2 的最坏情况）30 秒复现，608 万行。规则：**分配和"够不够"的判断在
+一个动作里做完**——`Host::restore` 与 `Pool::restore` 同形，按最坏长度一次取够、前缀拷进去；
+腾地方的循环里不能有"腾出来的正是自己刚要的"这条边，一旦要靠"记住刚 park 了谁"来打补丁
+（当时试过一版），就是接口在两处做了一件事。另一条：host 场景的 e2e 要有一个刚好差一页的
+池子，宽裕的池子什么都撞不到。
+
 ## 2026-09-14，半页 checkpoint 之后 host 层复用过期副本（kern-pool 重写）
 
 **共享的页谁都不能再写。** `Pool::checkpoint` 在页中间留快照时把那半页原样挂进链，
@@ -255,7 +268,8 @@ release 构建直接 panic（"attempted to zero-initialize type … which is inv
 **醒来的 session 再睡会再拷一份。** host 上的页链按 device 页节点去重，wake 出来的是
 新页，所以同一 session 第二次 park 认不出上一次的副本，旧的那份只是变成最冷的先走。
 没改，记在 serve.md 里；等真有 session 反复睡醒的负载数据再决定要不要让 wake 带着
-host 节点的身份。
+host 节点的身份。（2026-09-14 起 wake 出来的节点带 twin，2026-09-15 起醒进 lease 的整页
+节点也带，闭合。）
 
 **没能复现的事也要记。** kern-serve 一致性门禁的某一次运行里一个 12k 的 filler 请求
 花了 15 s（stats 里 prefill_tok_s 只有 1651），之后 4 次重跑都是 0.7 s。当时的日志是
