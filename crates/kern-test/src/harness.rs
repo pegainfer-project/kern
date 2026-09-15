@@ -829,7 +829,8 @@ pub fn run<S: Side>(o: &Options, diff: Diff, s: &mut Sides<S>, out: &mut dyn FnM
         // prefill: the tapped chunk length plus a sweep over the var range
         let mut sweep = Vec::new();
         if chunk_f.is_some() && n_spans(chunk_name) > 0 && !undriven.iter().any(|u| u == chunk_name) {
-            let max = pa.rows.max;
+            // The manifest's widest chunk, within what the sequence was provisioned.
+            let max = pa.rows.max.min(s.a.provision().tokens);
             let tap_len = pre.len().min(chunk) as u64;
             let mut points: BTreeSet<u64> = [tap_len].into();
             if o.sweep {

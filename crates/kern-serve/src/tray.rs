@@ -150,6 +150,12 @@ pub type Snapshot = Group<Checkpoint>;
 pub type Sleeping = Group<Parked>;
 pub type Rising = Group<Waking>;
 
+impl<X: Clone> Clone for Group<X> {
+    fn clone(&self) -> Group<X> {
+        Group { owner: self.owner, me: self.me, parts: self.parts.clone() }
+    }
+}
+
 impl<X> Group<X> {
     pub fn owner(&self) -> Rank {
         self.owner
@@ -587,9 +593,14 @@ impl Tray {
         self.ranks.iter().map(Runtime::pages_total).sum::<usize>() - self.pad.iter().map(Lease::pages).sum::<usize>()
     }
 
-    /// Longest sequence one page-table row can address, on any rank.
+    /// Longest sequence a row can hold on any rank: what its page table
+    /// addresses, within the pages beside the pad.
     pub fn max_seq_tokens(&self) -> usize {
-        self.ranks.iter().map(Runtime::max_seq_tokens).min().unwrap_or(0)
+        let page = self.page();
+        (self.ranks.iter().zip(&self.pad))
+            .map(|(rt, pad)| rt.max_seq_tokens().min((rt.pages_total() - pad.pages()) * page))
+            .min()
+            .unwrap_or(0)
     }
 
     pub fn has_seq_state(&self) -> bool {
@@ -656,15 +667,6 @@ impl Tray {
         self.each(snap.by_ref(), |rt, m, cp| rt.lease_from(cp, if m == snap.me { len } else { cp.tokens() }, tokens))
     }
 
-    /// A child of `parent` at its first `len` tokens with room for
-    /// `tokens`, on every member. Nothing in `serve` branches a live
-    /// sequence yet; the harness does (`k3_golden --fork`), and a session
-    /// fork request would land here.
-    #[allow(dead_code)]
-    pub fn fork(&mut self, parent: &mut Row, len: usize, tokens: usize) -> Result<Row, Error> {
-        self.each(parent.by_mut(), |rt, _, l| rt.fork(l, len, tokens))
-    }
-
     /// The first `len` tokens of `row` as a snapshot it keeps running past.
     pub fn checkpoint(&mut self, row: &mut Row, len: usize) -> Result<Snapshot, Error> {
         self.each(row.by_mut(), |rt, _, l| rt.checkpoint(l, len))
@@ -688,9 +690,11 @@ impl Tray {
         self.each(rooms, |rt, _, r| rt.park(r.unwrap_or_else(|_| unreachable!("every member found room")))).map(Ok)
     }
 
-    /// Wake the first `len` tokens of `sleeping` into a row with room for
-    /// `tokens`, on every member; the copies are in flight until
-    /// [`Tray::awake`] says otherwise.
+    /// A row continuing from the first `len` tokens of `sleeping` with
+    /// room for `tokens`, on the snapshot's owner, its bytes on the way in
+    /// from every member's host tier; the peers continue their slots at
+    /// the snapshot's length. The copies are in flight until
+    /// [`Tray::awake`] hands the row out.
     pub fn wake(&mut self, sleeping: &Sleeping, len: usize, tokens: usize) -> Result<Rising, Error> {
         self.each(sleeping.by_ref(), |rt, m, p| rt.wake(p, if m == sleeping.me { len } else { p.tokens() }, tokens))
     }

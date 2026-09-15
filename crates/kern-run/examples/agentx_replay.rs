@@ -26,7 +26,8 @@
 //! of that size instead of dropping it (dropping the coldest parked ones
 //! when the tier is full), and a hit on a parked one wakes it.
 //!
-//! Reported: hit rate (prefix tokens found / input tokens), extend
+//! Reported: hit rate (prefix tokens found / input tokens), the hits and
+//! their tokens by tier (resident, or woken from the host), extend
 //! percentiles, checkpoints kept, evictions, requests that had to wait,
 //! remaps, the most slots the pool grew to, parks and wakes.
 
@@ -36,7 +37,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kern_manifest::types::Manifest;
-use kern_pool::{Chain, Checkpoint, Denied, Host, Lease, Pool, Prefix, Tier};
+use kern_pool::{Denied, Evicted, Found, Host, Lease, Pool, Prefix, Tier};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -167,9 +168,9 @@ struct Live {
     lease: Lease,
     req: usize,
     hit: usize,
-    /// Over the prompt and the output both: the output's tokens are known
-    /// up front here, and a chain's key is read only at checkpoint lengths.
-    chain: Chain,
+    /// The prompt and the output both: the output's tokens are known up
+    /// front here.
+    tokens: Vec<i64>,
 }
 
 #[derive(Default)]
@@ -177,6 +178,11 @@ struct Tally {
     input: u64,
     hit: u64,
     extend: Vec<usize>,
+    /// Requests whose prefix was found resident, and on the host (woken).
+    resident_hits: u64,
+    resident_hit_tokens: u64,
+    host_hits: u64,
+    host_hit_tokens: u64,
     checkpoints: u64,
     evictions: u64,
     waited: u64,
@@ -194,37 +200,23 @@ struct Tally {
 /// Make room for a `Busy` lease: park the coldest resident checkpoint
 /// when there is a host tier (dropping the coldest parked ones until it
 /// fits), else drop it. `false` when nothing is resident.
-fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, page_bytes: u64, state: u64, tally: &mut Tally) -> bool {
-    let Some(id) = prefix.coldest(Tier::Resident) else { return false };
-    if let Some(h) = host {
-        loop {
-            // The plan's copies would run on the runtime; here the bytes
-            // are imaginary and the checkpoint goes straight back.
-            let park = |cp: Checkpoint| {
-                let slot = cp.seq_slot().map(|s| (s, state));
-                Ok::<_, ()>(match h.park(&cp.nodes(), page_bytes, slot, cp.tokens()) {
-                    Ok((p, _)) => Ok(p),
-                    Err(_) => Err(cp),
-                })
-            };
-            match prefix.park(id, park).unwrap() {
-                true => {
-                    tally.parks += 1;
-                    tally.host_peak = tally.host_peak.max(h.used());
-                    return true;
-                }
-                false => match prefix.coldest(Tier::Parked) {
-                    Some(c) => {
-                        prefix.remove(c);
-                        tally.host_evictions += 1;
-                    }
-                    None => break,
-                },
-            }
+fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, tally: &mut Tally) -> bool {
+    // The plan's copies would run on the runtime; here the bytes are
+    // imaginary and the checkpoint goes straight back.
+    let park = host.map(|h| move |cp| Ok::<_, ()>(h.park(&cp).map(|(p, _)| p).map_err(|_| cp)));
+    let dropped = match prefix.evict(park).unwrap() {
+        Some(Evicted::Parked { dropped, .. }) => {
+            tally.parks += 1;
+            tally.host_peak = tally.host_peak.max(host.map_or(0, |h| h.used()));
+            dropped
         }
-    }
-    prefix.remove(id);
-    tally.evictions += 1;
+        Some(Evicted::Dropped { dropped, .. }) => {
+            tally.evictions += 1;
+            dropped
+        }
+        None => return false,
+    };
+    tally.host_evictions += dropped as u64;
     true
 }
 
@@ -295,8 +287,9 @@ fn main() {
         None => (budget_gib << 30) / chunk,
     };
     let first_slots = if state > 0 { slots } else { 0 };
-    let pool = Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots).expect("the budget holds the first slots").0);
-    let host = (host_gib > 0).then(|| Arc::new(Host::new(host_gib << 30, 1 << 16)));
+    let pool =
+        Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots, None).expect("the budget holds the first slots").0);
+    let host = (host_gib > 0).then(|| Arc::new(Host::new(host_gib << 30, 1 << 16, page_bytes, state)));
     let mut prefix = Prefix::new(unit);
     let mut tally = Tally::default();
     let mut order: Vec<usize> = (0..reqs.len()).collect();
@@ -316,7 +309,7 @@ fn main() {
         if state > 0 {
             if total >= 1 {
                 let cp = pool.retire(live.lease, total);
-                prefix.insert(&live.chain, cp);
+                prefix.insert(&live.tokens[..total], cp);
                 tally.checkpoints += 1;
             }
         } else {
@@ -324,7 +317,7 @@ fn main() {
             let first = r.input.div_ceil(unit).max(live.hit / unit + 1);
             for k in first..=total / unit {
                 if let Ok((cp, _)) = pool.checkpoint(&mut lease, k * unit) {
-                    prefix.insert(&live.chain, cp);
+                    prefix.insert(&live.tokens[..k * unit], cp);
                     tally.checkpoints += 1;
                 }
             }
@@ -352,25 +345,30 @@ fn main() {
             now = now.max(offset[r.session] + r.t);
             let toks = tokens(&reqs, ri);
             let worst = r.input + r.out;
-            let hit = prefix.lookup(&toks[..r.input]);
+            let mut woken = false;
             let lease = loop {
-                let attempt = match hit {
-                    Some(h) => match h.tier {
-                        Tier::Resident => pool.restore(prefix.resident(h.id).unwrap(), h.len, worst).map(|(l, _)| l),
-                        Tier::Parked => pool.wake(h.len, worst),
+                // Room made for a retry may have parked or dropped the
+                // checkpoint hit: look it up again where it is now.
+                let attempt = match prefix.lookup(&toks[..r.input]) {
+                    Some(h) => match h.found {
+                        Found::Resident(cp) => pool.restore(&cp, h.len, worst).map(|(l, _)| l),
+                        // Woken straight into the lease; the parked
+                        // checkpoint stays on the host.
+                        Found::Parked(p) => {
+                            host.as_ref().expect("a parked hit").restore(&p, &pool, h.len, worst).map(|(l, _)| {
+                                woken = true;
+                                tally.wakes += 1;
+                                tally.wake_tokens += h.len as u64;
+                                l
+                            })
+                        }
                     },
                     None => pool.lease(worst),
                 };
                 match attempt {
-                    Ok(l) => {
-                        if hit.is_some_and(|h| h.tier == Tier::Parked) {
-                            tally.wakes += 1;
-                            tally.wake_tokens += l.prefix() as u64;
-                        }
-                        break Some(l);
-                    }
+                    Ok(l) => break Some(l),
                     Err(Denied::Busy) => {
-                        if !make_room(&mut prefix, host.as_ref(), page_bytes, state, &mut tally) {
+                        if !make_room(&mut prefix, host.as_ref(), &mut tally) {
                             break None;
                         }
                     }
@@ -403,11 +401,17 @@ fn main() {
             tally.input += r.input as u64;
             tally.hit += hit_len as u64;
             tally.extend.push(r.input - hit_len);
-            let chain = Chain::over(unit, &toks);
+            if woken {
+                tally.host_hits += 1;
+                tally.host_hit_tokens += hit_len as u64;
+            } else if hit_len > 0 {
+                tally.resident_hits += 1;
+                tally.resident_hit_tokens += hit_len as u64;
+            }
             if state == 0 {
                 for k in (hit_len / unit + 1)..=r.input / unit {
                     if let Ok((cp, _)) = pool.checkpoint(&mut lease, k * unit) {
-                        prefix.insert(&chain, cp);
+                        prefix.insert(&toks[..k * unit], cp);
                         tally.checkpoints += 1;
                     }
                 }
@@ -415,7 +419,7 @@ fn main() {
             let end = now + r.api;
             let id = live_ids;
             live_ids += 1;
-            finishing.insert((end.to_bits(), id), Live { lease, req: ri, hit: hit_len, chain });
+            finishing.insert((end.to_bits(), id), Live { lease, req: ri, hit: hit_len, tokens: toks });
             tally.max_live = tally.max_live.max(finishing.len());
         } else {
             let ((bits, _), live) = finishing.pop_first().unwrap();
@@ -450,14 +454,20 @@ fn main() {
         );
     }
     println!(
-        "hit {:.1}% of {} input tokens; extend p50 {} p90 {} p99 {}; {} checkpoints made, {} kept, {} evicted; {} requests waited, {} rejected; max live {}",
+        "hit {:.1}% of {} input tokens: {} requests hit resident ({} tokens, {:.1}%), {} hit the host ({} tokens, {:.1}%); extend p50 {} p90 {} p99 {}; {} checkpoints made, {} kept, {} evicted; {} requests waited, {} rejected; max live {}",
         100.0 * tally.hit as f64 / tally.input.max(1) as f64,
         tally.input,
+        tally.resident_hits,
+        tally.resident_hit_tokens,
+        100.0 * tally.resident_hit_tokens as f64 / tally.input.max(1) as f64,
+        tally.host_hits,
+        tally.host_hit_tokens,
+        100.0 * tally.host_hit_tokens as f64 / tally.input.max(1) as f64,
         pct(&mut tally.extend, 0.5),
         pct(&mut tally.extend, 0.9),
         pct(&mut tally.extend, 0.99),
         tally.checkpoints,
-        prefix.len(),
+        prefix.entries(),
         tally.evictions,
         tally.waited,
         tally.rejected,

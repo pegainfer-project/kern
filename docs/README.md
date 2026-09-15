@@ -38,6 +38,7 @@ The stable, flat paths below are grouped here by purpose.
 
 - [Original design exploration](design.md)
 - [Schema v4 design](v4-design.md)
+- [State pool design (kern-pool)](pool.md)
 - [Multi-GPU runtime](multi-gpu.md)
 - [Agent workload study](agent-workload.md)
 - [DCP microbench](dcp-bench.md)

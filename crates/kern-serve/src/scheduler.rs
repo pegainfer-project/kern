@@ -54,8 +54,8 @@
 //!   at a given batch size is the operator's call (`--rows`), not the
 //!   scheduler's;
 //! - prefix reuse: a finished sequence's KV lives on as snapshots
-//!   (`Tray::checkpoint` / `retire`, indexed by token hash in a `Prefix`
-//!   table keyed over the whole tray), and a new prompt starts from the
+//!   (`Tray::checkpoint` / `retire`, indexed by their tokens in a `Prefix`
+//!   tree over the whole tray), and a new prompt starts from the
 //!   longest snapshot holding a proper prefix of it (`Tray::lease_from`;
 //!   prefill covers the rest). A paged-only manifest checkpoints every
 //!   whole page as a sequence fills it — free, a shared page — so any
@@ -63,14 +63,21 @@
 //!   with a recurrent state checkpoints only where a request ends (the
 //!   finished sequence's state slots become the snapshot's, nothing is
 //!   copied), so only a prompt that continues an earlier request's whole
-//!   context hits. A `Busy` lease makes room and retries until it fits or
+//!   context hits; a speculative round that accepted past `max_tokens` or
+//!   the stop leaves a state no next turn continues, which is not kept.
+//!   A `Busy` lease makes room and retries until it fits or
 //!   nothing is left: the least recently hit snapshot is parked into the
 //!   host tier (`--host-gib`: pinned DRAM per rank, `Tray::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
 //!   it is full) or, without one, dropped. A prompt hitting a parked
-//!   snapshot wakes it (`Tray::wake`): the copies ride the transfer
-//!   streams and the request waits in `waking` until `Tray::awake` hands
-//!   out the row, so no step queues behind them.
+//!   snapshot wakes it (`Tray::wake`) straight into its own row: one
+//!   lease sized for the request, the prefix's pages copied in over the
+//!   transfer streams, so room is decided once (waking the prefix and then
+//!   leasing from it would ask twice, and the second ask could park what
+//!   the first woke, without end). The request waits in `waking` until
+//!   `Tray::awake` hands the row back and starts from it; no step queues
+//!   behind them. The parked snapshot stays parked; the request's own
+//!   finish indexes the longer context resident.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -78,7 +85,7 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::Protocol;
-use kern_pool::{Chain, Denied, Prefix, Tier};
+use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
 use kern_runtime::Error;
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
@@ -228,15 +235,18 @@ struct Seq {
     /// prompt goes through decode; the outputs of those steps are dropped.
     pending: VecDeque<u32>,
     generated: usize,
+    /// Tokens the client got: `generated` less the stop token and whatever
+    /// a speculative round accepted past `max_tokens` or the stop.
+    emitted: usize,
     max_tokens: usize,
     ignore_eos: bool,
     /// Its KV pages and state slots across the tray; returned when the
     /// sequence drops.
     row: Row,
     prompt_len: usize,
-    /// The hash chain over the tokens in the state, `pos` of them; the
-    /// prefix table keys this sequence's snapshots by it.
-    chain: Chain,
+    /// The tokens in the state, `pos` of them; the prefix tree keys this
+    /// sequence's snapshots by them.
+    history: Vec<i64>,
     /// Tokens already checkpointed, a whole number of pages.
     checkpointed: usize,
     admitted: Instant,
@@ -247,7 +257,7 @@ impl Seq {
     fn advance(&mut self, fed: impl IntoIterator<Item = u32>) {
         for t in fed {
             self.pos += 1;
-            self.chain.push(t as i64);
+            self.history.push(t as i64);
         }
     }
 
@@ -272,6 +282,7 @@ impl Seq {
                 break;
             }
         }
+        self.emitted += out.len();
         if !out.is_empty() {
             ledger.push_tokens(self.id, &out, &[]);
         }
@@ -308,7 +319,7 @@ pub struct KernScheduler {
     /// Draft acceptance, for a plan whose steps take several rows.
     counters: Option<SpecDecodeCounters>,
     waiting: VecDeque<QueuedRequest>,
-    /// Admitted requests whose woken rows are still on the way in.
+    /// Requests whose rows are still on the way in from the host tier.
     waking: VecDeque<(QueuedRequest, Rising)>,
     running: Vec<Seq>,
     /// Snapshots of finished prefixes, for the next prompt that shares
@@ -335,6 +346,12 @@ struct Stats {
     /// Prompt tokens found in a snapshot, and snapshots evicted for room.
     prefix_hit_tokens: u64,
     evictions: u64,
+    /// Requests whose prompt was found in a resident snapshot, and in one
+    /// woken from the host, with the tokens found.
+    resident_hits: u64,
+    resident_hit_tokens: u64,
+    host_hits: u64,
+    host_hit_tokens: u64,
     /// Snapshots parked to the host, dropped from it for room, woken
     /// from it, and the tokens woken.
     parks: u64,
@@ -359,6 +376,10 @@ impl Stats {
             prefill_ns: 0,
             prefix_hit_tokens: 0,
             evictions: 0,
+            resident_hits: 0,
+            resident_hit_tokens: 0,
+            host_hits: 0,
+            host_hit_tokens: 0,
             parks: 0,
             host_evictions: 0,
             wakes: 0,
@@ -379,6 +400,7 @@ pub struct Facts {
 /// What a lease attempt handed out.
 enum Got {
     Row(Row),
+    /// A row in flight from the host tier.
     Rising(Rising),
 }
 
@@ -479,16 +501,17 @@ impl KernScheduler {
     /// Admit waiting requests in order and prefill each (single sequence,
     /// chunked); one that cannot be seated stops the scan.
     fn admit(&mut self, ledger: &mut RequestLedger) -> Result<()> {
-        // Wakes land in order: the first still in flight stops the scan.
+        // Wakes land in order: the first still in flight stops the scan;
+        // a landed one starts from its row ahead of the line.
         while let Some((q, r)) = self.waking.pop_front() {
             match self.tray.awake(r)? {
                 Ok(row) => {
+                    self.stats.wakes += 1;
+                    self.stats.wake_tokens += row.prefix() as u64;
                     if ledger.is_aborted(q.id) {
                         ledger.retire(q.id);
                         continue;
                     }
-                    self.stats.wakes += 1;
-                    self.stats.wake_tokens += row.prefix() as u64;
                     self.admit_one(q, row, true, ledger)?;
                 }
                 Err(r) => {
@@ -512,37 +535,29 @@ impl KernScheduler {
             let prompt = q.request.prompt_tokens.len();
             let max_tokens = q.request.max_tokens;
             let worst = prompt + max_tokens + self.headroom();
-            if prompt == 0 {
-                let limit = self.tray.max_seq_tokens();
+            let limit = self.tray.max_seq_tokens();
+            if prompt == 0 || worst > limit {
                 ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
                 self.waiting.pop_front();
                 continue;
             }
             let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
-            let hit = self.prefix.lookup(&ids);
             // A hit continues on the snapshot's owner, which must have a row free.
-            let owner = hit.and_then(|h| match h.tier {
-                Tier::Resident => self.prefix.resident(h.id).map(Snapshot::owner),
-                Tier::Parked => self.prefix.parked(h.id).map(Sleeping::owner),
+            let owner = self.prefix.lookup(&ids).map(|h| match h.found {
+                Found::Resident(snap) => snap.owner(),
+                Found::Parked(p) => p.owner(),
             });
             if owner.is_some_and(|o| rows[o.index()] >= cap) {
                 break;
             }
+            // Room made for a retry may have parked or dropped the
+            // snapshot hit above: look it up again where it is now.
             let got = loop {
-                // Room made for a retry may have parked or dropped the
-                // snapshot hit above: look it up again where it is now.
-                let hit = self.prefix.lookup(&ids);
                 let tray = &mut self.tray;
-                let attempt = match hit {
-                    Some(h) => match h.tier {
-                        Tier::Resident => {
-                            let snap = self.prefix.resident(h.id).expect("hit");
-                            tray.lease_from(snap, h.len, worst).map(Got::Row)
-                        }
-                        Tier::Parked => {
-                            let p = self.prefix.parked(h.id).expect("hit");
-                            tray.wake(p, h.len, worst).map(Got::Rising)
-                        }
+                let attempt = match self.prefix.lookup(&ids) {
+                    Some(h) => match h.found {
+                        Found::Resident(snap) => tray.lease_from(&snap, h.len, worst).map(Got::Row),
+                        Found::Parked(p) => tray.wake(&p, h.len, worst).map(Got::Rising),
                     },
                     None => tray.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(Got::Row),
                 };
@@ -554,7 +569,7 @@ impl KernScheduler {
             let row = match got {
                 Ok(Got::Row(row)) => row,
                 Ok(Got::Rising(r)) => {
-                    // Its copies are in flight; it is admitted once they land.
+                    // Its copies are in flight; it starts once they land.
                     let q = self.waiting.pop_front().unwrap();
                     self.waking.push_back((q, r));
                     continue;
@@ -579,9 +594,9 @@ impl KernScheduler {
         Ok(())
     }
 
-    /// Start `q` running in `row` (past the row's prefix): through the
-    /// chunk forward when the manifest has one, else with the prompt
-    /// queued for the steps.
+    /// Start `q` running in `row` (past the row's prefix, `woken` from
+    /// the host tier or resident): through the chunk forward when the
+    /// manifest has one, else with the prompt queued for the steps.
     fn admit_one(&mut self, q: QueuedRequest, row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<()> {
         let id = q.id;
         let prompt = q.request.prompt_tokens.len();
@@ -620,6 +635,13 @@ impl KernScheduler {
             None => (start, None, q.request.prompt_tokens[start + 1..].iter().copied().collect()),
         };
         self.stats.prefix_hit_tokens += start as u64;
+        if woken {
+            self.stats.host_hits += 1;
+            self.stats.host_hit_tokens += start as u64;
+        } else if start > 0 {
+            self.stats.resident_hits += 1;
+            self.stats.resident_hit_tokens += start as u64;
+        }
         debug!(
             request = %id,
             prompt,
@@ -637,11 +659,12 @@ impl KernScheduler {
             next: q.request.prompt_tokens[n_pre.min(prompt - 1)],
             pending,
             generated: 0,
+            emitted: 0,
             max_tokens,
             ignore_eos: q.request.params.ignore_eos,
             row,
             prompt_len: prompt,
-            chain: Chain::over(page, &ids[..n_pre]),
+            history: ids[..n_pre].to_vec(),
             checkpointed: start / page * page,
             admitted: t0,
         };
@@ -662,26 +685,22 @@ impl KernScheduler {
     /// the host tier when there is one (the coldest parked ones dropped
     /// until it fits), else is dropped. `false` when nothing is resident.
     fn make_room(&mut self) -> Result<bool> {
-        let Some(id) = self.prefix.coldest(Tier::Resident) else { return Ok(false) };
-        if self.policy.host_bytes > 0 {
-            loop {
-                let tray = &mut self.tray;
-                if self.prefix.park(id, |snap| tray.park(snap))? {
-                    debug!(tokens = self.prefix.parked(id).map_or(0, kern_pool::Kept::tokens), "parked");
-                    self.stats.parks += 1;
-                    return Ok(true);
-                }
-                match self.prefix.coldest(Tier::Parked) {
-                    Some(c) => {
-                        self.prefix.remove(c);
-                        self.stats.host_evictions += 1;
-                    }
-                    None => break,
-                }
+        let tray = &mut self.tray;
+        let park = (self.policy.host_bytes > 0).then_some(|snap| tray.park(snap));
+        let dropped = match self.prefix.evict(park)? {
+            Some(Evicted::Parked { key, dropped }) => {
+                debug!(tokens = key.len(), dropped, "parked");
+                self.stats.parks += 1;
+                dropped
             }
-        }
-        self.prefix.remove(id);
-        self.stats.evictions += 1;
+            Some(Evicted::Dropped { key, dropped }) => {
+                debug!(tokens = key.len(), dropped, "dropped");
+                self.stats.evictions += 1;
+                dropped
+            }
+            None => return Ok(false),
+        };
+        self.stats.host_evictions += dropped as u64;
         Ok(true)
     }
 
@@ -695,7 +714,7 @@ impl KernScheduler {
         while s.checkpointed + unit <= s.pos {
             let len = s.checkpointed + unit;
             let snap = self.tray.checkpoint(&mut s.row, len)?;
-            self.prefix.insert(&s.chain, snap);
+            self.prefix.insert(&s.history[..len], snap);
             s.checkpointed = len;
         }
         Ok(())
@@ -703,13 +722,24 @@ impl KernScheduler {
 
     /// A sequence is done: with a recurrent state, its whole context
     /// becomes a snapshot (the slots move, nothing is copied); without
-    /// one, every whole page already is.
+    /// one, every whole page already is. A state holding tokens the client
+    /// never got (a speculative round accepted past `max_tokens` or the
+    /// stop) is a key no next turn can send: it returns to the pool.
     fn finish(&mut self, s: Seq) {
         if self.every_page || s.pos == 0 {
             return;
         }
+        // The last token is normally the next input, not in the state
+        // yet; the stop token itself may be in it, and stays: a chat's
+        // next turn ends the answer with it.
+        let visible = s.prompt_len + s.emitted;
+        let past = s.history.get(visible..).unwrap_or_default();
+        if s.pos > visible + 1 || past.iter().any(|&t| !self.policy.stop_tokens.contains(&(t as u32))) {
+            debug!(request = %s.id, tokens = s.pos, visible, "not kept");
+            return;
+        }
         let snap = self.tray.retire(s.row, s.pos);
-        self.prefix.insert(&s.chain, snap);
+        self.prefix.insert(&s.history, snap);
     }
 
     /// Drop aborted sequences before a step so they neither pad nor compute.
@@ -867,7 +897,11 @@ impl KernScheduler {
                 prefill_tok_s =
                     (st.prefill_ns > 0).then(|| round(st.prefill_tokens as f64 / (st.prefill_ns as f64 / 1e9), 1.0)),
                 prefix_hit_tokens = st.prefix_hit_tokens,
-                checkpoints = self.prefix.len(),
+                resident_hits = st.resident_hits,
+                resident_hit_tokens = st.resident_hit_tokens,
+                host_hits = host.map(|_| st.host_hits),
+                host_hit_tokens = host.map(|_| st.host_hit_tokens),
+                checkpoints = self.prefix.entries(),
                 evictions = st.evictions,
                 parked = host.map(|_| self.prefix.count(Tier::Parked)),
                 host_gib = host.map(|(u, _)| round(u as f64 / (1u64 << 30) as f64, 10.0)),

@@ -77,14 +77,15 @@ state 时把 state 拷进一个新 slot（没有空 slot 报 `Denied::Busy`）�
 slot 原样移交。`Runtime::lease_from(&checkpoint, tokens)` 从 checkpoint 起一条
 新序列：整页共享，`len` 落在页中间时把那一页拷一份（新序列往里追加，
 checkpoint 自己那页不动），state 拷进新 slot；租约的 `prefix()` = `len`，
-`slot(pos)` 拒绝 `pos < prefix`。谁拿着句柄谁持有：页在最后一个 lease /
+`slot(pos)` 拒绝 `pos < prefix`，也拒绝落在已封进链的页里的位置（`checkpoint` 之后
+那些整页有了 `Node`，封它们的租约也不能再写；harness 读字节走 `page_ids()`）。谁拿着句柄谁持有：页在最后一个 lease /
 checkpoint drop 时回池，checkpoint 本身不会被 runtime 淘汰。
-纯 host 的 `Prefix` 表（`kern-pool/prefix.rs`）按 token 哈希链索引 checkpoint：`lookup(tokens)`
-给出覆盖 prompt 真前缀（不含最后一个 token）的最长 checkpoint；序列自己带一条
-`Chain`（每 token 折一次，每页记一个头），`insert(&chain, cp)` 读链上对应长度的键，
-每页留一个 checkpoint 也只把每个 token 哈希一次；`insert` 去重，
-`evict` drop 最久未命中的一个（同一条链最深的先走，drop 叶子才真正还页）；
-逻辑时钟计数，不读钟，同样的 token 序列给同样的判定。决策（共享哪些页、拷哪一页、
+纯 host 的 `Prefix` 索引（`kern-pool/prefix.rs`，设计见 `pool.md`）是 token 键的 radix
+tree：`insert(&tokens, cp)` 把 checkpoint 挂在它的 token 路径上（同样的 token 是同一个
+条目），`lookup(tokens)` 给出覆盖 prompt 真前缀（不含最后一个 token）的最长可用条目，
+`Hit` 持有条目的一个 clone；`evict(park)` 拿最久未命中的 resident 条目 park 进 host
+或丢掉（同一条路径叶子先走，drop 叶子才真正还页）；逻辑时钟计数，不读钟，同样的
+token 序列给同样的判定。决策（共享哪些页、拷哪一页、
 拷哪个 slot）由 `Pool` 在 host 上算成 `Copies`，runtime 只在 stream 上执行拷贝。
 kern run / kern test 仍默认 4096（test 的 workload 抽样以 capacity 为界）。
 
@@ -104,20 +105,21 @@ Grace 各挂两张卡，本地 DRAM 拷贝 180 / 197 GiB/s（park / wake），�
 只在 host 块上找地方（放不下时把 checkpoint 原样退回，调用方淘汰点什么再试；`Room`
 drop 即退地），`Runtime::park(room) -> Parked` 才拷页和 slot——分开是为了 tray 级的
 park 能先在四张卡上都找到地方再动一个字节（半途失败的 park 无法撤销）；runtime 攥着
-这个 checkpoint 直到拷贝落地，页和 slot 才回池，前缀一直可查；`Runtime::wake(&parked, len, tokens) -> Waking` 租一条新序列并把前 `len` 个 token
-的页（和 slot）拷回来，`Runtime::awake(waking) -> Result<Lease, Waking>` 不阻塞地问拷贝
-落地没有，落地了才给出 `Lease`（`Runtime::landed(&waking)` 只问不拿，tray 用它先看齐
-四张卡再一起 awake）——没有 `Lease` 就没有程序能读到还在路上的页，这是类型
-保证的，不靠 compute stream 等事件（`Waking` 提前 drop 会等拷贝完再还页）。host 上
-的页也是链（`kern-pool/host.rs`，一页一个节点，按它拷自的 device 节点编号索引），同一 session
-下一轮再 park 只拷新增的页；一页在 host 上是所有分页 state 的该页首尾相接，slot 同理，
+这个 checkpoint 直到拷贝落地，页和 slot 才回池，前缀一直可查；`Runtime::wake(&parked, len, tokens) -> Waking`
+按 `tokens` 一次取够页（`Host::restore`，与 `lease_from` 同形）并把前 `len` 个 token 的页（和 slot）
+拷进去，`Runtime::awake(waking) -> Result<Lease, Waking>` 不阻塞地问拷贝落地没有，落地了才交出
+这份 `Lease`（`Runtime::landed(&waking)` 只问不拿，tray 用它先看齐四张卡再一起 awake）——没有
+`Lease` 就没有程序能读到还在路上的页，这是类型保证的，不靠 compute stream 等事件（`Waking`
+提前 drop 会等拷贝完再还页）；一个请求的房间只问一次（2026-09-15，lessons.md）。host 上
+的页也是链（`kern-pool/host.rs`，一页一个节点，device 节点记着它 host 副本的 `Weak`），同一 session
+下一轮再 park 只拷新增的页，醒来的再睡一个字节不拷；一页在 host 上是所有分页 state 的该页首尾相接，slot 同理，
 按 64 KiB 粒度 first-fit（页从低端长、slot 从高端长）。拷贝走单独的 transfer stream
 （`cuMemcpy2DAsync`，连续页折成一次），transfer stream 在 compute stream 已入队的一切
 之后开始，compute stream 从不等它，decode 步不排在拷贝后面。`Prefix` 表按
 `Tier::{Resident, Parked}` 分层：`lookup` 先挑 resident；纯 KV 的 checkpoint 链在表里
 是一个随页增长的条目（每个深度都登记），所以 parked 的条目部分命中时只醒需要的页；
-`coldest(tier)` / `park(id, |cp| ...)` / `remove(id)` 是调用方腾地方的三个动作；表对它
-存的东西是泛型的（`Prefix<R, P>`，`R: Kept`、`P: Kept` 只要求 `tokens()` / `has_slot()`），
+`evict(Some(|cp| ...))` 是调用方腾地方的一个动作（park 最冷的 resident，host 满了先丢
+最冷的 parked，没有 host 就丢）；表对它存的东西是泛型的（`Prefix<R, P>`，`R: Kept`、`P: Kept` 只要求 `tokens()` / `has_slot()`），
 单卡存 `Checkpoint` / `Parked`，kern-serve 的 tray 存四张卡的元组。实测
 （tray08 GB300 单卡，2026-09-03，`crates/kern-runtime/examples/park_wake.rs`，写入
 按位置的 pattern、park、清零、wake、逐字节比对）：qwen3.8-27b 形状 98k token =

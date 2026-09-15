@@ -163,7 +163,7 @@ impl Runtime {
             (true, None) => manifest.seq_slots(),
         };
         let chunk = chunk_size(&manifest, page, chunk_granularity(dev)? as u64);
-        let chunks = match capacity.and_then(|c| c.tokens) {
+        let tokens = match capacity.and_then(|c| c.tokens) {
             Some(asked) => {
                 let aligned = asked / page * page;
                 if aligned == 0 {
@@ -174,8 +174,12 @@ impl Runtime {
                 if aligned != asked {
                     tracing::warn!("state capacity {asked} is not a multiple of the page unit {page}; using {aligned}");
                 }
-                chunks_for(&manifest, aligned, first_slots, chunk)
+                Some(aligned)
             }
+            None => None,
+        };
+        let chunks = match tokens {
+            Some(t) => chunks_for(&manifest, t, first_slots, chunk),
             None => fit_budget(&ctx, fixed_bytes, paged_bytes, slot_bytes * first_slots)? / chunk,
         };
         let chunks =
@@ -189,7 +193,7 @@ impl Runtime {
             }
         }
         let t0 = std::time::Instant::now();
-        let (pool, initial) = Pool::new(&manifest, chunk, chunks, first_slots as usize)?;
+        let (pool, initial) = Pool::new(&manifest, chunk, chunks, first_slots as usize, tokens)?;
         let planned = t0.elapsed();
         let physical = Physical::create(dev, chunk as usize, chunks as usize)?;
         let created = t0.elapsed() - planned;

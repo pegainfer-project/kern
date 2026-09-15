@@ -190,9 +190,13 @@ attention 的命中被截到 mamba 块边界）。快照放哪由调用方定—
 NUMA 节点上）。租约 `Busy` 时最久未命中的 resident checkpoint 不再直接丢，而是 park
 到这块 host 内存（`Runtime::park`，页和 slot 都拷；host 放不下就先丢最冷的 parked），
 runtime 攥着它直到拷贝落地才还页；命中 parked checkpoint 的 prompt 走 `Runtime::wake`：
-租新页、把前缀拷回来，请求在 `waking` 队列里等 `Runtime::awake` 交出 `Lease`，其间
+按请求的最坏长度一次取够页、把前缀拷进去，请求在 `waking` 队列里等 `Runtime::awake` 交出
+这份 `Lease`，落地即开跑（2026-09-15 起，`pool.md`；之前先醒成 `Checkpoint` 插回索引、再
+`lease_from`，两次分配在 DSv4.1 EP4 的第二轮上 wake ↔ park 活锁，见 lessons.md），其间
 decode 步照常走——compute stream 从不等 transfer stream。stats 行多了
-`parked / host_gib / parks / host_evictions / wakes / wake_tokens`。
+`parked / host_gib / parks / host_evictions / wakes / wake_tokens`，以及按 tier 分的命中
+`resident_hits / resident_hit_tokens / host_hits / host_hit_tokens`（host 层有没有被打到
+一眼可见）。
 
 门禁（tray08 GB300 单卡，qwen3-4b，`--capacity 32768 --host-gib 32`，greedy 64 token，
 prompt 8189 token）：第一次请求 cold prefill；14 个不同的 12–13k 长 filler 把它挤到 host
@@ -217,8 +221,7 @@ decode 抖动（同卡，`--capacity 65536 --host-gib 48`，8 路 stream 各 256
 核只按 head 并行，长上下文下带宽吃不满），prefill-first 的每步又把它排在 decode 前面——
 resident 命中同样如此。这是 K5（prefill 作为 decode 步的 filler）要解的，不是 K3 的。
 
-同一 session 醒来后再睡，host 上按 device 页节点去重的链认不出它（醒来的是新页），会
-再拷一份；旧的那份最冷，缺地方时先走。
+同一 session 醒来后再睡，醒进 lease 的整页节点带着 host twin，只拷新增的页（`pool.md`）。
 
 ## DSv4.1 Flash 的 host 层命中（2026-09-11，tray05）
 
@@ -442,10 +445,128 @@ prompt 的序列各喂一段 run（`scheduler::runs`），所有 run 一样长�
     （8 条一样长）；混合长短的公平性是 K5 D2 预算策略的事。
 
 **没测**（按 CLAUDE.md 的门禁排队）：
-1. t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变；
+1. ~~t=1 qwen3.8-27b（有 slot 的路径）conc1 与 `kern run` 同，K1/K3 门禁数字不变~~（e2e 门禁一节，2026-09-14）；
 2. owner-only 页在 t>1 下：mixed 行、prefix 命中（retire → lease_from）、park / wake 之后 warm == cold；
 3. 全成或全不成：某一卡 `--host-gib` 故意给小，park 整体退回、四卡 host 占用回到原值；
 4. 93 层短 prompt 的 conc1 / conc8 步时对 k3_golden 的 20.8 / 25.5 ms（E3 量到 ITL 32 / 38 ms，含 tray 的 staging 与 HTTP，没拆）。
+
+## e2e 门禁（`tools/e2e`，2026-09-14，tray06 / tray07 / tray09，各 4×GB300）
+
+`python3 tools/e2e/e2e.py` 把一份 kern.toml 的每个 target 过同一组场景（表在 `tools/e2e/README.md`）：
+`kern test`、conc1 对 `kern run`、重复命中、turn2（prompt + 答案 + 追问，发 id）warm 对 `kern run` 与对冷
+server、12 条并发、流式中途挂断、小池子 + `--host-gib 2` 的 park / wake、刚好装一条 turn2 的池子上的 wake
+（`wake_room`）、`--max-seqs 2` 起的 slot 增长、
+投机 manifest 的 `--rows 1`。字节一致是门；单 rank target 的分歧再拿 `kern run --prompt-ids <分歧前的
+上下文> --rows 1 --probe-dir` 倒那一步的 logits，两个 token 都在 top-1 的 4 个 bf16 ULP 内才放过。
+每次 64 个 greedy token（K3 4 层 16 个）。结果与日志：`~/bench_results/2026-09-14-e2e-gate/`。
+
+| target（tray） | rank / rows / checkpoint | conc1 = `kern run` | 命中：重复 / turn2 | warm = `kern run` / = 冷 | 12 并发 · 接受率 | park / wake（小池子） | slot 增长（`--max-seqs 2`） | `--rows 1` = `kern run` |
+|---|---|---|---|---|---|---|---|---|
+| qwen3-4b（tray06） | 1 / 1 / 每页 | 12/12（`kern test` 位一致） | 16,16,16,0 / 80,80,80,64 | 2/4 + 2 近平局 / 同 | 12/12 · — | parks 16、wakes 5、host_hits 5，答案 11/12 + 1 近平局 | — | — |
+| qwen3-4b-dspark（tray06） | 1 / 7 / 每页 | 12/12 | 同上 | 1/4 + 3 近平局 / 同 | 12/12 · 24%（2.47 tok/步） | parks 14、wakes 5 | — | 4/4 |
+| qwen3.8-27b（tray06） | 1 / 1 / 请求结束 | 12/12 | 0×4 / 87,83,87,79 | 4/4 / 4/4 | 12/12 · — | parks 19、wakes 4、host_hits 4，12/12 与 4/4 | remaps 15，slot 5 → 20，12/12 与 turn2 4/4 | — |
+| qwen3.8-27b-dflash2（tray06） | 1 / 8 / 请求结束 | 12/12 | 0×4 / 87,84,88,0（6 个 `not kept`） | 4/4 / 4/4 | 12/12 · 20%（2.37） | parks 15、wakes 4、host_hits 3 | remaps 9，5 → 14 | 4/4 |
+| dsv41-h152（tray09，EP4） | 4 / 6 / 请求结束 | 无 oracle（冷 12 条作基准） | 0×4 / 86,84,0,0（7 个 `not kept`） | — / 4/4（只报） | 12/12（12 条与 conc1 同）· 27%（2.33） | 26 条填满：parks 11、wakes 2、host_hits 2，12/12 与 4/4 | remaps 24，20 → 44（4 卡合计） | — |
+| k3-4l-ep4（tray07，EP4，16 token） | 4 / 1 / 请求结束 | 无 oracle | 0×4 / 38,35,37,31 | — / 0/4（只报，见下） | 12/12（2 条与 conc1 同）· — | 17 条填满：parks 13、wakes 4、host_hits 4，12/12 | remaps 36，20 → 56 | — |
+
+2026-09-15 合入前 DSv4.1 EP4 在 tray06 重跑（`--chunk 128 --max-seqs 16`）：第一遍 host 会话在 park_wake 的
+turn2 上挂死——wake ↔ park 活锁（`server-host.log` 236 万行 `parked tokens=86`，见上面 toy 那节和 lessons.md）；
+wake 改成一次分配、行上限减掉 pad 之后 8 门 3 报全过，新加的 `wake_room` parks=1、命中 86、醒进一条 2 页的租约
+（`~/bench_results/2026-09-14-e2e-gate/results/tray06-r7-dsv41-final` → `tray06-r9-dsv41-wake`）。
+
+近平局都有 logits 证据（`results/<tray>/<target>/probe-*/`），例如 qwen3-4b turn2 第 56 个 token：top-4
+29.25 / 29.125 / 29.125 / 28.75，server 的在第 2、差 1 ULP。加载：qwen3-4b 10 s、qwen3.8 10 s、DSv4.1 37 s、
+K3 4 层 4 s（`--capacity 262144`）。
+
+过程中改了三处，都是 e2e 写不顺才发现的：
+
+- **kern run 只吃文本**：turn2 按文本发，DSv4.1 上答案文本切回去的 id 与生成的 id 不同（4 条里 3 条命中
+  0）——不是 cache 的错，是 client 造的 prompt 变了。turn2 改发 id，`kern run --prompt-ids` 让 oracle 跑
+  server 跑过的那串。
+- **投机轮多算的 checkpoint**：一轮接受的 token 可以越过 `max_tokens` 或 stop（`emit` 截断，state 里已经
+  有了），请求结束的快照就以这串多出来的 token 为键——下一轮永远发不出这个前缀，快照白占一个 slot 到被
+  淘汰（DSv4.1 4 条 turn2 命中 2 条、dflash2 3 条）。scheduler 现在不留这种快照（`not kept` debug 行），
+  只多一个 stop token 的留着（chat template 下一轮就带着它）。e2e 的 turn2 门：命中要么 ≥ 第一轮 prompt
+  要么 0，0 的条数 ≤ `not kept` 的条数。
+- **scheduler 线程 panic 后端口还开着**：请求全挂到 client 超时（driver 干等了 15 分钟）；现在进程跟着退 101。
+
+近平局的判法也改了一版：投机 manifest 的第 k 步是另一串（`--rows 1` 的 run 在更早的平局上已经分岔），
+拿它的 logits 判分歧是错的；要用"prompt + 分歧前双方一致的 token"作 prompt 单独跑一步。
+
+没有 oracle 的 tray target（EP4 没有 `kern run`），换了数值路径的一致性只报不门：K3 4 层 pruned
+checkpoint 近乎平局遍地（12 条并发只有 1 条与 conc1 同、warm 对 cold 0/4 在第 0–1 个 token 就分），
+同一条路的（重复、abort 后）4/4、1/1 一致照门。K3 4 层用默认预算：256 GiB 切成 131 079 个 2 MiB 块
+（页 64 token × 4 层太小，块取最小对象的一半），每 rank map 40–60 s，一次在 rank 3 的 `cuMemSetAccess`
+OOM——块大小该随预算长，先记着，e2e 里 K3 显式 `--capacity 262144`。
+
+"没测"清单的第 1 条（t=1 qwen3.8-27b conc1 对 `kern run`、K1/K3 门禁）由这一节覆盖；2、3（t>1 的
+owner-only 页、park 的全成或全不成）和 4 仍没测。
+
+## toy 门禁（`tools/toy`，2026-09-15，tray03 / tray06 GB300）
+
+真模型的 e2e 一轮 20 分钟、要三台 tray，还有近平局要争。`tools/toy` 是一组不是模型的
+manifest：整数 kernel，每个 token 槽开头存 64 个位置相关的 mark、其余到槽尾每个字都是
+头部的函数，下一个 token 由序列所有位置的头字按位置旋转后的和决定（有 line 的再加上
+line 的折叠，line 的尾部同样是折叠值的函数）；尾部哪个字对不上就把和毒掉，页序换了和
+也变。Python 参考（`tools/toy/model.py`）逐 token 精确，只算头字。kern-serve、kern-pool、
+runtime 走的是同一条路——它们本来就不认识模型。
+
+```
+python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py --gpus 0,1
+```
+
+把同一组场景过一遍，每个门都精确，包括真模型上只能"报不门"的：并发 12 条对 conc1、warm 对
+cold、醒来的对 cold；第二张卡上 `kern run` 自己也被 reference 门住（`run_equals_reference`），
+五种形状的每个 kernel 都过 `kern test` 的 A/B（256 对 128 线程块的两个 cubin）。
+
+| target | 形状 | 命中：重复 / turn2 | park / wake / host_hit | slot 增长 | 投机 |
+|---|---|---|---|---|---|
+| toy-paged | 4 KiB/token、页 16 | 96,80,96,64 / 144,160,112,176 | 13 / 4 / 4 | — | — |
+| toy-stateful | + 1 MiB/seq line | 0×4 / 117,219,160,107 | 14 / 4 / 4 | 5→20（15 remap） | — |
+| toy-spec | 4 行 round | 同 paged / 144,160,112,160 | 13 / 4 / 4 | — | 50% 串行、50% 并发（2.49/轮）、rows1 4/4 |
+| toy-stateful-spec | line + round | 0×4 / 117,220,0,0（req-2/3/14/15 `not kept`） | 15 / 2 / 2 | 5→15（10 remap） | 50% / 50%（2.5/轮） |
+| toy-big | 64 KiB/token、页 64、281 GiB state | 64×4 / 128,128,64,128 | 12 / 4 / 4 | — | — |
+
+2026-09-15 tray06，每条 256 token、12 条 prompt，五个 target 全部通过，整轮 3 分 09 秒，两张卡。
+结果与日志：`~/bench_results/2026-09-15-toy-e2e/`（`results/tray06-r8`；qwen3-4b 同日同机 9 门全过，`tray06-r9-qwen3-4b`）。
+同日 tray03 加上 `wake_room` 再跑一轮（`results/tray03-r14-wake-green`）：五个 target 全过，带 state 的两个
+parks=1、命中 117、醒进租约，纯 KV 的三个 parks=0 原地续上；qwen3-4b / -dspark 10 门与 11 门全过（`tray03-r14-qwen`）。
+
+第一版（tray03，`results/tray03-r4`）的表里五个 target 也"全过"，但并发 12 条那时只报不门，
+toy-stateful 的 12 条并发答案其实**全错**（0/12 与 conc1 同）：`gen.py` 给 prefill 和 decode
+的 `fold` 用的是同一个调用，rows 绑在 `tokens` 变量上，decode 的 tokens 是整批的行数，每个 group
+把别人的行折进了自己的 line。设计评审（Opus）读出来的，把并发在精确 oracle 下改成门就复现
+（`results/tray06-r5-red`，`FAIL: concurrent`），decode 改绑字面量 1 就过。同一轮 TDD 补的门：
+近平局只放过一个 token、之后从 server 选的 token 续算继续比（qwen3-4b 上 repeat 第 46 个 token
+两个 logit 相等 21.5，放过后其余 18 个逐字同）；`turn2_hit` 的 0 命中要配自己第一轮请求的
+`not kept`，不再数条数；投机接受率对串行自己（同样 12 条 prompt，按 steps 加权）的 0.9 倍而不是固定 20%，toy 还要落在 40–60；
+单 rank target 没 oracle 是 FAIL 不是只报；一个 target 都没跑退出码非零。这些裁决是纯函数，
+`tools/e2e/test_e2e.py` 在 CI 里跑。driver 自己的两处竞态也是这轮撞出来的：小池子的填充停在
+"日志里有 4 条 `parked`"，读日志的时机决定 turn2 要的 checkpoint park 没 park（一轮 wakes=0），
+改成填到 turn2 命中的那几个长度都 `parked` 为止；`serving` 在 pegainfer 绑端口之前打出，看到就连
+偶发 connection refused，ready 改为端口应答。
+
+toy 抓到的几条：
+
+- master 把 state 块的上限提到 64 MiB（bb50189，DSv4.1 的 836k 页从 13 s 降到 0.5 s）之后，
+  `--capacity 2832`（177 页 × 64 KiB）变成了整整一个块的 1023 页——`--capacity <tokens>` 的契约破了，
+  小池子什么都不 park。真模型的页都比 64 MiB 大得多，e2e 看不见；toy 的 4 KiB/token 一跑就翻。
+  `Pool::new` 现在拿到要的 token 数，页数以它为上限，块的尾巴空着。
+- `kern run` 与 kern-serve 对"权重是文件时 tokenizer / eos 在哪"的规则不一致，master 同日已统一
+  （`kern_run::checkpoint_dir`）。
+- toy-big 加上 `-ref` 之后 `kern test` 炸在 `position past the lease`：perf 的 prefill 扫描点取到
+  manifest 的 `tokens.max`（8192），租约只有 `--capacity` 的 4096 个位置；真模型的 `tokens.max`
+  从没超过 4096。扫描点现在以租约为界。
+- wake ↔ park 活锁（DSv4.1 EP4 的 host 会话先撞到，toy-stateful 上 `wake_room` 场景 30 秒复现，
+  608 万行 `parked`）：命中 parked 条目的请求先醒成快照再租，两次分配；现在 `Host::restore`
+  一次醒进请求自己的租约（`pool.md`、lessons.md）。同一场景顺手抓到第二条：`max_request_tokens`
+  没减 pad 那一页，恰好占满池子的请求既不被拒也永远坐不下；`Tray::max_seq_tokens` 现在以 pad
+  之外的页为界，超过的在租之前就按 ContextLength 拒。
+- kern-pool 两处（评审读出、集成测试复现）：`Prefix::evict` park 成功那条路把"为腾地方丢掉的
+  parked 条目数"扔了，scheduler 的 `host_evictions` 少计；`lookup` 给一条一页都没共享到的旁路
+  候选盖时间戳，一次什么都没命中的查询把最冷的条目变热、淘汰错人。
+
+toy 不测 kernel 数值和性能，也没有 tray（EP4 的 toy 要一个走 peer 指针的 collective，还没写）。
 
 ## 没做（按需要加）
 

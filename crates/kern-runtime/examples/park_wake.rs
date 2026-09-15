@@ -7,9 +7,9 @@
 //! Leases `tokens`, fills its pages and its slot with a pattern keyed by
 //! position, checkpoints it, parks the checkpoint (timed to the transfer
 //! stream's completion), zeroes the states once its pages are back in the
-//! pool, wakes it into a fresh lease (timed to the lease being handed
-//! out) and checks the pattern at the new pages. No weights are loaded:
-//! the states are all this touches.
+//! pool, wakes it (timed to the checkpoint being handed out), leases a
+//! sequence from it and checks the pattern at the new pages. No weights
+//! are loaded: the states are all this touches.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wake_pages = wake_at.div_ceil(unit);
     let mut waking = rt.wake(&parked, wake_at, tokens + 1)?;
     let issued = t.elapsed();
-    let woken = loop {
+    let row = loop {
         match rt.awake(waking)? {
             Ok(l) => break l,
             Err(w) => waking = w,
@@ -120,14 +120,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wake.as_secs_f64() * 1e3,
         gib / wake.as_secs_f64(),
         issued.as_secs_f64() * 1e3,
-        woken.prefix()
+        row.prefix()
     );
 
     let mut bad = 0usize;
     for (si, (name, page_bytes, slot_bytes)) in states.iter().enumerate() {
         let base = (si as u64) << 48;
         if *page_bytes > 0 {
-            for (k, &page) in woken.page_ids()[..wake_pages].iter().enumerate() {
+            for (k, &page) in row.page_ids()[..wake_pages].iter().enumerate() {
                 let off = page as usize * *page_bytes as usize;
                 let got = rt.read_state_at(name, off, *page_bytes as usize)?;
                 if got != pattern(base + k as u64 * page_bytes, *page_bytes as usize) {
@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        if let (true, Some(slot), true) = (*slot_bytes > 0, woken.seq_slot(), wake_at == tokens) {
+        if let (true, Some(slot), true) = (*slot_bytes > 0, row.seq_slot(), wake_at == tokens) {
             let got = rt.read_state_at(name, slot as usize * *slot_bytes as usize, *slot_bytes as usize)?;
             if got != pattern(base + (1 << 40), *slot_bytes as usize) {
                 bad += 1;
