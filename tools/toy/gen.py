@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from model import EOS, SALT, WORDS  # noqa: E402
+from model import EOS, SALT  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "tools" / "kernels-src" / "toy.cu"
@@ -76,10 +76,10 @@ def manifest(
         return {"params": iface, "impl": {"launches": [{"module": "toy", "entry": entry, "params": params, "block": [block, 1, 1], "grid": [grid, 1, 1], "args": args}]}}
 
     i32, i64 = (lambda v: {"i32": v}), (lambda v: {"i64": v})
-    geometry = [i32(WORDS), i64(bytes_per_token), i32(page), i32(width)]
+    geometry = [i64(bytes_per_token), i32(page), i32(width)]
     line = ["in buffer<i32>", "in state"]
     ops = {
-        "write": op("toy_write", "tokens", ["in buffer<i64>", "in buffer<i64>", "in buffer<i64>", "inout state", "in buffer<i64>"], [i32(WORDS), i64(bytes_per_token)]),
+        "write": op("toy_write", "tokens", ["in buffer<i64>", "in buffer<i64>", "in buffer<i64>", "inout state", "in buffer<i64>"], [i64(bytes_per_token)]),
         "predict": op("toy_predict", "seqs", ["in buffer<i32>", "in buffer<i32>", "in state", "in buffer<i64>", "out buffer<i64>"], geometry),
     }
     if lined:
@@ -181,14 +181,15 @@ def main() -> int:
     b128 = build(out / "kernels", a.sm, 128)
 
     small = dict(bytes_per_token=4096, page=16, width=512, tokens_max=2048, seqs_max=256)
-    targets = {
-        "toy-paged": manifest("toy-paged", b256, 256, **small),
-        "toy-paged-ref": manifest("toy-paged", b128, 128, **small),
-        "toy-stateful": manifest("toy-stateful", b256, 256, bytes_per_seq=1 << 20, **small),
-        "toy-spec": manifest("toy-spec", b256, 256, rows=4, **small),
-        "toy-stateful-spec": manifest("toy-stateful-spec", b256, 256, bytes_per_seq=1 << 20, rows=4, **small),
-        "toy-big": manifest("toy-big", b256, 256, bytes_per_token=65536, page=64, width=1024, tokens_max=8192, seqs_max=256),
+    shapes = {
+        "toy-paged": small,
+        "toy-stateful": dict(bytes_per_seq=1 << 20, **small),
+        "toy-spec": dict(rows=4, **small),
+        "toy-stateful-spec": dict(bytes_per_seq=1 << 20, rows=4, **small),
+        "toy-big": dict(bytes_per_token=65536, page=64, width=1024, tokens_max=8192, seqs_max=256),
     }
+    # Every shape twice, at two block sizes: `kern test` holds one to the other.
+    targets = {f"{name}{suffix}": manifest(name, module, block, **shape) for name, shape in shapes.items() for suffix, module, block in (("", b256, 256), ("-ref", b128, 128))}
     for name, m in targets.items():
         (out / f"{name}.json").write_text(json.dumps(m, indent=1) + "\n")
     (out / "model" / "tokenizer.json").write_text(json.dumps(tokenizer()))
@@ -197,12 +198,8 @@ def main() -> int:
     (out / "model" / "generation_config.json").write_text(json.dumps({"eos_token_id": EOS}))
     (out / "model" / "toy.safetensors").write_bytes(safetensors({"salt": ("I64", [64], struct.pack("<64q", *SALT))}))
     toml = []
-    for name in targets:
-        if name.endswith("-ref"):
-            continue
-        toml.append(f"[targets.{name}]\nmanifest = \"{name}.json\"")
-        if f"{name}-ref" in targets:
-            toml.append(f"reference = \"{name}-ref.json\"")
+    for name in shapes:
+        toml.append(f"[targets.{name}]\nmanifest = \"{name}.json\"\nreference = \"{name}-ref.json\"")
         toml.append('kernels = "kernels"\nweights = ["model/toy.safetensors"]\ntokenizer = "model/tokenizer.json"\n')
     (out / "kern.toml").write_text("\n".join(toml))
     print(f"{len(targets)} manifests, {b256[0]} and {b128[0]} -> {out}")
