@@ -319,7 +319,7 @@ pub(crate) fn at_rank(ranks: usize, q: usize, label: &str) -> String {
     }
 }
 
-pub(crate) fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()> {
+fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()> {
     for (name, rs) in runs {
         for (off, bytes) in rs {
             c.write_state(q, name, *off, bytes)?;
