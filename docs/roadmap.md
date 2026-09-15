@@ -107,8 +107,22 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
 - step 边界 GPU 化（vs vLLM 差的 ~0.25ms/step）：token 反馈闭环进 graph——
   embedding 的 token_ids 直接由 next_token 喂，positions/slot_mapping/seq_lens
   可预知提前写，host 滞后一步异步取结果，步间不再 sync。E4 直接依赖它。
-- kern test 后续：kernel-as-package 目录里带上 test report 当证据；bs>1 的
-  workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
-  0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
-  domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。
-  多卡时：A、B 共用一个 runtime 装载；设备侧 compare op；rank-local 比较。
+- kern test 后续（harness 已是独立 crate `kern-test`，`Side` 的 `Buf` 是
+  设备侧句柄、state 同步全 D2D，2026-09-15）：
+  - 设备侧比较：compare / 差异 bitmap / logits 行（argmax、margin、
+    Δ、KL）各一个 kernel，checked-in PTX + driver JIT（先例
+    `kern-runtime/src/profile.ptx`），host 的 `compare` 仍是定义，kernel
+    对它做性质测试；之后 host 只读事实（计数、ulp、行号），快照的输出
+    也不再下设备。live 区域按 var 值只读活跃前缀。
+  - 事件模型：list → record → run → report 四个动词，一条 case 一个事
+    件，报告是事件的折叠（现在 `run` 一口气产出 `Report`）；step 级（整
+    个 program 一步）在 span 与 sequence 之间补上；每个 program 快照第
+    一个与最后一个 run（现在只有第一个）。
+  - 判定补全：NaN / Inf 只出现在 B 一侧直接 FAIL（现在 logits 行记为
+    无限 Δ、判 INCONCLUSIVE）；noise floor 两边都测（B 自己不确定也是事实）；
+    `kern.toml` 里给 target 配 profile（seed / steps / chunk / prompt）。
+  - 老条目：kernel-as-package 目录里带上 test report 当证据；bs>1 的
+    workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
+    0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
+    domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。
+    多卡时：A、B 共用一个 runtime 装载；rank-local 比较。

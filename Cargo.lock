@@ -2128,6 +2128,7 @@ dependencies = [
  "kern-manifest",
  "kern-pool",
  "kern-runtime",
+ "kern-test",
  "memmap2",
  "serde",
  "serde_json",
@@ -2172,6 +2173,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vllm-chat",
+]
+
+[[package]]
+name = "kern-test"
+version = "0.2.3"
+dependencies = [
+ "anyhow",
+ "kern-manifest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
