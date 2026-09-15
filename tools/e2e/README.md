@@ -34,6 +34,7 @@ python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/mod
 | `abort` | 流式请求读 3 个 chunk 就挂断，之后的请求答案同冷 | |
 | `turn2_warm_equals_cold` | 新起一个 server 冷答 turn2 == 上面的 warm 答案 | |
 | `park_wake` | 每 rank `--capacity` 只够它那份（4 条最长请求）、`--host-gib 2`、`--max-seqs 4`：12 条 prompt（答案同冷）加编号变体填到 server 记下 4 次 `parked`（上限 48 × ranks 条，有 state 的 manifest 首批 slot 的块也能当页用，光靠页数算不准）→ parks ≥ 1；再问 turn2 → wakes ≥ 1、host_hits ≥ 1，答案同冷 | stats 行 `parks/wakes/host_hits`，`admitted ... woken=true`，`parked` 行 |
+| `wake_room` | `--capacity` 恰好一条 turn2 最坏情况（prompt + max_tokens + rows − 1 向上取整到页，加 pad 的一页）、`--host-gib 2`：第一轮跑完，紧接着发它的 turn2——带 state 的 target 的 checkpoint 停在半页，续写要拷那半页、比池子多一页：命中的 checkpoint 必须 park 才腾得出地方，醒回来的房间必须一次问够（先醒成快照再租，就让 wake ↔ park 打转）；纯 KV 的 checkpoint 停在整页，直接续上、不 park。120 s 内答完，答案同 warm，`parked` 行 ≤ 4 | `parked` 行 |
 | `slot_growth` | 带循环状态的 manifest 用 `--max-seqs 2` 起（首批 slot 只有几个）、池子默认：2 × 首批 slot 数 + 4 条结束后 `remaps` ≥ 1、`slots` 比 `scheduler ready` 时多，答案同冷，turn2 的命中与答案同第一个 session | stats 行 |
 | `rows1_equals_run` | 投机 manifest `--rows 1` == `kern run --rows 1`；与整块 rows 的答案相同条数只报 | |
 

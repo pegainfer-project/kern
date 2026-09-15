@@ -17,6 +17,9 @@ toml and a scenario reads like a client:
   park_wake         a pool of a few pages and a host tier: the coldest
                     checkpoints park, a prompt hitting one wakes it, the answer
                     is the cold one
+  wake_room         a pool holding one worst-case second turn: its first turn's
+                    checkpoint parks for it and wakes into the turn's own row;
+                    it finishes, with the warm answer
   slot_growth       a stateful manifest served with two slots grows them out
                     of free pages as requests finish, answers unchanged
   rows1             a speculative manifest served with `--rows 1` equals
@@ -235,9 +238,9 @@ class Server:
             self.sent += 1
             return f"req-{self.sent - 1}"
 
-    def complete(self, prompt, max_tokens: int) -> dict:
+    def complete(self, prompt, max_tokens: int, timeout: float = 900) -> dict:
         id = self.request_id()
-        return {**complete(self.url, prompt, max_tokens), "request": id}
+        return {**complete(self.url, prompt, max_tokens, timeout), "request": id}
 
     def hang_up(self, prompt: str, chunks: int) -> int:
         self.request_id()
@@ -677,6 +680,34 @@ def session_host(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: 
         )
 
 
+def session_wake(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path, prev: dict) -> None:
+    """A pool holding exactly one worst-case second turn (and the pad's
+    page). A stateful manifest's checkpoint ends inside a page, and the
+    continuation copies that page: one more than the pool, so the
+    checkpoint parks and the second turn's room is asked for once, with
+    the checkpoint woken into it (waking it back as a snapshot first,
+    then leasing from that, asks twice and parks what it just woke,
+    without end). A paged-only checkpoint ends at a page and is continued
+    in place. Either way the request finishes, with the answer a warm
+    server gave."""
+    turn2, page, rows = prev["turn2"], prev["page"], prev["rows"]
+    p = PROMPTS[0]
+    worst = len(turn2[p]["ids"]) + a.max_tokens + rows - 1
+    capacity = (-(-worst // page) + 1) * page
+    flags = {"--capacity": str(capacity), "--host-gib": "2", "--max-seqs": "4"}
+    with Server(a, t, gpus, port, flags, out / "server-wake.log") as s:
+        s.complete(p, a.max_tokens)
+        try:
+            r = s.complete(turn2[p]["ids"], a.max_tokens, timeout=120)
+        except Exception as e:  # noqa: BLE001
+            rep.add("wake_room", False, f"capacity={capacity} ({worst} worst): the second turn did not finish ({type(e).__name__}); {len(s.lines('parked'))} parked lines")
+            return
+        same = Same(oracle, rows)
+        same.add("turn2 0", turn2[p]["ids"], r["ids"], turn2[p]["warm_ids"])
+        parks = len(s.lines("parked"))
+        rep.add("wake_room", same.ok and parks <= 4, f"capacity={capacity} ({worst} worst) cached={r['cached']} parks={parks}; vs the warm answer: {same}")
+
+
 def session_slots(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path, prev: dict) -> None:
     """A stateful manifest starts with a few slots and grows them out of free
     pages: finished requests beyond the first slots leave their checkpoints
@@ -748,8 +779,9 @@ def run_target(a, t: Target, gpus: list[int], out: Path) -> Report:
         kern_test(a, t, use[0], rep, out)
         prev = session_default(a, t, use, a.port, rep, oracle, runner if a.reference else None, out)
         session_host(a, t, use, a.port + 1, rep, oracle, out, prev)
-        session_slots(a, t, use, a.port + 2, rep, oracle, out, prev)
-        session_rows1(a, t, use, a.port + 3, rep, oracle, out, prev)
+        session_wake(a, t, use, a.port + 2, rep, oracle, out, prev)
+        session_slots(a, t, use, a.port + 3, rep, oracle, out, prev)
+        session_rows1(a, t, use, a.port + 4, rep, oracle, out, prev)
     except Exception as e:  # noqa: BLE001
         rep.add("error", False, f"{type(e).__name__}: {e}")
     return rep
