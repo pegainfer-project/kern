@@ -39,7 +39,6 @@ pub fn replay<S: Side>(
     let ranks = rec.ranks;
     anyhow::ensure!(b.ranks() == ranks, "A recorded {ranks} ranks; B runs as {}", b.ranks());
     let (ma, mb) = (&rec.ma, &rec.mb);
-    let spans = rec.diff.spans.clone();
     let mut sum = Summary { a: o.a.clone(), b: o.b.clone(), diff: rec.diff.clone(), ..Default::default() };
     let undriven = rec.undriven();
     let shared = rec.shared_states();
@@ -351,8 +350,7 @@ pub fn replay<S: Side>(
         fuzz_ok = violations.is_empty();
         fuzz_bit = n_bit == compared && state_diffs.is_empty();
         fuzz_identical = n_bit + n_val == compared && state_diffs.is_empty();
-        let not_tapped =
-            spans.keys().filter(|p| !rec.kept.iter().any(|&(r, _)| &rec.runs[r].program == *p)).cloned().collect();
+        let not_tapped = rec.not_tapped();
         let (findings, omitted) = cap(all_fuzz.clone(), |f| f.at.severity());
         let fuzz = Fuzz {
             rounds: o.fuzz,

@@ -251,3 +251,17 @@ fn a_logits_buffer_is_found_by_the_last_segment_of_its_name() {
     assert_eq!(verdict(&r).1, "logit evidence", "{}", r.summary.verdict.summary);
     assert_eq!(r.summary.logits.as_ref().unwrap().rows, 9);
 }
+
+#[test]
+fn a_changed_once_program_is_each_sides_own_setup_not_an_untapped_program() {
+    let (r, lines) = test(
+        &Fixture::default().once("fill_table"),
+        &Fixture::default().once("fill_table_v2").scale("scale_same"),
+        &options(),
+    )
+    .unwrap();
+    assert!(r.summary.diff.spans.contains_key("prep"), "{:?}", r.summary.diff.spans.keys());
+    assert_eq!(verdict(&r), (0, "bit-identical at every span, real and perturbed inputs".into()), "{lines:#?}");
+    assert!(r.summary.local.as_ref().unwrap().undriven.is_empty());
+    assert!(r.summary.fuzz.as_ref().unwrap().not_tapped.is_empty());
+}

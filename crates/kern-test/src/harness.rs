@@ -122,6 +122,9 @@ pub struct Recording<B> {
     pub(crate) ranks: usize,
     pub(crate) chunk: Option<Forward>,
     steps: Vec<Forward>,
+    /// Programs either side runs once after load: their spans are each
+    /// side's own setup, not something the workload drives.
+    once: Vec<String>,
     pub(crate) runs: Vec<Run<B>>,
     /// `(run, span)` of the spans with state images: the first run of each
     /// driven program. Noise and fuzz replay these.
@@ -144,7 +147,16 @@ impl<B> Recording<B> {
     /// Programs with spans the workload does not drive.
     pub(crate) fn undriven(&self) -> Vec<String> {
         let driven: Vec<&str> = self.chunk.iter().chain(&self.steps).map(|f| f.name.as_str()).collect();
-        self.diff.spans.keys().filter(|p| !driven.contains(&p.as_str())).cloned().collect()
+        self.diff.spans.keys().filter(|p| !driven.contains(&p.as_str()) && !self.once.contains(p)).cloned().collect()
+    }
+    /// Programs with spans and no kept span: nothing for fuzz to replay.
+    pub(crate) fn not_tapped(&self) -> Vec<String> {
+        self.diff
+            .spans
+            .keys()
+            .filter(|p| !self.kept.iter().any(|&(r, _)| &self.runs[r].program == *p) && !self.once.contains(p))
+            .cloned()
+            .collect()
     }
     pub(crate) fn shared_states(&self) -> Vec<String> {
         self.ma.states.keys().filter(|n| self.mb.states.contains_key(*n)).cloned().collect()
@@ -366,6 +378,7 @@ pub fn record<S: Side>(
         ranks,
         chunk: chunk_f.clone(),
         steps: step_fs.clone(),
+        once: Vec::new(),
         runs: Vec::new(),
         kept: Vec::new(),
         logits: Vec::new(),
@@ -380,6 +393,7 @@ pub fn record<S: Side>(
     let pb = Protocol::check(mb).context("B does not fit the serving protocol")?;
     let mut fixed = constants(&ma, &pa.once);
     fixed.extend(constants(mb, &pb.once));
+    rec.once = pa.once.iter().chain(&pb.once).cloned().collect();
     let mb: &Manifest = mb;
     let chunk_name = chunk_f.as_ref().map_or("", |f| f.name.as_str());
 
