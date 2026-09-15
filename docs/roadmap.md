@@ -127,6 +127,10 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
     workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
     0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
     domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。
+  - logits 的"尺度 ulp"按存储 dtype 算：DSv4.1 的 logits 是 f32，fp8 /
+    bf16 流水线上一次换核动 2.6 就是 1.7e7 ulp，`--logit-ulp 4` 无意义。
+    改成与存储无关的尺度（bf16 ulp of max|logit|，或 top logit 的比例），
+    near-tie 也按预算而不是按实际 Δ 判（2026-09-04 已记）。
   - 大换核的 `diff` 段：DSv4.1 paged → fused 换了 20 个 op，`diff` 打
     211 行，其中 program 行把 120 个 span 逐个展开成一行 95 KB——按 op
     折叠、只点名前几个 span，其余进 `--out`。

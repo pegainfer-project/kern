@@ -251,6 +251,38 @@ runtime，PERF 1.8 s。
 20/20 bit-identical、noise 108/108、fuzz 648/648、PASS 6.7 s；tap
 1.3 s → 486 ms（state 同步不再经 host），noise 34.7 → 20.5 ms。
 
+## DSv4.1 Flash EP4 实测（GB300 tray18，2026-09-15）
+
+第一次多 rank 运行：A = `a-paged`（paged attention），B = `b-fused`（fused
+decode + fp8 `attention_raw`），2026-09-10 的 A/B 对，4 rank × 1 GPU，
+`--capacity 512 --prefill 64 --chunk 64 --decode-steps 8 --no-sweep`（存档
+`~/bench_results/2026-09-15-kern-test-multirank/`）。20 个 op 换掉，三个
+program 各 120–129 个 span，`load`（once）也有 span 但不算未驱动。
+
+- 时间：装 A 34 s → record 364 s（workload 本身 3 s，其余是 noise / fuzz
+  / perf：369 个 span × 4 rank）→ 装 B 34 s → replay ~400 s（tap 54 s、
+  noise 13 s、fuzz 288 s、perf 3 s），全程 797 s。设备上留了 13.5 GB 的
+  span 快照和 84 GB 的 state 镜像（后者是整块分配的尺寸，见 roadmap）。
+- local：0/2312 bit-identical——B 的 `q` 是 fused prep 重排过的布局，同名
+  不同义；`attention_raw`（bf16 → fp8）、`attention_sf`、`o`、`q_rotated`
+  按"声明不同 / 单侧写"不比。端到端 `next_token` 四个 rank 全部 bit 相同，
+  `verify_tokens` 5/6 不同（draft 走岔了），`nacc` 差 1。
+- logits：4036 行里 148 行有差，76 行 argmax 翻转、全是 near-tie（A 的
+  margin < Δ）。target 行（prefill + decode_batch）只有 16 行有差，max
+  |Δ| 5.6，翻的是 prefill 那一行（margin 0.19，Δ 2.6）；draft 行 60 行有
+  差，max 4.1；verify 行的 Δ 到 16——它们跟在已经不同的 draft token 后面，
+  算的不是同一个输入。"17162863 ulp at scale" 是 f32 logits 的 ulp，在
+  fp8/bf16 流水线上没有意义（roadmap）。
+- noise：A 自己 492/984 个 span 不确定（`o_lowrank` 50% 元素、16k ulp）：
+  paged 参考核本身不是确定性的，B 按这条带子判。
+- perf：decode_batch eager 17.7 → 15.0 ms（−15.6%），graph TPOT 11.41 →
+  10.57 ms（88 → 95 tok/s），120 span 5.75 → 3.07 ms（−46.6%）；round
+  TPOT 12.97 → 11.93 ms（77 → 84 tok/s）；prefill 64 行 22.4 → 18.9 ms。
+  fused attention 281 MB/call，37.6 µs = 7.5 TB/s（93% 峰值）。
+- 判定 INCONCLUSIVE：logits 动得超过阈值但没有 wide flip，A 自己不确定。
+  按 lessons 的规则看 margin：翻转都在 near-tie 上，decode 的 token 一致，
+  是"合理一致"还是 fp8 attention 的精度代价，交给人判。
+
 ## 位置
 
 - 静态 diff、frontier、录制、重放、fuzz、比较、报告全在 `crates/kern-test`
