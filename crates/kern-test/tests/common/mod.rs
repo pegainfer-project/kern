@@ -47,6 +47,8 @@ pub struct Fixture {
     pub peer: bool,
     /// A `prep` program run once after load that fills a carry `table`.
     pub once: bool,
+    /// `act` declared one column wider: the same name, another shape.
+    pub wide_act: bool,
 }
 
 impl Default for Fixture {
@@ -61,6 +63,7 @@ impl Default for Fixture {
             ranks: 1,
             peer: false,
             once: false,
+            wide_act: false,
         }
     }
 }
@@ -92,6 +95,9 @@ impl Fixture {
     }
     pub fn once(self) -> Self {
         Fixture { once: true, ..self }
+    }
+    pub fn wide_act(self) -> Self {
+        Fixture { wide_act: true, ..self }
     }
 
     pub fn manifest(&self) -> Verified {
@@ -164,7 +170,7 @@ impl Fixture {
                                  "domain": {"index_into": "kv"}},
                 "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
                 "hidden": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", D]},
-                "act": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", D]},
+                "act": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", if self.wide_act { D + 1 } else { D }]},
                 self.logits: {"kind": "output", "dtype": "bf16", "shape": ["tokens", VOCAB]},
                 "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"], "fill": "tokens",
                                "domain": {"min": 0, "max": VOCAB - 1}},

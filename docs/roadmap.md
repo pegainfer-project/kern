@@ -130,5 +130,8 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
   - 大换核的 `diff` 段：DSv4.1 paged → fused 换了 20 个 op，`diff` 打
     211 行，其中 program 行把 120 个 span 逐个展开成一行 95 KB——按 op
     折叠、只点名前几个 span，其余进 `--out`。
-  - 多 rank 下每个 run 的 state 镜像是 rank 数 × capacity 份 D2D 拷贝；
-    只留 write-set 会碰到的 state、镜像只在 kept run 上留。
+  - 每个 run 的 state 镜像按 `state_bytes`（池的整块分配，一个 state 至少
+    一块 64 MiB）拷：DSv4.1 55 个 state 在 capacity 512 下活跃只有 12 MB，
+    镜像却是 3 GB/rank/run（7 run × 4 rank = 84 GB，录制 375 s 大半在
+    此）。镜像只拷活跃前缀（`bytes_per_token × capacity`）、只留 write-set
+    会碰到的 state、只在 kept run 上留。

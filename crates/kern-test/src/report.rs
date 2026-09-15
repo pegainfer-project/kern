@@ -227,7 +227,10 @@ impl Local {
         if !self.one_sided.is_empty() {
             v.push(row(
                 "local",
-                format!("written on one side only, not compared: {}", self.one_sided.join(", ")),
+                format!(
+                    "written on one side only or declared differently, not compared: {}",
+                    self.one_sided.join(", ")
+                ),
                 None,
             ));
         }

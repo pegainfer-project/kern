@@ -225,3 +225,17 @@ fn a_and_b_must_run_as_the_same_number_of_ranks() {
     let err = test(&Fixture::default().ranks(2), &Fixture::default(), &options()).unwrap_err();
     assert!(format!("{err:#}").contains("A recorded 2 ranks; B runs as 1"), "{err:#}");
 }
+
+#[test]
+fn a_buffer_declared_differently_on_the_two_sides_is_not_compared() {
+    let (r, lines) = run(Fixture::default().scale("scale_same").wide_act());
+    assert!(
+        line(&lines, "diff").contains("buffer act changed") || lines.iter().any(|l| l.contains("act changed")),
+        "{lines:#?}"
+    );
+    let local = r.summary.local.as_ref().unwrap();
+    assert_eq!((local.compared, local.one_sided.clone()), (0, vec!["act".to_string()]));
+    assert!(line(&lines, "local     written on one side").contains("declared differently"), "{lines:#?}");
+    // the oracle still speaks: B's logits are what they were
+    assert_eq!(verdict(&r).0, 0, "{}", r.summary.verdict.summary);
+}

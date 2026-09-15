@@ -628,12 +628,16 @@ fn record_run<S: Side>(
     for span in &segs {
         a.run(pname, &e, ia..span.a.start)?;
         ia = span.a.end;
-        // Inputs both sides have and A can hand over: a buffer only B knows
-        // (an intermediate of its own), a weight, or what a `once` program
-        // made of one (B packs it its own way) is B's to produce.
+        // Inputs both sides have, declared alike, and A can hand over: a
+        // buffer only B knows (an intermediate of its own), one B declares
+        // with another shape, a weight, or what a `once` program made of one
+        // (B packs it its own way) is B's to produce.
+        let alike = |n: &String| {
+            ma.buffers.get(n).zip(mb.buffers.get(n)).is_some_and(|(x, y)| x.dtype == y.dtype && x.shape == y.shape)
+        };
         let names: Vec<String> = frontier_inputs(ma, pname, span.a.clone())
             .union(&frontier_inputs(mb, pname, span.b.clone()))
-            .filter(|n| ma.buffers.contains_key(*n) && mb.buffers.contains_key(*n))
+            .filter(|n| alike(n))
             .filter(|n| ma.buffers[*n].kind != BufferKind::Weight && !fixed.contains(*n))
             .cloned()
             .collect();
@@ -683,8 +687,13 @@ fn record_run<S: Side>(
             pre.push(pq);
             post.push(oq);
         }
-        let written: Vec<String> = aa.writes.intersection(&ab.writes).cloned().collect();
-        rec.one_sided.extend(aa.writes.symmetric_difference(&ab.writes).cloned());
+        // Compared: what both sides write into the same declaration.
+        let (written, apart): (Vec<String>, Vec<String>) = aa
+            .writes
+            .union(&ab.writes)
+            .cloned()
+            .partition(|n| aa.writes.contains(n) && ab.writes.contains(n) && alike(n));
+        rec.one_sided.extend(apart);
         let mut ref_out = Vec::new();
         for q in 0..ranks {
             ref_out.push(
