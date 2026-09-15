@@ -121,7 +121,7 @@ pub struct Recording<B> {
     pub(crate) wl: Workload,
     pub(crate) ranks: usize,
     pub(crate) chunk: Option<Forward>,
-    pub(crate) steps: Vec<Forward>,
+    steps: Vec<Forward>,
     pub(crate) runs: Vec<Run<B>>,
     /// `(run, span)` of the spans with state images: the first run of each
     /// driven program. Noise and fuzz replay these.
@@ -173,13 +173,13 @@ impl<B> Recording<B> {
 /// The workload's programs: the chunk program over the prompt, then every
 /// fixed-rows forward in rotation (a caller may switch between them at any
 /// step: same state contract).
-pub(crate) fn driven(p: &Protocol) -> (Option<Forward>, Vec<Forward>) {
+fn driven(p: &Protocol) -> (Option<Forward>, Vec<Forward>) {
     let chunk = p.chunk().cloned();
     let steps = p.forwards.iter().filter(|f| matches!(f.rows, Rows::Const(_))).cloned().collect();
     (chunk, steps)
 }
 
-pub(crate) fn rows_of(f: &Forward) -> u64 {
+fn rows_of(f: &Forward) -> u64 {
     match f.rows {
         Rows::Const(r) => r,
         Rows::Var => 1,
@@ -195,7 +195,7 @@ pub(crate) fn at_rank(ranks: usize, q: usize, label: &str) -> String {
     }
 }
 
-pub(crate) fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()> {
+fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()> {
     for (name, rs) in runs {
         for (off, bytes) in rs {
             c.write_state(q, name, *off, bytes)?;
@@ -205,7 +205,7 @@ pub(crate) fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()
 }
 
 /// The bytes now at the offsets of `runs`.
-pub(crate) fn read_runs<S: Side>(c: &S, q: usize, runs: &Runs) -> Result<Runs> {
+fn read_runs<S: Side>(c: &S, q: usize, runs: &Runs) -> Result<Runs> {
     runs.iter()
         .map(|(name, rs)| {
             let v = rs
@@ -243,7 +243,7 @@ pub(crate) fn image<S: Side>(c: &mut S, run: &Run<S::Buf>) -> Result<()> {
 }
 
 /// `logits*` buffers a program writes on both sides: the end-to-end oracle.
-pub(crate) fn logits_of(ma: &Manifest, mb: &Manifest, prog: &str) -> Vec<String> {
+fn logits_of(ma: &Manifest, mb: &Manifest, prog: &str) -> Vec<String> {
     access(ma, prog, 0..ma.programs[prog].calls.len())
         .writes
         .into_iter()
@@ -584,7 +584,7 @@ pub fn record<S: Side>(
 }
 
 /// Bytes the per-run state images hold.
-pub(crate) fn image_bytes<S: Side>(rec: &Recording<S::Buf>, c: &S) -> Result<usize> {
+fn image_bytes<S: Side>(rec: &Recording<S::Buf>, c: &S) -> Result<usize> {
     let mut n = 0;
     for run in &rec.runs {
         for img in &run.image {
@@ -616,7 +616,7 @@ fn record_run<S: Side>(
         let mut img = BTreeMap::new();
         for n in shared {
             let mut b = a.alloc(q, a.state_bytes(n)?)?;
-            a.save_state(q, n, &mut b)?;
+            a.save_state(q, n, &mut b).with_context(|| format!("imaging state `{n}` before {pname} {label}"))?;
             img.insert(n.clone(), b);
         }
         image.push(img);
@@ -642,8 +642,12 @@ fn record_run<S: Side>(
             let mut v = Vec::new();
             for n in &names {
                 let bytes = live_bytes(ma, n, &e);
+                if bytes == 0 {
+                    continue;
+                }
                 let mut buf = a.alloc(q, bytes)?;
-                a.save(q, n, bytes, &mut buf)?;
+                a.save(q, n, bytes, &mut buf)
+                    .with_context(|| format!("recording `{n}` ({bytes} B) at {pname} span {}", span.label()))?;
                 v.push((n.clone(), bytes, buf));
             }
             inputs.push(v);
@@ -684,7 +688,15 @@ fn record_run<S: Side>(
         let mut ref_out = Vec::new();
         for q in 0..ranks {
             ref_out.push(
-                written.iter().map(|n| Ok((n.clone(), a.read(q, n, live_bytes(ma, n, &e))?))).collect::<Result<_>>()?,
+                written
+                    .iter()
+                    .map(|n| {
+                        let bytes = a
+                            .read(q, n, live_bytes(ma, n, &e))
+                            .with_context(|| format!("reading `{n}` after {pname} span {}", span.label()))?;
+                        Ok((n.clone(), bytes))
+                    })
+                    .collect::<Result<_>>()?,
             );
         }
         spans.push(SpanRec { span: span.clone(), inputs, ref_out, pre, post });
