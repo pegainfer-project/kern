@@ -229,7 +229,7 @@ impl Local {
             v.push(row(
                 "local",
                 format!(
-                    "written on one side only or declared differently, not compared: {}",
+                    "declared differently or written on one side only, neither injected nor compared: {}",
                     self.one_sided.join(", ")
                 ),
                 None,

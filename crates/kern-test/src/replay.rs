@@ -11,7 +11,9 @@ use serde_json::{json, Value};
 
 use crate::compare::{Cmp, LogitRow, TOP};
 use crate::diff::{access, live_bytes};
-use crate::harness::{at_rank, compare_outputs, domain_violations, image, logit_rows, read_logits, Recording};
+use crate::harness::{
+    at_rank, compare_outputs, domain_violations, image, logit_rows, read_logits, write_runs, Recording,
+};
 use crate::report::*;
 use crate::{At, Options, Side, Vars};
 use kern_manifest::types::DType;
@@ -57,7 +59,11 @@ pub fn replay<S: Side>(
         for sr in &run.spans {
             b.run(p, e, ib..sr.span.b.start)?;
             ib = sr.span.b.end;
+            // A's pre-image and inputs in, so this span is B's own doing;
+            // A's post-image out afterwards, so the next span's reads see
+            // the reference, not what B made of this one.
             for q in 0..ranks {
+                write_runs(b, q, &sr.pre[q])?;
                 for (n, len, buf) in &sr.inputs[q] {
                     b.load(q, n, *len, buf)?;
                 }
@@ -113,6 +119,9 @@ pub fn replay<S: Side>(
                         .or_default()
                         .push((label.clone(), StateCmp { set, n_diff, outside }));
                 }
+            }
+            for q in 0..ranks {
+                write_runs(b, q, &sr.post[q])?;
             }
         }
         b.run(p, e, ib..b.calls(p)?)?;
@@ -183,8 +192,9 @@ pub fn replay<S: Side>(
             }
         }
     }
-    let local_bit = n_bit == compared;
-    let local_identical = n_bit + n_val == compared;
+    // Nothing compared is not everything identical.
+    let local_bit = compared > 0 && n_bit == compared;
+    let local_identical = compared > 0 && n_bit + n_val == compared;
     let mut outputs = Vec::new();
     let mut e2e_differs: Vec<String> = Vec::new();
     for (name, per_rank) in &rec.outputs {
@@ -241,7 +251,10 @@ pub fn replay<S: Side>(
     let kl_max = logit_rows.iter().map(|r| r.stats.kl).fold(0.0, f64::max);
     let n_flips = logit_rows.iter().filter(|r| r.stats.flip()).count();
     let n_within = logit_rows.iter().filter(|r| r.stats.flip() && r.stats.kl <= o.logit_kl).count();
-    let wide_flip = logit_rows.iter().find(|r| r.stats.flip() && r.stats.kl > o.logit_kl);
+    let wide_flip = logit_rows
+        .iter()
+        .filter(|r| r.stats.flip() && r.stats.kl > o.logit_kl)
+        .max_by(|x, y| x.stats.kl.total_cmp(&y.stats.kl));
     let logits_within = have_logits && kl_max <= o.logit_kl;
     let worst_kl = logit_rows.iter().max_by(|x, y| x.stats.kl.total_cmp(&y.stats.kl));
     let logits_at = worst_kl.map_or(String::new(), |w| w.label.clone());

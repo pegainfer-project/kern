@@ -236,7 +236,7 @@ impl Runtime {
         }
         let rows = x.len() / row;
         let out = alloc(&self.stream, (rows * 96) as u64)?;
-        let cfg = LaunchConfig { grid_dim: (rows as u32, 1, 1), block_dim: (1024, 1, 1), shared_mem_bytes: 0 };
+        let cfg = LaunchConfig { grid_dim: (rows as u32, 1, 1), block_dim: (256, 1, 1), shared_mem_bytes: 0 };
         unsafe {
             self.stream
                 .launch_builder(&k.logits)

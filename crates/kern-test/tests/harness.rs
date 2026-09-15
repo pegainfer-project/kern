@@ -240,9 +240,27 @@ fn a_buffer_declared_differently_on_the_two_sides_is_not_compared() {
     );
     let local = r.summary.local.as_ref().unwrap();
     assert_eq!((local.compared, local.one_sided.clone()), (0, vec!["act".to_string()]));
-    assert!(line(&lines, "local     written on one side").contains("declared differently"), "{lines:#?}");
-    // the oracle still speaks: B's logits are what they were
-    assert_eq!(verdict(&r).0, 0, "{}", r.summary.verdict.summary);
+    assert!(line(&lines, "local     declared differently").contains("act"), "{lines:#?}");
+    // nothing compared is not everything identical: the oracle decides
+    assert_eq!(
+        verdict(&r),
+        (0, "spans differ, but the end-to-end logits are bit-identical on all 9 rows".into()),
+        "{lines:#?}"
+    );
+}
+
+#[test]
+fn nothing_compared_is_not_everything_identical() {
+    // B declares the only compared buffer differently and drifts: no span
+    // is comparable, and the verdict comes from the oracle, not from 0/0.
+    let (r, lines) = run(Fixture::default().scale("scale_drift").wide_act());
+    assert_eq!(r.summary.local.as_ref().unwrap().compared, 0);
+    assert_eq!(verdict(&r).0, 2, "{lines:#?}");
+    assert!(
+        r.summary.verdict.summary.starts_with("spans differ; end-to-end KL up to"),
+        "{}",
+        r.summary.verdict.summary
+    );
 }
 
 #[test]

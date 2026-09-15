@@ -135,8 +135,14 @@ impl<B> Recording<B> {
         let driven: Vec<&str> = self.chunk.iter().chain(&self.steps).map(|f| f.name.as_str()).collect();
         self.diff.spans.keys().filter(|p| !driven.contains(&p.as_str()) && !self.once.contains(p)).cloned().collect()
     }
+    /// States both sides declare identically: the ones A's images fit.
     pub(crate) fn shared_states(&self) -> Vec<String> {
-        self.ma.states.keys().filter(|n| self.mb.states.contains_key(*n)).cloned().collect()
+        self.ma
+            .states
+            .iter()
+            .filter(|(n, a)| self.mb.states.get(*n).is_some_and(|b| declares_same(*a, b)))
+            .map(|(n, _)| n.clone())
+            .collect()
     }
     /// Bytes the kept spans' inputs and reference outputs take.
     pub(crate) fn snapshot_bytes(&self) -> usize {
@@ -184,7 +190,7 @@ pub(crate) fn at_rank(ranks: usize, q: usize, label: &str) -> String {
     }
 }
 
-fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()> {
+pub(crate) fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()> {
     for (name, rs) in runs {
         for (off, bytes) in rs {
             c.write_state(q, name, *off, bytes)?;
@@ -234,8 +240,20 @@ fn logits_of(ma: &Manifest, mb: &Manifest, prog: &str) -> Vec<String> {
     access(ma, prog, 0..ma.programs[prog].calls.len())
         .writes
         .into_iter()
-        .filter(|n| n.rsplit('.').next().is_some_and(|last| last.starts_with("logits")) && mb.buffers.contains_key(n))
+        .filter(|n| n.rsplit('.').next().is_some_and(|last| last.starts_with("logits")) && alike(ma, mb, n))
         .collect()
+}
+
+/// Two declarations, field for field.
+fn declares_same<T: serde::Serialize>(a: &T, b: &T) -> bool {
+    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+}
+
+/// A buffer both sides declare with the same dtype and shape: the only
+/// kind whose bytes mean the same thing on either side, so the only kind
+/// A can hand over or B's copy can be compared against.
+pub(crate) fn alike(ma: &Manifest, mb: &Manifest, n: &str) -> bool {
+    ma.buffers.get(n).zip(mb.buffers.get(n)).is_some_and(|(x, y)| x.dtype == y.dtype && x.shape == y.shape)
 }
 
 pub(crate) fn read_logits<S: Side>(
@@ -399,7 +417,14 @@ pub fn record<S: Side>(
         logits: Vec::new(),
         outputs: BTreeMap::new(),
         states: Vec::new(),
-        one_sided: BTreeSet::new(),
+        one_sided: ma
+            .states
+            .keys()
+            .filter(|n| {
+                mb.states.contains_key(*n) && !mb.states.get(*n).is_some_and(|b| declares_same(&ma.states[*n], b))
+            })
+            .cloned()
+            .collect(),
         noise: None,
         perf: None,
     };
@@ -436,7 +461,7 @@ pub fn record<S: Side>(
     // What a caller would get: the outputs and the states after the workload.
     let e_last = rec.runs.last().map(|r| r.vars.clone()).unwrap_or_default();
     for (name, b) in &ma.buffers {
-        if b.kind == BufferKind::Output && mb.buffers.contains_key(name) {
+        if b.kind == BufferKind::Output && alike(&ma, mb, name) {
             let len = live_bytes(&ma, name, &e_last);
             rec.outputs.insert(name.clone(), (0..ranks).map(|q| a.read(q, name, len)).collect::<Result<_>>()?);
         }
@@ -629,18 +654,17 @@ fn record_run<S: Side>(
         a.run(pname, &e, ia..span.a.start)?;
         ia = span.a.end;
         // Inputs both sides have, declared alike, and A can hand over: a
-        // buffer only B knows (an intermediate of its own), one B declares
-        // with another shape, a weight, or what a `once` program made of one
-        // (B packs it its own way) is B's to produce.
-        let alike = |n: &String| {
-            ma.buffers.get(n).zip(mb.buffers.get(n)).is_some_and(|(x, y)| x.dtype == y.dtype && x.shape == y.shape)
-        };
-        let names: Vec<String> = frontier_inputs(ma, pname, span.a.clone())
+        // buffer only B knows (an intermediate of its own), a weight, or
+        // what a `once` program made of one (B packs it its own way) is
+        // B's to produce; one B declares with another shape B reads as its
+        // own, and the report says so.
+        let (names, apart): (Vec<String>, Vec<String>) = frontier_inputs(ma, pname, span.a.clone())
             .union(&frontier_inputs(mb, pname, span.b.clone()))
-            .filter(|n| alike(n))
+            .filter(|n| ma.buffers.contains_key(*n) && mb.buffers.contains_key(*n))
             .filter(|n| ma.buffers[*n].kind != BufferKind::Weight && !fixed.contains(*n))
             .cloned()
-            .collect();
+            .partition(|n| alike(ma, mb, n));
+        rec.one_sided.extend(apart);
         let mut inputs = Vec::new();
         for q in 0..ranks {
             let mut v = Vec::new();
@@ -706,7 +730,7 @@ fn record_run<S: Side>(
             .writes
             .union(&ab.writes)
             .cloned()
-            .partition(|n| aa.writes.contains(n) && ab.writes.contains(n) && alike(n));
+            .partition(|n| aa.writes.contains(n) && ab.writes.contains(n) && alike(ma, mb, n));
         rec.one_sided.extend(apart);
         let mut ref_out = Vec::new();
         for q in 0..ranks {

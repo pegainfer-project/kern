@@ -206,7 +206,7 @@ __device__ Best next_best(int kind, int w, const unsigned char* row, unsigned in
 // argmax_b, (rank_in_b << 32 | top overlap).
 extern "C" __global__ void logit_rows(const unsigned char* a, const unsigned char* b, unsigned int cols, int kind,
                                       int top, unsigned long long* out) {
-    __shared__ union { Acc acc[1024]; Best best[1024]; double sum[1024]; } sh;
+    __shared__ union { Acc acc[256]; Best best[256]; double sum[256]; } sh;
     __shared__ unsigned int sel_a[TOP_MAX], sel_b[TOP_MAX];
     int w = width(kind);
     unsigned long long row = (unsigned long long)blockIdx.x * cols * w;
