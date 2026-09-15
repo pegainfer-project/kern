@@ -242,12 +242,14 @@ pub(crate) fn image<S: Side>(c: &mut S, run: &Run<S::Buf>) -> Result<()> {
     Ok(())
 }
 
-/// `logits*` buffers a program writes on both sides: the end-to-end oracle.
+/// Buffers a program writes on both sides whose last name segment is
+/// `logits*` (`logits`, `logits_blk`, `decode.target_head.logits`): the
+/// end-to-end oracle.
 fn logits_of(ma: &Manifest, mb: &Manifest, prog: &str) -> Vec<String> {
     access(ma, prog, 0..ma.programs[prog].calls.len())
         .writes
         .into_iter()
-        .filter(|n| n.starts_with("logits") && mb.buffers.contains_key(n))
+        .filter(|n| n.rsplit('.').next().is_some_and(|last| last.starts_with("logits")) && mb.buffers.contains_key(n))
         .collect()
 }
 

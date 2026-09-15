@@ -239,3 +239,15 @@ fn a_buffer_declared_differently_on_the_two_sides_is_not_compared() {
     // the oracle still speaks: B's logits are what they were
     assert_eq!(verdict(&r).0, 0, "{}", r.summary.verdict.summary);
 }
+
+#[test]
+fn a_logits_buffer_is_found_by_the_last_segment_of_its_name() {
+    let (r, _) = test(
+        &Fixture::default().logits("target_head.logits"),
+        &Fixture::default().logits("target_head.logits").scale("scale_round"),
+        &options(),
+    )
+    .unwrap();
+    assert_eq!(verdict(&r).1, "logit evidence", "{}", r.summary.verdict.summary);
+    assert_eq!(r.summary.logits.as_ref().unwrap().rows, 9);
+}
