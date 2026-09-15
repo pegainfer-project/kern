@@ -350,6 +350,18 @@ fn a_stateful_checkpoint_restores_at_its_length_only() {
 }
 
 #[test]
+#[should_panic(expected = "inside a sealed page")]
+fn a_lease_refuses_the_pages_it_sealed() {
+    let p = pool();
+    let mut a = p.lease(32).unwrap();
+    let (_cp, _) = p.checkpoint(&mut a, 20).unwrap();
+    // Page 0 went whole into the checkpoint's chain; page 1 was copied and
+    // stays the lease's own.
+    assert_eq!(a.slot(20), a.page_ids()[1] as i64 * 16 + 4);
+    a.slot(15);
+}
+
+#[test]
 #[should_panic(expected = "inside the shared prefix")]
 fn restored_lease_refuses_its_prefix() {
     let p = pool();

@@ -858,10 +858,13 @@ impl Lease {
     }
 
     /// The token slot of position `pos` of the sequence, to write into;
-    /// `pos` is past the shared prefix.
+    /// `pos` is past the shared prefix and past every page moved into a
+    /// chain: a node's page is never written after the node exists, and
+    /// the lease that sealed it is no exception.
     pub fn slot(&self, pos: usize) -> i64 {
         assert!(pos >= self.prefix, "position {pos} is inside the shared prefix of {} tokens", self.prefix);
         let unit = self.pool.unit as usize;
+        assert!(pos >= self.shared * unit, "position {pos} is inside a sealed page ({} pages sealed)", self.shared);
         let page = *self.pages.get(pos / unit).expect("position past the lease") as i64;
         page * unit as i64 + (pos % unit) as i64
     }
