@@ -401,7 +401,8 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         // prompt shares with it: `at` tokens through a sibling of the
         // path at depth `at`, `matched` through the edge the prompt
         // continues into below `pos`. The longest wins, a resident one
-        // before a parked one at the same length.
+        // before a parked one at the same length; one sharing no whole
+        // page serves nothing and is not touched.
         let mut cands: Vec<(usize, usize, i64, bool)> = Vec::new();
         let mut node = &mut *root;
         let mut at = 0;
@@ -431,7 +432,8 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
             at += child.tokens.len();
             node = child;
         }
-        if let Some(&(shared, depth, k, resident)) = cands.iter().max_by_key(|&&(s, _, _, r)| (s / unit * unit, r)) {
+        let usable = cands.iter().filter(|&&(s, ..)| s >= unit);
+        if let Some(&(shared, depth, k, resident)) = usable.max_by_key(|&&(s, _, _, r)| (s / unit * unit, r)) {
             let parent = path_mut(root, &q[..depth]);
             let n = paged_in_mut(parent.children.get_mut(&k).expect("a child"), resident).expect("counted");
             let e = n.entry.as_mut().expect("a stateless entry");

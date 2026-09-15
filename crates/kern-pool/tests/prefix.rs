@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use kern_pool::{Checkpoint, Denied, Evicted, Found, Hit, Host, Kept, Parked, Prefix, Tier};
 
-use common::{hybrid_pool4, paged4, pool4, pool_of, Rand};
+use common::{hybrid_pool4, pool4, Rand};
 
 fn table() -> Prefix<Checkpoint, Parked> {
     Prefix::new(4)
@@ -423,5 +423,21 @@ fn lookup_matches_the_brute_force_model() {
         out
     };
     assert_eq!(trace(0x1234_5678_9ABC_DEF1), trace(0x1234_5678_9ABC_DEF1));
-    let _ = pool_of(&paged4(), 4, 8, 0);
+}
+
+#[test]
+fn a_lookup_that_uses_nothing_touches_nothing() {
+    let p = pool4();
+    let mut t = table();
+    let mut l = p.lease(4).unwrap();
+    let mut l2 = p.lease(4).unwrap();
+    let (a, mut b) = (toks(4), toks(4));
+    b[0] = -1;
+    t.insert(&b, p.checkpoint(&mut l2, 4).unwrap().0);
+    t.insert(&a, p.checkpoint(&mut l, 4).unwrap().0);
+    // Nothing shared, then one token of b: under a page, so no hit, and
+    // an entry that served nothing is not made warm by it.
+    assert_eq!(find(&mut t, &[999, 998]), None);
+    assert_eq!(find(&mut t, &[b[0], 55, 56]), None);
+    assert_eq!(drop_coldest(&mut t), Some(Evicted::Dropped { key: Arc::from(&b[..]), dropped: 0 }));
 }
