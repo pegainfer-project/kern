@@ -535,8 +535,8 @@ impl KernScheduler {
             let prompt = q.request.prompt_tokens.len();
             let max_tokens = q.request.max_tokens;
             let worst = prompt + max_tokens + self.headroom();
-            if prompt == 0 {
-                let limit = self.tray.max_seq_tokens();
+            let limit = self.tray.max_seq_tokens();
+            if prompt == 0 || worst > limit {
                 ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
                 self.waiting.pop_front();
                 continue;

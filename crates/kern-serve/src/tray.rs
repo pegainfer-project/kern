@@ -593,9 +593,14 @@ impl Tray {
         self.ranks.iter().map(Runtime::pages_total).sum::<usize>() - self.pad.iter().map(Lease::pages).sum::<usize>()
     }
 
-    /// Longest sequence one page-table row can address, on any rank.
+    /// Longest sequence a row can hold on any rank: what its page table
+    /// addresses, within the pages beside the pad.
     pub fn max_seq_tokens(&self) -> usize {
-        self.ranks.iter().map(Runtime::max_seq_tokens).min().unwrap_or(0)
+        let page = self.page();
+        (self.ranks.iter().zip(&self.pad))
+            .map(|(rt, pad)| rt.max_seq_tokens().min((rt.pages_total() - pad.pages()) * page))
+            .min()
+            .unwrap_or(0)
     }
 
     pub fn has_seq_state(&self) -> bool {
