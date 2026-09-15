@@ -222,8 +222,9 @@ driver 不会 stage 的 program 在 TAP 里标红、判 INCONCLUSIVE。
 
 - `FAIL`（退出码 1）：fuzz 下 B 崩溃 / 产出越出声明域。
 - `FAIL`：端到端某一步 B 换了 argmax，且这一行的 KL 超过 `--logit-kl`
-  （不是限内的平局；B 一侧出 NaN 也在此，KL 无限）；A 自己不确定（noise
-  floor 脏）时不下这个结论。
+  （不是限内的平局；B 一侧出 NaN 也在此，KL 无限）。A 对 A 的端到端
+  自己就超限或翻转时不下这个结论（span 吵不算：`o_lowrank` 不确定的参考
+  端到端照样可能复现）。
 - `INCONCLUSIVE`（退出码 2）：变了的 program driver 喂不了（覆盖缺口，
   再好的 logits 也只说明被喂到的那些）。
 - `PASS: bit-identical`：每个 span 在真实和扰动输入下逐 bit 相同。

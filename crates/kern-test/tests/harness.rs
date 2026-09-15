@@ -72,6 +72,19 @@ fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
 }
 
 #[test]
+fn a_wide_argmax_flip_fails_when_a_reproduces_itself_end_to_end() {
+    // A is noisy at its spans (±3% on `scale`) yet lands on the same
+    // distribution every time; B swaps the head's argmax. The flip is B's.
+    let (r, lines) =
+        test(&Fixture::default().scale("scale_noisy"), &Fixture::default().head("head_swap"), &options()).unwrap();
+    let v = &r.summary.verdict;
+    assert!(v.code == 1 && v.summary.starts_with("B changes the argmax end-to-end at prefill chunk 0"), "{lines:#?}");
+    let n = r.summary.noise.as_ref().unwrap();
+    let f = n.floor.as_ref().unwrap();
+    assert!(n.clean < n.compared && f.kl_max <= 0.01 && f.flips == 0, "{n:?}");
+}
+
+#[test]
 fn a_wide_argmax_flip_fails() {
     let (r, lines) = run(Fixture::default().head("head_swap"));
     let v = &r.summary.verdict;

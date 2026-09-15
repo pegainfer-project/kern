@@ -278,6 +278,9 @@ pub fn replay<S: Side>(
         None => (true, BTreeSet::new(), BTreeMap::new(), Vec::new()),
     };
     let floor = rec.noise.as_ref().and_then(|n| n.report.floor.clone());
+    // A's spans may be noisy while its end-to-end distribution reproduces;
+    // only the latter says whether a flip beyond the limit is B's doing.
+    let a_reproduces = floor.as_ref().is_none_or(|f| f.kl_max <= o.logit_kl && f.flips == 0);
 
     // ---- 4. fuzz: the kept spans on B, with the inputs A saw
     let mut fuzz_ok = true;
@@ -507,7 +510,7 @@ pub fn replay<S: Side>(
     let n_rows = logit_rows.len();
     let (code, text) = if !fuzz_ok {
         (1, "B violates a declared domain (or crashed) under fuzz".to_string())
-    } else if let (Some(f), true) = (wide_flip, noise_clean) {
+    } else if let (Some(f), true) = (wide_flip, a_reproduces) {
         (
             1,
             format!(
@@ -540,8 +543,15 @@ pub fn replay<S: Side>(
         (0, "differences at every span lie within A's own noise floor".to_string())
     } else if have_logits {
         let band = match &floor {
-            _ if !noise_clean => " — A itself is not deterministic at some spans".to_string(),
-            Some(f) if f.kl_max > o.logit_kl => format!(" — A against itself reaches KL {:.2e}", f.kl_max),
+            Some(f) if !a_reproduces => {
+                format!(
+                    " — A against itself reaches KL {:.2e} with {} flip{}",
+                    f.kl_max,
+                    f.flips,
+                    if f.flips == 1 { "" } else { "s" }
+                )
+            }
+            None if !noise_clean => " — A itself is not deterministic at some spans".to_string(),
             _ => String::new(),
         };
         (2, format!("spans differ; end-to-end KL up to {kl_max:.2e} at {} on {n_rows} rows (limit {:.0e}), {n_flips} argmax flip{} ({n_within} within the limit){band}", logits_at, o.logit_kl, if n_flips == 1 { "" } else { "s" }))
