@@ -293,7 +293,7 @@ pub fn row_tokens(m: &Manifest, unit: u64) -> Option<u64> {
 /// The pooled states of `m` in manifest order, paged ones first, sized for
 /// a budget of `chunks` chunks: a state is paged, per-sequence or fixed,
 /// never a mix.
-fn pooled(m: &Manifest, unit: u64, chunk: u64, chunks: u32) -> Result<Vec<Pooled>> {
+fn pooled(m: &Manifest, unit: u64, chunk: u64, chunks: u32, tokens: Option<u64>) -> Result<Vec<Pooled>> {
     let mut paged = Vec::new();
     let mut per_seq = Vec::new();
     for (name, s) in &m.states {
@@ -310,7 +310,10 @@ fn pooled(m: &Manifest, unit: u64, chunk: u64, chunks: u32) -> Result<Vec<Pooled
     let budget = chunk * chunks as u64;
     let page_bytes: u64 = paged.iter().map(|(_, b)| b).sum();
     let slot_bytes: u64 = per_seq.iter().map(|(_, b)| b).sum();
+    // What the chunks hold, or the tokens asked for when that is fewer: a
+    // chunk is whole, a capacity is not.
     let pages = budget.checked_div(page_bytes).map_or(chunks as usize, |n| n as usize);
+    let pages = tokens.map_or(pages, |t| pages.min((t / unit) as usize));
     let slots = budget.checked_div(slot_bytes).map_or(0, |n| n as usize);
     let entry = |(state, object): (String, u64), kind, objects: usize| Pooled {
         state,
@@ -425,12 +428,19 @@ impl Pool {
     /// The pool of `m` over `chunks` chunks of `chunk` bytes, in whole
     /// pages of [`page_unit`]: the first `first_slots` sequence slots
     /// (slot 0 among them) exist from the start, then as many pages as the
-    /// chunks left hold. The [`Remap`] returned makes that initial layout;
-    /// the pool already counts it as landed.
-    pub fn new(m: &Manifest, chunk: u64, chunks: u32, first_slots: usize) -> Result<(Pool, Remap)> {
+    /// chunks left hold, at most `tokens` of them when a capacity was
+    /// asked for. The [`Remap`] returned makes that initial layout; the
+    /// pool already counts it as landed.
+    pub fn new(
+        m: &Manifest,
+        chunk: u64,
+        chunks: u32,
+        first_slots: usize,
+        tokens: Option<u64>,
+    ) -> Result<(Pool, Remap)> {
         let unit = page_unit(m);
         let tables = tables(m);
-        let pooled = pooled(m, unit, chunk, chunks)?;
+        let pooled = pooled(m, unit, chunk, chunks, tokens)?;
         let arenas: Vec<(Kind, u64, usize)> = pooled.iter().map(|p| (p.kind, p.object, p.objects)).collect();
         let pages_max = pooled.iter().find(|p| p.kind == Kind::Page).map_or(chunks as usize, |p| p.objects);
         let slots_max = pooled.iter().find(|p| p.kind == Kind::Slot).map_or(0, |p| p.objects);

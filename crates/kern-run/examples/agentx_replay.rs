@@ -285,7 +285,8 @@ fn main() {
         None => (budget_gib << 30) / chunk,
     };
     let first_slots = if state > 0 { slots } else { 0 };
-    let pool = Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots).expect("the budget holds the first slots").0);
+    let pool =
+        Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots, None).expect("the budget holds the first slots").0);
     let host = (host_gib > 0).then(|| Arc::new(Host::new(host_gib << 30, 1 << 16, page_bytes, state)));
     let mut prefix = Prefix::new(unit);
     let mut tally = Tally::default();

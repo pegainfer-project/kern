@@ -20,14 +20,17 @@ fn a_new_pool_maps_every_chunk_in_its_first_plan() {
     assert_eq!((p.has_slots(), p.slots()), (false, 0));
     assert_eq!(p.lease(1).unwrap().seq_slot(), None);
     // Two chunks over what four pages take are spare, not a torn page.
-    let (p2, plan) = Pool::new(&two_paged(), 8, 18, 0).unwrap();
+    let (p2, plan) = Pool::new(&two_paged(), 8, 18, 0, None).unwrap();
     assert_eq!((p2.total(), p2.pages_max(), plan.map.len(), plan.unmap.len()), (4, 4, 16, 0));
+    // A capacity in tokens is a cap on the pages, whatever the chunks hold.
+    let (p3, plan3) = Pool::new(&two_paged(), 8, 18, 0, Some(32)).unwrap();
+    assert_eq!((p3.total(), p3.pages_max(), plan3.map.len()), (2, 2, 8));
     assert_eq!(plan.made, [(Kind::Page, 0), (Kind::Page, 1), (Kind::Page, 2), (Kind::Page, 3)]);
     let names: Vec<(&str, Kind, u64, usize)> =
         p2.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.object, a.positions)).collect();
     assert_eq!(names, [("draft_kv", Kind::Page, 16, 8), ("kv", Kind::Page, 16, 8)]);
     // With slots: every chunk mapped, one access grant per object, nothing unmapped.
-    let (p, plan) = Pool::new(&hybrid(), 8, 20, 4).unwrap();
+    let (p, plan) = Pool::new(&hybrid(), 8, 20, 4, None).unwrap();
     assert_eq!((plan.map.len(), plan.access.len(), plan.unmap.len(), plan.unmade.len()), (20, 8, 0, 0));
     assert_eq!(plan.made.len(), 8);
     assert_eq!((p.total(), p.slots(), p.pages_max(), p.slots_max()), (4, 4, 10, 6));
@@ -37,7 +40,7 @@ fn a_new_pool_maps_every_chunk_in_its_first_plan() {
 
 #[test]
 fn pool_rejects_a_manifest_it_cannot_lay_out() {
-    let err = |m: &Manifest, chunks: u32, first_slots: usize| match Pool::new(m, 8, chunks, first_slots) {
+    let err = |m: &Manifest, chunks: u32, first_slots: usize| match Pool::new(m, 8, chunks, first_slots, None) {
         Ok(_) => panic!("laid out"),
         Err(e) => e.to_string(),
     };
@@ -72,8 +75,8 @@ fn the_chunk_budget_rounds_every_state_on_its_own() {
     m.states.get_mut("gdn").unwrap().bytes_per_seq = 40;
     m.states.insert("gdn2".into(), m.states["gdn"].clone());
     assert_eq!(chunks_for(&m, 0, 1, 32), 4);
-    assert!(Pool::new(&m, 32, 4, 1).is_ok());
-    assert!(Pool::new(&m, 32, 3, 1).is_err());
+    assert!(Pool::new(&m, 32, 4, 1, None).is_ok());
+    assert!(Pool::new(&m, 32, 3, 1, None).is_err());
 }
 
 #[test]
@@ -645,7 +648,7 @@ fn check(dev: &Device, map: &Mapping, p: &Pool, seqs: &[Seq], cps: &[Held]) {
 /// along the way land into a model of the chunks: a chunk is free or
 /// at one position, and whatever a handle names is mapped whole.
 fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, first_slots: usize, seed: u64) {
-    let (p, first) = Pool::new(m, chunk, chunks, first_slots).unwrap();
+    let (p, first) = Pool::new(m, chunk, chunks, first_slots, None).unwrap();
     let p = Arc::new(p);
     let mut map = Mapping::new(chunks);
     map.land(&p, &first);

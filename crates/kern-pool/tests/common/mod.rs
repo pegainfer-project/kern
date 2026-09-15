@@ -79,7 +79,7 @@ pub fn hybrid4() -> Manifest {
 /// A pool over `m` with `chunks` chunks of `chunk` bytes, the initial
 /// remap taken as landed.
 pub fn pool_of(m: &Manifest, chunk: u64, chunks: u32, first_slots: usize) -> Arc<Pool> {
-    Arc::new(Pool::new(m, chunk, chunks, first_slots).expect("fixture lays out").0)
+    Arc::new(Pool::new(m, chunk, chunks, first_slots, None).expect("fixture lays out").0)
 }
 
 /// `two_paged` over 8-byte chunks: a page is 2 chunks per arena, 16 chunks
