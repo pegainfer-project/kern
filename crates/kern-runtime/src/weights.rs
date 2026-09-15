@@ -200,12 +200,12 @@ fn header(read: impl Fn(usize, &mut [u8]) -> Option<()>, len: usize) -> Result<(
             serde_json::from_value(field("shape")?).map_err(|_| bad(&format!("tensor `{name}`: shape")))?;
         let [at, end]: [u64; 2] = serde_json::from_value(field("data_offsets")?)
             .map_err(|_| bad(&format!("tensor `{name}`: data_offsets")))?;
-        if at > end || data as u64 + end > len as u64 {
+        if at > end || data + end > len as u64 {
             return Err(bad(&format!("tensor `{name}`: data_offsets [{at}, {end}) outside the artifact")));
         }
         tensors.insert(name, Info { dtype, shape, at, end });
     }
-    Ok((data as u64, tensors))
+    Ok((data, tensors))
 }
 
 impl Tensors for Safetensors<'_> {
