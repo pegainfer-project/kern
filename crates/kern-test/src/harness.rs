@@ -15,11 +15,11 @@ use kern_manifest::types::{BufferKind, Manifest};
 use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
 
-use crate::compare::{compare, diff_runs, is_float, logit_row, perturb, Cmp, LogitRow, MODES};
+use crate::compare::{is_float, perturb, Cmp, LogitRow, MODES};
 use crate::diff::{access, constants, frontier_inputs, live_bytes, row_elems, Diff, Span};
 use crate::report::{cap, kb, row, Finding, Floor, Noise};
 use crate::workload::{self, Rng, Workload};
-use crate::{Options, Side, Vars};
+use crate::{At, Options, Side, Vars};
 
 pub(crate) type Bytes = Vec<u8>;
 /// `state -> [(offset, bytes)]`: the runs of a state a span changed.
@@ -30,8 +30,9 @@ pub(crate) struct SpanRec<B> {
     pub span: Span,
     /// A's frontier inputs: name, live bytes, the bytes (on the device).
     pub inputs: Vec<Vec<(String, usize, B)>>,
-    /// What A wrote that both sides write (live prefix).
-    pub ref_out: Vec<BTreeMap<String, Bytes>>,
+    /// What A wrote that both sides write: live bytes and where they are
+    /// kept (on the device).
+    pub ref_out: Vec<BTreeMap<String, (usize, B)>>,
     /// Kept runs only: pre-image and post-image of every state byte the
     /// span changed. A span with inout state is not idempotent (replaying
     /// it on its own output shifts the conv window again, advances the SSM
@@ -57,12 +58,13 @@ pub(crate) struct Run<B> {
     pub spans: Vec<SpanRec<B>>,
 }
 
-/// A's `logits*` buffer after one run, per rank.
-pub(crate) struct LogitsAt {
+/// A side's `logits*` buffer after one run, per rank: live bytes and
+/// where they are kept (on the device); `cols` elements per row.
+pub(crate) struct LogitsAt<B> {
     pub label: String,
     pub buffer: String,
-    pub vars: Vars,
-    pub bytes: Vec<Bytes>,
+    pub cols: usize,
+    pub bufs: Vec<(usize, B)>,
 }
 
 pub(crate) struct NoiseRec {
@@ -74,16 +76,16 @@ pub(crate) struct NoiseRec {
 }
 
 /// One kept span under one perturbation: the inputs (per rank) and what
-/// A made of them.
-pub(crate) struct FuzzCase {
+/// A made of them (on the device).
+pub(crate) struct FuzzCase<B> {
     pub at: (usize, usize),
     pub inputs: Vec<Vec<(String, Bytes)>>,
-    pub out: Vec<BTreeMap<String, Bytes>>,
+    pub out: Vec<BTreeMap<String, (usize, B)>>,
     pub states: Vec<Runs>,
 }
 
-pub(crate) struct FuzzRec {
-    pub rounds: Vec<(&'static str, Vec<FuzzCase>)>,
+pub(crate) struct FuzzRec<B> {
+    pub rounds: Vec<(&'static str, Vec<FuzzCase<B>>)>,
     pub ints_kept: BTreeMap<String, BTreeSet<String>>,
     pub violations: Vec<String>,
 }
@@ -129,14 +131,14 @@ pub struct Recording<B> {
     /// `(run, span)` of the spans with state images: the first run of each
     /// driven program. Noise and fuzz replay these.
     pub(crate) kept: Vec<(usize, usize)>,
-    pub(crate) logits: Vec<LogitsAt>,
+    pub(crate) logits: Vec<LogitsAt<B>>,
     /// Output buffers after the workload, per rank.
     pub(crate) outputs: BTreeMap<String, Vec<Bytes>>,
     /// Per rank: A's shared states after the workload.
     pub(crate) states: Vec<BTreeMap<String, B>>,
     pub(crate) one_sided: BTreeSet<String>,
     pub(crate) noise: Option<NoiseRec>,
-    pub(crate) fuzz: Option<FuzzRec>,
+    pub(crate) fuzz: Option<FuzzRec<B>>,
     pub(crate) perf: Option<PerfRec>,
 }
 
@@ -168,7 +170,7 @@ impl<B> Recording<B> {
             .map(|&(r, s)| {
                 let sr = &self.runs[r].spans[s];
                 sr.inputs.iter().flatten().map(|(_, b, _)| *b).sum::<usize>()
-                    + sr.ref_out.iter().flatten().map(|(_, b)| b.len()).sum::<usize>()
+                    + sr.ref_out.iter().flatten().map(|(_, (b, _))| *b).sum::<usize>()
             })
             .sum()
     }
@@ -240,10 +242,6 @@ pub(crate) fn runs_differ(x: &Runs, y: &Runs) -> BTreeMap<String, usize> {
         .collect()
 }
 
-pub(crate) fn whole<S: Side>(c: &S, q: usize, state: &str) -> Result<Vec<u8>> {
-    c.read_state(q, state, 0..c.state_bytes(state)?)
-}
-
 /// Put a side's shared states to the image a run started from.
 pub(crate) fn image<S: Side>(c: &mut S, run: &Run<S::Buf>) -> Result<()> {
     for (q, img) in run.image.iter().enumerate() {
@@ -272,56 +270,75 @@ pub(crate) fn read_logits<S: Side>(
     prog: &str,
     e: &Vars,
     label: &str,
-) -> Result<Vec<LogitsAt>> {
+) -> Result<Vec<LogitsAt<S::Buf>>> {
     logits_of(ma, mb, prog)
         .into_iter()
         .map(|n| {
             let len = live_bytes(ma, &n, e);
-            let bytes = (0..c.ranks()).map(|q| c.read(q, &n, len)).collect::<Result<_>>()?;
-            Ok(LogitsAt { label: label.to_string(), buffer: n, vars: e.clone(), bytes })
+            let bufs = (0..c.ranks())
+                .map(|q| {
+                    let mut b = c.alloc(q, len)?;
+                    c.save(q, &n, len, &mut b)?;
+                    Ok((len, b))
+                })
+                .collect::<Result<_>>()?;
+            Ok(LogitsAt { label: label.to_string(), cols: row_elems(ma, &n, e), buffer: n, bufs })
         })
         .collect()
 }
 
 /// The end-to-end rows of two sides' `logits*` reads, in workload order:
-/// one per rank and, for a buffer of several rows, per row.
-pub(crate) fn logit_rows(ma: &Manifest, ranks: usize, a: &[LogitsAt], b: &[LogitsAt]) -> Vec<LogitRow> {
+/// one per rank and, for a buffer of several rows, per row; compared
+/// where they are.
+pub(crate) fn logit_rows<S: Side>(
+    c: &S,
+    ma: &Manifest,
+    ranks: usize,
+    a: &[LogitsAt<S::Buf>],
+    b: &[LogitsAt<S::Buf>],
+) -> Result<Vec<LogitRow>> {
     let n_runs_with = |label: &str| a.iter().filter(|x| x.label == label).count();
     let mut rows_out = Vec::new();
     for (la, lb) in a.iter().zip(b) {
         let dt = ma.buffers[&la.buffer].dtype;
-        let row = row_elems(ma, &la.buffer, &la.vars) * dt.bytes() as usize;
+        let w = dt.bytes() as usize;
         for q in 0..ranks {
-            let (x, y) = (&la.bytes[q], &lb.bytes[q]);
-            let rows = x.len().checked_div(row).unwrap_or(0);
-            for r in 0..rows.max(1) {
-                let (lo, hi) = if rows > 1 { (r * row, (r + 1) * row) } else { (0, x.len()) };
+            let (len, x) = &la.bufs[q];
+            let (_, y) = &lb.bufs[q];
+            if *len == 0 {
+                continue;
+            }
+            // a live prefix that is not whole rows is one row of what there is
+            let cols = if *len % (la.cols * w) == 0 { la.cols } else { *len / w };
+            let stats = c.logits(q, dt, cols, At::Scratch(x, 0..*len), At::Scratch(y, 0..*len))?;
+            let rows = stats.len();
+            for (r, st) in stats.into_iter().enumerate() {
                 let lbl = if n_runs_with(&la.label) > 1 || rows > 1 {
                     format!("{} {}{}", la.label, la.buffer, if rows > 1 { format!("[{r}]") } else { String::new() })
                 } else {
                     la.label.clone()
                 };
-                rows_out.push(logit_row(at_rank(ranks, q, &lbl), dt, &x[lo..hi], &y[lo..hi]));
+                rows_out.push(LogitRow { label: at_rank(ranks, q, &lbl), stats: st });
             }
         }
     }
-    rows_out
+    Ok(rows_out)
 }
 
 /// Replay one recorded span on a side: from the recorded inputs, or from
-/// `host_inputs` (perturbed, per rank). Returns the written buffers (live
-/// prefix) and the state post-image over the recorded write-set, per rank.
-/// The state is put back to A's pre-image first (so the span sees what it
-/// saw in the recording, on either side) and to A's post-image after (so
-/// the next span's reads see the reference, not this replay's output —
-/// under fuzz, garbage).
+/// `host_inputs` (perturbed, per rank). Returns the state post-image over
+/// the recorded write-set, per rank; what the span wrote is in its
+/// buffers for the caller to compare where it is. The state is put back
+/// to A's pre-image first (so the span sees what it saw in the recording,
+/// on either side) and to A's post-image after (so the next span's reads
+/// see the reference, not this replay's output — under fuzz, garbage).
 pub(crate) fn replay_span<S: Side>(
     c: &mut S,
     sr: &SpanRec<S::Buf>,
     run: &Run<S::Buf>,
     side_b: bool,
     host_inputs: Option<&[Vec<(String, Bytes)>]>,
-) -> Result<(Vec<BTreeMap<String, Bytes>>, Vec<Runs>)> {
+) -> Result<Vec<Runs>> {
     let ranks = c.ranks();
     for q in 0..ranks {
         write_runs(c, q, &sr.pre[q])?;
@@ -340,34 +357,65 @@ pub(crate) fn replay_span<S: Side>(
     }
     let r = if side_b { sr.span.b.clone() } else { sr.span.a.clone() };
     c.run(&run.program, &run.vars, r)?;
-    let mut out = Vec::new();
     let mut st = Vec::new();
     for q in 0..ranks {
-        let mut o = BTreeMap::new();
-        for (n, r) in &sr.ref_out[q] {
-            o.insert(n.clone(), c.read(q, n, r.len())?);
-        }
-        out.push(o);
         st.push(read_runs(c, q, &sr.post[q])?);
         write_runs(c, q, &sr.post[q])?;
     }
-    Ok((out, st))
+    Ok(st)
+}
+
+/// What a side's buffers hold after a span, kept on the device: name ->
+/// (live bytes, where).
+fn keep_outputs<S: Side>(c: &S, sr: &SpanRec<S::Buf>) -> Result<Vec<BTreeMap<String, (usize, S::Buf)>>> {
+    (0..c.ranks())
+        .map(|q| {
+            sr.ref_out[q]
+                .iter()
+                .map(|(n, (len, _))| {
+                    let mut b = c.alloc(q, *len)?;
+                    c.save(q, n, *len, &mut b)?;
+                    Ok((n.clone(), (*len, b)))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Every written buffer of a span against a kept copy, per rank.
+pub(crate) fn compare_outputs<S: Side>(
+    c: &S,
+    m: &Manifest,
+    kept: &[BTreeMap<String, (usize, S::Buf)>],
+) -> Result<Vec<BTreeMap<String, Cmp>>> {
+    (0..c.ranks())
+        .map(|q| {
+            kept[q]
+                .iter()
+                .map(|(n, (len, b))| {
+                    Ok((n.clone(), c.compare(q, m.buffers[n].dtype, At::Buffer(n, *len), At::Scratch(b, 0..*len))?))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Values a written buffer's declared domain rules out: `side name[i] = v`.
+/// Values a side produced that lie outside their buffer's declared
+/// domain, among `names`; only buffers with a domain are read.
 pub(crate) fn domain_violations<S: Side>(
     c: &S,
     m: &Manifest,
     vars: &Vars,
     side: &str,
-    out: &[BTreeMap<String, Bytes>],
+    names: &[String],
 ) -> Result<Vec<String>> {
     let mut v = Vec::new();
-    for (q, o) in out.iter().enumerate() {
-        for (name, bytes) in o {
+    for q in 0..c.ranks() {
+        for name in names {
             let Some(d) = &m.buffers[name].domain else { continue };
             let r = d.resolve(m, vars, &c.provision())?;
-            let vals = values::to_f64(m.buffers[name].dtype, bytes);
+            let vals = values::to_f64(m.buffers[name].dtype, &c.read(q, name, live_bytes(m, name, vars))?);
             if let Some(i) = vals.iter().position(|x| !r.contains(*x)) {
                 v.push(format!("{} {name}[{i}] = {} outside domain", at_rank(c.ranks(), q, side), vals[i]));
             }
@@ -476,13 +524,13 @@ pub fn record<S: Side>(
             again.extend(read_logits(a, &ma, mb, &run.program, &e, "")?);
             a.advance(run.advance);
         }
-        let rows = logit_rows(&ma, ranks, &rec.logits, &again);
-        let worst = rows.iter().max_by(|x, y| x.kl.total_cmp(&y.kl));
+        let rows = logit_rows(a, &ma, ranks, &rec.logits, &again)?;
+        let worst = rows.iter().max_by(|x, y| x.stats.kl.total_cmp(&y.stats.kl));
         let floor = worst.map(|w| Floor {
             rows: rows.len(),
-            kl_max: w.kl,
+            kl_max: w.stats.kl,
             kl_at: w.label.clone(),
-            flips: rows.iter().filter(|r| r.flip()).count(),
+            flips: rows.iter().filter(|r| r.stats.flip()).count(),
         });
         let mut res: BTreeMap<String, BTreeMap<String, Vec<(String, Cmp)>>> = BTreeMap::new();
         let mut noisy_states = BTreeSet::new();
@@ -497,18 +545,22 @@ pub fn record<S: Side>(
                 cur = Some(r);
             }
             let sr = &run.spans[s];
-            let (out_a, st) = replay_span(a, sr, run, false, None)?;
+            let st = replay_span(a, sr, run, false, None)?;
+            let cmps = compare_outputs(a, &ma, &sr.ref_out)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
-                for (n, b) in &out_a[q] {
-                    let c = compare(ma.buffers[n].dtype, &sr.ref_out[q][n], b);
+                for (n, c) in &cmps[q] {
                     compared += 1;
                     if c.identical() {
                         clean += 1;
                     } else {
-                        findings.push(Finding::of(&run.program, &label, n, &c));
+                        findings.push(Finding::of(&run.program, &label, n, c));
                     }
-                    res.entry(run.program.clone()).or_default().entry(n.clone()).or_default().push((label.clone(), c));
+                    res.entry(run.program.clone())
+                        .or_default()
+                        .entry(n.clone())
+                        .or_default()
+                        .push((label.clone(), c.clone()));
                 }
                 for (name, d) in runs_differ(&st[q], &sr.post[q]) {
                     if d > 0 {
@@ -553,7 +605,7 @@ pub fn record<S: Side>(
                     let mut v = Vec::new();
                     for (name, len, buf) in &sr.inputs[q] {
                         let decl = &ma.buffers[name];
-                        let tapped = a.bytes(q, buf, *len)?;
+                        let tapped = a.bytes(q, buf, 0..*len)?;
                         if !is_float(decl.dtype) {
                             // sequence layout, indices, page tables: structure,
                             // not values — a random one is a workload no caller
@@ -571,11 +623,13 @@ pub fn record<S: Side>(
                     inputs.push(v);
                 }
                 let at = format!("{} span {}", run.program, sr.span.label());
-                let (out, states) = replay_span(a, sr, run, false, Some(&inputs))
+                let states = replay_span(a, sr, run, false, Some(&inputs))
                     .with_context(|| format!("A crashed under fuzz ({mode}) at {at}"))?;
+                let out = keep_outputs(a, sr)?;
                 // A violation on the reference is the reference misbehaving.
+                let names: Vec<String> = sr.ref_out[0].keys().cloned().collect();
                 violations.extend(
-                    domain_violations(a, &ma, &run.vars, "A", &out)?.into_iter().map(|v| format!("{mode} {at}: {v}")),
+                    domain_violations(a, &ma, &run.vars, "A", &names)?.into_iter().map(|v| format!("{mode} {at}: {v}")),
                 );
                 cases.push(FuzzCase { at: (r, s), inputs, out, states });
             }
@@ -723,10 +777,19 @@ fn record_run<S: Side>(
         // B starts from A's image of the run.
         let touched: Vec<String> =
             aa.state_writes.union(&ab.state_writes).filter(|s| shared.contains(s)).cloned().collect();
-        let mut a_pre: Vec<BTreeMap<String, Vec<u8>>> = Vec::new();
+        let mut a_pre: Vec<BTreeMap<String, S::Buf>> = Vec::new();
         if keep {
             for q in 0..ranks {
-                a_pre.push(touched.iter().map(|st| Ok((st.clone(), whole(a, q, st)?))).collect::<Result<_>>()?);
+                a_pre.push(
+                    touched
+                        .iter()
+                        .map(|st| {
+                            let mut b = a.alloc(q, a.state_bytes(st)?)?;
+                            a.save_state(q, st, &mut b)?;
+                            Ok((st.clone(), b))
+                        })
+                        .collect::<Result<_>>()?,
+                );
             }
         }
         a.run(pname, &e, span.a.clone())?;
@@ -734,14 +797,19 @@ fn record_run<S: Side>(
         for q in 0..ranks {
             let (mut pq, mut oq) = (Runs::new(), Runs::new());
             if keep {
+                // the write-set: the blocks the span changed, found where the
+                // state is; only those bytes come to the host
                 for st in &touched {
-                    let after = whole(a, q, st)?;
-                    let runs = diff_runs(&a_pre[q][st], &after);
-                    oq.insert(
-                        st.clone(),
-                        runs.iter().map(|(off, b)| (*off, after[*off..*off + b.len()].to_vec())).collect(),
-                    );
-                    pq.insert(st.clone(), runs);
+                    let len = a.state_bytes(st)?;
+                    let img = &a_pre[q][st];
+                    let ranges = a.changed(q, At::Scratch(img, 0..len), At::State(st, 0..len))?;
+                    let (mut before, mut after) = (Vec::new(), Vec::new());
+                    for r in ranges {
+                        before.push((r.start, a.bytes(q, img, r.clone())?));
+                        after.push((r.start, a.read_state(q, st, r)?));
+                    }
+                    pq.insert(st.clone(), before);
+                    oq.insert(st.clone(), after);
                 }
             }
             pre.push(pq);
@@ -760,10 +828,11 @@ fn record_run<S: Side>(
                 written
                     .iter()
                     .map(|n| {
-                        let bytes = a
-                            .read(q, n, live_bytes(ma, n, &e))
-                            .with_context(|| format!("reading `{n}` after {pname} span {}", span.label()))?;
-                        Ok((n.clone(), bytes))
+                        let bytes = live_bytes(ma, n, &e);
+                        let mut buf = a.alloc(q, bytes)?;
+                        a.save(q, n, bytes, &mut buf)
+                            .with_context(|| format!("keeping `{n}` after {pname} span {}", span.label()))?;
+                        Ok((n.clone(), (bytes, buf)))
                     })
                     .collect::<Result<_>>()?,
             );

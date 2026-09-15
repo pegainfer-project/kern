@@ -1,6 +1,8 @@
 //! Comparing what two sides wrote, and perturbing what a span read. Byte
 //! slices in, numbers out; the dtype says how to read them.
 
+use std::ops::Range;
+
 use kern_manifest::types::DType;
 use kern_manifest::values;
 use serde::Serialize;
@@ -51,6 +53,19 @@ pub fn compare(dt: DType, a: &[u8], b: &[u8]) -> Cmp {
 }
 
 impl Cmp {
+    /// A comparison a device kernel counted: `max_ulp` only if any float
+    /// pair was measurable.
+    pub fn from_counts(
+        n: usize,
+        n_diff: usize,
+        signed_zero: usize,
+        nan_only_one_side: usize,
+        measured: usize,
+        max_ulp: u64,
+        max_abs: f64,
+    ) -> Cmp {
+        Cmp { n, n_diff, max_ulp: (measured > 0).then_some(max_ulp), max_abs, nan_only_one_side, signed_zero }
+    }
     pub fn identical(&self) -> bool {
         self.n_diff == 0
     }
@@ -68,17 +83,15 @@ impl Cmp {
 /// whether a drift sits at the head of the distribution or in its tail.
 pub const TOP: usize = 20;
 
-/// One end-to-end logits comparison: A (lockstep, uninjected) vs B (free
-/// run) on one row of a `logits*` buffer after one program run. Measured
-/// on the distribution, not the storage: KL(A‖B) says how much probability
-/// mass moved, whatever dtype the row is kept in, and a flip within a
-/// small KL is a tie that was going to break either way. Element-wise
-/// ulps are meaningless here — a 1-ulp change of the hidden state moves
-/// every logit by about the same absolute amount, which is thousands of
-/// ulps for a logit near zero and decides nothing.
-#[derive(Clone, Debug)]
-pub struct LogitRow {
-    pub label: String,
+/// One row of a `logits*` buffer, A against B, measured on the
+/// distribution, not the storage: KL(A‖B) says how much probability mass
+/// moved, whatever dtype the row is kept in, and a flip within a small KL
+/// is a tie that was going to break either way. Element-wise ulps are
+/// meaningless here — a 1-ulp change of the hidden state moves every logit
+/// by about the same absolute amount, which is thousands of ulps for a
+/// logit near zero and decides nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogitStats {
     pub cmp: Cmp,
     pub argmax_a: usize,
     pub argmax_b: usize,
@@ -92,13 +105,38 @@ pub struct LogitRow {
     pub rank_in_b: usize,
 }
 
-impl LogitRow {
+impl LogitStats {
+    /// From what a kernel measured: A's top two values, the raw KL sum
+    /// and the counts. A NaN on one side is an unbounded move, not one to
+    /// skip: a row B poisons must never read as "moved nothing".
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        cmp: Cmp,
+        argmax_a: usize,
+        argmax_b: usize,
+        top1: f64,
+        top2: f64,
+        kl: f64,
+        top: usize,
+        rank_in_b: usize,
+    ) -> Self {
+        let kl = if cmp.nan_only_one_side == 0 && kl.is_finite() { kl.max(0.0) } else { f64::INFINITY };
+        LogitStats { cmp, argmax_a, argmax_b, margin_a: top1 - top2, kl, top, rank_in_b }
+    }
     pub fn flip(&self) -> bool {
         self.argmax_a != self.argmax_b
     }
 }
 
-pub fn logit_row(label: String, dt: DType, a: &[u8], b: &[u8]) -> LogitRow {
+/// A [`LogitStats`] with the workload position it was read at.
+#[derive(Clone, Debug)]
+pub struct LogitRow {
+    pub label: String,
+    pub stats: LogitStats,
+}
+
+/// The definition: one row on the host.
+pub fn logit_stats(dt: DType, a: &[u8], b: &[u8]) -> LogitStats {
     let (va, vb) = (values::to_f64(dt, a), values::to_f64(dt, b));
     let cmp = compare(dt, a, b);
     let order = |v: &[f64]| {
@@ -117,10 +155,11 @@ pub fn logit_row(label: String, dt: DType, a: &[u8], b: &[u8]) -> LogitRow {
     let mb = vb.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let (la, lb) = (lse(&va, top1), lse(&vb, mb));
     let kl = va.iter().zip(&vb).map(|(x, y)| (x - la).exp() * ((x - la) - (y - lb))).sum::<f64>();
-    // A NaN on one side is an unbounded move, not one to skip: a row B
-    // poisons must never read as "moved nothing".
-    let kl = if cmp.nan_only_one_side == 0 && kl.is_finite() { kl.max(0.0) } else { f64::INFINITY };
-    LogitRow { label, cmp, argmax_a, argmax_b, margin_a: top1 - top2, kl, top, rank_in_b }
+    LogitStats::from_parts(cmp, argmax_a, argmax_b, top1, top2, kl, top, rank_in_b)
+}
+
+pub fn logit_row(label: String, dt: DType, a: &[u8], b: &[u8]) -> LogitRow {
+    LogitRow { label, stats: logit_stats(dt, a, b) }
 }
 
 /// The perturbations a fuzz round cycles through, in order.
@@ -181,25 +220,21 @@ pub fn perturb(rng: &mut Rng, mode: usize, x: &[f64], row: usize, dt: DType) -> 
     v
 }
 
-/// Runs of `[offset, offset+len)` where `pre` and `post` differ (gaps under
-/// 64 bytes are bridged so a sparse update is a few runs, not thousands),
-/// with `pre`'s bytes over each run.
-pub fn diff_runs(pre: &[u8], post: &[u8]) -> Vec<(usize, Vec<u8>)> {
-    let mut runs: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < pre.len() {
-        if pre[i] == post[i] {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < pre.len() && pre[i] != post[i] {
-            i += 1;
-        }
-        match runs.last_mut() {
-            Some((_, end)) if start - *end < 64 => *end = i,
-            _ => runs.push((start, i)),
+/// The 64-byte blocks where `pre` and `post` differ, as merged byte
+/// ranges (adjacent changed blocks are one range; the last block is
+/// clipped to the length). The unit a state's write-set is found in: a
+/// kernel sets one bit per block, the host reads bits, not bytes.
+pub const BLOCK: usize = 64;
+
+pub fn changed_blocks(pre: &[u8], post: &[u8]) -> Vec<Range<usize>> {
+    let n = pre.len();
+    let block = |i: usize| i * BLOCK..((i + 1) * BLOCK).min(n);
+    let mut out: Vec<Range<usize>> = Vec::new();
+    for r in (0..n.div_ceil(BLOCK)).map(block).filter(|r| pre[r.clone()] != post[r.clone()]) {
+        match out.last_mut() {
+            Some(last) if last.end == r.start => last.end = r.end,
+            _ => out.push(r),
         }
     }
-    runs.into_iter().map(|(a, b)| (a, pre[a..b].to_vec())).collect()
+    out
 }

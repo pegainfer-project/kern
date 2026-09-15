@@ -107,12 +107,19 @@ D2H 再 H2D（qwen3-4b 604 MB × 每 run），大模型上 tap 以秒计。现�
 `Side` 里的 `Buf` 是不透明的设备侧暂存句柄：state 同步、run 前的镜像、
 快照的 frontier 输入都是 D2D（`Runtime::scratch / save_state /
 load_state / save_buffer / load_buffer`）；两个 runtime 共用设备的
-primary context，指针互相可见。CPU 只在真要判断的地方读：被快照的 run
-的写出 buffer（差异在哪、多少 ulp）、端到端的 logits 行、最后一次全量
-state 比对。qwen3-4b 的 tap 从 1.3 s 到 0.49 s；剩下的 host 侧比较
-（`compare` 的字节循环、logits 行）是下一步（roadmap：设备侧 compare /
-bitmap / logits kernel，checked-in PTX + driver JIT，host 的 `compare`
-仍是定义）。
+primary context，指针互相可见。**比较也在设备上做**：`Side` 有三个比较
+原语——`compare`（两段字节按 dtype 逐元素比，回 5 个计数）、`changed`
+（两段字节按 64 B 块出差异 bitmap，回区间；state 的 write-set 就这么找，
+不再整块读回 host 逐字节 diff）、`logits`（每行 argmax / margin / KL /
+top-20 重合 / A 的 token 在 B 里的名次，一 block 一行）——kern-runtime 里
+是三个 kernel（`compare.cu`，PTX 随源码入库、driver JIT，和 `profile.ptx`
+一个做法）。A 的参考输出、logits 行、fuzz 下的输出全留在设备侧 scratch，
+CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_blocks` /
+`logit_stats` 仍是定义，假 Side 用它们，kernel 对它们做性质测试
+（`cargo test -p kern-run --test device_compare -- --ignored`，要一张 GPU；
+每种 dtype 随机字节、每种操作数、非 64 整倍数长度、7 到 129280 列的行）。
+真正过 host 的字节只剩：fuzz 要扰动的输入、write-set 里的几 KB、有 domain
+的整数输出、e2e 的 output buffer。
 
 ## 五段
 
@@ -310,6 +317,8 @@ program 各 120–129 个 span，`load`（once）也有 span 但不算未驱动�
 - runtime 只加了不在服务路径上的原语：`run_range`（按 call 区间
   eager 执行）、`read_buffer_prefix` / `write_buffer` / `read_state_at` /
   `write_state_at`、`scratch` 与 `save_* / load_*`（设备侧暂存的 D2D
-  存取）、`time_range`（区间内逐 call event 计时）、`time_captured`
-  （graph 中位数）、`check_domain`。元素编解码在
-  `kern_manifest::values`（bf16/f16/f32/fp8e4m3/整数 ↔ f64，ulp 距离）。
+  存取）、`compare` / `changed` / `logits`（`compare.rs` + `compare.cu`
+  的三个比较 kernel，操作数 `At::{Buffer, State, Scratch}`）、`time_range`
+  （区间内逐 call event 计时）、`time_captured`（graph 中位数）、
+  `check_domain`。元素编解码在 `kern_manifest::values`
+  （bf16/f16/f32/fp8e4m3/整数 ↔ f64，ulp 距离），kernel 里逐条复刻。

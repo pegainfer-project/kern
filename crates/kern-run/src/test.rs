@@ -17,11 +17,12 @@ use crate::config::{Config, Target};
 use crate::{Caller, Weights};
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use kern_manifest::types::Provision;
+use kern_manifest::types::{DType, Provision};
 use kern_manifest::{Protocol, Verified};
 use kern_runtime::{Capacity, GroupRank, HostWeights, PeerHandle, Runtime, Scratch, Topology};
+use kern_test::compare::{Cmp, LogitStats, TOP};
 use kern_test::report::{plural, row, Report, Verdict};
-use kern_test::{Options, Side, Vars};
+use kern_test::{At, Options, Side, Vars};
 use serde_json::json;
 
 /// Flags of `kern test`; anything not given comes from the target /
@@ -310,8 +311,50 @@ impl Side for Ranks {
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Scratch) -> Result<()> {
         self.rt_mut(rank).load_buffer(buffer, bytes, from).with_context(|| format!("rank {rank}: loading `{buffer}`"))
     }
-    fn bytes(&self, rank: usize, from: &Scratch, len: usize) -> Result<Vec<u8>> {
-        self.rt(rank).read_scratch(from, len).with_context(|| format!("rank {rank}: reading {len} bytes of scratch"))
+    fn bytes(&self, rank: usize, from: &Scratch, at: Range<usize>) -> Result<Vec<u8>> {
+        self.rt(rank).read_scratch(from, at.clone()).with_context(|| format!("rank {rank}: reading scratch at {at:?}"))
+    }
+    fn compare(&self, rank: usize, dtype: DType, a: At<Scratch>, b: At<Scratch>) -> Result<Cmp> {
+        let what = name_of(&a);
+        let c = self
+            .rt(rank)
+            .compare(dtype, on_device(a), on_device(b))
+            .with_context(|| format!("rank {rank}: comparing {what}"))?;
+        Ok(cmp_of(c))
+    }
+    fn changed(&self, rank: usize, a: At<Scratch>, b: At<Scratch>) -> Result<Vec<Range<usize>>> {
+        let what = name_of(&b);
+        self.rt(rank)
+            .changed(on_device(a), on_device(b))
+            .with_context(|| format!("rank {rank}: changed blocks of {what}"))
+    }
+    fn logits(
+        &self,
+        rank: usize,
+        dtype: DType,
+        cols: usize,
+        a: At<Scratch>,
+        b: At<Scratch>,
+    ) -> Result<Vec<LogitStats>> {
+        let rows = self
+            .rt(rank)
+            .logits(dtype, cols, TOP, on_device(a), on_device(b))
+            .with_context(|| format!("rank {rank}: logits rows of {cols}"))?;
+        Ok(rows
+            .into_iter()
+            .map(|l| {
+                LogitStats::from_parts(
+                    cmp_of(l.cmp),
+                    l.argmax_a as usize,
+                    l.argmax_b as usize,
+                    l.top1,
+                    l.top2,
+                    l.kl,
+                    l.top as usize,
+                    l.rank_in_b as usize,
+                )
+            })
+            .collect())
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {
         Ok(self.rt(0).state_bytes(state)?)
@@ -352,6 +395,34 @@ impl Side for Ranks {
             self.each(&format!("timing captured `{program}`"), |c| Ok(c.rt.time_captured(program, vars, iters)?))?;
         Ok(t.into_iter().fold(0.0, f32::max))
     }
+}
+
+fn on_device(at: At<'_, Scratch>) -> kern_runtime::At<'_> {
+    match at {
+        At::Buffer(n, bytes) => kern_runtime::At::Buffer(n, bytes),
+        At::State(n, r) => kern_runtime::At::State(n, r),
+        At::Scratch(s, r) => kern_runtime::At::Scratch(s, r),
+    }
+}
+
+fn name_of(at: &At<Scratch>) -> String {
+    match at {
+        At::Buffer(n, _) => format!("`{n}`"),
+        At::State(n, _) => format!("state `{n}`"),
+        At::Scratch(..) => "scratch".into(),
+    }
+}
+
+fn cmp_of(c: kern_runtime::Cmp) -> Cmp {
+    Cmp::from_counts(
+        c.n as usize,
+        c.n_diff as usize,
+        c.signed_zero as usize,
+        c.nan_one_side as usize,
+        c.measured as usize,
+        c.max_ulp,
+        c.max_abs,
+    )
 }
 
 /// Ranks a manifest runs as: the size its topology groups share; 1

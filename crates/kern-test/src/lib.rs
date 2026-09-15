@@ -54,7 +54,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use anyhow::Result;
-use kern_manifest::types::Provision;
+use kern_manifest::types::{DType, Provision};
 use kern_manifest::Verified;
 
 pub use harness::{record, Recording};
@@ -63,6 +63,17 @@ pub use report::{Report, Summary};
 
 /// The var values one call runs at.
 pub type Vars = BTreeMap<String, u64>;
+
+/// Where bytes a comparison reads live on a rank: a buffer's live
+/// prefix, a byte range of a state, or a byte range of scratch. Nothing
+/// a verdict needs comes to the host as bytes; the side compares where
+/// the bytes are and hands back counts.
+#[derive(Clone)]
+pub enum At<'a, B> {
+    Buffer(&'a str, usize),
+    State(&'a str, Range<usize>),
+    Scratch(&'a B, Range<usize>),
+}
 
 /// One driven side: a loaded manifest, as one rank or several, plus the
 /// single sequence the workload feeds every rank as. Every method is
@@ -107,8 +118,25 @@ pub trait Side {
     fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Self::Buf) -> Result<()>;
     /// The first `bytes` of `from` into a buffer.
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Self::Buf) -> Result<()>;
-    /// The first `len` bytes of `from`, allocated on `rank`, on the host.
-    fn bytes(&self, rank: usize, from: &Self::Buf, len: usize) -> Result<Vec<u8>>;
+    /// Bytes `at` of `from`, allocated on `rank`, on the host.
+    fn bytes(&self, rank: usize, from: &Self::Buf, at: Range<usize>) -> Result<Vec<u8>>;
+
+    /// `a` against `b` element by element as `dtype`, where they are;
+    /// [`compare::compare`] is the definition.
+    fn compare(&self, rank: usize, dtype: DType, a: At<Self::Buf>, b: At<Self::Buf>) -> Result<compare::Cmp>;
+    /// The 64-byte blocks where `a` and `b` differ, as merged byte
+    /// ranges; [`compare::changed_blocks`] is the definition.
+    fn changed(&self, rank: usize, a: At<Self::Buf>, b: At<Self::Buf>) -> Result<Vec<Range<usize>>>;
+    /// Every `cols`-element row of `a` against the same row of `b`;
+    /// [`compare::logit_stats`] is the definition.
+    fn logits(
+        &self,
+        rank: usize,
+        dtype: DType,
+        cols: usize,
+        a: At<Self::Buf>,
+        b: At<Self::Buf>,
+    ) -> Result<Vec<compare::LogitStats>>;
 
     fn state_bytes(&self, state: &str) -> Result<usize>;
     fn read_state(&self, rank: usize, state: &str, at: Range<usize>) -> Result<Vec<u8>>;

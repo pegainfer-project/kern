@@ -111,11 +111,6 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
 - kern test 后续（harness 已是独立 crate `kern-test`，`Side` 的 `Buf` 是
   设备侧句柄、state 同步全 D2D；先录 A 再放 B、一侧可为多 rank，
   2026-09-15）：
-  - 设备侧比较：compare / 差异 bitmap / logits 行（argmax、margin、
-    Δ、KL）各一个 kernel，checked-in PTX + driver JIT（先例
-    `kern-runtime/src/profile.ptx`），host 的 `compare` 仍是定义，kernel
-    对它做性质测试；之后 host 只读事实（计数、ulp、行号），快照的输出
-    也不再下设备。live 区域按 var 值只读活跃前缀。
   - 事件模型：list → record → run → report 四个动词，一条 case 一个事
     件，报告是事件的折叠（现在 `run` 一口气产出 `Report`）；step 级（整
     个 program 一步）在 span 与 sequence 之间补上；每个 program 快照第

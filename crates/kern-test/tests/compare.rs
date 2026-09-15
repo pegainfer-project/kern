@@ -4,7 +4,7 @@
 
 use kern_manifest::types::DType;
 use kern_manifest::values::{from_f64, to_f64};
-use kern_test::compare::{compare, diff_runs, logit_row, perturb, Cmp, MODES, TOP};
+use kern_test::compare::{changed_blocks, compare, logit_stats, perturb, Cmp, BLOCK, MODES, TOP};
 use kern_test::workload::Rng;
 
 const FLOATS: [DType; 4] = [DType::Bf16, DType::F16, DType::F32, DType::Fp8E4m3];
@@ -101,25 +101,25 @@ fn row(dt: DType, v: &[f64]) -> Vec<u8> {
 }
 
 #[test]
-fn a_logit_row_knows_its_argmax_margin_kl_and_top_overlap() {
+fn logit_stats_know_the_argmax_margin_kl_and_top_overlap() {
     let dt = DType::F32;
     let a = [0.5, 2.0, -1.0, 1.75];
     let ra = row(dt, &a);
-    let same = logit_row("r".into(), dt, &ra, &ra);
+    let same = logit_stats(dt, &ra, &ra);
     assert_eq!((same.argmax_a, same.argmax_b, same.flip(), same.rank_in_b), (1, 1, false, 1));
     assert_eq!((same.kl, same.margin_a, same.top), (0.0, 0.25, 4));
     // shifting every logit by a constant leaves argmax, KL and the top set alone
-    let shifted = logit_row("r".into(), dt, &ra, &row(dt, &a.map(|x| x + 3.0)));
+    let shifted = logit_stats(dt, &ra, &row(dt, &a.map(|x| x + 3.0)));
     assert_eq!((shifted.flip(), shifted.top, shifted.cmp.n_diff), (false, 4, 4));
     assert!(shifted.kl.abs() < 1e-9, "{}", shifted.kl);
     // a near tie broken the other way: a flip, A's token now second in B,
     // almost no mass moved
     let t = [0.5, 2.0, -1.0, 1.99];
-    let tie = logit_row("r".into(), dt, &row(dt, &t), &row(dt, &[0.5, 1.99, -1.0, 2.0]));
+    let tie = logit_stats(dt, &row(dt, &t), &row(dt, &[0.5, 1.99, -1.0, 2.0]));
     assert_eq!((tie.flip(), tie.argmax_b, tie.rank_in_b, tie.top), (true, 3, 2, 4));
     assert!(tie.kl > 0.0 && tie.kl < 1e-3, "{}", tie.kl);
     // a confident token displaced: the same flip, far more mass moved
-    let wide = logit_row("r".into(), dt, &row(dt, &[0.0, 5.0, 0.0, 1.0]), &row(dt, &[0.0, 1.0, 0.0, 5.0]));
+    let wide = logit_stats(dt, &row(dt, &[0.0, 5.0, 0.0, 1.0]), &row(dt, &[0.0, 1.0, 0.0, 5.0]));
     assert_eq!((wide.flip(), wide.argmax_b, wide.rank_in_b), (true, 3, 2));
     assert!(wide.kl > 1.0, "{}", wide.kl);
     // the top set is A's TOP most likely tokens found among B's
@@ -127,10 +127,10 @@ fn a_logit_row_knows_its_argmax_margin_kl_and_top_overlap() {
     let va: Vec<f64> = (0..n).map(|i| i as f64).collect();
     let mut vb = va.clone();
     vb.swap(n - 1, 0); // A's best becomes B's worst, A's worst B's best
-    let moved = logit_row("r".into(), dt, &row(dt, &va), &row(dt, &vb));
+    let moved = logit_stats(dt, &row(dt, &va), &row(dt, &vb));
     assert_eq!((moved.top, moved.rank_in_b, moved.argmax_b), (TOP - 1, n, 0));
     // a NaN on one side is an unbounded move
-    let nan = logit_row("r".into(), dt, &ra, &row(dt, &[0.5, f64::NAN, -1.0, 1.75]));
+    let nan = logit_stats(dt, &ra, &row(dt, &[0.5, f64::NAN, -1.0, 1.75]));
     assert!(nan.kl.is_infinite() && nan.cmp.nan_only_one_side == 1);
 }
 
@@ -182,30 +182,34 @@ fn every_perturbation_mode_keeps_shape_range_and_its_own_promise() {
 }
 
 #[test]
-fn diff_runs_patch_post_back_into_pre_and_bridge_only_short_gaps() {
-    let mut rng = Rng(7);
-    for n in [0usize, 1, 63, 64, 65, 200, 1000] {
-        for density in [0u64, 1, 3, 50] {
-            let pre: Vec<u8> = (0..n).map(|_| rng.draw() as u8).collect();
-            let post: Vec<u8> =
-                pre.iter().map(|&b| if density > 0 && rng.below(100) < density { b ^ 0x5a } else { b }).collect();
-            let runs = diff_runs(&pre, &post);
-            let mut patched = post.clone();
-            for (at, bytes) in &runs {
-                patched[*at..at + bytes.len()].copy_from_slice(bytes);
+fn changed_blocks_name_every_block_that_differs_and_only_those() {
+    let mut rng = Rng(3);
+    for n in [0usize, 1, BLOCK - 1, BLOCK, BLOCK + 1, 10 * BLOCK + 7] {
+        for _ in 0..20 {
+            let pre: Vec<u8> = (0..n).map(|_| rng.below(256) as u8).collect();
+            let mut post = pre.clone();
+            for _ in 0..rng.below(4) {
+                if n > 0 {
+                    let at = rng.below(n as u64) as usize;
+                    post[at] ^= 1 + rng.below(255) as u8;
+                }
             }
-            assert_eq!(patched, pre, "n {n} density {density}");
-            for w in runs.windows(2) {
-                let (end, next) = (w[0].0 + w[0].1.len(), w[1].0);
-                assert!(next >= end + 64, "runs {end}..{next} should have been one");
+            let ranges = changed_blocks(&pre, &post);
+            let block = |lo: usize| lo..(lo + BLOCK).min(n);
+            // every differing byte is covered; a range is whole blocks that all
+            // differ, clipped at the end; no two ranges touch
+            for i in (0..n).filter(|&i| pre[i] != post[i]) {
+                assert!(ranges.iter().any(|r| r.contains(&i)), "{n}: byte {i} not covered by {ranges:?}");
             }
-            for (at, bytes) in &runs {
-                assert!(
-                    pre[*at] != post[*at] && pre[at + bytes.len() - 1] != post[at + bytes.len() - 1],
-                    "a run has a matching end"
-                );
+            for r in &ranges {
+                assert!(r.start % BLOCK == 0 && (r.end % BLOCK == 0 || r.end == n) && r.start < r.end, "{n}: {r:?}");
+                for lo in (r.start..r.end).step_by(BLOCK) {
+                    assert_ne!(pre[block(lo)], post[block(lo)], "{n}: {r:?} has a clean block at {lo}");
+                }
             }
-            assert_eq!(runs.is_empty(), pre == post);
+            for w in ranges.windows(2) {
+                assert!(w[0].end < w[1].start, "{n}: {:?} touches {:?}", w[0], w[1]);
+            }
         }
     }
 }

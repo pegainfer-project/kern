@@ -16,7 +16,8 @@ use kern_manifest::protocol::Axis;
 use kern_manifest::types::{Arg, DType, Dim, Fill, Provision};
 use kern_manifest::values;
 use kern_manifest::{verify, Manifest, Protocol, Verified};
-use kern_test::{Options, Side, Vars};
+use kern_test::compare::{changed_blocks, compare, logit_stats, Cmp, LogitStats};
+use kern_test::{At, Options, Side, Vars};
 
 pub const D: usize = 4;
 pub const VOCAB: usize = 16;
@@ -372,6 +373,16 @@ impl Rank {
     }
 }
 
+impl Fake {
+    fn at<'a>(&'a self, rank: usize, at: At<'a, Vec<u8>>) -> &'a [u8] {
+        match at {
+            At::Buffer(name, bytes) => &self.ranks[rank].bufs[name][..bytes],
+            At::State(name, r) => &self.ranks[rank].states[name][r],
+            At::Scratch(b, r) => &b[r],
+        }
+    }
+}
+
 impl Side for Fake {
     type Buf = Vec<u8>;
 
@@ -447,8 +458,26 @@ impl Side for Fake {
         self.ranks[rank].bufs.get_mut(buffer).unwrap()[..bytes].copy_from_slice(&from[..bytes]);
         Ok(())
     }
-    fn bytes(&self, _rank: usize, from: &Vec<u8>, len: usize) -> Result<Vec<u8>> {
-        Ok(from[..len].to_vec())
+    fn bytes(&self, _rank: usize, from: &Vec<u8>, at: Range<usize>) -> Result<Vec<u8>> {
+        Ok(from[at].to_vec())
+    }
+    fn compare(&self, rank: usize, dtype: DType, a: At<Vec<u8>>, b: At<Vec<u8>>) -> Result<Cmp> {
+        Ok(compare(dtype, self.at(rank, a), self.at(rank, b)))
+    }
+    fn changed(&self, rank: usize, a: At<Vec<u8>>, b: At<Vec<u8>>) -> Result<Vec<Range<usize>>> {
+        Ok(changed_blocks(self.at(rank, a), self.at(rank, b)))
+    }
+    fn logits(
+        &self,
+        rank: usize,
+        dtype: DType,
+        cols: usize,
+        a: At<Vec<u8>>,
+        b: At<Vec<u8>>,
+    ) -> Result<Vec<LogitStats>> {
+        let row = cols * dtype.bytes() as usize;
+        let (x, y) = (self.at(rank, a), self.at(rank, b));
+        Ok(x.chunks_exact(row).zip(y.chunks_exact(row)).map(|(p, q)| logit_stats(dtype, p, q)).collect())
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {
         Ok(self.ranks[0].states[state].len())

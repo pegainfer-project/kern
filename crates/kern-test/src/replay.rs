@@ -10,13 +10,14 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::compare::{compare, diff_runs, Cmp, LogitRow, MODES, TOP};
+use crate::compare::{Cmp, LogitRow, MODES, TOP};
 use crate::diff::{access, live_bytes};
 use crate::harness::{
-    at_rank, domain_violations, image, logit_rows, read_logits, replay_span, runs_differ, whole, Recording,
+    at_rank, compare_outputs, domain_violations, image, logit_rows, read_logits, replay_span, runs_differ, Recording,
 };
 use crate::report::*;
-use crate::{Options, Side, Vars};
+use crate::{At, Options, Side, Vars};
+use kern_manifest::types::DType;
 
 /// How B's write to a state compares with A's, on this span: bytes of A's
 /// write-set (`set`), how many of them B wrote differently (`n_diff`), and
@@ -65,37 +66,49 @@ pub fn replay<S: Side>(
                 }
             }
             let kept = sr.pre.iter().any(|r| !r.is_empty());
-            let mut b_pre: Vec<BTreeMap<String, Vec<u8>>> = Vec::new();
+            let mut b_pre: Vec<BTreeMap<String, S::Buf>> = Vec::new();
             if kept {
                 for q in 0..ranks {
-                    b_pre.push(sr.pre[q].keys().map(|st| Ok((st.clone(), whole(b, q, st)?))).collect::<Result<_>>()?);
+                    b_pre.push(
+                        sr.pre[q]
+                            .keys()
+                            .map(|st| {
+                                let mut img = b.alloc(q, b.state_bytes(st)?)?;
+                                b.save_state(q, st, &mut img)?;
+                                Ok((st.clone(), img))
+                            })
+                            .collect::<Result<_>>()?,
+                    );
                 }
             }
             b.run(p, e, sr.span.b.clone())?;
+            let cmps = compare_outputs(b, ma, &sr.ref_out)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
-                for (n, a_bytes) in &sr.ref_out[q] {
-                    let c = compare(ma.buffers[n].dtype, a_bytes, &b.read(q, n, a_bytes.len())?);
-                    local_res.entry(p.into()).or_default().entry(n.clone()).or_default().push((label.clone(), c));
+                for (n, c) in &cmps[q] {
+                    local_res
+                        .entry(p.into())
+                        .or_default()
+                        .entry(n.clone())
+                        .or_default()
+                        .push((label.clone(), c.clone()));
                 }
                 for (st, runs) in &sr.pre[q] {
-                    let b_post = whole(b, q, st)?;
+                    let len = b.state_bytes(st)?;
+                    let img = &b_pre[q][st];
                     let set: usize = runs.iter().map(|(_, b)| b.len()).sum();
-                    let n_diff: usize = sr.post[q][st]
-                        .iter()
-                        .map(|(off, ap)| (0..ap.len()).filter(|i| ap[*i] != b_post[off + i]).count())
-                        .sum();
+                    // A's write-set is small and comes to the host; the rest
+                    // of the state is compared where it is
+                    let (mut n_diff, mut inside) = (0usize, 0usize);
+                    for (off, ap) in &sr.post[q][st] {
+                        let now = b.read_state(q, st, *off..off + ap.len())?;
+                        let was = b.bytes(q, img, *off..off + ap.len())?;
+                        n_diff += ap.iter().zip(&now).filter(|(x, y)| x != y).count();
+                        inside += was.iter().zip(&now).filter(|(x, y)| x != y).count();
+                    }
+                    let total = b.compare(q, DType::U8, At::Scratch(img, 0..len), At::State(st, 0..len))?.n_diff;
                     // bytes B changed that lie outside A's write-set
-                    let outside: usize = diff_runs(&b_pre[q][st], &b_post)
-                        .iter()
-                        .map(|(boff, bb)| {
-                            (0..bb.len())
-                                .filter(|i| {
-                                    !runs.iter().any(|(aoff, ab)| (*aoff..aoff + ab.len()).contains(&(boff + i)))
-                                })
-                                .count()
-                        })
-                        .sum();
+                    let outside = total - inside;
                     local_states
                         .entry(p.into())
                         .or_default()
@@ -179,7 +192,7 @@ pub fn replay<S: Side>(
     let mut e2e_differs: Vec<String> = Vec::new();
     for (name, per_rank) in &rec.outputs {
         for (q, a_bytes) in per_rank.iter().enumerate() {
-            let c = compare(ma.buffers[name].dtype, a_bytes, &b.read(q, name, a_bytes.len())?);
+            let c = crate::compare::compare(ma.buffers[name].dtype, a_bytes, &b.read(q, name, a_bytes.len())?);
             if !c.value_identical() {
                 e2e_differs.push(at_rank(ranks, q, name));
             }
@@ -191,17 +204,14 @@ pub fn replay<S: Side>(
     for (q, img) in rec.states.iter().enumerate() {
         for name in &shared {
             let len = b.state_bytes(name)?;
-            let a_bytes = b.bytes(q, &img[name], len)?;
-            let b_bytes = b.read_state(q, name, 0..len)?;
+            let d = b.compare(q, DType::U8, At::Scratch(&img[name], 0..len), At::State(name, 0..len))?.n_diff;
             // KERN_TEST_DUMP=<dir>: both sides' final image of every state, for
             // locating a whole-state difference the spans do not explain.
             if let Ok(dir) = std::env::var("KERN_TEST_DUMP") {
-                std::fs::write(format!("{dir}/{name}-r{q}-a.bin"), &a_bytes)?;
-                std::fs::write(format!("{dir}/{name}-r{q}-b.bin"), &b_bytes)?;
+                std::fs::write(format!("{dir}/{name}-r{q}-a.bin"), b.bytes(q, &img[name], 0..len)?)?;
+                std::fs::write(format!("{dir}/{name}-r{q}-b.bin"), b.read_state(q, name, 0..len)?)?;
             }
-            let d =
-                a_bytes.iter().zip(&b_bytes).filter(|(p, q)| p != q).count() + a_bytes.len().abs_diff(b_bytes.len());
-            e2e_states.push(StateE2e { name: at_rank(ranks, q, name), bytes: a_bytes.len(), differ: d });
+            e2e_states.push(StateE2e { name: at_rank(ranks, q, name), bytes: len, differ: d });
         }
     }
     let (findings, omitted) = cap(all_local.clone(), Finding::severity);
@@ -221,41 +231,41 @@ pub fn replay<S: Side>(
 
     // ---- 2b. logits: the end-to-end oracle
     let t_log = Instant::now();
-    let logit_rows = logit_rows(ma, ranks, &rec.logits, &b_logits);
+    let logit_rows = logit_rows(b, ma, ranks, &rec.logits, &b_logits)?;
     let have_logits = !logit_rows.is_empty();
-    let logits_bit = have_logits && logit_rows.iter().all(|r| r.cmp.identical());
-    let kl_max = logit_rows.iter().map(|r| r.kl).fold(0.0, f64::max);
-    let n_flips = logit_rows.iter().filter(|r| r.flip()).count();
-    let n_within = logit_rows.iter().filter(|r| r.flip() && r.kl <= o.logit_kl).count();
-    let wide_flip = logit_rows.iter().find(|r| r.flip() && r.kl > o.logit_kl);
+    let logits_bit = have_logits && logit_rows.iter().all(|r| r.stats.cmp.identical());
+    let kl_max = logit_rows.iter().map(|r| r.stats.kl).fold(0.0, f64::max);
+    let n_flips = logit_rows.iter().filter(|r| r.stats.flip()).count();
+    let n_within = logit_rows.iter().filter(|r| r.stats.flip() && r.stats.kl <= o.logit_kl).count();
+    let wide_flip = logit_rows.iter().find(|r| r.stats.flip() && r.stats.kl > o.logit_kl);
     let logits_within = have_logits && kl_max <= o.logit_kl;
-    let worst_kl = logit_rows.iter().max_by(|x, y| x.kl.total_cmp(&y.kl));
+    let worst_kl = logit_rows.iter().max_by(|x, y| x.stats.kl.total_cmp(&y.stats.kl));
     let logits_at = worst_kl.map_or(String::new(), |w| w.label.clone());
-    let worst_top = logit_rows.iter().min_by_key(|r| r.top);
-    let top_full = |r: &&LogitRow| r.top == TOP.min(r.cmp.n);
+    let worst_top = logit_rows.iter().min_by_key(|r| r.stats.top);
+    let top_full = |r: &&LogitRow| r.stats.top == TOP.min(r.stats.cmp.n);
     let logits = Logits {
         rows: logit_rows.len(),
         runs: rec.logits.len(),
-        differ: logit_rows.iter().filter(|r| !r.cmp.identical()).count(),
+        differ: logit_rows.iter().filter(|r| !r.stats.cmp.identical()).count(),
         flips: n_flips,
         within: n_within,
         kl_max,
         kl_at: logits_at.clone(),
         limit_kl: o.logit_kl,
-        top_min: worst_top.map_or(0, |w| w.top),
+        top_min: worst_top.map_or(0, |w| w.stats.top),
         top_at: worst_top.map_or(String::new(), |w| w.label.clone()),
         top_differ: logit_rows.iter().filter(|r| !top_full(r)).count(),
         flipped: logit_rows
             .iter()
-            .filter(|r| r.flip())
+            .filter(|r| r.stats.flip())
             .map(|r| Flip {
                 row: r.label.clone(),
-                argmax_a: r.argmax_a,
-                argmax_b: r.argmax_b,
-                margin_a: r.margin_a,
-                kl: r.kl,
-                rank_in_b: r.rank_in_b,
-                within: r.kl <= o.logit_kl,
+                argmax_a: r.stats.argmax_a,
+                argmax_b: r.stats.argmax_b,
+                margin_a: r.stats.margin_a,
+                kl: r.stats.kl,
+                rank_in_b: r.stats.rank_in_b,
+                within: r.stats.kl <= o.logit_kl,
             })
             .collect(),
         elapsed_s: elapsed(&t_log),
@@ -264,8 +274,8 @@ pub fn replay<S: Side>(
     sum.logits = Some(logits);
     let logit_detail: Vec<Value> = logit_rows
         .iter()
-        .filter(|r| !r.cmp.identical())
-        .map(|r| json!({"row": r.label, "cmp": r.cmp, "argmax_a": r.argmax_a, "argmax_b": r.argmax_b, "margin_a": r.margin_a, "kl": r.kl, "top": r.top, "rank_in_b": r.rank_in_b}))
+        .filter(|r| !r.stats.cmp.identical())
+        .map(|r| json!({"row": r.label, "cmp": r.stats.cmp, "argmax_a": r.stats.argmax_a, "argmax_b": r.stats.argmax_b, "margin_a": r.stats.margin_a, "kl": r.stats.kl, "top": r.stats.top, "rank_in_b": r.stats.rank_in_b}))
         .collect();
 
     // ---- 3. noise floor: measured on A while it was loaded
@@ -303,9 +313,10 @@ pub fn replay<S: Side>(
                 }
                 let sr = &run.spans[s];
                 let at = format!("{} span {}", run.program, sr.span.label());
-                let (out_b, st_b) = replay_span(b, sr, run, true, Some(&case.inputs)).with_context(|| {
+                let st_b = replay_span(b, sr, run, true, Some(&case.inputs)).with_context(|| {
                     format!("B crashed under fuzz ({mode}) at {at}; the CUDA context is unusable past this point")
                 })?;
+                let cmps = compare_outputs(b, ma, &case.out)?;
                 for q in 0..ranks {
                     let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
                     // on the span's write-set, like the tap
@@ -315,8 +326,7 @@ pub fn replay<S: Side>(
                                 .push(format!("{mode} {} state {name}: {d} bytes differ", at_rank(ranks, q, &at)));
                         }
                     }
-                    for (name, bb) in &out_b[q] {
-                        let c = compare(ma.buffers[name].dtype, &case.out[q][name], bb);
+                    for (name, c) in &cmps[q] {
                         compared += 1;
                         if c.identical() {
                             n_bit += 1;
@@ -324,15 +334,16 @@ pub fn replay<S: Side>(
                             n_val += c.value_identical() as usize;
                             all_fuzz.push(FuzzFinding {
                                 mode: mode.to_string(),
-                                at: Finding::of(&run.program, &label, name, &c),
+                                at: Finding::of(&run.program, &label, name, c),
                             });
                         }
                     }
                 }
                 // Post-condition: produced values must lie in the buffer's
                 // declared domain.
+                let names: Vec<String> = case.out[0].keys().cloned().collect();
                 violations.extend(
-                    domain_violations(b, mb, &run.vars, "B", &out_b)?.into_iter().map(|v| format!("{mode} {at}: {v}")),
+                    domain_violations(b, mb, &run.vars, "B", &names)?.into_iter().map(|v| format!("{mode} {at}: {v}")),
                 );
             }
         }
@@ -515,7 +526,7 @@ pub fn replay<S: Side>(
             1,
             format!(
                 "B changes the argmax end-to-end at {}: A {} → B {}, KL {:.2e} above the limit {:.0e} (A's margin {:.4}, A's token is B's #{})",
-                f.label, f.argmax_a, f.argmax_b, f.kl, o.logit_kl, f.margin_a, f.rank_in_b
+                f.label, f.stats.argmax_a, f.stats.argmax_b, f.stats.kl, o.logit_kl, f.stats.margin_a, f.stats.rank_in_b
             ),
         )
     } else if !undriven.is_empty() {
