@@ -142,7 +142,7 @@ pub(crate) struct Caller {
 }
 
 impl Caller {
-    pub(crate) fn into_runtime(self) -> Runtime {
+    fn into_runtime(self) -> Runtime {
         self.rt
     }
 
