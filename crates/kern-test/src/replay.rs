@@ -1,20 +1,17 @@
 //! Replaying B against a [`Recording`] of A: the workload with every run
 //! started from A's state image and every span from A's inputs (so what
 //! B writes is the span's own doing), B's free run for the end-to-end
-//! logits, the kept spans under the perturbations A saw, B's timings, and
-//! the verdict over all of it.
+//! logits, B's timings, and the verdict over all of it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::compare::{Cmp, LogitRow, MODES, TOP};
+use crate::compare::{Cmp, LogitRow, TOP};
 use crate::diff::{access, live_bytes};
-use crate::harness::{
-    at_rank, compare_outputs, domain_violations, image, logit_rows, read_logits, replay_span, runs_differ, Recording,
-};
+use crate::harness::{at_rank, compare_outputs, domain_violations, image, logit_rows, read_logits, Recording};
 use crate::report::*;
 use crate::{At, Options, Side, Vars};
 use kern_manifest::types::DType;
@@ -200,6 +197,11 @@ pub fn replay<S: Side>(
         }
     }
     let e2e_outputs_identical = e2e_differs.is_empty();
+    // Post-condition on what a caller would get: every output lies in
+    // its declared domain.
+    let names: Vec<String> = rec.outputs.keys().cloned().collect();
+    let vars = rec.runs.last().map(|r| r.vars.clone()).unwrap_or_default();
+    let violations = domain_violations(b, mb, &vars, "B", &names)?;
     let mut e2e_states = Vec::new();
     for (q, img) in rec.states.iter().enumerate() {
         for name in &shared {
@@ -222,10 +224,12 @@ pub fn replay<S: Side>(
         findings,
         omitted,
         outputs,
+        violations,
         states: e2e_states,
         one_sided: rec.one_sided.iter().cloned().collect(),
         undriven: undriven.clone(),
     };
+    let domain_ok = local.violations.is_empty();
     out(&local.lines());
     sum.local = Some(local);
 
@@ -292,85 +296,7 @@ pub fn replay<S: Side>(
     // only the latter says whether a flip beyond the limit is B's doing.
     let a_reproduces = floor.as_ref().is_none_or(|f| f.kl_max <= o.logit_kl && f.flips == 0);
 
-    // ---- 4. fuzz: the kept spans on B, with the inputs A saw
-    let mut fuzz_ok = true;
-    let mut fuzz_identical = true; // value-identical under every distribution
-    let mut fuzz_bit = true;
-    let mut all_fuzz: Vec<FuzzFinding> = Vec::new();
-    if let Some(fz) = &rec.fuzz {
-        let t_f = Instant::now();
-        let mut violations = fz.violations.clone();
-        let mut state_diffs = Vec::new();
-        let (mut compared, mut n_bit, mut n_val) = (0usize, 0usize, 0usize);
-        for (mode, cases) in &fz.rounds {
-            let mut cur = None;
-            for case in cases {
-                let (r, s) = case.at;
-                let run = &rec.runs[r];
-                if cur != Some(r) {
-                    image(b, run)?;
-                    cur = Some(r);
-                }
-                let sr = &run.spans[s];
-                let at = format!("{} span {}", run.program, sr.span.label());
-                let st_b = replay_span(b, sr, run, true, Some(&case.inputs)).with_context(|| {
-                    format!("B crashed under fuzz ({mode}) at {at}; the CUDA context is unusable past this point")
-                })?;
-                let cmps = compare_outputs(b, ma, &case.out)?;
-                for q in 0..ranks {
-                    let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
-                    // on the span's write-set, like the tap
-                    for (name, d) in runs_differ(&case.states[q], &st_b[q]) {
-                        if d > 0 {
-                            state_diffs
-                                .push(format!("{mode} {} state {name}: {d} bytes differ", at_rank(ranks, q, &at)));
-                        }
-                    }
-                    for (name, c) in &cmps[q] {
-                        compared += 1;
-                        if c.identical() {
-                            n_bit += 1;
-                        } else {
-                            n_val += c.value_identical() as usize;
-                            all_fuzz.push(FuzzFinding {
-                                mode: mode.to_string(),
-                                at: Finding::of(&run.program, &label, name, c),
-                            });
-                        }
-                    }
-                }
-                // Post-condition: produced values must lie in the buffer's
-                // declared domain.
-                let names: Vec<String> = case.out[0].keys().cloned().collect();
-                violations.extend(
-                    domain_violations(b, mb, &run.vars, "B", &names)?.into_iter().map(|v| format!("{mode} {at}: {v}")),
-                );
-            }
-        }
-        fuzz_ok = violations.is_empty();
-        fuzz_bit = n_bit == compared && state_diffs.is_empty();
-        fuzz_identical = n_bit + n_val == compared && state_diffs.is_empty();
-        let not_tapped = rec.not_tapped();
-        let (findings, omitted) = cap(all_fuzz.clone(), |f| f.at.severity());
-        let fuzz = Fuzz {
-            rounds: o.fuzz,
-            modes: MODES.iter().take(o.fuzz).map(|m| m.to_string()).collect(),
-            compared,
-            bit_identical: n_bit,
-            value_identical: n_val,
-            findings,
-            omitted,
-            violations,
-            state_diffs,
-            not_tapped,
-            integers_kept: fz.ints_kept.clone(),
-            elapsed_s: elapsed(&t_f),
-        };
-        out(&fuzz.lines());
-        sum.fuzz = Some(fuzz);
-    }
-
-    // ---- 5. perf: B's side of every timing, then attribution
+    // ---- 4. perf: B's side of every timing, then attribution
     if let Some(pf) = &rec.perf {
         let t_p = Instant::now();
         // (program, kernel) -> per side (bytes, ms, count)
@@ -519,8 +445,8 @@ pub fn replay<S: Side>(
 
     // ---- verdict
     let n_rows = logit_rows.len();
-    let (code, text) = if !fuzz_ok {
-        (1, "B violates a declared domain (or crashed) under fuzz".to_string())
+    let (code, text) = if !domain_ok {
+        (1, "B writes a value outside a declared domain end to end".to_string())
     } else if let (Some(f), true) = (wide_flip, a_reproduces) {
         (
             1,
@@ -531,9 +457,9 @@ pub fn replay<S: Side>(
         )
     } else if !undriven.is_empty() {
         (2, "a changed program was not tapped — the workload driver can't stage it".to_string())
-    } else if local_bit && fuzz_bit {
-        (0, "bit-identical at every span, real and perturbed inputs".to_string())
-    } else if local_identical && fuzz_identical {
+    } else if local_bit {
+        (0, "bit-identical at every span".to_string())
+    } else if local_identical {
         (0, "value-identical at every span (only signed zeros differ)".to_string())
     } else if logits_bit {
         (0, format!("spans differ, but the end-to-end logits are bit-identical on all {n_rows} rows"))
@@ -550,7 +476,7 @@ pub fn replay<S: Side>(
                 }
             ),
         )
-    } else if within_noise && fuzz_identical {
+    } else if within_noise {
         (0, "differences at every span lie within A's own noise floor".to_string())
     } else if have_logits {
         let band = match &floor {
@@ -572,7 +498,7 @@ pub fn replay<S: Side>(
     sum.verdict = Verdict::new(code, text, elapsed(&t_start) + rec.record_s + rec.load_s);
     let detail = json!({
         "within_noise": within_noise, "end_to_end_outputs_differ": e2e_differs, "end_to_end_outputs_identical": e2e_outputs_identical,
-        "local": all_local, "logit_rows": logit_detail, "noise": all_noise, "fuzz": all_fuzz,
+        "local": all_local, "logit_rows": logit_detail, "noise": all_noise,
     });
     Ok(Report { summary: sum, detail })
 }

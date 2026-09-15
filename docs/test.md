@@ -20,7 +20,7 @@
 shell 里 for 一下。target 的名字用户随便起，kern 不解释。
 
 报告走 stdout，一行一个事实：行首是段名（`diff` / `tap` / `local` /
-`logits` / `noise` / `fuzz` / `perf` / `sweep` / `roofline`），事实之间用
+`logits` / `noise` / `perf` / `sweep` / `roofline`），事实之间用
 ` · `，两边用 `a → b`，段耗时在行尾；**最后一行以 verdict 开头**（`PASS` /
 `FAIL` / `INCONCLUSIVE`，同退出码 0 / 1 / 2），`tail -1 | cut -d' ' -f1`
 就是结论。相同的只给计数（`900/900 bit-identical`），不同的才点名，最坏的
@@ -36,7 +36,7 @@ stderr 默认安静（`RUST_LOG=debug` 看 runtime 装载）。
 call 一字不动——纯 impl 替换。两份 manifest 共用一个 `--kernels`
 目录：module 按 sha256 解析，目录里放着两边各自钉的版本即可（`tools/
 extract_kernels.sh` 对 A、B 各跑一次，只增不减）。`--capacity` 会向下
-对齐到 manifest 的页单位，fuzz 的 `slot_mapping` 不会落进半页。
+对齐到 manifest 的页单位。
 
 ## 设计：先录 A，再放 B，之后全是 span 级
 
@@ -44,7 +44,7 @@ extract_kernels.sh` 对 A、B 各跑一次，只增不减）。`--capacity` 会�
 workload，每个 program run 起点的 state 镜像、每个 span 的 frontier 输入
 与参考输出都留在设备上）和 **replay**（B 从 A 的镜像起跑同一 workload，
 每个 span 先写进 A 的输入再跑，之后再从零 state 自由跑一遍给端到端
-logits）。噪声地板、fuzz、计时都在各自那一侧按 span 重放：把 frontier
+logits）。噪声地板、计时都在各自那一侧按 span 重放：把 frontier
 输入写回去、`run_range` 跑那几个 call、读写出的 buffer。成本随 span 大小
 走，不随模型走。
 
@@ -52,8 +52,7 @@ logits）。噪声地板、fuzz、计时都在各自那一侧按 span 重放：�
 Flash EP4 每 rank 119 GB 权重）也能测，代价是装载两次。录下来的东西
 （`Side::Buf`）是设备侧句柄，活得比分配它的那一侧长：两次装载共用 primary
 context，B 直接 D2D 读 A 的镜像；只有要下判断的字节走 host。A 的噪声地板
-在 A 还在时测（每个保留的 span 重放对自己）；fuzz 的扰动输入和 A 在其上
-的输出也在那时录下，B 之后拿同一份输入重放；A 的计时同理。
+在 A 还在时测（每个保留的 span 重放对自己）；A 的计时同理。
 
 **端到端只看 logits，不生成。** 每个 span bit 相同 ⇒ 整体必相同，不需要
 再证；span 有差异时，oracle 是 B 自由跑同一 workload 后每一步的 `logits`
@@ -113,15 +112,15 @@ primary context，指针互相可见。**比较也在设备上做**：`Side` 有
 不再整块读回 host 逐字节 diff）、`logits`（每行 argmax / margin / KL /
 top-20 重合 / A 的 token 在 B 里的名次，一 block 一行）——kern-runtime 里
 是三个 kernel（`compare.cu`，PTX 随源码入库、driver JIT，和 `profile.ptx`
-一个做法）。A 的参考输出、logits 行、fuzz 下的输出全留在设备侧 scratch，
+一个做法）。A 的参考输出、logits 行全留在设备侧 scratch，
 CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_blocks` /
 `logit_stats` 仍是定义，假 Side 用它们，kernel 对它们做性质测试
 （`cargo test -p kern-run --test device_compare -- --ignored`，要一张 GPU；
 每种 dtype 随机字节、每种操作数、非 64 整倍数长度、7 到 129280 列的行）。
-真正过 host 的字节只剩：fuzz 要扰动的输入、write-set 里的几 KB、有 domain
-的整数输出、e2e 的 output buffer。
+真正过 host 的字节只剩：write-set 里的几 KB、有 domain 的整数输出、e2e
+的 output buffer。
 
-## 五段
+## 四段
 
 1. **DIFF（静态）**：逐 kernel 比接口（`params`）和实现（`impl`），分
    interface / impl / added / removed；逐 program 用 LCS 对齐两边的
@@ -189,20 +188,7 @@ CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_bl
    逐位可复现，band 为零；仍不 clean 才是 A 真的不确定（atomics 之类），
    此时 B 按这条带子判（`--no-noise` 跳过）。早先没有复位时 A 自比差
    上百 MB，band 无限宽，B 在 state 上的真错误全躲在带内。
-4. **FUZZ（围绕 tap 扰动）**：对每个快照，浮点 frontier 输入在 tap 到的
-   值上扰动，轮流用 jitter（×(1+N(0,1)/64)，动低位尾数）/ noise（加 10%
-   自身 rms 的高斯噪声）/ scale（整体 ×¼…×4）/ shuffle（按行打乱位置）/
-   resample（自举，保边缘分布毁结构）/ outliers（1% 元素 ×16）；**整数
-   输入一律保留 tap 值**（序列边界、索引、页表是结构不是值——随机的
-   `cu_seqlens_q` 是没有调用方会产生的 workload，序列外的行 manifest 没
-   定义，A 不碰 B 全写，早先 GDN 核在这上面"6143/6144 differ · 33k ulp"
-   全是这么来的）。不再从 N(0,1) 合成：核只在它被造出来的分布里测。两边
-   重放同一个 span，
-   比写出的 buffer；写出的 buffer 若声明了 domain，则检查每个元素落在域内
-   （后置条件；A 违反说明参考本身有问题）。写出的 state 也比（在 span
-   的 write-set 上，两边此时起点相同）。扰动输入在 record 时生成、A 跑过
-   就留下，replay 时 B 拿同一份；B 崩溃（IMA）直接 FAIL。
-5. **PERF**：每个变了的 program 整步 eager 跑 N 次，逐 call event 计时
+4. **PERF**：每个变了的 program 整步 eager 跑 N 次，逐 call event 计时
    取最小——同一份数据既给**整步**（Σ 全部）又给 **Σ spans**（换掉的那
    块）。表里 `B measured` 旁边就是 **`B derived`** = `A − Σspan_A +
    Σspan_B`（只看 span 就能推出的整步预估），实测与推导的差就是换 kernel
@@ -213,6 +199,20 @@ CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_bl
    的 kernel 用 manifest 声明的读写 buffer 字节数算 roofline 下界——不需
    要任何模型知识（state 不透明，标为 "+ opaque state"）。
    整步计时不是 span 级的，但成本只是"program 跑 N 次"，和 tap 同量级。
+
+**没有 fuzz。** 早先有第五段：每个快照的浮点 frontier 输入按六种分布扰动
+（jitter / noise / scale / shuffle / resample / outliers），两边各跑一次比
+写出的 buffer。2026-09-15 删了。它回答的问题没人问：manifest 不给浮点
+domain（定过，不加），扰动后 B 出 NaN 而 A 没出，只能记进报告没法判；
+shuffle / resample 之后 attention 的 q 与 KV 已不对应，比出来的差什么都
+不说明；jitter 说的事 noise floor 已经说了。换核会出的 bug 各有别的段在
+覆盖（布局、边界行：tap；形状：perf 的 token 扫描；确定性：noise；
+时间：多步 workload），两个真机 case 和几十次 fixture 它从未改变过一次
+判定，却占 DSv4.1 EP4 一次 `kern test` 的 5 分钟（A 侧单线程 CPU 逐元素
+扰动 21 G 个 bf16）和几百行代码。要"B 在 workload 之外也像 A"这条证据，
+换一个 `--seed` 再跑一遍：端到端、走 KL、每一行可解释。fuzz 唯一留下的
+是它的后置条件：B 端到端写出的 output 若声明了 domain，每个元素必须落
+在域内，违反即 FAIL。
 
 ## driver
 
@@ -227,14 +227,14 @@ driver 不会 stage 的 program 在 TAP 里标红、判 INCONCLUSIVE。
 
 按顺序取第一条命中的：
 
-- `FAIL`（退出码 1）：fuzz 下 B 崩溃 / 产出越出声明域。
+- `FAIL`（退出码 1）：B 端到端写出的 output 越出声明域（后置条件）。
 - `FAIL`：端到端某一步 B 换了 argmax，且这一行的 KL 超过 `--logit-kl`
   （不是限内的平局；B 一侧出 NaN 也在此，KL 无限）。A 对 A 的端到端
   自己就超限或翻转时不下这个结论（span 吵不算：`o_lowrank` 不确定的参考
   端到端照样可能复现）。
 - `INCONCLUSIVE`（退出码 2）：变了的 program driver 喂不了（覆盖缺口，
   再好的 logits 也只说明被喂到的那些）。
-- `PASS: bit-identical`：每个 span 在真实和扰动输入下逐 bit 相同。
+- `PASS: bit-identical`：每个 span 逐 bit 相同。
 - `PASS: value-identical`：只差 ±0 符号位（silu 类 kernel 常见）。
 - `PASS: logits bit-identical`：span 有差，端到端每一步 logits 逐 bit 相同。
 - `PASS: logit evidence`：端到端每一行 KL(A‖B) ≤ `--logit-kl`（默认
@@ -243,15 +243,14 @@ driver 不会 stage 的 program 在 TAP 里标红、判 INCONCLUSIVE。
   280 KB、logits 差 1 ulp）进这一档。阈值按流水线定：bf16 的舍入序噪声
   在 1e-3 量级，fp8 attention 换核到 1e-1 也不奇怪，看 noise 里 A 对 A
   的那一行再定。
-- `PASS: within noise floor`：span 差异不超过 A 自己重跑的差异（且 fuzz
-  值相同）。
+- `PASS: within noise floor`：span 差异不超过 A 自己重跑的差异。
 - `INCONCLUSIVE`：其余——logits 动得超过阈值但没翻 argmax、或没有 logits
   可比。报告里有最坏一行的 KL、翻转数、top-20 重合、A 对 A 的带子，交给
   上层判断。
 
 `--out` 写完整 JSON（每个 span 每个 buffer 的 n_diff / max ulp / max |Δ| /
 nan / signed-zero、端到端每步 logits 的 KL / argmax / margin / top-20、noise
-带、每轮 fuzz、逐 kernel roofline、sweep 曲线）。
+带、逐 kernel roofline、sweep 曲线）。
 
 ## fixture 实测（GB300，2026-08-31）
 
@@ -319,12 +318,16 @@ A 的 token 在 B 里排第 2；step 1/3/5 的 verify 行 KL 4–12 是 draft �
 的不同输入，见 roadmap 的 teacher forcing），所以 **FAIL**：A 自己能复现，
 差异就是 B 的。0.01 nat 对 fp8 attention 是否过严，由跑的人按
 `--logit-kl` 定，harness 只负责把 A 的底线和 B 的差摆在一行里。剩下的
-323 s 全在 record：workload 只占 1.3 s，其余是 84 GB 的 state 镜像、每个
-输入一次 `cuMemAlloc` 和逐 span 的 fan-out，下一步先分相计时再动手。
+323 s 归因：workload（含 7 次 run 和 84 GB 的 state 镜像 D2D）只占
+1.3 s，`cuMemAllocAsync` 实测 1 MB 5 µs、3 GB 3 µs、几千个存活也不涨，
+noise 0.55 s，perf 约 3 s——余下全是 fuzz 的 A 侧：每轮把 kept span
+的输入读回 host，单线程逐元素解码、扰动（jitter / noise 每元素 20 ns）、
+编码、写回，6 轮 21 G 个 bf16 约 330 s。fuzz 随后整段删除（见"四段"），
+删后预期全程约 100 s，其中 68 s 是装两次模型。
 
 ## 位置
 
-- 静态 diff、frontier、录制、重放、fuzz、比较、报告全在 `crates/kern-test`
+- 静态 diff、frontier、录制、重放、比较、报告全在 `crates/kern-test`
   （`diff.rs` / `compare.rs` / `workload.rs` / `report.rs` / `harness.rs`
   录 A、`replay.rs` 放 B 并判定，`lib.rs` 的 `Side` trait 是与设备之间唯
   一的边界）；`kern test` 子命令、`Side` 的真实现（`Ranks`：每 rank 一个

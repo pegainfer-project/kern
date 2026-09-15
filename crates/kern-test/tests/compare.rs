@@ -1,10 +1,10 @@
-//! The comparison and perturbation primitives over enumerated inputs: every
-//! pair of interesting values per dtype, every perturbation mode over a
-//! few seeds, and sparse byte diffs against a patch-back reference.
+//! The comparison primitives over enumerated inputs: every pair of
+//! interesting values per dtype, changed blocks against a byte-level
+//! reference, and logits rows with a known argmax, KL and top set.
 
 use kern_manifest::types::DType;
 use kern_manifest::values::{from_f64, to_f64};
-use kern_test::compare::{changed_blocks, compare, logit_stats, perturb, Cmp, BLOCK, MODES, TOP};
+use kern_test::compare::{changed_blocks, compare, logit_stats, Cmp, BLOCK, TOP};
 use kern_test::workload::Rng;
 
 const FLOATS: [DType; 4] = [DType::Bf16, DType::F16, DType::F32, DType::Fp8E4m3];
@@ -132,53 +132,6 @@ fn logit_stats_know_the_argmax_margin_kl_and_top_overlap() {
     // a NaN on one side is an unbounded move
     let nan = logit_stats(dt, &ra, &row(dt, &[0.5, f64::NAN, -1.0, 1.75]));
     assert!(nan.kl.is_infinite() && nan.cmp.nan_only_one_side == 1);
-}
-
-#[test]
-fn every_perturbation_mode_keeps_shape_range_and_its_own_promise() {
-    let x: Vec<f64> = (0..24).map(|i| ((i * 7) % 11) as f64 - 5.0).collect();
-    for dt in FLOATS {
-        let max = match dt {
-            DType::F16 => 65504.0,
-            DType::Fp8E4m3 => 448.0,
-            _ => 3.0e38,
-        };
-        for mode in 0..MODES.len() {
-            for seed in 0..8u64 {
-                let y = perturb(&mut Rng(seed), mode, &x, 4, dt);
-                assert_eq!(y.len(), x.len(), "{} seed {seed}", MODES[mode]);
-                assert!(y.iter().all(|v| !v.is_finite() || v.abs() <= max), "{} seed {seed}: {y:?}", MODES[mode]);
-                assert_eq!(
-                    perturb(&mut Rng(seed), mode, &x, 4, dt),
-                    y,
-                    "{} is not a function of the seed",
-                    MODES[mode]
-                );
-                let sorted = |v: &[f64]| {
-                    let mut s = v.to_vec();
-                    s.sort_by(f64::total_cmp);
-                    s
-                };
-                match MODES[mode] {
-                    "jitter" => assert!(x.iter().zip(&y).all(|(a, b)| (a - b).abs() <= a.abs() * 0.1), "{y:?}"),
-                    "scale" => {
-                        let f = y[1] / x[1];
-                        assert!([0.25, 0.5, 2.0, 4.0].contains(&f), "{f}");
-                        assert!(x.iter().zip(&y).all(|(a, b)| a * f == *b), "{y:?}");
-                    }
-                    "shuffle" => {
-                        assert_eq!(sorted(&x), sorted(&y));
-                        let rows: Vec<&[f64]> = y.chunks(4).collect();
-                        assert!(rows.iter().all(|r| x.chunks(4).any(|xr| xr == *r)), "rows torn: {y:?}");
-                    }
-                    "resample" => assert!(y.iter().all(|v| x.contains(v)), "{y:?}"),
-                    "outliers" => assert!(x.iter().zip(&y).all(|(a, b)| *b == *a || *b == a * 16.0), "{y:?}"),
-                    _ => assert_eq!(MODES[mode], "noise"),
-                }
-            }
-        }
-    }
-    assert_eq!(perturb(&mut Rng(1), 0, &[], 1, DType::F32), Vec::<f64>::new());
 }
 
 #[test]

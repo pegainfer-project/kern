@@ -7,8 +7,6 @@
 //! verdict. The archive is the same sections plus every differing
 //! comparison.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use serde::Serialize;
 use serde_json::Value;
 
@@ -194,6 +192,8 @@ pub struct Local {
     pub findings: Vec<Finding>,
     pub omitted: usize,
     pub outputs: Vec<Finding>,
+    /// An output B produced outside its declared domain.
+    pub violations: Vec<String>,
     pub states: Vec<StateE2e>,
     pub one_sided: Vec<String>,
     pub undriven: Vec<String>,
@@ -222,6 +222,7 @@ impl Local {
             };
         }
         let mut v = vec![row("local", head, None)];
+        v.extend(self.violations.iter().map(|t| row("local", format!("✗ domain: {t}"), None)));
         v.extend(self.findings.iter().map(|f| f.line("local", "✗ ")));
         v.extend(more("local", self.omitted, "comparisons"));
         if !self.one_sided.is_empty() {
@@ -375,61 +376,6 @@ impl Noise {
     }
 }
 
-#[derive(Serialize, Clone, Debug)]
-pub struct FuzzFinding {
-    pub mode: String,
-    #[serde(flatten)]
-    pub at: Finding,
-}
-
-/// Both sides on perturbed inputs, from every snapshot.
-#[derive(Serialize, Debug)]
-pub struct Fuzz {
-    pub rounds: usize,
-    pub modes: Vec<String>,
-    pub compared: usize,
-    pub bit_identical: usize,
-    pub value_identical: usize,
-    pub findings: Vec<FuzzFinding>,
-    pub omitted: usize,
-    /// A side produced a value outside a buffer's declared domain.
-    pub violations: Vec<String>,
-    pub state_diffs: Vec<String>,
-    pub not_tapped: Vec<String>,
-    pub integers_kept: BTreeMap<String, BTreeSet<String>>,
-    pub elapsed_s: f32,
-}
-
-impl Fuzz {
-    pub fn lines(&self) -> Vec<String> {
-        let mut s = format!(
-            "{}/{} bit-identical · {} round{} ({})",
-            self.bit_identical,
-            self.compared,
-            self.rounds,
-            if self.rounds == 1 { "" } else { "s" },
-            self.modes.join(" ")
-        );
-        if self.value_identical > 0 {
-            s += &format!(" · {} value-identical (±0 only)", self.value_identical);
-        }
-        let mut v = vec![row("fuzz", s, Some(self.elapsed_s))];
-        v.extend(self.violations.iter().map(|t| row("fuzz", format!("✗ domain: {t}"), None)));
-        v.extend(self.findings.iter().map(|f| f.at.line("fuzz", &format!("{} ", f.mode))));
-        v.extend(more("fuzz", self.omitted, "comparisons"));
-        v.extend(self.state_diffs.iter().map(|t| row("fuzz", t, None)));
-        v.extend(self.not_tapped.iter().map(|p| row("fuzz", format!("{p}: not tapped"), None)));
-        v.extend(self.integers_kept.iter().map(|(p, u)| {
-            row(
-                "fuzz",
-                format!("{p}: integer inputs kept as tapped: {}", u.iter().cloned().collect::<Vec<_>>().join(", ")),
-                None,
-            )
-        }));
-        v
-    }
-}
-
 /// One program timed whole on both sides; `derived` is A's step with A's
 /// spans swapped for B's (both eager), so measured − derived is the
 /// launch-gap / L2 interaction of the swap.
@@ -557,8 +503,6 @@ pub struct Summary {
     pub logits: Option<Logits>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub noise: Option<Noise>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fuzz: Option<Fuzz>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub perf: Option<Perf>,
     pub verdict: Verdict,

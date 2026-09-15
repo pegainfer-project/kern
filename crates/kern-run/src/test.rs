@@ -1,8 +1,8 @@
 //! `kern test`: the evidence for a kernel swap, over the loaded runtime.
 //!
 //! The harness itself is `kern-test` (`docs/test.md`): the static diff,
-//! the seeded workload recorded on A, replayed on B, noise floor, fuzz,
-//! perf and the verdict, written over [`kern_test::Side`]. This module
+//! the seeded workload recorded on A, replayed on B, noise floor, perf
+//! and the verdict, written over [`kern_test::Side`]. This module
 //! resolves the flags against `kern.toml`, loads A, records, drops A,
 //! loads B, replays; and prints or archives the report. The side is
 //! [`Ranks`]: the manifest on one GPU, or on one GPU per rank of its
@@ -63,11 +63,6 @@ pub struct TestOpts {
     /// flip within it is a tie, one beyond it a FAIL (default 0.01)
     #[arg(long)]
     logit_kl: Option<f64>,
-    /// Fuzz rounds per span (0 disables); rounds cycle through the
-    /// perturbations of the tapped inputs (jitter, noise, scale, shuffle,
-    /// resample, outliers) (default 6)
-    #[arg(long)]
-    fuzz: Option<usize>,
     /// CUDA device ordinals, one per rank of the manifest's topology (a
     /// single ordinal starts the ranks there, consecutively); default 0
     #[arg(long, value_delimiter = ',')]
@@ -105,7 +100,7 @@ pub struct TestOpts {
     /// Skip the noise-floor re-runs
     #[arg(long)]
     no_noise: bool,
-    /// Seed for the workload and the fuzz generator (default 0x5eed)
+    /// Seed for the workload (default 0x5eed)
     #[arg(long)]
     seed: Option<u64>,
     /// Print the report as one JSON object instead of text lines
@@ -159,7 +154,6 @@ impl TestOpts {
             prefill: self.prefill,
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),
             logit_kl: self.logit_kl.or_else(|| test.and_then(|x| x.logit_kl)).unwrap_or(0.01),
-            fuzz: self.fuzz.or_else(|| test.and_then(|x| x.fuzz)).unwrap_or(6),
             chunk: self.chunk,
             iters: self.iters,
             graph_step: !self.no_graph_step,
@@ -298,9 +292,6 @@ impl Side for Ranks {
     }
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
         self.rt(rank).read_buffer_prefix(buffer, bytes).with_context(|| format!("rank {rank}: reading `{buffer}`"))
-    }
-    fn write(&mut self, rank: usize, buffer: &str, bytes: &[u8]) -> Result<()> {
-        self.rt_mut(rank).write_buffer(buffer, bytes).with_context(|| format!("rank {rank}: writing `{buffer}`"))
     }
     fn alloc(&self, rank: usize, bytes: usize) -> Result<Scratch> {
         self.rt(rank).scratch(bytes).with_context(|| format!("rank {rank}: scratch of {bytes} bytes"))

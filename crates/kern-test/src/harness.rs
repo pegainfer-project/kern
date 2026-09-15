@@ -1,7 +1,7 @@
 //! Recording A: the seeded workload once, keeping at every span of every
 //! program run what the span consumed and what A produced, and an image
-//! of A's state at the start of each run; then A's noise floor, A's
-//! outputs under fuzz and A's timings. Everything B is later judged
+//! of A's state at the start of each run; then A's noise floor and A's
+//! timings. Everything B is later judged
 //! against lives in the [`Recording`]; A is not needed after this.
 //! Generic over [`Side`]; every decision here is made on numbers the
 //! side handed back.
@@ -15,7 +15,7 @@ use kern_manifest::types::{BufferKind, Manifest};
 use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
 
-use crate::compare::{is_float, perturb, Cmp, LogitRow, MODES};
+use crate::compare::{Cmp, LogitRow};
 use crate::diff::{access, constants, frontier_inputs, live_bytes, row_elems, Diff, Span};
 use crate::report::{cap, kb, row, Finding, Floor, Noise};
 use crate::workload::{self, Rng, Workload};
@@ -75,21 +75,6 @@ pub(crate) struct NoiseRec {
     pub findings: Vec<Finding>,
 }
 
-/// One kept span under one perturbation: the inputs (per rank) and what
-/// A made of them (on the device).
-pub(crate) struct FuzzCase<B> {
-    pub at: (usize, usize),
-    pub inputs: Vec<Vec<(String, Bytes)>>,
-    pub out: Vec<BTreeMap<String, (usize, B)>>,
-    pub states: Vec<Runs>,
-}
-
-pub(crate) struct FuzzRec<B> {
-    pub rounds: Vec<(&'static str, Vec<FuzzCase<B>>)>,
-    pub ints_kept: BTreeMap<String, BTreeSet<String>>,
-    pub violations: Vec<String>,
-}
-
 pub(crate) struct StepRec {
     pub program: String,
     pub rows: u64,
@@ -129,7 +114,7 @@ pub struct Recording<B> {
     once: Vec<String>,
     pub(crate) runs: Vec<Run<B>>,
     /// `(run, span)` of the spans with state images: the first run of each
-    /// driven program. Noise and fuzz replay these.
+    /// driven program. The noise floor replays these.
     pub(crate) kept: Vec<(usize, usize)>,
     pub(crate) logits: Vec<LogitsAt<B>>,
     /// Output buffers after the workload, per rank.
@@ -138,7 +123,6 @@ pub struct Recording<B> {
     pub(crate) states: Vec<BTreeMap<String, B>>,
     pub(crate) one_sided: BTreeSet<String>,
     pub(crate) noise: Option<NoiseRec>,
-    pub(crate) fuzz: Option<FuzzRec<B>>,
     pub(crate) perf: Option<PerfRec>,
 }
 
@@ -150,15 +134,6 @@ impl<B> Recording<B> {
     pub(crate) fn undriven(&self) -> Vec<String> {
         let driven: Vec<&str> = self.chunk.iter().chain(&self.steps).map(|f| f.name.as_str()).collect();
         self.diff.spans.keys().filter(|p| !driven.contains(&p.as_str()) && !self.once.contains(p)).cloned().collect()
-    }
-    /// Programs with spans and no kept span: nothing for fuzz to replay.
-    pub(crate) fn not_tapped(&self) -> Vec<String> {
-        self.diff
-            .spans
-            .keys()
-            .filter(|p| !self.kept.iter().any(|&(r, _)| &self.runs[r].program == *p) && !self.once.contains(p))
-            .cloned()
-            .collect()
     }
     pub(crate) fn shared_states(&self) -> Vec<String> {
         self.ma.states.keys().filter(|n| self.mb.states.contains_key(*n)).cloned().collect()
@@ -232,7 +207,7 @@ fn read_runs<S: Side>(c: &S, q: usize, runs: &Runs) -> Result<Runs> {
 }
 
 /// Bytes differing between two run sets over the same offsets.
-pub(crate) fn runs_differ(x: &Runs, y: &Runs) -> BTreeMap<String, usize> {
+fn runs_differ(x: &Runs, y: &Runs) -> BTreeMap<String, usize> {
     x.iter()
         .map(|(name, rs)| {
             let d =
@@ -325,34 +300,18 @@ pub(crate) fn logit_rows<S: Side>(
     Ok(rows_out)
 }
 
-/// Replay one recorded span on a side: from the recorded inputs, or from
-/// `host_inputs` (perturbed, per rank). Returns the state post-image over
-/// the recorded write-set, per rank; what the span wrote is in its
-/// buffers for the caller to compare where it is. The state is put back
-/// to A's pre-image first (so the span sees what it saw in the recording,
-/// on either side) and to A's post-image after (so the next span's reads
-/// see the reference, not this replay's output — under fuzz, garbage).
-pub(crate) fn replay_span<S: Side>(
-    c: &mut S,
-    sr: &SpanRec<S::Buf>,
-    run: &Run<S::Buf>,
-    side_b: bool,
-    host_inputs: Option<&[Vec<(String, Bytes)>]>,
-) -> Result<Vec<Runs>> {
+/// Replay one recorded span on a side from the recorded inputs. Returns
+/// the state post-image over the recorded write-set, per rank; what the
+/// span wrote is in its buffers for the caller to compare where it is.
+/// The state is put back to A's pre-image first (so the span sees what it
+/// saw in the recording, on either side) and to A's post-image after (so
+/// the next span's reads see the reference, not this replay's output).
+fn replay_span<S: Side>(c: &mut S, sr: &SpanRec<S::Buf>, run: &Run<S::Buf>, side_b: bool) -> Result<Vec<Runs>> {
     let ranks = c.ranks();
     for q in 0..ranks {
         write_runs(c, q, &sr.pre[q])?;
-        match host_inputs {
-            Some(v) => {
-                for (n, bytes) in &v[q] {
-                    c.write(q, n, bytes)?;
-                }
-            }
-            None => {
-                for (n, len, b) in &sr.inputs[q] {
-                    c.load(q, n, *len, b)?;
-                }
-            }
+        for (n, len, b) in &sr.inputs[q] {
+            c.load(q, n, *len, b)?;
         }
     }
     let r = if side_b { sr.span.b.clone() } else { sr.span.a.clone() };
@@ -363,23 +322,6 @@ pub(crate) fn replay_span<S: Side>(
         write_runs(c, q, &sr.post[q])?;
     }
     Ok(st)
-}
-
-/// What a side's buffers hold after a span, kept on the device: name ->
-/// (live bytes, where).
-fn keep_outputs<S: Side>(c: &S, sr: &SpanRec<S::Buf>) -> Result<Vec<BTreeMap<String, (usize, S::Buf)>>> {
-    (0..c.ranks())
-        .map(|q| {
-            sr.ref_out[q]
-                .iter()
-                .map(|(n, (len, _))| {
-                    let mut b = c.alloc(q, *len)?;
-                    c.save(q, n, *len, &mut b)?;
-                    Ok((n.clone(), (*len, b)))
-                })
-                .collect()
-        })
-        .collect()
 }
 
 /// Every written buffer of a span against a kept copy, per rank.
@@ -400,9 +342,9 @@ pub(crate) fn compare_outputs<S: Side>(
         .collect()
 }
 
-/// Values a written buffer's declared domain rules out: `side name[i] = v`.
 /// Values a side produced that lie outside their buffer's declared
-/// domain, among `names`; only buffers with a domain are read.
+/// domain, among `names`, as `side name[i] = v`; only buffers with a
+/// domain are read.
 pub(crate) fn domain_violations<S: Side>(
     c: &S,
     m: &Manifest,
@@ -425,7 +367,7 @@ pub(crate) fn domain_violations<S: Side>(
 }
 
 /// Record A on the workload `o` and the diff's spans: what every span
-/// consumed and produced, then A's noise floor, fuzz outputs and timings.
+/// consumed and produced, then A's noise floor and timings.
 /// `mb` is B's manifest: which buffers and states the two sides share,
 /// and what B's `once` programs make their own.
 pub fn record<S: Side>(
@@ -459,7 +401,6 @@ pub fn record<S: Side>(
         states: Vec::new(),
         one_sided: BTreeSet::new(),
         noise: None,
-        fuzz: None,
         perf: None,
     };
     let shared = rec.shared_states();
@@ -545,7 +486,7 @@ pub fn record<S: Side>(
                 cur = Some(r);
             }
             let sr = &run.spans[s];
-            let st = replay_span(a, sr, run, false, None)?;
+            let st = replay_span(a, sr, run, false)?;
             let cmps = compare_outputs(a, &ma, &sr.ref_out)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
@@ -581,61 +522,6 @@ pub fn record<S: Side>(
             elapsed_s: t_n.elapsed().as_secs_f32(),
         };
         rec.noise = Some(NoiseRec { report, res, noisy_states, findings });
-    }
-
-    // ---- fuzz: the kept spans on perturbed inputs, A's side
-    if o.fuzz > 0 {
-        let mut rng = Rng(o.seed);
-        let mut ints_kept: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut violations = Vec::new();
-        let mut rounds = Vec::new();
-        for round in 0..o.fuzz {
-            let mode = MODES[round % MODES.len()];
-            let mut cases = Vec::new();
-            let mut cur = None;
-            for &(r, s) in &rec.kept {
-                let run = &rec.runs[r];
-                if cur != Some(r) {
-                    image(a, run)?;
-                    cur = Some(r);
-                }
-                let sr = &run.spans[s];
-                let mut inputs = Vec::new();
-                for q in 0..ranks {
-                    let mut v = Vec::new();
-                    for (name, len, buf) in &sr.inputs[q] {
-                        let decl = &ma.buffers[name];
-                        let tapped = a.bytes(q, buf, 0..*len)?;
-                        if !is_float(decl.dtype) {
-                            // sequence layout, indices, page tables: structure,
-                            // not values — a random one is a workload no caller
-                            // produces, and the manifest says nothing about rows
-                            // outside it
-                            ints_kept.entry(run.program.clone()).or_default().insert(name.clone());
-                            v.push((name.clone(), tapped));
-                            continue;
-                        }
-                        let base = values::to_f64(decl.dtype, &tapped);
-                        let vals =
-                            perturb(&mut rng, round % MODES.len(), &base, row_elems(&ma, name, &run.vars), decl.dtype);
-                        v.push((name.clone(), values::from_f64(decl.dtype, &vals)));
-                    }
-                    inputs.push(v);
-                }
-                let at = format!("{} span {}", run.program, sr.span.label());
-                let states = replay_span(a, sr, run, false, Some(&inputs))
-                    .with_context(|| format!("A crashed under fuzz ({mode}) at {at}"))?;
-                let out = keep_outputs(a, sr)?;
-                // A violation on the reference is the reference misbehaving.
-                let names: Vec<String> = sr.ref_out[0].keys().cloned().collect();
-                violations.extend(
-                    domain_violations(a, &ma, &run.vars, "A", &names)?.into_iter().map(|v| format!("{mode} {at}: {v}")),
-                );
-                cases.push(FuzzCase { at: (r, s), inputs, out, states });
-            }
-            rounds.push((mode, cases));
-        }
-        rec.fuzz = Some(FuzzRec { rounds, ints_kept, violations });
     }
 
     // ---- perf: A's side of every timing

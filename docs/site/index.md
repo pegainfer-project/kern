@@ -21,7 +21,7 @@ features:
   - title: Model-agnostic runtime
     details: The executor knows how to verify and run a program. Model-specific structure remains in the artifact.
   - title: Evidence for a swap
-    details: kern test compares a candidate manifest with a reference through structural, numerical, fuzz, and timing evidence.
+    details: kern test compares a candidate manifest with a reference through structural, numerical, and timing evidence.
 ---
 
 ## Start with the boundary

@@ -16,7 +16,6 @@ weights = ["artifacts/checkpoint"]   # HF snapshot dir(s) or .safetensors files
 seed = 0x5eed
 decode_steps = 32
 logit_kl = 0.01
-fuzz = 6
 ```
 
 The kernel directory may hold modules for both versions. Each manifest resolves
@@ -28,8 +27,8 @@ the bytes it names by SHA-256.
 ./target/release/kern test demo
 ```
 
-The command reports structural differences, numerical comparison, input
-perturbation results, and timing evidence. Its exit status is part of the API:
+The command reports structural differences, numerical comparison and
+timing evidence. Its exit status is part of the API:
 
 | Status | Meaning |
 | --- | --- |

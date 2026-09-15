@@ -11,14 +11,13 @@
 //!      are kept, with an image of A's state at the start of each run.
 //!      The first run of each program also keeps the state bytes its
 //!      spans changed, so the span can be replayed on its own. A's noise
-//!      floor (each kept span replayed against itself), A's outputs under
-//!      fuzz and A's timings are recorded too: after this A is not needed;
+//!      floor (each kept span replayed against itself) and A's timings
+//!      are recorded too: after this A is not needed;
 //!   3. replays B ([`replay`]): B runs the same workload starting every
 //!      program run from A's state image and every span from A's frontier
 //!      inputs, so what B writes is the span's own doing; then B free-runs
 //!      the workload and the logits of every step are compared end to
-//!      end against A's: the oracle. Fuzz replays the kept spans on B with
-//!      the perturbed inputs A saw; perf times B where A was timed. The
+//!      end against A's: the oracle. Perf times B where A was timed. The
 //!      verdict is a pure function of what was measured (`FAIL` / `PASS`
 //!      / `INCONCLUSIVE`, exit codes 1 / 0 / 2), stated last, after one
 //!      line per fact.
@@ -111,8 +110,6 @@ pub trait Side {
 
     /// The first `bytes` of a buffer, on the host.
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>>;
-    /// Overwrite the first `bytes.len()` bytes of a buffer from the host.
-    fn write(&mut self, rank: usize, buffer: &str, bytes: &[u8]) -> Result<()>;
     fn alloc(&self, rank: usize, bytes: usize) -> Result<Self::Buf>;
     /// The first `bytes` of a buffer into `into`.
     fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Self::Buf) -> Result<()>;
@@ -173,8 +170,6 @@ pub struct Options {
     /// any logits row, and still PASS with logit evidence; an argmax flip
     /// within it is a tie, one beyond it a FAIL.
     pub logit_kl: f64,
-    /// Fuzz rounds per span (0 disables).
-    pub fuzz: usize,
     /// Prefill chunk; 0 = drawn from the seed.
     pub chunk: u64,
     /// Replays for span timing (the minimum is reported).
@@ -187,6 +182,6 @@ pub struct Options {
     pub peak_bw: f64,
     pub perf: bool,
     pub noise: bool,
-    /// Seed of the workload and the fuzz generator.
+    /// Seed of the workload.
     pub seed: u64,
 }

@@ -81,7 +81,6 @@ pub struct Test {
     pub(crate) seed: Option<u64>,
     pub(crate) decode_steps: Option<u64>,
     pub(crate) logit_kl: Option<f64>,
-    pub(crate) fuzz: Option<usize>,
     pub(crate) prompt: Option<String>,
 }
 

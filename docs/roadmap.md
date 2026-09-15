@@ -133,6 +133,10 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
     折叠、只点名前几个 span，其余进 `--out`。
   - 每个 run 的 state 镜像按 `state_bytes`（池的整块分配，一个 state 至少
     一块 64 MiB）拷：DSv4.1 55 个 state 在 capacity 512 下活跃只有 12 MB，
-    镜像却是 3 GB/rank/run（7 run × 4 rank = 84 GB，录制 375 s 大半在
-    此）。镜像只拷活跃前缀（`bytes_per_token × capacity`）、只留 write-set
-    会碰到的 state、只在 kept run 上留。
+    镜像却是 3 GB/rank/run（7 run × 4 rank = 84 GB；D2D 只要几十 ms，
+    问题是显存不是时间）。镜像只拷活跃前缀（`bytes_per_token ×
+    capacity`）、只留 write-set 会碰到的 state、只在 kept run 上留。
+  - 分布外覆盖走多 seed 的 workload（`--seed`），不做 span 级扰动：fuzz
+    段 2026-09-15 删除（没有浮点 domain 就没有判据、shuffle/resample 破坏
+    张量语义、从未改变过判定、占 DSv4.1 一次 test 的 5 分钟），后置条件
+    （output 落在声明域内）留在端到端行。

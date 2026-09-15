@@ -1,5 +1,5 @@
-//! Comparing what two sides wrote, and perturbing what a span read. Byte
-//! slices in, numbers out; the dtype says how to read them.
+//! Comparing what two sides wrote. Byte slices in, numbers out; the
+//! dtype says how to read them.
 
 use std::ops::Range;
 
@@ -7,9 +7,7 @@ use kern_manifest::types::DType;
 use kern_manifest::values;
 use serde::Serialize;
 
-use crate::workload::Rng;
-
-pub fn is_float(dt: DType) -> bool {
+fn is_float(dt: DType) -> bool {
     matches!(dt, DType::Bf16 | DType::F16 | DType::F32 | DType::Fp8E4m3)
 }
 
@@ -160,64 +158,6 @@ pub fn logit_stats(dt: DType, a: &[u8], b: &[u8]) -> LogitStats {
 
 pub fn logit_row(label: String, dt: DType, a: &[u8], b: &[u8]) -> LogitRow {
     LogitRow { label, stats: logit_stats(dt, a, b) }
-}
-
-/// The perturbations a fuzz round cycles through, in order.
-pub const MODES: [&str; 6] = ["jitter", "noise", "scale", "shuffle", "resample", "outliers"];
-
-/// Perturb a tapped float tensor, staying in the distribution the kernel
-/// was built for: `mode` indexes [`MODES`]. `row` is the trailing extent
-/// (elements per leading-dim row) so `shuffle` permutes rows, not
-/// elements. Finite values stay within the dtype's range.
-pub fn perturb(rng: &mut Rng, mode: usize, x: &[f64], row: usize, dt: DType) -> Vec<f64> {
-    let max = match dt {
-        DType::Bf16 | DType::F32 => 3.0e38,
-        DType::F16 => 65504.0,
-        DType::Fp8E4m3 => 448.0,
-        _ => unreachable!(),
-    };
-    let n = x.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut v: Vec<f64> = match MODES[mode % MODES.len()] {
-        // a few low mantissa bits: the same tensor, different rounding paths
-        "jitter" => x.iter().map(|&a| a * (1.0 + rng.normal() / 64.0)).collect(),
-        // additive noise at 10% of the tensor's own rms
-        "noise" => {
-            let rms = (x.iter().filter(|a| a.is_finite()).map(|a| a * a).sum::<f64>() / n as f64).sqrt();
-            x.iter().map(|&a| a + rng.normal() * 0.1 * rms).collect()
-        }
-        // dynamic range: the whole tensor ×¼ … ×4
-        "scale" => {
-            let f = [0.25, 0.5, 2.0, 4.0][rng.below(4) as usize];
-            x.iter().map(|&a| a * f).collect()
-        }
-        // rows in another order: positions change, values don't
-        "shuffle" => {
-            let row = row.clamp(1, n);
-            let rows = n / row;
-            let mut perm: Vec<usize> = (0..rows).collect();
-            for i in (1..rows).rev() {
-                perm.swap(i, rng.below(i as u64 + 1) as usize);
-            }
-            let mut v = x.to_vec();
-            for (dst, &src) in perm.iter().enumerate() {
-                v[dst * row..(dst + 1) * row].copy_from_slice(&x[src * row..(src + 1) * row]);
-            }
-            v
-        }
-        // bootstrap: the tensor's own marginal, structure destroyed
-        "resample" => (0..n).map(|_| x[rng.below(n as u64) as usize]).collect(),
-        // 1% of the elements ×16
-        _ => x.iter().map(|&a| if rng.below(100) == 0 { a * 16.0 } else { a }).collect(),
-    };
-    for a in &mut v {
-        if a.is_finite() {
-            *a = a.clamp(-max, max);
-        }
-    }
-    v
 }
 
 /// The 64-byte blocks where `pre` and `post` differ, as merged byte

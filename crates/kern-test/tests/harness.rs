@@ -20,13 +20,12 @@ fn line<'a>(lines: &'a [String], key: &str) -> &'a str {
 #[test]
 fn a_no_op_swap_is_bit_identical_at_every_span() {
     let (r, lines) = run(Fixture::default().scale("scale_same"));
-    assert_eq!(verdict(&r), (0, "bit-identical at every span, real and perturbed inputs".into()));
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()));
     let local = r.summary.local.as_ref().unwrap();
     // two layers × (2 prefill chunks + 4 decode steps) spans compared, all identical
     assert_eq!((local.compared, local.bit_identical, local.findings.len()), (12, 12, 0));
     assert_eq!(r.summary.tap.as_ref().unwrap().spans, 4);
     assert!(line(&lines, "diff").contains("scale impl extern:scale → extern:scale_same"), "{lines:#?}");
-    assert!(line(&lines, "fuzz").starts_with("fuzz      24/24 bit-identical"), "{lines:#?}");
 }
 
 #[test]
@@ -59,10 +58,8 @@ fn a_rounding_change_passes_on_logit_evidence() {
 fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
     // A is ±3% on every `scale` call, the sign flipping on each repeat of
     // an input; B is the exact op.
-    // Fuzz is off: with a noisy A, perturbed inputs are never value-identical.
     // The KL limit is below A's own band, so logit evidence cannot decide.
     let mut o = options();
-    o.fuzz = 0;
     o.logit_kl = 1e-4;
     let (r, lines) = test(&Fixture::default().scale("scale_noisy"), &Fixture::default(), &o).unwrap();
     assert_eq!(verdict(&r), (0, "differences at every span lie within A's own noise floor".into()), "{lines:#?}");
@@ -97,16 +94,8 @@ fn a_wide_argmax_flip_fails() {
 #[test]
 fn a_value_outside_the_declared_domain_fails() {
     let (r, lines) = run(Fixture::default().head("head_bad"));
-    assert_eq!(verdict(&r), (1, "B violates a declared domain (or crashed) under fuzz".into()));
-    assert!(line(&lines, "fuzz      ✗ domain").contains("B next_token[0] = 99 outside domain"), "{lines:#?}");
-}
-
-#[test]
-fn a_crash_under_fuzz_is_an_error_naming_the_span_and_the_mode() {
-    let err = test(&Fixture::default(), &Fixture::default().scale("scale_crash"), &options()).unwrap_err();
-    let msg = format!("{err:#}");
-    assert!(msg.contains("B crashed under fuzz (jitter) at prefill span A[1..2) B[1..2)"), "{msg}");
-    assert!(msg.contains("illegal memory access"), "{msg}");
+    assert_eq!(verdict(&r), (1, "B writes a value outside a declared domain end to end".into()));
+    assert!(line(&lines, "local     ✗ domain").contains("B next_token[0] = 99 outside domain"), "{lines:#?}");
 }
 
 #[test]
@@ -211,7 +200,7 @@ fn identical_manifests_have_nothing_to_test() {
 fn the_json_summary_names_every_section_and_the_archive_every_finding() {
     let (r, _) = run(Fixture::default().scale("scale_round"));
     let v = serde_json::to_value(&r.summary).unwrap();
-    for k in ["a", "b", "diff", "tap", "local", "logits", "noise", "fuzz", "verdict"] {
+    for k in ["a", "b", "diff", "tap", "local", "logits", "noise", "verdict"] {
         assert!(v.get(k).is_some(), "no `{k}` in {v}");
     }
     assert!(v.get("perf").is_none());
@@ -277,7 +266,6 @@ fn a_changed_once_program_is_each_sides_own_setup_not_an_untapped_program() {
     )
     .unwrap();
     assert!(r.summary.diff.spans.contains_key("prep"), "{:?}", r.summary.diff.spans.keys());
-    assert_eq!(verdict(&r), (0, "bit-identical at every span, real and perturbed inputs".into()), "{lines:#?}");
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()), "{lines:#?}");
     assert!(r.summary.local.as_ref().unwrap().undriven.is_empty());
-    assert!(r.summary.fuzz.as_ref().unwrap().not_tapped.is_empty());
 }

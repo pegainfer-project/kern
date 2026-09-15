@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use kern_manifest::protocol::Axis;
 use kern_manifest::types::{Arg, DType, Dim, Fill, Provision};
 use kern_manifest::values;
@@ -297,18 +297,11 @@ impl Rank {
                         "extern:scale_dim3" if i % D == 3 => v * 0.5 + 1.0,
                         "extern:scale_dim3" => v * 0.5,
                         "extern:scale_noisy" => v * 0.5 * noisy,
-                        "extern:scale_crash" => v * 0.5,
                         "extern:scale_rank1_wrong" if self.q == 1 => v * 0.5 + 1.0,
                         "extern:scale_rank1_wrong" => v * 0.5,
                         _ => panic!("no such scale: {e}"),
                     })
                     .collect();
-                // A kernel with a baked-in assumption: the exact model only
-                // ever produces multiples of 1/16, and the first input off
-                // that grid (fuzz's jitter) kills it.
-                if e == "extern:scale_crash" && x.iter().any(|v| (v * 16.0).fract() != 0.0) {
-                    bail!("scale_crash: illegal memory access");
-                }
                 self.bufs.get_mut(&buf(1)).unwrap()[..t * D * 4].copy_from_slice(&bytes_f32(&y));
             }
             e if e.starts_with("extern:mix") => {
@@ -442,11 +435,6 @@ impl Side for Fake {
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
         Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
     }
-    fn write(&mut self, rank: usize, buffer: &str, bytes: &[u8]) -> Result<()> {
-        self.ranks[rank].bufs.get_mut(buffer).ok_or_else(|| anyhow!("no buffer `{buffer}`"))?[..bytes.len()]
-            .copy_from_slice(bytes);
-        Ok(())
-    }
     fn alloc(&self, _rank: usize, bytes: usize) -> Result<Vec<u8>> {
         Ok(vec![0; bytes])
     }
@@ -526,7 +514,6 @@ pub fn options() -> Options {
         prefill: 5,
         decode_steps: 4,
         logit_kl: 0.01,
-        fuzz: 6,
         chunk: 3,
         iters: 1,
         graph_step: false,
