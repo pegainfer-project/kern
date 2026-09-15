@@ -1,33 +1,57 @@
 //! Assembling weight buffers out of checkpoint tensors. A weight buffer's
 //! `bind` lists the tensors (or rectangles of them) that make it up, laid
 //! end to end. Where the tensors are is a [`Tensors`]: the model's own
-//! safetensors shards in this process's memory ([`Safetensors`]), or
-//! memory another process holds that this device can read (a weight
-//! cache's buckets mapped into the context). [`plan`] is the pure part: it
-//! turns one buffer's segments into byte copies and checks that they tile
-//! the buffer exactly, so the shell that runs them has nothing left to
-//! decide.
+//! safetensors shards, as files or as bytes in this process's memory
+//! ([`Safetensors`]), or memory another process holds that this device
+//! can read (a weight cache's buckets mapped into the context). [`plan`]
+//! is the pure part: it turns one buffer's segments into byte copies and
+//! checks that they tile the buffer exactly, so the shell that runs them
+//! has nothing left to decide.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
+use std::path::Path;
 
 use kern_manifest::types::{Buffer, DType, Rows, TensorSource};
 
 use crate::error::{bail, Error, Result};
 
-/// Bytes a copy can read: a slice of this process's memory, or a span of
-/// memory this context addresses on the device side (a mapped allocation
-/// of another process, on this tray or across the fabric).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Bytes a copy can read: a slice of this process's memory, a span of a
+/// file, or a span of memory this context addresses on the device side
+/// (a mapped allocation of another process, on this tray or across the
+/// fabric). A file's bytes are read as they are copied, not mapped: a
+/// `pread` is the page cache's own copy and scales with readers, where
+/// memcpy out of a mapping pays a page fault per page on one lock (a
+/// GB300 reading a checkpoint on Ceph: 32 readers 109 GiB/s against 27).
+#[derive(Debug, Clone, Copy)]
 pub enum Blob<'a> {
     Host(&'a [u8]),
+    File { file: &'a File, at: u64, bytes: u64 },
     Device { ptr: u64, bytes: u64 },
 }
+
+impl PartialEq for Blob<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        use std::os::unix::io::AsRawFd;
+        match (self, other) {
+            (Self::Host(a), Self::Host(b)) => a == b,
+            (Self::File { file: f, at, bytes }, Self::File { file: g, at: at2, bytes: bytes2 }) => {
+                (f.as_raw_fd(), at, bytes) == (g.as_raw_fd(), at2, bytes2)
+            }
+            (Self::Device { ptr, bytes }, Self::Device { ptr: p, bytes: b }) => (ptr, bytes) == (p, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Blob<'_> {}
 
 impl<'a> Blob<'a> {
     pub fn bytes(&self) -> u64 {
         match self {
             Self::Host(s) => s.len() as u64,
-            Self::Device { bytes, .. } => *bytes,
+            Self::File { bytes, .. } | Self::Device { bytes, .. } => *bytes,
         }
     }
 
@@ -38,15 +62,21 @@ impl<'a> Blob<'a> {
         }
         Some(match *self {
             Self::Host(s) => Self::Host(&s[at as usize..(at + len) as usize]),
+            Self::File { file, at: from, .. } => Self::File { file, at: from + at, bytes: len },
             Self::Device { ptr, .. } => Self::Device { ptr: ptr + at, bytes: len },
         })
     }
 
-    pub(crate) fn ptr(&self) -> u64 {
-        match self {
-            Self::Host(s) => s.as_ptr() as u64,
-            Self::Device { ptr, .. } => *ptr,
+    /// Bytes `from..from + out.len()` of host or file bytes into `out`.
+    pub(crate) fn read(&self, from: u64, out: &mut [u8]) -> Result<()> {
+        match *self {
+            Self::Host(s) => out.copy_from_slice(&s[from as usize..from as usize + out.len()]),
+            Self::File { file, at, .. } => file
+                .read_exact_at(out, at + from)
+                .map_err(|e| Error::WeightArtifact(format!("reading checkpoint bytes: {e}")))?,
+            Self::Device { .. } => unreachable!("device bytes are copied by the device"),
         }
+        Ok(())
     }
 }
 
@@ -65,46 +95,150 @@ pub trait Tensors {
     fn find(&self, name: &str) -> Result<Tensor<'_>>;
 }
 
-/// Safetensors blobs (a model's shards, a draft's next to them) with their
-/// headers parsed and every tensor name indexed. Only headers are read;
-/// a tensor's bytes are a slice of the blob it is in. A name that appears
-/// in more than one blob is ambiguous and refused.
+/// Safetensors artifacts (a model's shards, a draft's next to them) with
+/// their headers parsed and every tensor name indexed. Only headers are
+/// read; a tensor's bytes are a span of the artifact it is in, a file
+/// ([`Safetensors::open`]) or bytes already in memory
+/// ([`Safetensors::parse`]). A name that appears in more than one
+/// artifact is ambiguous and refused.
 pub struct Safetensors<'a> {
-    blobs: Vec<safetensors::SafeTensors<'a>>,
-    index: BTreeMap<String, usize>,
+    sources: Vec<(Source<'a>, u64)>,
+    tensors: BTreeMap<String, (usize, Info)>,
+}
+
+enum Source<'a> {
+    Bytes(&'a [u8]),
+    File(File),
+}
+
+/// A tensor as the header declares it: offsets are into the data section.
+struct Info {
+    dtype: String,
+    shape: Vec<u64>,
+    at: u64,
+    end: u64,
 }
 
 impl<'a> Safetensors<'a> {
     pub fn parse(blobs: &[&'a [u8]]) -> Result<Self> {
-        let blobs = blobs
+        let sources = blobs
             .iter()
-            .map(|b| safetensors::SafeTensors::deserialize(b))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| Error::WeightArtifact(format!("unparseable safetensors: {e}")))?;
-        let mut index = BTreeMap::new();
-        let mut names: Vec<(&str, usize)> =
-            blobs.iter().enumerate().flat_map(|(i, st)| st.names().into_iter().map(move |n| (n, i))).collect();
-        names.sort();
-        for (name, i) in names {
-            if index.insert(name.to_string(), i).is_some() {
-                bail!(WeightArtifact, "tensor `{name}` is in more than one of the {} artifact(s)", blobs.len());
+            .map(|b| {
+                let read = |at: usize, out: &mut [u8]| {
+                    out.copy_from_slice(b.get(at..at + out.len())?);
+                    Some(())
+                };
+                let (data, tensors) = header(read, b.len())?;
+                Ok(((Source::Bytes(b), data), tensors))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::index(sources)
+    }
+
+    pub fn open(paths: &[impl AsRef<Path>]) -> Result<Self> {
+        let sources = paths
+            .iter()
+            .map(|p| {
+                let p = p.as_ref();
+                let io = |e: std::io::Error| Error::WeightArtifact(format!("weights {}: {e}", p.display()));
+                let file = File::open(p).map_err(io)?;
+                let len = file.metadata().map_err(io)?.len() as usize;
+                let (data, tensors) =
+                    header(|at, out| file.read_exact_at(out, at as u64).ok(), len).map_err(|e| e.at(p))?;
+                Ok(((Source::File(file), data), tensors))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::index(sources)
+    }
+
+    fn index(sources: Vec<((Source<'a>, u64), BTreeMap<String, Info>)>) -> Result<Self> {
+        let n = sources.len();
+        let mut tensors = BTreeMap::new();
+        let (sources, headers): (Vec<_>, Vec<_>) = sources.into_iter().unzip();
+        for (i, h) in headers.into_iter().enumerate() {
+            for (name, info) in h {
+                if tensors.insert(name.clone(), (i, info)).is_some() {
+                    bail!(WeightArtifact, "tensor `{name}` is in more than one of the {n} artifact(s)");
+                }
             }
         }
-        Ok(Self { blobs, index })
+        Ok(Self { sources, tensors })
     }
+}
+
+impl Error {
+    fn at(self, p: &Path) -> Error {
+        match self {
+            Error::WeightArtifact(m) => Error::WeightArtifact(format!("{m} ({})", p.display())),
+            e => e,
+        }
+    }
+}
+
+/// The header of a safetensors artifact `len` bytes long, read through
+/// `read` (bytes at an offset, `None` past the end): where its data
+/// section starts, and every tensor in it with its offsets checked
+/// against the section.
+fn header(read: impl Fn(usize, &mut [u8]) -> Option<()>, len: usize) -> Result<(u64, BTreeMap<String, Info>)> {
+    let bad = |what: &str| Error::WeightArtifact(format!("unparseable safetensors: {what}"));
+    let mut n = [0u8; 8];
+    read(0, &mut n).ok_or_else(|| bad("no header length"))?;
+    let n = u64::from_le_bytes(n) as usize;
+    let mut json = vec![0u8; n];
+    read(8, &mut json).ok_or_else(|| bad("header longer than the artifact"))?;
+    let data = 8 + n;
+    let entries: BTreeMap<String, serde_json::Value> =
+        serde_json::from_slice(&json).map_err(|e| bad(&format!("header: {e}")))?;
+    let mut tensors = BTreeMap::new();
+    for (name, v) in entries.into_iter().filter(|(k, _)| k != "__metadata__") {
+        let field = |k: &str| v.get(k).cloned().ok_or_else(|| bad(&format!("tensor `{name}` has no `{k}`")));
+        let dtype = field("dtype")?.as_str().ok_or_else(|| bad(&format!("tensor `{name}`: dtype")))?.to_string();
+        let shape: Vec<u64> =
+            serde_json::from_value(field("shape")?).map_err(|_| bad(&format!("tensor `{name}`: shape")))?;
+        let [at, end]: [u64; 2] = serde_json::from_value(field("data_offsets")?)
+            .map_err(|_| bad(&format!("tensor `{name}`: data_offsets")))?;
+        if at > end || data as u64 + end > len as u64 {
+            return Err(bad(&format!("tensor `{name}`: data_offsets [{at}, {end}) outside the artifact")));
+        }
+        tensors.insert(name, Info { dtype, shape, at, end });
+    }
+    Ok((data as u64, tensors))
 }
 
 impl Tensors for Safetensors<'_> {
     fn find(&self, name: &str) -> Result<Tensor<'_>> {
-        let Some(&i) = self.index.get(name) else {
-            bail!(WeightArtifact, "tensor `{name}` is in none of the {} artifact(s)", self.blobs.len());
+        let Some((i, t)) = self.tensors.get(name) else {
+            bail!(WeightArtifact, "tensor `{name}` is in none of the {} artifact(s)", self.sources.len());
         };
-        let t = self.blobs[i].tensor(name).map_err(|e| Error::WeightArtifact(format!("tensor `{name}`: {e}")))?;
-        let Some(dtype) = dtype_of(t.dtype()) else {
-            bail!(WeightArtifact, "tensor `{name}`: dtype {:?} has no manifest dtype", t.dtype());
+        let Some(dtype) = dtype_named(&t.dtype) else {
+            bail!(WeightArtifact, "tensor `{name}`: dtype {} has no manifest dtype", t.dtype);
         };
-        Ok(Tensor { dtype, shape: t.shape().iter().map(|&d| d as u64).collect(), data: Blob::Host(t.data()) })
+        let (source, data) = &self.sources[*i];
+        let data = match source {
+            Source::Bytes(b) => Blob::Host(&b[(data + t.at) as usize..(data + t.end) as usize]),
+            Source::File(file) => Blob::File { file, at: data + t.at, bytes: t.end - t.at },
+        };
+        Ok(Tensor { dtype, shape: t.shape.clone(), data })
     }
+}
+
+/// The manifest dtype a safetensors dtype name (`BF16`, `F8_E4M3`, …)
+/// stands for; `None` for one the manifest has no word for.
+pub fn dtype_named(name: &str) -> Option<DType> {
+    Some(match name {
+        "BF16" => DType::Bf16,
+        "F16" => DType::F16,
+        "F32" => DType::F32,
+        "F8_E4M3" => DType::Fp8E4m3,
+        "F8_E8M0" => DType::Fp8E8m0,
+        "I8" => DType::I8,
+        "I32" => DType::I32,
+        "U32" => DType::U32,
+        "I64" => DType::I64,
+        "U64" => DType::U64,
+        "U8" => DType::U8,
+        _ => return None,
+    })
 }
 
 /// One copy: `rows` rows of `width` bytes, `pitch` apart in `src`, landing
@@ -117,30 +251,6 @@ pub(crate) struct Copy<'a> {
     pub width: u64,
     pub rows: u64,
     pub pitch: u64,
-}
-
-/// The manifest dtype a safetensors dtype name (`BF16`, `F8_E4M3`, …)
-/// stands for; `None` for one the manifest has no word for.
-pub fn dtype_named(name: &str) -> Option<DType> {
-    serde_json::from_value::<safetensors::Dtype>(serde_json::Value::String(name.into())).ok().and_then(dtype_of)
-}
-
-fn dtype_of(st: safetensors::Dtype) -> Option<DType> {
-    use safetensors::Dtype as S;
-    Some(match st {
-        S::BF16 => DType::Bf16,
-        S::F16 => DType::F16,
-        S::F32 => DType::F32,
-        S::F8_E4M3 => DType::Fp8E4m3,
-        S::F8_E8M0 => DType::Fp8E8m0,
-        S::I8 => DType::I8,
-        S::I32 => DType::I32,
-        S::U32 => DType::U32,
-        S::I64 => DType::I64,
-        S::U64 => DType::U64,
-        S::U8 => DType::U8,
-        _ => return None,
-    })
 }
 
 /// The copies that assemble weight buffer `name` (`bytes` long) from its

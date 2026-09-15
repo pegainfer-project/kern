@@ -190,14 +190,28 @@ tray04 4×GB300 实测（2026-09-02）：EP4 每 rank 64 token **227 µs/层**
 917504 个元素无一超 5%+0.05。
 
 **权重来源（`Tensors`）**：`load_weights` 只认一个 trait——按名字给出张量的
-dtype、shape 和字节（`Blob`：本进程内存的一个切片，或本 context 能读的设备
-地址，比如另一个进程的分配经 `Runtime::map` 映射进来）。`plan` 是纯函数，把一个
-buffer 的 `bind` 段变成一列拷贝并核对铺满；shell 按 `Blob` 的两种形态选拷贝：
-host 字节 memcpy / 2D copy 上卡，设备地址 device-to-device；host placement 的
-buffer 反过来，host 字节 CPU memcpy、设备字节 DtoH。runtime 内的实现是
-`Safetensors`（mmap 的 shard，只读 header，同名张量出现在两份 shard 里就拒绝）；
-权重缓存、对象存储是 caller 侧的实现，下载进 host 内存后走 `Safetensors` 或自己
-实现 `Tensors`。
+dtype、shape 和字节（`Blob`：本进程内存的一个切片、一个文件的一段，或本 context
+能读的设备地址，比如另一个进程的分配经 `Runtime::map` 映射进来）。`plan` 是纯
+函数，把一个 buffer 的 `bind` 段变成一列拷贝并核对铺满；shell 按 `Blob` 的形态选
+拷贝：设备地址 device-to-device，host / 文件字节经 pinned staging 上卡（下），
+host placement 的 buffer 反过来，host / 文件字节 CPU 读进去、设备字节 DtoH。
+runtime 内的实现是 `Safetensors`（shard 只读 header，`open` 拿文件、`parse` 拿
+内存里的字节，同名张量出现在两份 shard 里就拒绝）；权重缓存、对象存储是 caller
+侧的实现，自己实现 `Tensors`。
+
+文件不 mmap 而是 `pread`：mmap 后 memcpy 每页付一次缺页，缺页在 mm 的锁上串行，
+读者再多也没用；`pread` 是 page cache 自己的拷贝，随读者数线性涨（GB300 读 Ceph
+上的 shard，warm：mmap+memcpy 1/8/32 读者 7/25/28 GiB/s，pread 11/76/109 GiB/s；
+`bench_results/2026-09-15-dsv41-e2e-swap/scripts/readbench.py`）。上卡走 pinned
+双缓冲：16 条线程各持两块 16 MiB 的 page-locked 块和一条 stream，把一段拷贝
+`pread` 进一块的同时另一块在 DMA，段按计数器分给线程；一个连续拷贝不论多少行
+一次读完（按行 `pread` 在 DSV4.1 是每 rank 六千万次 syscall，300 s）。以前是
+mmap 后 pageable `cuMemcpyHtoD`，驱动在调用线程上做同样的 staging，缺页也在那
+条线程上。DSV4.1 EP4 每 rank 126 GiB、4 rank 同时装、page cache warm
+（2026-09-15）：Ceph 上 pageable 5.8–16.3 s/rank，pread staging 8 线程 7.2–8.5 s、
+16 线程 4.4–5.4 s（24–29 GiB/s，四 rank 合计 ~105 GiB/s，就是 readbench 的上限）；
+本地 ext4（tray07）pageable 15.4–16.7 s，pread 8 线程 4.8–6.0 s、16 线程 4.4–5.8 s。进程也不再挂着
+500 GB 的映射（RSS 490 GB → 3 GB）。
 连续的设备侧拷贝走 `cuMemcpyAsync`，按 8 条 stream 轮流发：`cuMemcpy2DAsync` 在
 fabric 映射的源上每次约 90 µs 固定开销，DSV4.1 每 rank 24923 次 78.8 GiB 单 stream
 2.3 s、8 条 2D 1.2–2.2 s、8 条 1D 0.5–0.7 s（111–148 GiB/s）；先发完设备拷贝再填

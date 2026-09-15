@@ -363,6 +363,9 @@ Engram 表在 HBM）对 B300 的 148-SM 实例**：整块快照时，换 `dsv41_
 （`Runtime::load_over`，见 runtime.md「权重来源」），只有声明变了的才走文件：
 两个 target 都是 126 GiB/rank 全部认领，装 B 2.8 s（gate 全程 42 → 33 s，判定不变：
 72/72 bit 相同、noise 24/24 clean；tray06，2026-09-15，`results/*-resident.log`）。
+装 A 那一次的权重再走 pread staging（runtime.md「权重来源」）：Ceph 上 5.8–16.3 s/rank
+→ 4.4–5.4 s，装 A 15.7–20 s → 11.0 s，gate 全程 **26.5 s**（`results/*-pread16.log`）。
+一次四 rank 的 DSv4.1 换核验证：装 A 11 s、record 5 s、装 B 3 s、replay 3 s。
 
 同一份全套换核三跑的路：整块链 479 s（tap 302 s：链长几百、逐段同步拷）→
 扁平 piece 181 s → `changed` 的 host 端按字跳零 113 s（1 GB 的 bitmap 逐块扫

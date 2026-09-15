@@ -38,9 +38,7 @@ impl Weights {
     pub fn bind(&self, rt: &mut Runtime, topo: &Topology) -> Result<()> {
         match self {
             Weights::Files(paths) => {
-                let maps = crate::map_weights(&rank_files(paths, topo)?)?;
-                let blobs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
-                Ok(rt.load_weights(&Safetensors::parse(&blobs)?)?)
+                Ok(rt.load_weights(&Safetensors::open(&crate::shard_files(&rank_files(paths, topo)?)?)?)?)
             }
         }
     }

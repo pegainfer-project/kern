@@ -12,12 +12,14 @@ cudarc.workspace = true
 half.workspace = true
 hex.workspace = true
 libc.workspace = true
-safetensors.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 ureq.workspace = true
+
+[dev-dependencies]
+safetensors.workspace = true
 
 [lints]
 workspace = true

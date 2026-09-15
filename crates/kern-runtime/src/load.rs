@@ -12,18 +12,20 @@
 //! chunks that the pool hands out as pages and slots.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
-use cudarc::driver::{CudaContext, CudaStream};
+use cudarc::driver::{sys, CudaContext, CudaStream};
 use kern_manifest::types::{Buffer, BufferKind, DType, Dim, Manifest, Placement, Provision, Segment};
 use kern_manifest::Verified;
 
 use crate::cublas::Blas;
 use crate::device::{
-    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_1d, copy_2d, Arena, DeviceBuf, Mapper, Physical, Space,
+    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_1d, copy_2d, record, Arena, DeviceBuf, Mapper, Physical,
+    Pinned, Space,
 };
-use crate::error::bail;
+use crate::error::{bail, cuda_check};
 use crate::lease::Remaps;
 use crate::peers::PeerSlot;
 use crate::weights::{Blob, Tensors};
@@ -329,16 +331,23 @@ impl Runtime {
                 weights::plan(name, b, dst.bytes, |t| tensors.find(t), |group| self.ranks.get(group).copied())?;
             planned.push((dst, copies));
         }
-        // Device copies go out first and run while a host weight is filled.
+        // Device-to-device copies go out first and run while the host
+        // bytes are staged up and a host weight is filled.
         let t0 = std::time::Instant::now();
         let (mut device, mut host, mut filled) = ((0u64, 0usize), (0u64, 0usize, 0f64), (0u64, 0f64));
+        let mut staged = Vec::new();
         for (dst, copies) in planned.iter().filter(|(d, _)| d.host_weight().is_none()) {
             for c in copies {
-                copy_to_device(&lanes[device.1 % LOAD_LANES], dst, c)?;
+                match c.src {
+                    Blob::Host(_) | Blob::File { .. } => staged.push((dst.ptr, c)),
+                    Blob::Device { ptr, .. } => copy_device(&lanes[device.1 % LOAD_LANES], dst, c, ptr)?,
+                }
                 device.1 += 1;
             }
             device.0 += dst.bytes;
         }
+        let t = std::time::Instant::now();
+        let up = (upload(&self.ctx, self.gpu as i32, &staged)?, t.elapsed().as_secs_f64());
         for (dst, copies) in planned.iter() {
             let Some(h) = dst.host_weight() else { continue };
             let t = std::time::Instant::now();
@@ -352,11 +361,14 @@ impl Runtime {
         lanes.iter().try_for_each(|s| s.synchronize())?;
         self.stream.synchronize()?;
         tracing::info!(
-            "gpu {} weights: device {:.1} GiB in {} copies ({:.1} GiB resident already), host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s); {:.1}s in all",
+            "gpu {} weights: device {:.1} GiB in {} copies ({:.1} GiB resident already; {:.1} GiB staged from host memory in {:.1}s, {:.0} GiB/s), host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s); {:.1}s in all",
             self.gpu,
             gib(device.0),
             device.1,
             gib(self.kept),
+            gib(up.0),
+            up.1,
+            gib(up.0) / up.1.max(1e-9),
             gib(host.0),
             host.1,
             gib(filled.0),
@@ -442,34 +454,108 @@ impl Identity {
 
 const LOAD_LANES: usize = 8;
 
-/// One planned copy into a device buffer. Host bytes go up in one memcpy
-/// when contiguous, else as one 2D copy; device bytes (another process's
-/// allocation mapped here) are a device-to-device copy either way.
-fn copy_to_device(stream: &Arc<CudaStream>, dst: &DeviceBuf, c: &weights::Copy) -> Result<()> {
-    if let (Blob::Host(src), true) = (c.src, c.pitch == c.width) {
-        let mut view = dst.view(c.dst as usize..(c.dst + c.width * c.rows) as usize)?;
-        return Ok(stream.memcpy_htod(src, &mut view)?);
+/// Bytes of one staging block, so one piece of a copy.
+const STAGE: u64 = 16 << 20;
+/// Threads staging host and file bytes, each on its own stream.
+const STAGE_LANES: usize = 16;
+
+/// Host and file bytes go up through page-locked staging: [`STAGE_LANES`]
+/// threads, each with two blocks and a stream, gather a piece of a copy
+/// into one block while the DMA out of the other is in flight, and share
+/// the pieces through a counter. A pageable `cuMemcpyHtoD` stages the
+/// same way inside the driver, on the calling thread alone. Returns the
+/// bytes uploaded.
+fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) -> Result<u64> {
+    let pieces: Vec<(usize, u64, u64)> = copies
+        .iter()
+        .enumerate()
+        .flat_map(|(k, (_, c))| {
+            let total = c.width * c.rows;
+            (0..total).step_by(STAGE as usize).map(move |lo| (k, lo, (lo + STAGE).min(total)))
+        })
+        .collect();
+    let next = AtomicUsize::new(0);
+    let lane = || -> Result<()> {
+        ctx.bind_to_thread()?;
+        let stream = ctx.new_stream()?;
+        let blocks = [Pinned::alloc(STAGE, dev)?, Pinned::alloc(STAGE, dev)?];
+        let mut landed: [Option<sys::CUevent>; 2] = [None, None];
+        let mut i = 0;
+        let mut run = || -> Result<()> {
+            loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&(c, lo, hi)) = pieces.get(k) else { break };
+                if let Some(ev) = landed[i].take() {
+                    let r = cuda_check(unsafe { sys::cuEventSynchronize(ev) }, "cuEventSynchronize");
+                    unsafe { sys::cuEventDestroy_v2(ev) };
+                    r?;
+                }
+                let (dst, copy) = copies[c];
+                let block = unsafe { std::slice::from_raw_parts_mut(blocks[i].ptr() as *mut u8, STAGE as usize) };
+                gather(copy, lo, hi, block)?;
+                copy_1d(stream.cu_stream(), dst + copy.dst + lo, blocks[i].ptr(), hi - lo)?;
+                landed[i] = Some(record(&stream)?);
+                i ^= 1;
+            }
+            Ok(())
+        };
+        // Nothing may be in flight out of a block when it is freed.
+        let r = run();
+        stream.synchronize()?;
+        for ev in landed.into_iter().flatten() {
+            unsafe { sys::cuEventDestroy_v2(ev) };
+        }
+        r
+    };
+    std::thread::scope(|s| {
+        let lanes: Vec<_> = (0..STAGE_LANES).map(|_| s.spawn(lane)).collect();
+        lanes.into_iter().try_for_each(|h| h.join().expect("an upload lane panicked"))
+    })?;
+    Ok(copies.iter().map(|(_, c)| c.width * c.rows).sum())
+}
+
+/// Bytes `lo..hi` of a copy, counted row-major over its rows, laid
+/// contiguously into `out`: one read per row of a strided rectangle, one
+/// read in all for full-width rows (a `pread` per 2 KiB row would be
+/// tens of millions of syscalls for one rank of DSv4.1).
+fn gather(c: &weights::Copy, lo: u64, hi: u64, out: &mut [u8]) -> Result<()> {
+    let (width, pitch) = if c.pitch == c.width { (c.width * c.rows, c.pitch * c.rows) } else { (c.width, c.pitch) };
+    let (mut i, mut o) = (lo, 0usize);
+    while i < hi {
+        let (row, col) = (i / width, i % width);
+        let n = (width - col).min(hi - i) as usize;
+        c.src.read(row * pitch + col, &mut out[o..o + n])?;
+        i += n as u64;
+        o += n;
     }
-    if let (Blob::Device { ptr, .. }, true) = (c.src, c.rows == 1 || c.pitch == c.width) {
+    Ok(())
+}
+
+/// One planned copy of device bytes at `ptr` (another process's
+/// allocation mapped here): one device-to-device copy, 2D when the rows
+/// are strided.
+fn copy_device(stream: &Arc<CudaStream>, dst: &DeviceBuf, c: &weights::Copy, ptr: u64) -> Result<()> {
+    if c.rows == 1 || c.pitch == c.width {
         return copy_1d(stream.cu_stream(), dst.ptr + c.dst, ptr, c.width * c.rows);
     }
     copy_2d(
         stream.cu_stream(),
         (dst.ptr + c.dst, c.width, Space::Device),
-        (c.src.ptr(), c.pitch, space(&c.src)),
+        (ptr, c.pitch, Space::Device),
         c.width,
         c.rows,
     )
 }
 
 /// The planned copies into a host weight (registered host memory every
-/// rank maps). Host bytes are copied by the CPU; device bytes come down
-/// over the stream, which is drained before the initializer returns.
+/// rank maps). Host and file bytes are copied by the CPU; device bytes
+/// come down over the stream, which is drained before the initializer
+/// returns.
 fn copy_to_host(stream: &Arc<CudaStream>, dst: &mut [u8], copies: &[weights::Copy]) -> Result<()> {
     let base = dst.as_mut_ptr() as u64;
     for c in copies {
         match c.src {
-            Blob::Host(src) => copy_rows(dst, c, src),
+            Blob::Host(_) | Blob::File { .. } => copy_rows(dst, c)?,
             Blob::Device { ptr, .. } => copy_2d(
                 stream.cu_stream(),
                 (base + c.dst, c.width, Space::Host),
@@ -482,26 +568,10 @@ fn copy_to_host(stream: &Arc<CudaStream>, dst: &mut [u8], copies: &[weights::Cop
     Ok(stream.synchronize()?)
 }
 
-fn space(b: &Blob) -> Space {
-    match b {
-        Blob::Host(_) => Space::Host,
-        Blob::Device { .. } => Space::Device,
-    }
-}
-
-/// One copy of host bytes into a host buffer: a full-width segment is one
-/// memcpy even for hundreds of millions of short rows; a rectangle keeps
-/// its source pitch.
-fn copy_rows(dst: &mut [u8], c: &weights::Copy, src: &[u8]) {
-    let (width, dest) = (c.width as usize, c.dst as usize);
-    if c.pitch == c.width {
-        dst[dest..dest + src.len()].copy_from_slice(src);
-    } else {
-        for row in 0..c.rows as usize {
-            let from = row * c.pitch as usize;
-            dst[dest + row * width..dest + (row + 1) * width].copy_from_slice(&src[from..from + width]);
-        }
-    }
+/// One copy of host or file bytes into a host buffer.
+fn copy_rows(dst: &mut [u8], c: &weights::Copy) -> Result<()> {
+    let (n, dest) = ((c.width * c.rows) as usize, c.dst as usize);
+    gather(c, 0, n as u64, &mut dst[dest..dest + n])
 }
 
 fn fmt_groups(t: &kern_manifest::types::Topology) -> String {
@@ -601,8 +671,7 @@ mod host_copy_tests {
     use super::*;
 
     fn copy(dst: &mut [u8], c: &weights::Copy) {
-        let Blob::Host(src) = c.src else { unreachable!() };
-        copy_rows(dst, c, src);
+        copy_rows(dst, c).unwrap();
     }
 
     #[test]
@@ -626,5 +695,42 @@ mod host_copy_tests {
         let mut dst = [0; 8];
         copies.iter().for_each(|c| copy(&mut dst, c));
         assert_eq!(dst, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every way of cutting a strided copy into pieces gathers the same
+    /// bytes as reading its rows in order, out of memory or out of a file.
+    #[test]
+    fn gather_pieces_are_the_rows_in_order() {
+        let (width, rows) = (5u64, 4u64);
+        let src: Vec<u8> = (0..(rows * 8) as u8).collect();
+        let path = std::env::temp_dir().join(format!("kern-gather-{}", std::process::id()));
+        std::fs::write(&path, [&[7u8, 7][..], &src].concat()).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let blobs = [Blob::Host(&src), Blob::File { file: &file, at: 2, bytes: src.len() as u64 }];
+        for (src, pitch) in blobs.iter().flat_map(|b| [(*b, 8u64), (*b, 5)]) {
+            let row = |r: u64| {
+                let mut out = vec![0u8; width as usize];
+                src.read(r * pitch, &mut out).unwrap();
+                out
+            };
+            let whole: Vec<u8> = (0..rows).flat_map(row).collect();
+            let c = weights::Copy { dst: 0, src, width, rows, pitch };
+            for piece in 1..=width * rows {
+                let mut got = Vec::new();
+                for lo in (0..width * rows).step_by(piece as usize) {
+                    let hi = (lo + piece).min(width * rows);
+                    let mut out = vec![0u8; (hi - lo) as usize];
+                    gather(&c, lo, hi, &mut out).unwrap();
+                    got.extend(out);
+                }
+                assert_eq!((piece, &got), (piece, &whole));
+            }
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 }

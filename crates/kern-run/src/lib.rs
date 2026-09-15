@@ -98,6 +98,12 @@ pub(crate) type Vars = BTreeMap<String, u64>;
 /// name order, mapped read-only. Nothing is read up front: the runtime
 /// parses headers and copies each bound segment straight out of the map.
 pub fn map_weights(paths: &[std::path::PathBuf]) -> Result<Vec<memmap2::Mmap>> {
+    shard_files(paths)?.iter().map(|f| map_file(f)).collect()
+}
+
+/// The safetensors files the entries name: a file itself, or every
+/// `*.safetensors` under a directory, in name order.
+pub fn shard_files(paths: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();
     for p in paths {
         if p.is_dir() {
@@ -113,7 +119,7 @@ pub fn map_weights(paths: &[std::path::PathBuf]) -> Result<Vec<memmap2::Mmap>> {
             files.push(p.clone());
         }
     }
-    files.iter().map(|f| map_file(f)).collect()
+    Ok(files)
 }
 
 #[allow(unsafe_code)]
