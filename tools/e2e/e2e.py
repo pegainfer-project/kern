@@ -12,6 +12,7 @@ toml and a scenario reads like a client:
   turn2_warm        prompt + answer + a question, right after: the hit and the
                     same tokens a cold server gives it
   concurrent        every prompt at once: all finish, acceptance holds up
+                    (under an exact oracle: the same tokens as one at a time)
   abort             a client that hangs up mid-stream leaves the server whole
   park_wake         a pool of a few pages and a host tier: the coldest
                     checkpoints park, a prompt hitting one wakes it, the answer
@@ -24,12 +25,15 @@ toml and a scenario reads like a client:
 A target is skipped, not failed, when its artifacts are not on this
 machine. `kern run` is the oracle for single-rank targets; a tray target
 (EP4) has no `kern run`, its cold conc1 answers are the oracle for the
-warm ones. Byte identity of greedy token ids is the gate everywhere; a
-divergence is reported with its position so a near-tie can be argued
-from the logits, never assumed. With `--reference`, a Python module
-whose `generate(ids, max_tokens, manifest)` is the model's exact
-arithmetic (tools/toy/model.py over the toy manifests), every target has
-an oracle, whatever its ranks, and no divergence is excused.
+warm ones; a single-rank target without one (no spare GPU) fails, it
+does not report. Byte identity of greedy token ids is the gate
+everywhere; a divergence is excused only as a near-tie the logits show at
+that token, never assumed, and the answer goes on being compared from the
+server's choice. With `--reference`, a Python module whose
+`generate(ids, max_tokens, manifest)` is the model's exact arithmetic
+(tools/toy/model.py over the toy manifests), every target has an oracle,
+whatever its ranks, no divergence is excused, and `kern run` itself is
+held to the reference on a spare GPU.
 
 Runs on the machine with the GPUs:
   python3 tools/e2e/e2e.py --gpus 0,1,2,3 --out results/ [--config kern.toml] [--targets a b]
@@ -41,6 +45,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import signal
@@ -70,6 +75,7 @@ PROMPTS = [
 ]
 SUFFIX = "\n\nNow explain that again for a ten-year-old, in two sentences."
 LOG_FILTER = "kern_serve=debug,kern_runtime=info"
+EXCUSED_MAX = 3  # near-tie tokens one answer may be excused
 
 
 @dataclass
@@ -178,6 +184,7 @@ class Server:
         self.proc = None
         self.url = f"http://127.0.0.1:{port}"
         self.facts = {}
+        self.sent, self.lock = 0, threading.Lock()
 
     def __enter__(self):
         cmd = [str(self.a.kern), "--config", str(self.target.config), "server", self.target.name, "--port", str(self.port)]
@@ -211,6 +218,20 @@ class Server:
     def lines(self, tag: str) -> list[dict]:
         return [kv(l) for l in self.log.read_text(errors="replace").splitlines() if f" {tag} " in l]
 
+    def request_id(self) -> str:
+        """The id the frontend gives the next request: they are numbered in arrival order."""
+        with self.lock:
+            self.sent += 1
+            return f"req-{self.sent - 1}"
+
+    def complete(self, prompt, max_tokens: int) -> dict:
+        id = self.request_id()
+        return {**complete(self.url, prompt, max_tokens), "request": id}
+
+    def hang_up(self, prompt: str, chunks: int) -> int:
+        self.request_id()
+        return stream_then_hang_up(self.url, prompt, chunks)
+
     def counters(self) -> dict:
         """Sums of the per-window counters over every stats line, the gauges as last seen."""
         sums = ("parks", "wakes", "host_hits", "resident_hits", "evictions", "host_evictions", "prefill_tokens")
@@ -226,7 +247,7 @@ class Server:
     def flush_stats(self) -> None:
         """The stats line covers a 5 s window that ends at a step: wait one out and take a step."""
         time.sleep(5.2)
-        complete(self.url, "Hi", 1)
+        self.complete("Hi", 1)
         time.sleep(0.5)
 
 
@@ -286,51 +307,88 @@ def divergence(a: list[int], b: list[int]) -> str:
 
 
 class Same:
-    """Byte identity over a set of answers, a divergence excused only by a near-tie
-    the oracle can show at that very token (the prompt and the tokens up to it
-    run through `kern run`), never assumed."""
+    """Byte identity over a set of answers. A divergence is excused only as a
+    near-tie the oracle can show at that very token (the prompt and the
+    tokens up to it run through `kern run`), never assumed, and it excuses
+    that token alone: the answer goes on being compared against the
+    oracle's own continuation of the server's choice, at most EXCUSED_MAX
+    times."""
 
     def __init__(self, oracle: Oracle, rows: int):
-        self.oracle, self.rows, self.n, self.same, self.notes, self.excused = oracle, rows, 0, 0, [], 0
+        self.oracle, self.rows, self.n, self.same, self.matched, self.excused, self.notes = oracle, rows, 0, 0, 0, 0, []
 
     def add(self, label: str, prompt: list[int], got: list[int], want: list[int]) -> None:
         self.n += 1
+        notes, excused = [], 0
+        while got != want:
+            k = next((i for i, (x, y) in enumerate(zip(got, want)) if x != y), None)
+            verdict = self.oracle.near_tie(prompt + want[:k], got[k], want[k], self.rows) if k is not None else None
+            notes.append(divergence(got, want) + (f" ({verdict})" if verdict else ""))
+            if not (verdict or "").startswith("near-tie") or excused == EXCUSED_MAX:
+                break
+            excused += 1
+            head = want[:k] + [got[k]]
+            rest = self.oracle.run(prompt + head, len(want) - k - 1, self.rows) if len(want) > k + 1 else []
+            want = head + rest
+        self.excused += excused
         if got == want:
-            self.same += 1
-            return
-        k = next((i for i, (x, y) in enumerate(zip(got, want)) if x != y), None)
-        note = f"{label}: {divergence(got, want)}"
-        if k is not None:
-            verdict = self.oracle.near_tie(prompt + want[:k], got[k], want[k], self.rows)
-            if verdict:
-                note += f" ({verdict})"
-                self.excused += verdict.startswith("near-tie")
-        self.notes.append(note)
+            self.same += not excused
+            self.matched += bool(excused)
+        if notes:
+            self.notes.append(f"{label}: " + "; then ".join(notes))
 
     @property
     def ok(self) -> bool:
-        return self.same + self.excused == self.n
+        return self.same + self.matched == self.n
 
     def __str__(self) -> str:
         s = f"{self.same}/{self.n} identical"
         if self.excused:
-            s += f", {self.excused} near-tie"
+            s += f", {self.matched} after {self.excused} near-tie tokens"
         return s + ("; " + "; ".join(self.notes) if self.notes else "")
+
+
+def ulp_of(x: float) -> float:
+    """The bf16 ulp at the scale of `x` (8 significand bits), the unit
+    docs/test.md measures a logit gap in."""
+    return 2.0 ** (math.frexp(abs(x))[1] - 8) if x else 2.0 ** -133
+
+
+def oracle_gate(ranks: int, available: bool) -> bool | None:
+    """What an identity check is without an oracle: a single-rank target
+    has one to give (a spare GPU or `--reference`), so missing it fails; a
+    tray has none, so its cold answers are reported, not gated."""
+    return True if available else (None if ranks > 1 else False)
+
+
+def turn2_hit(cached: list[tuple[int, int, list[str]]], floor, unkept: set[str]) -> bool:
+    """Every second turn (cached tokens, first prompt's length, its first
+    turns' request ids) hit at least the floor of its first prompt, or
+    missed because every first turn of it ended in a state the server
+    did not keep; and not all of them missed."""
+    return all(c >= floor(n) or (c == 0 and set(reqs) <= unkept) for c, n, reqs in cached) and any(c > 0 for c, _, _ in cached)
+
+
+def acceptance_holds(baseline: float | None, burst: float | None, bounds: tuple[float, float] | None = None) -> bool:
+    """A speculative acceptance rate under load within half of the rate one
+    request at a time, that rate inside the bounds an exact oracle states."""
+    return bool(baseline) and burst is not None and burst >= baseline / 2 and (bounds is None or bounds[0] <= baseline <= bounds[1])
 
 
 class Reference:
     """A Python module's `generate(ids, max_tokens, manifest)`: the model's own
     arithmetic, exact, so it answers for any target and excuses nothing."""
 
-    available = True
+    available = exact = True
 
     def __init__(self, module: Path, target: Target):
         spec = importlib.util.spec_from_file_location(module.stem, module)
         self.model = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.model)
         self.manifest = json.loads(target.manifest.read_text())
+        self.accept_pct = getattr(self.model, "ACCEPT_PCT", None)
 
-    def run(self, ids: list[int], steps: int, rows: int | None = None) -> list[int]:
+    def run(self, ids: list[int], steps: int, rows: int) -> list[int]:
         return self.model.generate(ids, steps, self.manifest)
 
     def near_tie(self, context: list[int], a: int, b: int, rows: int) -> str:
@@ -341,6 +399,8 @@ class Oracle:
     """`kern run` answers, cached by (ids, steps, rows), and the logit margin
     behind any token of one; only single-rank targets have an oracle, and it
     runs on a GPU the server is not on."""
+
+    exact, accept_pct = False, None
 
     def __init__(self, a, target: Target, gpu: int | None, path: Path):
         self.a, self.target, self.gpu, self.path = a, target, gpu, path
@@ -387,8 +447,7 @@ class Oracle:
         else:
             return "no evidence (no dumped step produced the first token)"
         x1 = vals[order[0]]
-        ulp = 2.0 ** (int(abs(x1)).bit_length() - 8) if x1 != 0 else 2.0 ** -133
-        gap = lambda t: (x1 - vals[t]) / ulp
+        gap = lambda t: (x1 - vals[t]) / ulp_of(x1)
         verdict = "near-tie" if max(gap(a), gap(b)) <= 4 else "confident flip"
         top = ", ".join(f"{i}:{vals[i]:g}" for i in order[:4])
         return f"{verdict}: top {top}; server's {a} #{order.index(a) + 1} {gap(a):.1f} ULPs down, kern run's {b} #{order.index(b) + 1} {gap(b):.1f}"
@@ -407,14 +466,12 @@ class Oracle:
         raw = f.read_bytes()[: self.vocab * 2]
         return [struct.unpack("<f", b"\0\0" + raw[i : i + 2])[0] for i in range(0, len(raw), 2)]
 
-    def run(self, ids: list[int], steps: int, rows: int | None = None) -> list[int] | None:
-        if self.target.ranks != 1 or self.gpu is None:
+    def run(self, ids: list[int], steps: int, rows: int) -> list[int] | None:
+        if not self.available:
             return None
         key = json.dumps([ids, steps, rows])
         if key not in self.cache:
-            cmd = self.command(ids) + ["--steps", str(steps)]
-            if rows is not None:
-                cmd += ["--rows", str(rows)]
+            cmd = self.command(ids) + ["--steps", str(steps), "--rows", str(rows)]
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             m = re.search(r"generated ids: \[([^\]]*)\]", p.stderr)
             if p.returncode != 0 or not m:
@@ -435,10 +492,11 @@ def kern_test(a, t: Target, gpu: int, rep: Report, out: Path) -> None:
     rep.add("kern_test", p.returncode == 0, f"{verdict}: {last[:160]}")
 
 
-def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path) -> dict:
+def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, runner: Oracle | None, out: Path) -> dict:
     """conc1, repeat, turn2 (warm half), concurrent, abort. Returns what later sessions compare against."""
     cold: dict[str, list[int]] = {}
     prompt_ids: dict[str, list[int]] = {}
+    first: dict[str, list[str]] = {}
     stop: dict[str, int | None] = {}
     turn2: dict[str, dict] = {}
     prompt_max = 0
@@ -447,25 +505,29 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
         page, rows = s.facts["page"], s.facts["rows"]
         t.stateful = s.facts.get("checkpoints") == "at request end"
         print(f"  facts: {', '.join(f'{k}={v}' for k, v in s.facts.items() if k in ('ranks', 'tray', 'pages', 'page', 'rows', 'checkpoints', 'seq_slots', 'load_s'))}")
-        # conc1: one request at a time, against `kern run`.
-        same = Same(oracle, rows)
+        # conc1: one request at a time, against the oracle.
+        same, wants = Same(oracle, rows), {}
         for i, p in enumerate(PROMPTS):
-            r = complete(s.url, p, a.max_tokens)
-            cold[p], prompt_ids[p], stop[p] = r["ids"], r["prompt_ids"], r["stop"]
+            r = s.complete(p, a.max_tokens)
+            cold[p], prompt_ids[p], stop[p], first[p] = r["ids"], r["prompt_ids"], r["stop"], [r["request"]]
             prompt_max = max(prompt_max, len(r["prompt_ids"]))
-            want = oracle.run(r["prompt_ids"], a.max_tokens)
-            if want is not None:
-                same.add(f"prompt {i}", r["prompt_ids"], r["ids"], want)
-        if oracle.available:
-            rep.add("conc1_equals_run", same.ok, str(same))
-        else:
-            rep.add("conc1_cold", None, f"{len(PROMPTS)} cold answers recorded (no `kern run` oracle: {t.ranks} ranks or no spare GPU)")
+            wants[p] = oracle.run(r["prompt_ids"], a.max_tokens, rows)
+            if wants[p] is not None:
+                same.add(f"prompt {i}", r["prompt_ids"], r["ids"], wants[p])
+        gate = oracle_gate(t.ranks, oracle.available)
+        rep.add("conc1_equals_run", same.ok if gate else gate, str(same) if gate else f"no oracle: {t.ranks} rank(s), no spare GPU, no --reference; {len(PROMPTS)} cold answers recorded")
+        # `kern run` against the reference: the runtime's own path, not the server's.
+        if runner is not None:
+            runs = {p: runner.run(prompt_ids[p], a.max_tokens, rows) for p in PROMPTS} if runner.available else {}
+            agree = [i for i, p in enumerate(PROMPTS) if runs.get(p) == wants[p]]
+            rep.add("run_equals_reference", len(agree) == len(PROMPTS) if runs else None, f"{len(agree)}/{len(PROMPTS)} `kern run` answers equal the reference" if runs else "no spare GPU for `kern run`")
         # repeat: the hit the checkpoints allow. Every page: the prompt's whole
         # pages short of its last token; at request end: a stateful checkpoint
         # is prompt + answer, longer than the prompt, so no hit.
         hits, same = [], Same(oracle, rows)
         for i, p in enumerate(PROMPTS[:4]):
-            r = complete(s.url, p, a.max_tokens)
+            r = s.complete(p, a.max_tokens)
+            first[p].append(r["request"])
             n = len(r["prompt_ids"])
             want = (n - 1) // page * page if not t.stateful else 0
             hits.append((r["cached"], want))
@@ -478,31 +540,34 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
         cached, same = [], Same(oracle, rows)
         for i, p in enumerate(PROMPTS[:4]):
             t2 = prompt_ids[p] + cold[p] + ([stop[p]] if stop[p] is not None else []) + suffix
-            r = complete(s.url, t2, a.max_tokens)
+            r = s.complete(t2, a.max_tokens)
             n1 = len(prompt_ids[p])
             turn2[p] = {"ids": t2, "warm_ids": r["ids"], "cached": r["cached"], "prompt_len": n1}
-            cached.append((r["cached"], n1))
-            want = oracle.run(t2, a.max_tokens)
+            cached.append((r["cached"], n1, first[p]))
+            want = oracle.run(t2, a.max_tokens, rows)
             if want is not None:
                 same.add(f"turn2 {i}", t2, r["ids"], want)
         # A hit covers at least the first prompt's tokens, its last one aside,
         # in whole pages for a paged-only manifest. A speculative round can
         # take a stateful sequence past what the client got: the server
-        # says so ("not kept") and no hit is right, for those.
+        # says so ("not kept", naming the request) and no hit is right after
+        # first turns that all ended so.
         floor = lambda n: (n - 1) // page * page if not t.stateful else n
-        unkept = len(s.lines("not kept"))
-        misses = sum(1 for c, _ in cached if c == 0)
-        hit_ok = all(c >= floor(n) or c == 0 for c, n in cached) and misses <= unkept and misses < len(cached)
-        rep.add("turn2_hit", hit_ok, f"cached (got, first prompt) {cached}; {unkept} states past the answer not kept")
+        unkept = {l["request"] for l in s.lines("not kept")}
+        rep.add("turn2_hit", turn2_hit(cached, floor, unkept), f"cached (got, first prompt) {[(c, n) for c, n, _ in cached]}; not kept: {sorted(unkept)}")
         if same.n:
             rep.add("turn2_warm_equals_run", same.ok, str(same))
-        # concurrent: everything at once.
+        # concurrent: everything at once. The windows so far held one
+        # request at a time: the acceptance rate to hold the burst's to.
+        if rows > 1:
+            s.flush_stats()
         results: dict[str, dict] = {}
 
         def one(p):
-            results[p] = complete(s.url, p, a.max_tokens)
+            results[p] = s.complete(p, a.max_tokens)
 
         windows = len(s.lines("stats"))
+        baseline = max(s.lines("stats")[:windows], key=lambda w: w.get("steps", 0), default={})
         threads = [threading.Thread(target=one, args=(p,)) for p in PROMPTS]
         t0 = time.monotonic()
         for th in threads:
@@ -511,20 +576,30 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
             th.join()
         dt = time.monotonic() - t0
         finished = sum(1 for p in PROMPTS if p in results and results[p]["finish"] in ("length", "stop"))
-        same = sum(1 for p in PROMPTS if p in results and results[p]["ids"] == cold[p])
-        rep.add("concurrent", finished == len(PROMPTS), f"{finished}/{len(PROMPTS)} finished in {dt:.1f}s, {same} identical to conc1 (batch composition is not a gate)")
+        # Under an exact oracle the batch's composition changes nothing:
+        # identity is the gate; under `kern run` a reduction order may.
+        if oracle.exact:
+            same = Same(oracle, rows)
+            for i, p in enumerate(PROMPTS):
+                if p in results:
+                    same.add(f"prompt {i}", results[p]["prompt_ids"], results[p]["ids"], cold[p])
+            identical, note = same.ok, f"vs conc1: {same}"
+        else:
+            n = sum(1 for p in PROMPTS if p in results and results[p]["ids"] == cold[p])
+            identical, note = True, f"{n} identical to conc1 (batch composition is not a gate)"
+        rep.add("concurrent", finished == len(PROMPTS) and identical, f"{finished}/{len(PROMPTS)} finished in {dt:.1f}s; {note}")
         s.flush_stats()
         c = s.counters()
         if rows > 1:
             # The 5 s window that held the burst; a later one may hold only
             # the flush request.
             burst = max(s.lines("stats")[windows:], key=lambda w: w.get("steps", 0), default={})
-            pct = burst.get("accept_pct")
-            rep.add("spec_acceptance", pct is not None and pct >= 20, f"rows={rows} accept_pct={pct} accepted={burst.get('accepted')} (the burst's window)")
+            pct, base = burst.get("accept_pct"), baseline.get("accept_pct")
+            rep.add("spec_acceptance", acceptance_holds(base, pct, oracle.accept_pct), f"rows={rows} accept_pct {pct} under the burst ({burst.get('accepted')} tokens/round) vs {base} one at a time" + (f", expected within {oracle.accept_pct}" if oracle.accept_pct else ""))
         # abort: hang up mid-stream, then a plain request.
-        got = stream_then_hang_up(s.url, PROMPTS[5], 3)
+        got = s.hang_up(PROMPTS[5], 3)
         time.sleep(1)
-        r = complete(s.url, PROMPTS[0], a.max_tokens)
+        r = s.complete(PROMPTS[0], a.max_tokens)
         same = Same(oracle, rows)
         same.add("after the abort", r["prompt_ids"], r["ids"], cold[PROMPTS[0]])
         rep.add("abort", got == 3 and same.ok, f"{got} chunks read before hanging up; next answer vs cold: {same}")
@@ -549,7 +624,7 @@ def session_host(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: 
         # Cold turn2 on a fresh server: warm == cold.
         same = Same(oracle, rows)
         for i, p in enumerate(PROMPTS[:4]):
-            r = complete(s.url, turn2[p]["ids"], a.max_tokens)
+            r = s.complete(turn2[p]["ids"], a.max_tokens)
             turn2[p]["cold_ids"] = r["ids"]
             same.add(f"turn2 {i}", turn2[p]["ids"], turn2[p]["warm_ids"], r["ids"])
         rep.add("turn2_warm_equals_cold", gate(same), f"cached_tokens warm {[turn2[p]['cached'] for p in PROMPTS[:4]]}; {same}")
@@ -558,14 +633,14 @@ def session_host(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: 
         fill, n = Same(oracle, rows), 0
         while n < len(PROMPTS) or (n < 48 * t.ranks and len(s.lines("parked")) < 4):
             p = PROMPTS[n % len(PROMPTS)]
-            r = complete(s.url, p if n < len(PROMPTS) else f"{n}. {p}", a.max_tokens)
+            r = s.complete(p if n < len(PROMPTS) else f"{n}. {p}", a.max_tokens)
             if n < len(PROMPTS):
                 fill.add(f"prompt {n}", r["prompt_ids"], r["ids"], cold[p])
             n += 1
         # The turn2 prompts hit the parked checkpoints of their first turns.
         same = Same(oracle, rows)
         for i, p in enumerate(PROMPTS[:4]):
-            r = complete(s.url, turn2[p]["ids"], a.max_tokens)
+            r = s.complete(turn2[p]["ids"], a.max_tokens)
             same.add(f"turn2 {i}", turn2[p]["ids"], r["ids"], turn2[p]["cold_ids"])
         s.flush_stats()
         c = s.counters()
@@ -594,12 +669,12 @@ def session_slots(a, t: Target, gpus: list[int], port: int, rep: Report, oracle:
         same = Same(oracle, rows)
         for n in range(max(2 * first + 4, len(PROMPTS))):
             p = PROMPTS[n % len(PROMPTS)]
-            r = complete(s.url, p if n < len(PROMPTS) else f"{n}. {p}", a.max_tokens)
+            r = s.complete(p if n < len(PROMPTS) else f"{n}. {p}", a.max_tokens)
             if n < len(PROMPTS):
                 same.add(f"prompt {n}", r["prompt_ids"], r["ids"], cold[p])
         hits, warm = [], Same(oracle, rows)
         for i, p in enumerate(PROMPTS[:4]):
-            r = complete(s.url, turn2[p]["ids"], a.max_tokens)
+            r = s.complete(turn2[p]["ids"], a.max_tokens)
             hits.append((r["cached"], turn2[p]["cached"]))
             warm.add(f"turn2 {i}", turn2[p]["ids"], r["ids"], turn2[p]["warm_ids"])
         s.flush_stats()
@@ -619,9 +694,9 @@ def session_rows1(a, t: Target, gpus: list[int], port: int, rep: Report, oracle:
     with Server(a, t, gpus, port, {"--rows": "1"}, out / "server-rows1.log") as s:
         same, same_spec = Same(oracle, 1), 0
         for i, p in enumerate(PROMPTS[:4]):
-            r = complete(s.url, p, a.max_tokens)
+            r = s.complete(p, a.max_tokens)
             same_spec += r["ids"] == prev["cold"][p]
-            want = oracle.run(r["prompt_ids"], a.max_tokens, rows=1)
+            want = oracle.run(r["prompt_ids"], a.max_tokens, 1)
             if want is not None:
                 same.add(f"prompt {i}", r["prompt_ids"], r["ids"], want)
         if same.n:
@@ -644,10 +719,11 @@ def run_target(a, t: Target, gpus: list[int], out: Path) -> Report:
     out.mkdir(parents=True, exist_ok=True)
     use = gpus[: t.ranks]
     spare = gpus[t.ranks] if len(gpus) > t.ranks else None
-    oracle = Reference(a.reference, t) if a.reference else Oracle(a, t, spare, out / "oracle.json")
+    runner = Oracle(a, t, spare, out / "oracle.json")
+    oracle = Reference(a.reference, t) if a.reference else runner
     try:
         kern_test(a, t, use[0], rep, out)
-        prev = session_default(a, t, use, a.port, rep, oracle, out)
+        prev = session_default(a, t, use, a.port, rep, oracle, runner if a.reference else None, out)
         session_host(a, t, use, a.port + 1, rep, oracle, out, prev)
         session_slots(a, t, use, a.port + 2, rep, oracle, out, prev)
         session_rows1(a, t, use, a.port + 3, rep, oracle, out, prev)
@@ -688,20 +764,28 @@ def main() -> int:
         (a.out / t.name / "report.json").write_text(
             json.dumps({"target": rep.target, "skipped": rep.skipped, "facts": rep.facts, "counters": rep.counters, "checks": [c.__dict__ for c in rep.checks]}, indent=1)
         )
+    summary, code = summarize(reports)
+    print("\n" + summary)
+    (a.out / "summary.md").write_text(summary + "\n")
+    return code
+
+
+def summarize(reports: list[Report]) -> tuple[str, int]:
+    """The table and the exit code: nonzero when a gate failed, or nothing ran."""
     lines = ["| target | checks | result |", "|---|---|---|"]
-    failed = 0
+    ran, failed = 0, 0
     for r in reports:
         if r.skipped:
             lines.append(f"| {r.target} | — | skipped: {r.skipped} |")
             continue
         gated = [c for c in r.checks if c.ok is not None]
         bad = [c.name for c in gated if not c.ok]
+        ran += 1
         failed += bool(bad)
         lines.append(f"| {r.target} | {len(gated)} gated, {len(r.checks) - len(gated)} reported | {'FAIL: ' + ', '.join(bad) if bad else 'all pass'} |")
-    summary = "\n".join(lines)
-    print("\n" + summary)
-    (a.out / "summary.md").write_text(summary + "\n")
-    return 1 if failed else 0
+    if not ran:
+        lines.append("| — | — | nothing ran |")
+    return "\n".join(lines), 1 if failed or not ran else 0
 
 
 MODEL = ""

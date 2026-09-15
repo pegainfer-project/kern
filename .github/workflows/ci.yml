@@ -62,6 +62,9 @@ jobs:
       - name: TRTLLM manifest conversion regression tests
         run: python3 -m unittest discover -s tools -p test_trtllm_manifest.py
 
+      - name: e2e driver verdicts
+        run: python3 -m unittest discover -s tools/e2e -p test_e2e.py
+
       - name: Protocol names stay in the manifest
         run: |
           # kern-run, kern-test and kern-serve drive the runtime through `Protocol`; a
