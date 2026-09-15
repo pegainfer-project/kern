@@ -10,9 +10,11 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::compare::{compare, diff_runs, logit_row, Cmp, LogitRow, MODES};
-use crate::diff::{access, live_bytes, row_elems};
-use crate::harness::{at_rank, domain_violations, image, read_logits, replay_span, runs_differ, whole, Recording};
+use crate::compare::{compare, diff_runs, Cmp, LogitRow, MODES, TOP};
+use crate::diff::{access, live_bytes};
+use crate::harness::{
+    at_rank, domain_violations, image, logit_rows, read_logits, replay_span, runs_differ, whole, Recording,
+};
 use crate::report::*;
 use crate::{Options, Side, Vars};
 
@@ -219,48 +221,30 @@ pub fn replay<S: Side>(
 
     // ---- 2b. logits: the end-to-end oracle
     let t_log = Instant::now();
-    let mut logit_rows: Vec<LogitRow> = Vec::new();
-    let n_runs_with = |label: &str| rec.logits.iter().filter(|x| x.label == label).count();
-    for (la, lb) in rec.logits.iter().zip(&b_logits) {
-        let dt = ma.buffers[&la.buffer].dtype;
-        let row = row_elems(ma, &la.buffer, &la.vars) * dt.bytes() as usize;
-        for q in 0..ranks {
-            let (a, bb) = (&la.bytes[q], &lb.bytes[q]);
-            let rows = a.len().checked_div(row).unwrap_or(0);
-            for r in 0..rows.max(1) {
-                let (lo, hi) = if rows > 1 { (r * row, (r + 1) * row) } else { (0, a.len()) };
-                let lbl = if n_runs_with(&la.label) > 1 || rows > 1 {
-                    format!("{} {}{}", la.label, la.buffer, if rows > 1 { format!("[{r}]") } else { String::new() })
-                } else {
-                    la.label.clone()
-                };
-                logit_rows.push(logit_row(at_rank(ranks, q, &lbl), dt, &a[lo..hi], &bb[lo..hi]));
-            }
-        }
-    }
+    let logit_rows = logit_rows(ma, ranks, &rec.logits, &b_logits);
     let have_logits = !logit_rows.is_empty();
     let logits_bit = have_logits && logit_rows.iter().all(|r| r.cmp.identical());
-    let logits_max_ulp = logit_rows.iter().map(|r| r.scale_ulps).fold(0.0, f64::max);
+    let kl_max = logit_rows.iter().map(|r| r.kl).fold(0.0, f64::max);
     let n_flips = logit_rows.iter().filter(|r| r.flip()).count();
-    let n_near = logit_rows.iter().filter(|r| r.near_tie()).count();
-    let wide_flip = logit_rows.iter().find(|r| r.flip() && !r.near_tie());
-    let logits_within = have_logits && logits_max_ulp <= o.logit_ulp as f64 && wide_flip.is_none();
-    let worst =
-        logit_rows.iter().max_by(|x, y| x.scale_ulps.total_cmp(&y.scale_ulps).then(x.cmp.n_diff.cmp(&y.cmp.n_diff)));
+    let n_within = logit_rows.iter().filter(|r| r.flip() && r.kl <= o.logit_kl).count();
+    let wide_flip = logit_rows.iter().find(|r| r.flip() && r.kl > o.logit_kl);
+    let logits_within = have_logits && kl_max <= o.logit_kl;
     let worst_kl = logit_rows.iter().max_by(|x, y| x.kl.total_cmp(&y.kl));
+    let logits_at = worst_kl.map_or(String::new(), |w| w.label.clone());
+    let worst_top = logit_rows.iter().min_by_key(|r| r.top);
+    let top_full = |r: &&LogitRow| r.top == TOP.min(r.cmp.n);
     let logits = Logits {
         rows: logit_rows.len(),
         runs: rec.logits.len(),
         differ: logit_rows.iter().filter(|r| !r.cmp.identical()).count(),
         flips: n_flips,
-        near_ties: n_near,
-        max_ulp: logits_max_ulp,
-        limit_ulp: o.logit_ulp,
-        max_abs: worst.map_or(0.0, |w| w.max_abs),
-        scale: worst.map_or(0.0, |w| w.scale),
-        worst_at: worst.map_or(String::new(), |w| w.label.clone()),
-        kl_max: worst_kl.map_or(0.0, |w| w.kl),
-        kl_at: worst_kl.map_or(String::new(), |w| w.label.clone()),
+        within: n_within,
+        kl_max,
+        kl_at: logits_at.clone(),
+        limit_kl: o.logit_kl,
+        top_min: worst_top.map_or(0, |w| w.top),
+        top_at: worst_top.map_or(String::new(), |w| w.label.clone()),
+        top_differ: logit_rows.iter().filter(|r| !top_full(r)).count(),
         flipped: logit_rows
             .iter()
             .filter(|r| r.flip())
@@ -269,8 +253,9 @@ pub fn replay<S: Side>(
                 argmax_a: r.argmax_a,
                 argmax_b: r.argmax_b,
                 margin_a: r.margin_a,
-                delta: r.max_abs,
-                near_tie: r.near_tie(),
+                kl: r.kl,
+                rank_in_b: r.rank_in_b,
+                within: r.kl <= o.logit_kl,
             })
             .collect(),
         elapsed_s: elapsed(&t_log),
@@ -280,7 +265,7 @@ pub fn replay<S: Side>(
     let logit_detail: Vec<Value> = logit_rows
         .iter()
         .filter(|r| !r.cmp.identical())
-        .map(|r| json!({"row": r.label, "cmp": r.cmp, "max_abs": r.max_abs, "scale_ulps": r.scale_ulps, "scale": r.scale, "argmax_a": r.argmax_a, "argmax_b": r.argmax_b, "margin_a": r.margin_a, "kl": r.kl, "near_tie": r.near_tie()}))
+        .map(|r| json!({"row": r.label, "cmp": r.cmp, "argmax_a": r.argmax_a, "argmax_b": r.argmax_b, "margin_a": r.margin_a, "kl": r.kl, "top": r.top, "rank_in_b": r.rank_in_b}))
         .collect();
 
     // ---- 3. noise floor: measured on A while it was loaded
@@ -292,6 +277,7 @@ pub fn replay<S: Side>(
         }
         None => (true, BTreeSet::new(), BTreeMap::new(), Vec::new()),
     };
+    let floor = rec.noise.as_ref().and_then(|n| n.report.floor.clone());
 
     // ---- 4. fuzz: the kept spans on B, with the inputs A saw
     let mut fuzz_ok = true;
@@ -525,8 +511,8 @@ pub fn replay<S: Side>(
         (
             1,
             format!(
-                "B changes the argmax end-to-end at {}: A {} → B {} with A's margin {:.4} above the logit Δ {:.4}",
-                f.label, f.argmax_a, f.argmax_b, f.margin_a, f.max_abs
+                "B changes the argmax end-to-end at {}: A {} → B {}, KL {:.2e} above the limit {:.0e} (A's margin {:.4}, A's token is B's #{})",
+                f.label, f.argmax_a, f.argmax_b, f.kl, o.logit_kl, f.margin_a, f.rank_in_b
             ),
         )
     } else if !undriven.is_empty() {
@@ -538,11 +524,27 @@ pub fn replay<S: Side>(
     } else if logits_bit {
         (0, format!("spans differ, but the end-to-end logits are bit-identical on all {n_rows} rows"))
     } else if logits_within {
-        (0, format!("logit evidence: end-to-end logits move ≤ {logits_max_ulp:.2} ulp at their scale (limit {}) on {n_rows} rows, argmax agrees{}", o.logit_ulp, if n_near > 0 { format!(" except {n_near} near-tie{}", if n_near == 1 { "" } else { "s" }) } else { String::new() }))
+        (
+            0,
+            format!(
+                "logit evidence: end-to-end KL ≤ {kl_max:.2e} (limit {:.0e}) on {n_rows} rows, argmax agrees{}",
+                o.logit_kl,
+                if n_within > 0 {
+                    format!(" except {n_within} flip{} within the limit", if n_within == 1 { "" } else { "s" })
+                } else {
+                    String::new()
+                }
+            ),
+        )
     } else if within_noise && fuzz_identical {
         (0, "differences at every span lie within A's own noise floor".to_string())
     } else if have_logits {
-        (2, format!("spans differ; end-to-end logits move up to {logits_max_ulp:.2} ulp at their scale on {n_rows} rows (limit {}), {n_flips} argmax flip{} ({n_near} near-tie){}", o.logit_ulp, if n_flips == 1 { "" } else { "s" }, if !noise_clean { " — A itself is not deterministic at some spans" } else { "" }))
+        let band = match &floor {
+            _ if !noise_clean => " — A itself is not deterministic at some spans".to_string(),
+            Some(f) if f.kl_max > o.logit_kl => format!(" — A against itself reaches KL {:.2e}", f.kl_max),
+            _ => String::new(),
+        };
+        (2, format!("spans differ; end-to-end KL up to {kl_max:.2e} at {} on {n_rows} rows (limit {:.0e}), {n_flips} argmax flip{} ({n_within} within the limit){band}", logits_at, o.logit_kl, if n_flips == 1 { "" } else { "s" }))
     } else {
         (2, "spans differ beyond bit/value identity and no driven program writes logits — no oracle".to_string())
     };

@@ -15,9 +15,9 @@ use kern_manifest::types::{BufferKind, Manifest};
 use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
 
-use crate::compare::{compare, diff_runs, is_float, perturb, Cmp, MODES};
+use crate::compare::{compare, diff_runs, is_float, logit_row, perturb, Cmp, LogitRow, MODES};
 use crate::diff::{access, constants, frontier_inputs, live_bytes, row_elems, Diff, Span};
-use crate::report::{cap, kb, row, Finding, Noise};
+use crate::report::{cap, kb, row, Finding, Floor, Noise};
 use crate::workload::{self, Rng, Workload};
 use crate::{Options, Side, Vars};
 
@@ -283,6 +283,31 @@ pub(crate) fn read_logits<S: Side>(
         .collect()
 }
 
+/// The end-to-end rows of two sides' `logits*` reads, in workload order:
+/// one per rank and, for a buffer of several rows, per row.
+pub(crate) fn logit_rows(ma: &Manifest, ranks: usize, a: &[LogitsAt], b: &[LogitsAt]) -> Vec<LogitRow> {
+    let n_runs_with = |label: &str| a.iter().filter(|x| x.label == label).count();
+    let mut rows_out = Vec::new();
+    for (la, lb) in a.iter().zip(b) {
+        let dt = ma.buffers[&la.buffer].dtype;
+        let row = row_elems(ma, &la.buffer, &la.vars) * dt.bytes() as usize;
+        for q in 0..ranks {
+            let (x, y) = (&la.bytes[q], &lb.bytes[q]);
+            let rows = x.len().checked_div(row).unwrap_or(0);
+            for r in 0..rows.max(1) {
+                let (lo, hi) = if rows > 1 { (r * row, (r + 1) * row) } else { (0, x.len()) };
+                let lbl = if n_runs_with(&la.label) > 1 || rows > 1 {
+                    format!("{} {}{}", la.label, la.buffer, if rows > 1 { format!("[{r}]") } else { String::new() })
+                } else {
+                    la.label.clone()
+                };
+                rows_out.push(logit_row(at_rank(ranks, q, &lbl), dt, &x[lo..hi], &y[lo..hi]));
+            }
+        }
+    }
+    rows_out
+}
+
 /// Replay one recorded span on a side: from the recorded inputs, or from
 /// `host_inputs` (perturbed, per rank). Returns the written buffers (live
 /// prefix) and the state post-image over the recorded write-set, per rank.
@@ -438,9 +463,27 @@ pub fn record<S: Side>(
     }
     let workload_s = t0.elapsed().as_secs_f32();
 
-    // ---- noise floor: A's kept spans replayed from their own recording
+    // ---- noise floor: A's kept spans replayed from their own recording,
+    // and the whole workload once more for the end-to-end band
     if o.noise {
         let t_n = Instant::now();
+        a.zero_states()?;
+        a.reset();
+        let mut again = Vec::new();
+        for run in &rec.runs {
+            let e = a.stage(&run.tokens)?;
+            a.run(&run.program, &e, 0..a.calls(&run.program)?)?;
+            again.extend(read_logits(a, &ma, mb, &run.program, &e, "")?);
+            a.advance(run.advance);
+        }
+        let rows = logit_rows(&ma, ranks, &rec.logits, &again);
+        let worst = rows.iter().max_by(|x, y| x.kl.total_cmp(&y.kl));
+        let floor = worst.map(|w| Floor {
+            rows: rows.len(),
+            kl_max: w.kl,
+            kl_at: w.label.clone(),
+            flips: rows.iter().filter(|r| r.flip()).count(),
+        });
         let mut res: BTreeMap<String, BTreeMap<String, Vec<(String, Cmp)>>> = BTreeMap::new();
         let mut noisy_states = BTreeSet::new();
         let mut findings = Vec::new();
@@ -482,6 +525,7 @@ pub fn record<S: Side>(
             findings: shown,
             omitted,
             states: state_noise,
+            floor,
             elapsed_s: t_n.elapsed().as_secs_f32(),
         };
         rec.noise = Some(NoiseRec { report, res, noisy_states, findings });

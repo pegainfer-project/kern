@@ -4,7 +4,7 @@
 
 use kern_manifest::types::DType;
 use kern_manifest::values::{from_f64, to_f64};
-use kern_test::compare::{compare, diff_runs, logit_row, perturb, ulp_at, Cmp, MODES};
+use kern_test::compare::{compare, diff_runs, logit_row, perturb, Cmp, MODES, TOP};
 use kern_test::workload::Rng;
 
 const FLOATS: [DType; 4] = [DType::Bf16, DType::F16, DType::F32, DType::Fp8E4m3];
@@ -96,45 +96,42 @@ fn severity_orders_identical_below_signed_zeros_below_real_differences() {
     assert_eq!((ints.n_diff, ints.max_ulp, ints.max_abs), (1, None, 2.0));
 }
 
-#[test]
-fn ulp_at_is_the_spacing_of_the_binade() {
-    for dt in FLOATS {
-        // values every dtype holds exactly: the next code up is one step
-        for x in [1.0f64, 1.5, -1.0, 2.0, 0.5, 4.0, 0.25] {
-            let one = from_f64(dt, &[x.abs()]);
-            let mut next = one.clone();
-            next[0] += 1;
-            assert_eq!(ulp_at(dt, x), to_f64(dt, &next)[0] - to_f64(dt, &one)[0], "{dt:?} at {x}");
-        }
-        assert_eq!(ulp_at(dt, 0.0), ulp_at(dt, 1.0));
-    }
-}
-
 fn row(dt: DType, v: &[f64]) -> Vec<u8> {
     from_f64(dt, v)
 }
 
 #[test]
-fn a_logit_row_knows_its_argmax_margin_and_delta() {
+fn a_logit_row_knows_its_argmax_margin_kl_and_top_overlap() {
     let dt = DType::F32;
     let a = [0.5, 2.0, -1.0, 1.75];
     let ra = row(dt, &a);
     let same = logit_row("r".into(), dt, &ra, &ra);
-    assert_eq!((same.argmax_a, same.argmax_b, same.flip(), same.near_tie()), (1, 1, false, false));
-    assert_eq!((same.max_abs, same.scale_ulps, same.kl, same.scale, same.margin_a), (0.0, 0.0, 0.0, 2.0, 0.25));
-    // shifting every logit by a constant leaves argmax and KL alone
+    assert_eq!((same.argmax_a, same.argmax_b, same.flip(), same.rank_in_b), (1, 1, false, 1));
+    assert_eq!((same.kl, same.margin_a, same.top), (0.0, 0.25, 4));
+    // shifting every logit by a constant leaves argmax, KL and the top set alone
     let shifted = logit_row("r".into(), dt, &ra, &row(dt, &a.map(|x| x + 3.0)));
-    assert_eq!((shifted.flip(), shifted.max_abs), (false, 3.0));
+    assert_eq!((shifted.flip(), shifted.top, shifted.cmp.n_diff), (false, 4, 4));
     assert!(shifted.kl.abs() < 1e-9, "{}", shifted.kl);
-    assert_eq!(shifted.scale_ulps, 3.0 / ulp_at(dt, 2.0));
-    // a flip within A's own margin is a near tie; one past it is not
-    let tie = logit_row("r".into(), dt, &ra, &row(dt, &[0.5, 1.75, -1.0, 2.0]));
-    assert_eq!((tie.flip(), tie.near_tie(), tie.margin_a <= tie.max_abs), (true, true, true));
-    let wide = logit_row("r".into(), dt, &row(dt, &[0.0, 5.0, 0.0, 4.4]), &row(dt, &[0.0, 4.6, 0.0, 4.8]));
-    assert_eq!((wide.flip(), wide.near_tie(), wide.argmax_b), (true, false, 3));
-    // a NaN on one side is an unbounded delta
+    // a near tie broken the other way: a flip, A's token now second in B,
+    // almost no mass moved
+    let t = [0.5, 2.0, -1.0, 1.99];
+    let tie = logit_row("r".into(), dt, &row(dt, &t), &row(dt, &[0.5, 1.99, -1.0, 2.0]));
+    assert_eq!((tie.flip(), tie.argmax_b, tie.rank_in_b, tie.top), (true, 3, 2, 4));
+    assert!(tie.kl > 0.0 && tie.kl < 1e-3, "{}", tie.kl);
+    // a confident token displaced: the same flip, far more mass moved
+    let wide = logit_row("r".into(), dt, &row(dt, &[0.0, 5.0, 0.0, 1.0]), &row(dt, &[0.0, 1.0, 0.0, 5.0]));
+    assert_eq!((wide.flip(), wide.argmax_b, wide.rank_in_b), (true, 3, 2));
+    assert!(wide.kl > 1.0, "{}", wide.kl);
+    // the top set is A's TOP most likely tokens found among B's
+    let n = TOP + 5;
+    let va: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let mut vb = va.clone();
+    vb.swap(n - 1, 0); // A's best becomes B's worst, A's worst B's best
+    let moved = logit_row("r".into(), dt, &row(dt, &va), &row(dt, &vb));
+    assert_eq!((moved.top, moved.rank_in_b, moved.argmax_b), (TOP - 1, n, 0));
+    // a NaN on one side is an unbounded move
     let nan = logit_row("r".into(), dt, &ra, &row(dt, &[0.5, f64::NAN, -1.0, 1.75]));
-    assert!(nan.max_abs.is_infinite() && nan.scale_ulps.is_infinite() && nan.cmp.nan_only_one_side == 1);
+    assert!(nan.kl.is_infinite() && nan.cmp.nan_only_one_side == 1);
 }
 
 #[test]

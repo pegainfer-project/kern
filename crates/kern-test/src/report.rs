@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::compare::Cmp;
+use crate::compare::{Cmp, TOP};
 use crate::diff::Diff;
 
 /// Differing comparisons a section names before saying "more".
@@ -251,8 +251,10 @@ pub struct Flip {
     pub argmax_a: usize,
     pub argmax_b: usize,
     pub margin_a: f64,
-    pub delta: f64,
-    pub near_tie: bool,
+    pub kl: f64,
+    pub rank_in_b: usize,
+    /// The row's KL is within the limit: a tie that broke the other way.
+    pub within: bool,
 }
 
 /// The end-to-end oracle over every logits row of the workload.
@@ -262,14 +264,16 @@ pub struct Logits {
     pub runs: usize,
     pub differ: usize,
     pub flips: usize,
-    pub near_ties: usize,
-    pub max_ulp: f64,
-    pub limit_ulp: u64,
-    pub max_abs: f64,
-    pub scale: f64,
-    pub worst_at: String,
+    /// Flips whose row stays within the KL limit.
+    pub within: usize,
     pub kl_max: f64,
     pub kl_at: String,
+    pub limit_kl: f64,
+    /// The smallest top-[`TOP`](crate::compare::TOP) overlap over the rows, and where.
+    pub top_min: usize,
+    pub top_at: String,
+    /// Rows whose top-[`TOP`](crate::compare::TOP) sets differ.
+    pub top_differ: usize,
     pub flipped: Vec<Flip>,
     pub elapsed_s: f32,
 }
@@ -285,34 +289,50 @@ impl Logits {
         }
         let mut s = format!("{}/{} argmax agree", self.rows - self.flips, self.rows);
         if self.flips > 0 {
-            s += &format!(" ({} near-tie, {} wide)", self.near_ties, self.flips - self.near_ties);
+            s += &format!(" ({} within the KL limit, {} beyond)", self.within, self.flips - self.within);
         }
         if self.differ == 0 {
-            s += &format!(" · bit-identical on all rows (limit {} ulp)", self.limit_ulp);
+            s += &format!(" · bit-identical on all rows (limit KL {:.0e})", self.limit_kl);
         } else {
-            s += &format!(
-                " · max {:.2} ulp at the row's scale ({:.4} of {:.1}) at {} (limit {}) · KL {:.2e} at {}",
-                self.max_ulp, self.max_abs, self.scale, self.worst_at, self.limit_ulp, self.kl_max, self.kl_at
-            );
+            s += &format!(" · max KL {:.2e} at {} (limit {:.0e})", self.kl_max, self.kl_at, self.limit_kl);
+            s += &if self.top_differ == 0 {
+                format!(" · top-{TOP} same on all rows")
+            } else {
+                format!(
+                    " · top-{TOP} differs on {} rows, overlap down to {}/{TOP} at {}",
+                    self.top_differ, self.top_min, self.top_at
+                )
+            };
         }
         let mut v = vec![row("logits", s, Some(self.elapsed_s))];
         v.extend(self.flipped.iter().map(|f| {
             row(
                 "logits",
                 format!(
-                    "{} {}: A {} → B {} · A's margin {:.4} · Δ {:.4}",
-                    if f.near_tie { "near-tie" } else { "✗ flip" },
+                    "{} {}: A {} → B {} · A's margin {:.4} · KL {:.2e} · A's token is B's #{}",
+                    if f.within { "flip" } else { "✗ flip" },
                     f.row,
                     f.argmax_a,
                     f.argmax_b,
                     f.margin_a,
-                    f.delta
+                    f.kl,
+                    f.rank_in_b
                 ),
                 None,
             )
         }));
         v
     }
+}
+
+/// A against itself end to end: the workload run twice on A, its logits
+/// rows compared. The band any end-to-end judgement of B sits in.
+#[derive(Serialize, Debug, Clone)]
+pub struct Floor {
+    pub rows: usize,
+    pub kl_max: f64,
+    pub kl_at: String,
+    pub flips: usize,
 }
 
 /// A's span re-run from its own snapshot against its own output.
@@ -323,6 +343,7 @@ pub struct Noise {
     pub findings: Vec<Finding>,
     pub omitted: usize,
     pub states: Vec<String>,
+    pub floor: Option<Floor>,
     pub elapsed_s: f32,
 }
 
@@ -336,6 +357,20 @@ impl Noise {
         v.extend(self.findings.iter().map(|f| f.line("noise", "")));
         v.extend(more("noise", self.omitted, "comparisons"));
         v.extend(self.states.iter().map(|t| row("noise", t, None)));
+        if let Some(f) = &self.floor {
+            v.push(row(
+                "noise",
+                format!(
+                    "A against itself end to end: {} rows · max KL {:.2e} at {} · {} argmax flip{}",
+                    f.rows,
+                    f.kl_max,
+                    f.kl_at,
+                    f.flips,
+                    if f.flips == 1 { "" } else { "s" }
+                ),
+                None,
+            ));
+        }
         v
     }
 }

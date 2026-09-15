@@ -141,9 +141,10 @@ pub struct Options {
     pub prefill: u64,
     /// Decode steps; the seed picks a length in `[steps/2, steps]`.
     pub decode_steps: u64,
-    /// How far the end-to-end logits may move, in ulps at the row's scale,
-    /// and still PASS with logit evidence.
-    pub logit_ulp: u64,
+    /// How far the end-to-end distribution may move, KL(A‖B) in nats on
+    /// any logits row, and still PASS with logit evidence; an argmax flip
+    /// within it is a tie, one beyond it a FAIL.
+    pub logit_kl: f64,
     /// Fuzz rounds per span (0 disables).
     pub fuzz: usize,
     /// Prefill chunk; 0 = drawn from the seed.

@@ -64,89 +64,63 @@ impl Cmp {
     }
 }
 
+/// How many of A's most likely tokens the report follows: enough to see
+/// whether a drift sits at the head of the distribution or in its tail.
+pub const TOP: usize = 20;
+
 /// One end-to-end logits comparison: A (lockstep, uninjected) vs B (free
-/// run) on one row of a `logits*` buffer after one program run.
+/// run) on one row of a `logits*` buffer after one program run. Measured
+/// on the distribution, not the storage: KL(A‖B) says how much probability
+/// mass moved, whatever dtype the row is kept in, and a flip within a
+/// small KL is a tie that was going to break either way. Element-wise
+/// ulps are meaningless here — a 1-ulp change of the hidden state moves
+/// every logit by about the same absolute amount, which is thousands of
+/// ulps for a logit near zero and decides nothing.
 #[derive(Clone, Debug)]
 pub struct LogitRow {
     pub label: String,
     pub cmp: Cmp,
-    pub max_abs: f64,
-    /// `max_abs` in ulps of the row's scale (A's max |logit|): the
-    /// granularity the row is stored at. Element-wise ulps are meaningless
-    /// here — a 1-ulp change of the hidden state moves every logit by
-    /// about the same absolute amount, which is thousands of ulps for a
-    /// logit near zero, and decides nothing.
-    pub scale_ulps: f64,
-    pub scale: f64,
     pub argmax_a: usize,
     pub argmax_b: usize,
     /// A's top-1 − top-2: how far the argmax was from flipping on its own.
     pub margin_a: f64,
+    /// KL(A‖B) in nats; infinite when a side holds a NaN.
     pub kl: f64,
+    /// How many of A's [`TOP`] most likely tokens are among B's.
+    pub top: usize,
+    /// Where A's argmax ranks in B, 1-based.
+    pub rank_in_b: usize,
 }
 
 impl LogitRow {
     pub fn flip(&self) -> bool {
         self.argmax_a != self.argmax_b
     }
-    /// The delta could have flipped A's own argmax: not B's doing alone.
-    pub fn near_tie(&self) -> bool {
-        self.flip() && self.margin_a <= self.max_abs
-    }
-}
-
-/// Spacing of `dt` at magnitude `x`.
-pub fn ulp_at(dt: DType, x: f64) -> f64 {
-    let mant = match dt {
-        DType::Bf16 => 7,
-        DType::F16 => 10,
-        DType::F32 => 23,
-        DType::Fp8E4m3 => 3,
-        _ => 0,
-    };
-    let e = if x.abs() > 0.0 && x.is_finite() { x.abs().log2().floor() } else { 0.0 };
-    2f64.powf(e - mant as f64)
 }
 
 pub fn logit_row(label: String, dt: DType, a: &[u8], b: &[u8]) -> LogitRow {
     let (va, vb) = (values::to_f64(dt, a), values::to_f64(dt, b));
     let cmp = compare(dt, a, b);
-    // A NaN on one side is an unbounded delta, not one to skip: a row B
-    // poisons must never read as "moved 0 ulp".
-    let max_abs = if cmp.nan_only_one_side > 0 {
-        f64::INFINITY
-    } else {
-        va.iter().zip(&vb).map(|(x, y)| (x - y).abs()).filter(|d| d.is_finite()).fold(0.0, f64::max)
+    let order = |v: &[f64]| {
+        let mut idx: Vec<usize> = (0..v.len()).collect();
+        idx.sort_by(|&i, &j| v[j].total_cmp(&v[i]).then(i.cmp(&j)));
+        idx
     };
-    let argmax = |v: &[f64]| {
-        v.iter().enumerate().fold((0usize, f64::NEG_INFINITY), |m, (i, &x)| if x > m.1 { (i, x) } else { m })
-    };
-    let (argmax_a, top1) = argmax(&va);
-    let top2 = va.iter().enumerate().filter(|(i, _)| *i != argmax_a).map(|(_, &x)| x).fold(f64::NEG_INFINITY, f64::max);
-    let (argmax_b, _) = argmax(&vb);
+    let (oa, ob) = (order(&va), order(&vb));
+    let (argmax_a, argmax_b) = (oa.first().copied().unwrap_or(0), ob.first().copied().unwrap_or(0));
+    let top1 = va.get(argmax_a).copied().unwrap_or(f64::NEG_INFINITY);
+    let top2 = oa.get(1).map_or(f64::NEG_INFINITY, |&i| va[i]);
+    let k = TOP.min(va.len());
+    let top = oa[..k].iter().filter(|i| ob[..k].contains(i)).count();
+    let rank_in_b = ob.iter().position(|&i| i == argmax_a).map_or(0, |r| r + 1);
     let lse = |v: &[f64], m: f64| m + v.iter().map(|x| (x - m).exp()).sum::<f64>().ln();
-    let (ma_, mb_) = (top1, vb.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
-    let (la, lb) = (lse(&va, ma_), lse(&vb, mb_));
+    let mb = vb.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let (la, lb) = (lse(&va, top1), lse(&vb, mb));
     let kl = va.iter().zip(&vb).map(|(x, y)| (x - la).exp() * ((x - la) - (y - lb))).sum::<f64>();
-    let scale = va.iter().filter(|x| x.is_finite()).fold(0.0f64, |m, x| m.max(x.abs()));
-    let scale_ulps = if max_abs == 0.0 {
-        0.0
-    } else if max_abs.is_finite() {
-        max_abs / ulp_at(dt, scale)
-    } else {
-        f64::INFINITY
-    };
-    LogitRow {
-        label,
-        cmp,
-        max_abs,
-        scale_ulps,
-        scale,
-        argmax_a,
-        argmax_b,
-        margin_a: top1 - top2,
-        kl: if kl.is_finite() { kl } else { f64::INFINITY },
-    }
+    // A NaN on one side is an unbounded move, not one to skip: a row B
+    // poisons must never read as "moved nothing".
+    let kl = if cmp.nan_only_one_side == 0 && kl.is_finite() { kl.max(0.0) } else { f64::INFINITY };
+    LogitRow { label, cmp, argmax_a, argmax_b, margin_a: top1 - top2, kl, top, rank_in_b }
 }
 
 /// The perturbations a fuzz round cycles through, in order.

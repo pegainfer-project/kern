@@ -120,17 +120,19 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
     件，报告是事件的折叠（现在 `run` 一口气产出 `Report`）；step 级（整
     个 program 一步）在 span 与 sequence 之间补上；每个 program 快照第
     一个与最后一个 run（现在只有第一个）。
-  - 判定补全：NaN / Inf 只出现在 B 一侧直接 FAIL（现在 logits 行记为
-    无限 Δ、判 INCONCLUSIVE）；noise floor 两边都测（B 自己不确定也是事实）；
+  - 判定补全：noise floor 两边都测（B 自己不确定也是事实）；
     `kern.toml` 里给 target 配 profile（seed / steps / chunk / prompt）。
   - 老条目：kernel-as-package 目录里带上 test report 当证据；bs>1 的
     workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
     0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
     domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。
-  - logits 的"尺度 ulp"按存储 dtype 算：DSv4.1 的 logits 是 f32，fp8 /
-    bf16 流水线上一次换核动 2.6 就是 1.7e7 ulp，`--logit-ulp 4` 无意义。
-    改成与存储无关的尺度（bf16 ulp of max|logit|，或 top logit 的比例），
-    near-tie 也按预算而不是按实际 Δ 判（2026-09-04 已记）。
+  - 端到端行的可比性：B 自由跑时 program 内部由模型自己产出的整数决策
+    （spec 的 draft token、indexer 的 window_indices、MoE 的路由）一旦和
+    A 不同，后面的 logits 行算的就不是同一个输入（DSv4.1 实测 step 5 的
+    verify 行 KL 到 12，全是 step 1 一个 draft 平局翻转的后果）。做法是
+    teacher forcing：record 时在每个整数中间量的写点后读下 A 的值，B
+    自由跑到同一写点后覆盖成 A 的，数值自己算、决策照 A 的走；决策翻没
+    翻由 tap 的整数输出比较另报。改完后 KL 门在 spec / MoE 上才能收紧。
   - 大换核的 `diff` 段：DSv4.1 paged → fused 换了 20 个 op，`diff` 打
     211 行，其中 program 行把 120 个 span 逐个展开成一行 95 KB——按 op
     折叠、只点名前几个 span，其余进 `--out`。

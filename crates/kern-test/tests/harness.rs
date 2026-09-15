@@ -52,16 +52,18 @@ fn a_rounding_change_passes_on_logit_evidence() {
     let (code, head) = verdict(&r);
     assert_eq!((code, head.as_str()), (0, "logit evidence"), "{}", r.summary.verdict.summary);
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.differ > 0 && lg.max_ulp <= 4.0 && lg.flips == lg.near_ties, "{lg:?}");
+    assert!(lg.differ > 0 && lg.kl_max <= 0.01 && lg.flips == lg.within, "{lg:?}");
 }
 
 #[test]
 fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
     // A is ±3% on every `scale` call, the sign flipping on each repeat of
-    // an input; B is the exact op. Fuzz is off: with a noisy A, perturbed
-    // inputs are never value-identical.
+    // an input; B is the exact op.
+    // Fuzz is off: with a noisy A, perturbed inputs are never value-identical.
+    // The KL limit is below A's own band, so logit evidence cannot decide.
     let mut o = options();
     o.fuzz = 0;
+    o.logit_kl = 1e-4;
     let (r, lines) = test(&Fixture::default().scale("scale_noisy"), &Fixture::default(), &o).unwrap();
     assert_eq!(verdict(&r), (0, "differences at every span lie within A's own noise floor".into()), "{lines:#?}");
     assert!(line(&lines, "noise").contains("A is not deterministic"), "{lines:#?}");
@@ -75,7 +77,7 @@ fn a_wide_argmax_flip_fails() {
     let v = &r.summary.verdict;
     assert!(v.code == 1 && v.summary.starts_with("B changes the argmax end-to-end at prefill chunk 0"), "{lines:#?}");
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.flips > lg.near_ties, "{lg:?}");
+    assert!(lg.flips > lg.within, "{lg:?}");
     assert!(lines.iter().any(|l| l.starts_with("logits    ✗ flip")), "{lines:#?}");
 }
 
@@ -107,9 +109,9 @@ fn a_changed_program_the_driver_cannot_stage_is_inconclusive() {
 fn logits_moving_past_the_limit_without_a_flip_are_inconclusive() {
     let (r, _) = run(Fixture::default().scale("scale_drift"));
     let v = &r.summary.verdict;
-    assert!(v.code == 2 && v.summary.starts_with("spans differ; end-to-end logits move up to"), "{}", v.summary);
+    assert!(v.code == 2 && v.summary.starts_with("spans differ; end-to-end KL up to"), "{}", v.summary);
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.max_ulp > 4.0 && lg.flips == lg.near_ties, "{lg:?}");
+    assert!(lg.kl_max > 0.01 && lg.flips == lg.within, "{lg:?}");
 }
 
 #[test]
@@ -149,11 +151,12 @@ fn nan_on_one_side_is_counted_and_never_passes_as_logit_evidence() {
     let local = r.summary.local.as_ref().unwrap();
     assert!(local.findings.iter().all(|f| f.cmp.as_ref().unwrap().nan_only_one_side == 1), "{:#?}", local.findings);
     assert!(line(&lines, "local     ✗").contains("· 1 nan"), "{lines:#?}");
-    // a NaN row has no finite delta to measure against the limit: it is an
+    // a NaN row has no finite move to measure against the limit: it is an
     // infinite one, not a zero one
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.max_ulp.is_infinite(), "{lg:?}");
-    assert_eq!(verdict(&r).0, 2, "{}", r.summary.verdict.summary);
+    assert!(lg.kl_max.is_infinite(), "{lg:?}");
+    assert_eq!(verdict(&r).0, 1, "{}", r.summary.verdict.summary);
+    assert!(r.summary.verdict.summary.contains("KL inf above the limit"), "{}", r.summary.verdict.summary);
 }
 
 #[test]
@@ -216,7 +219,7 @@ fn a_side_of_several_ranks_is_compared_rank_by_rank() {
     assert!(local.findings.iter().all(|f| f.span.starts_with("rank 1 ")), "{:#?}", local.findings);
     assert!(local.outputs.iter().all(|f| f.buffer.starts_with("rank ")), "{:#?}", local.outputs);
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.worst_at.starts_with("rank 1 ") && lg.flipped.iter().all(|f| f.row.starts_with("rank 1 ")), "{lg:#?}");
+    assert!(lg.kl_at.starts_with("rank 1 ") && lg.flipped.iter().all(|f| f.row.starts_with("rank 1 ")), "{lg:#?}");
     assert!(verdict(&r).0 != 0 && line(&lines, "tap").contains("2 ranks"), "{lines:#?}");
 }
 

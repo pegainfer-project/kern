@@ -15,7 +15,7 @@ weights = ["artifacts/checkpoint"]   # HF snapshot dir(s) or .safetensors files
 [test]
 seed = 0x5eed
 decode_steps = 32
-logit_ulp = 4
+logit_kl = 0.01
 fuzz = 6
 ```
 

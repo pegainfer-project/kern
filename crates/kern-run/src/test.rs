@@ -57,11 +57,11 @@ pub struct TestOpts {
     /// Decode steps; the seed picks a length in [steps/2, steps] (default 32)
     #[arg(long)]
     decode_steps: Option<u64>,
-    /// How far the end-to-end logits may move, in ulps at the row's scale
-    /// (A's max |logit|), and still PASS (with logit evidence), provided
-    /// the argmax agrees except at near-ties (default 4)
+    /// How far the end-to-end distribution may move, KL(A‖B) in nats on
+    /// any logits row, and still PASS (with logit evidence); an argmax
+    /// flip within it is a tie, one beyond it a FAIL (default 0.01)
     #[arg(long)]
-    logit_ulp: Option<u64>,
+    logit_kl: Option<f64>,
     /// Fuzz rounds per span (0 disables); rounds cycle through the
     /// perturbations of the tapped inputs (jitter, noise, scale, shuffle,
     /// resample, outliers) (default 6)
@@ -157,7 +157,7 @@ impl TestOpts {
             prompt: None,
             prefill: self.prefill,
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),
-            logit_ulp: self.logit_ulp.or_else(|| test.and_then(|x| x.logit_ulp)).unwrap_or(4),
+            logit_kl: self.logit_kl.or_else(|| test.and_then(|x| x.logit_kl)).unwrap_or(0.01),
             fuzz: self.fuzz.or_else(|| test.and_then(|x| x.fuzz)).unwrap_or(6),
             chunk: self.chunk,
             iters: self.iters,

@@ -57,8 +57,8 @@ context，B 直接 D2D 读 A 的镜像；只有要下判断的字节走 host。A
 
 **端到端只看 logits，不生成。** 每个 span bit 相同 ⇒ 整体必相同，不需要
 再证；span 有差异时，oracle 是 B 自由跑同一 workload 后每一步的 `logits`
-（manifest 里的 buffer，读出来就行）：Δ 以 logits 自身尺度的 ulp 计，
-argmax 的翻转按 A 自己的 margin 分成 near-tie 与真翻转。裁不了的（没有
+（manifest 里的 buffer，读出来就行）：量的是分布不是存储——每行算
+KL(A‖B)，argmax 翻转按这一行的 KL 分成"限内的平局"与真翻转。裁不了的（没有
 logits 的 program、A 自己不确定）报 INCONCLUSIVE（退出码 2）。
 
 ## 多 rank：一侧可以是几张卡
@@ -154,13 +154,22 @@ bitmap / logits kernel，checked-in PTX + driver JIT，host 的 `compare`
    （前后像），后面的段全靠它。最后比 output 类 buffer。
 2b. **LOGITS（端到端判据）**：record 里每个 run 之后读 A 的 `logits*`
    buffer（manifest 里本来就有，`logits`、spec 的 `logits_blk`），自由跑
-   里读 B 的，逐 run（`logits_blk` 逐行）比：argmax 是否一致、A 的
-   top-1 − top-2 margin、max |Δ|、KL(A‖B)。**尺度是 A 的 top logit 的
-   ulp**（Δ / ulp(top1)）——逐元素 ulp 在这里没意义，近零的 logit 在
-   hidden 差 1 ulp 时能动几千 bf16 ulp，却决定不了任何 token；c9 的求和序
-   改写就是"31185 ulp"实为 0.156 = top logit 的 1.25 ulp。token 翻了但
-   A 自己的 margin ≤ Δ 的叫 **near-tie**——A 自己就站在平局上，不算 B
-   的错；margin 明显大于 Δ 的翻转才是 **FAIL**（第一个真正的 FAIL 档）。
+   里读 B 的，逐 run（`logits_blk` 逐行）比：KL(A‖B)、argmax 是否一致、
+   A 的 top-1 − top-2 margin、A 的 argmax 在 B 里排第几、A 的 top-20 有
+   几个还在 B 的 top-20 里。**尺度是 KL，与存储 dtype 无关**——早先按
+   "logits 自身尺度的 ulp"（Δ / ulp(max |logit|)）算，在 bf16 logits 上
+   还说得通（c9 的求和序改写 Δ 0.156 = 1.25 ulp），到 DSv4.1 的 f32 logits
+   上一次换核动 2.6 就是 1.7e7 ulp，阈值失去意义；而 logits 存成什么只是
+   head 核的输出格式，流水线本身是 fp8 / bf16 的。KL 直接量"概率质量挪了
+   多少"，对整体平移不敏感。翻转不单独设 margin 规则：一行 KL 很小却翻了
+   argmax，只能是两个近乎并列的 token 换位（0.55/0.45 互换就要 KL 5e-3），
+   算 **限内的平局**；KL 超过 `--logit-kl` 的翻转才是 **FAIL**（第一个真正
+   的 FAIL 档）。早先"A 的 margin ≤ Δ 就算 near-tie"是拿 B 造成的偏差解释
+   B 造成的翻转，B 错得越大越多翻转被算成平局，已删。top-20 重合只进报告
+   不进判决：带 margin 排除它是 KL 的子集，不带就被尾部的并列刷屏；给人看
+   漂移发生在头部还是尾部很直观。noise 里另跑一遍 A 自己的 workload，A 对
+   A 的 KL / 翻转数是任何端到端结论所在的带子（fp8 参考核常常自己就不
+   确定）。
 3. **NOISE FLOOR**：每个快照写回 A，重跑 A 自己的 span，和参考输出比。
    带 inout state 的 span 不幂等（重放一次 conv 窗口再移一位、SSM 再递推
    一步），所以**每次重放先把 pre-image 写回，跑完把 A 的 post-image 写
@@ -212,25 +221,28 @@ driver 不会 stage 的 program 在 TAP 里标红、判 INCONCLUSIVE。
 按顺序取第一条命中的：
 
 - `FAIL`（退出码 1）：fuzz 下 B 崩溃 / 产出越出声明域。
-- `FAIL`：端到端某一步 B 换了 argmax，而 A 的 top-1 − top-2 margin 明显
-  大于 logits 的 Δ（不是 near-tie）；A 自己不确定（noise floor 脏）时不
-  下这个结论。
+- `FAIL`：端到端某一步 B 换了 argmax，且这一行的 KL 超过 `--logit-kl`
+  （不是限内的平局；B 一侧出 NaN 也在此，KL 无限）；A 自己不确定（noise
+  floor 脏）时不下这个结论。
 - `INCONCLUSIVE`（退出码 2）：变了的 program driver 喂不了（覆盖缺口，
   再好的 logits 也只说明被喂到的那些）。
 - `PASS: bit-identical`：每个 span 在真实和扰动输入下逐 bit 相同。
 - `PASS: value-identical`：只差 ±0 符号位（silu 类 kernel 常见）。
 - `PASS: logits bit-identical`：span 有差，端到端每一步 logits 逐 bit 相同。
-- `PASS: logit evidence`：端到端 logits 的 max |Δ| ≤ `--logit-ulp`（默认
-  4）个"logits 自身尺度的 ulp"（Δ / ulp(max |logit|)），argmax 一致或
-  只有 near-tie 翻转（报告逐条列出）。合法的舍入序改写（c9 的 SSM 求和
-  序：state 差 280 KB、logits 差 1 ulp）进这一档。
+- `PASS: logit evidence`：端到端每一行 KL(A‖B) ≤ `--logit-kl`（默认
+  0.01 nat），argmax 一致或只有限内的翻转（报告逐条列出 margin、KL、A 的
+  token 在 B 里的名次）。合法的舍入序改写（c9 的 SSM 求和序：state 差
+  280 KB、logits 差 1 ulp）进这一档。阈值按流水线定：bf16 的舍入序噪声
+  在 1e-3 量级，fp8 attention 换核到 1e-1 也不奇怪，看 noise 里 A 对 A
+  的那一行再定。
 - `PASS: within noise floor`：span 差异不超过 A 自己重跑的差异（且 fuzz
   值相同）。
 - `INCONCLUSIVE`：其余——logits 动得超过阈值但没翻 argmax、或没有 logits
-  可比。报告里有 Δ、near-tie 数、KL，交给上层判断。
+  可比。报告里有最坏一行的 KL、翻转数、top-20 重合、A 对 A 的带子，交给
+  上层判断。
 
 `--out` 写完整 JSON（每个 span 每个 buffer 的 n_diff / max ulp / max |Δ| /
-nan / signed-zero、端到端每步 logits 的 Δ / argmax / margin / KL、noise
+nan / signed-zero、端到端每步 logits 的 KL / argmax / margin / top-20、noise
 带、每轮 fuzz、逐 kernel roofline、sweep 曲线）。
 
 ## fixture 实测（GB300，2026-08-31）
@@ -272,7 +284,9 @@ program 各 120–129 个 span，`load`（once）也有 span 但不算未驱动�
   |Δ| 5.6，翻的是 prefill 那一行（margin 0.19，Δ 2.6）；draft 行 60 行有
   差，max 4.1；verify 行的 Δ 到 16——它们跟在已经不同的 draft token 后面，
   算的不是同一个输入。"17162863 ulp at scale" 是 f32 logits 的 ulp，在
-  fp8/bf16 流水线上没有意义（roadmap）。
+  fp8/bf16 流水线上没有意义——这次之后判据改成了 KL（见 2b）；按存档的
+  行重算：分叉前的行 KL 0.09–0.33，step 5 verify 行 4–12，margin 2.69 的
+  那次翻转 KL 4.4，新规则下不再算平局。
 - noise：A 自己 492/984 个 span 不确定（`o_lowrank` 50% 元素、16k ulp）：
   paged 参考核本身不是确定性的，B 按这条带子判。
 - perf：decode_batch eager 17.7 → 15.0 ms（−15.6%），graph TPOT 11.41 →
