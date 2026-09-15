@@ -175,6 +175,13 @@ pub fn frontier_inputs(m: &Manifest, prog: &str, calls: Range<usize>) -> BTreeSe
     inputs
 }
 
+/// Buffers the `once` programs write: load-time constants (a packed
+/// weight, a rope table), each side's own like its weights, never handed
+/// from A to B.
+pub fn constants(m: &Manifest, once: &[String]) -> BTreeSet<String> {
+    once.iter().flat_map(|p| access(m, p, 0..m.programs[p].calls.len()).writes).collect()
+}
+
 /// Elements of a buffer at `vars` (its live prefix).
 pub fn live_elems(m: &Manifest, name: &str, vars: &Vars) -> usize {
     m.buffers[name]

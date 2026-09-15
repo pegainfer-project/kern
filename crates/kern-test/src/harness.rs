@@ -13,10 +13,10 @@ use anyhow::{Context, Result};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::{BufferKind, Manifest};
 use kern_manifest::values;
-use kern_manifest::Protocol;
+use kern_manifest::{Protocol, Verified};
 
 use crate::compare::{compare, diff_runs, is_float, perturb, Cmp, MODES};
-use crate::diff::{access, frontier_inputs, live_bytes, row_elems, Diff, Span};
+use crate::diff::{access, constants, frontier_inputs, live_bytes, row_elems, Diff, Span};
 use crate::report::{cap, kb, row, Finding, Noise};
 use crate::workload::{self, Rng, Workload};
 use crate::{Options, Side, Vars};
@@ -339,11 +339,12 @@ pub(crate) fn domain_violations<S: Side>(
 
 /// Record A on the workload `o` and the diff's spans: what every span
 /// consumed and produced, then A's noise floor, fuzz outputs and timings.
-/// `mb` is B's manifest: which buffers and states the two sides share.
+/// `mb` is B's manifest: which buffers and states the two sides share,
+/// and what B's `once` programs make their own.
 pub fn record<S: Side>(
     o: &Options,
     diff: Diff,
-    mb: &Manifest,
+    mb: &Verified,
     a: &mut S,
     out: &mut dyn FnMut(&[String]),
 ) -> Result<Recording<S::Buf>> {
@@ -357,7 +358,7 @@ pub fn record<S: Side>(
         load_s: 0.0,
         record_s: 0.0,
         ma: ma.clone(),
-        mb: mb.clone(),
+        mb: (**mb).clone(),
         diff,
         wl: wl.clone(),
         ranks,
@@ -374,6 +375,10 @@ pub fn record<S: Side>(
         perf: None,
     };
     let shared = rec.shared_states();
+    let pb = Protocol::check(mb).context("B does not fit the serving protocol")?;
+    let mut fixed = constants(&ma, &pa.once);
+    fixed.extend(constants(mb, &pb.once));
+    let mb: &Manifest = mb;
     let chunk_name = chunk_f.as_ref().map_or("", |f| f.name.as_str());
 
     // ---- the workload: one run at a time, spans recorded as A passes them
@@ -383,7 +388,8 @@ pub fn record<S: Side>(
     while i < wl.prefill.len() {
         let c = (wl.prefill.len() - i).min(wl.chunk);
         let tokens = wl.prefill[i..i + c].to_vec();
-        record_run(a, &mut rec, chunk_name, format!("chunk {n_chunks}"), tokens, c as u64, n_chunks == 0, &shared)?;
+        let keep = n_chunks == 0;
+        record_run(a, &mut rec, chunk_name, format!("chunk {n_chunks}"), tokens, c as u64, keep, &shared, &fixed)?;
         a.advance(c as u64);
         i += c;
         n_chunks += 1;
@@ -394,7 +400,7 @@ pub fn record<S: Side>(
     for (k, &tok) in wl.decode.iter().enumerate() {
         let f = &step_fs[k % step_fs.len()];
         let tokens = vec![tok; rows_of(f) as usize];
-        record_run(a, &mut rec, &f.name, format!("step {k}"), tokens, 1, k < step_fs.len(), &shared)?;
+        record_run(a, &mut rec, &f.name, format!("step {k}"), tokens, 1, k < step_fs.len(), &shared, &fixed)?;
         a.advance(1);
     }
     // What a caller would get: the outputs and the states after the workload.
@@ -601,6 +607,7 @@ fn record_run<S: Side>(
     advance: u64,
     keep: bool,
     shared: &[String],
+    fixed: &BTreeSet<String>,
 ) -> Result<()> {
     let ranks = rec.ranks;
     let e = a.stage(&tokens)?;
@@ -622,12 +629,12 @@ fn record_run<S: Side>(
         a.run(pname, &e, ia..span.a.start)?;
         ia = span.a.end;
         // Inputs both sides have and A can hand over: a buffer only B knows
-        // (a weight it packs differently, an intermediate of its own) is
-        // B's to produce.
+        // (an intermediate of its own), a weight, or what a `once` program
+        // made of one (B packs it its own way) is B's to produce.
         let names: Vec<String> = frontier_inputs(ma, pname, span.a.clone())
             .union(&frontier_inputs(mb, pname, span.b.clone()))
             .filter(|n| ma.buffers.contains_key(*n) && mb.buffers.contains_key(*n))
-            .filter(|n| ma.buffers[*n].kind != BufferKind::Weight)
+            .filter(|n| ma.buffers[*n].kind != BufferKind::Weight && !fixed.contains(*n))
             .cloned()
             .collect();
         let mut inputs = Vec::new();

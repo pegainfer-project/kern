@@ -45,6 +45,8 @@ pub struct Fixture {
     /// A `gather` program over a `peer` buffer of `hidden`, for the diff
     /// (its op is a module kernel the fake never runs).
     pub peer: bool,
+    /// A `prep` program run once after load that fills a carry `table`.
+    pub once: bool,
 }
 
 impl Default for Fixture {
@@ -58,6 +60,7 @@ impl Default for Fixture {
             probe: false,
             ranks: 1,
             peer: false,
+            once: false,
         }
     }
 }
@@ -86,6 +89,9 @@ impl Fixture {
     }
     pub fn peer(self) -> Self {
         Fixture { peer: true, ..self }
+    }
+    pub fn once(self) -> Self {
+        Fixture { once: true, ..self }
     }
 
     pub fn manifest(&self) -> Verified {
@@ -131,6 +137,11 @@ impl Fixture {
         if self.probe {
             programs["probe"] = serde_json::json!({"calls": calls});
         }
+        if self.once {
+            ops.insert("fill_table".into(), op(&["out buffer<f32>"], "fill_table"));
+            programs["prep"] =
+                serde_json::json!({"once": true, "calls": [{"op": "fill_table", "args": [{"buf": "table"}]}]});
+        }
         let mut modules = serde_json::json!({});
         if self.peer {
             modules["toy"] = serde_json::json!({"source": "toy.cubin", "sha256": "ab".repeat(32)});
@@ -164,6 +175,9 @@ impl Fixture {
         });
         if ranked {
             m["topology"] = serde_json::json!({"groups": {"ep": self.ranks}});
+        }
+        if self.once {
+            m["buffers"]["table"] = serde_json::json!({"kind": "carry", "dtype": "f32", "shape": [D]});
         }
         if self.peer {
             m["buffers"]["hidden"]["export"] = true.into();

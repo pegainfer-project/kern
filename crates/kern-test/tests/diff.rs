@@ -170,3 +170,14 @@ fn a_peer_buffer_stands_for_the_exported_buffer_it_holds_addresses_of() {
     assert_eq!(acc.writes.iter().cloned().collect::<Vec<_>>(), ["act", "hidden"]);
     assert_eq!(frontier_inputs(&m, "gather", 1..2).into_iter().collect::<Vec<_>>(), ["hidden"]);
 }
+
+#[test]
+fn what_a_once_program_writes_is_a_load_time_constant() {
+    use kern_manifest::Protocol;
+    use kern_test::diff::constants;
+    let m = Fixture::default().once().manifest();
+    let once = Protocol::check(&m).unwrap().once;
+    assert_eq!(once, ["prep"]);
+    assert_eq!(constants(&m, &once).into_iter().collect::<Vec<_>>(), ["table"]);
+    assert!(constants(&m, &[]).is_empty());
+}

@@ -135,7 +135,10 @@ bitmap / logits kernel，checked-in PTX + driver JIT，host 的 `compare`
    写进报告钉成回归。
    **record**：A 一个 run 一个 run 地跑，每个 run 之前把共有 state 全量
    D2D 存成镜像，每个 span 之前把 frontier 输入（按当前 var 值取活跃前
-   缀）D2D 存下，跑完读参考输出；**replay**：B 每个 run 先装 A 的镜像，
+   缀）D2D 存下，跑完读参考输出。weight 和 `once` program 写出的 buffer
+   （打包好的权重、rope 表：装载期常量，B 有自己的一份，可能是别的布局）
+   不算 frontier 输入——DSv4.1 每个 attention span 都读 268 MB 的 rope
+   表，120 个 span × 9 个 run 会把卡塞满；**replay**：B 每个 run 先装 A 的镜像，
    每个 span 先装 A 的输入再跑，比 B 写出的 buffer。所以每一行 span 结果
    都是 **span-local**：B 拿 A 的输入、A 的 state 跑这一刀，差多少就是这
    一刀自己的事，不混前面层漂移下来的误差（早先不注入时，c7 那种 state
