@@ -196,7 +196,9 @@ class Server:
         while True:
             text = self.log.read_text(errors="replace")
             ready = next((l for l in text.splitlines() if " scheduler ready " in l), None)
-            if ready and " serving " in text:
+            # `serving` is logged as the engine comes up; the port opens a
+            # moment later, so ready is when it answers.
+            if ready and " serving " in text and self.listening():
                 self.facts = kv(ready)
                 self.facts["load_s"] = round(time.monotonic() - t0, 1)
                 return self
@@ -206,6 +208,15 @@ class Server:
                 self.proc.kill()
                 raise RuntimeError("kern-serve did not come up in time")
             time.sleep(1)
+
+    def listening(self) -> bool:
+        try:
+            with urllib.request.urlopen(f"{self.url}/v1/models", timeout=5):
+                return True
+        except urllib.error.HTTPError:
+            return True
+        except urllib.error.URLError:
+            return False
 
     def __exit__(self, *_):
         if self.proc and self.proc.poll() is None:
@@ -628,10 +639,13 @@ def session_host(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: 
             turn2[p]["cold_ids"] = r["ids"]
             same.add(f"turn2 {i}", turn2[p]["ids"], turn2[p]["warm_ids"], r["ids"])
         rep.add("turn2_warm_equals_cold", gate(same), f"cached_tokens warm {[turn2[p]['cached'] for p in PROMPTS[:4]]}; {same}")
-        # Finished requests fill the pool until their checkpoints park: the
+        # Finished requests fill the pool until the checkpoints turn2 hits
+        # (their lengths are what the warm turn2 got) have parked: the
         # twelve prompts (their answers vs cold), then numbered variants.
         fill, n = Same(oracle, rows), 0
-        while n < len(PROMPTS) or (n < 48 * t.ranks and len(s.lines("parked")) < 4):
+        want = {turn2[p]["cached"] for p in PROMPTS[:4]} - {0}
+        parked = lambda: {l["tokens"] for l in s.lines("parked")}
+        while n < len(PROMPTS) or (n < 48 * t.ranks and not want <= parked()):
             p = PROMPTS[n % len(PROMPTS)]
             r = s.complete(p if n < len(PROMPTS) else f"{n}. {p}", a.max_tokens)
             if n < len(PROMPTS):
@@ -650,7 +664,7 @@ def session_host(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: 
         rep.add(
             "park_wake",
             c["parks"] >= 1 and c["wakes"] >= 1 and c["host_hits"] >= 1 and identity,
-            f"capacity={capacity} fills={n} parks={c['parks']} host_evictions={c['host_evictions']} evictions={c['evictions']} wakes={c['wakes']} host_hits={c['host_hits']} woken requests={woke}; under the small pool vs cold: {fill}; turn2 after the parks vs cold: {same}",
+            f"capacity={capacity} fills={n} parks={c['parks']} (turn2's {sorted(want & parked())} of {sorted(want)}) host_evictions={c['host_evictions']} evictions={c['evictions']} wakes={c['wakes']} host_hits={c['host_hits']} woken requests={woke}; under the small pool vs cold: {fill}; turn2 after the parks vs cold: {same}",
         )
 
 
