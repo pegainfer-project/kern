@@ -9,13 +9,18 @@
 //!   2. records A ([`record`]): a seeded workload runs once on A and, at
 //!      every span of every program run, A's frontier inputs and outputs
 //!      are kept, with an image of A's state at the start of each run.
-//!      The first run of each program also keeps the state bytes its
-//!      spans changed, so the span can be replayed on its own. A's noise
-//!      floor (each kept span replayed against itself) and A's timings
-//!      are recorded too: after this A is not needed;
+//!      A buffer is kept as what changed since it was last kept (the
+//!      64-byte blocks that differ, over a whole copy at the head of the
+//!      chain), so a span that writes a few rows of a 1 GB workspace
+//!      costs those rows, and what a span wrote is known exactly. The
+//!      first run of each program also keeps the state bytes its spans
+//!      changed, so the span can be replayed on its own. A's noise floor
+//!      (each kept span replayed against itself) and A's timings are
+//!      recorded too: after this A is not needed;
 //!   3. replays B ([`replay`]): B runs the same workload starting every
 //!      program run from A's state image and every span from A's frontier
-//!      inputs, so what B writes is the span's own doing; then B free-runs
+//!      inputs, so what B writes is the span's own doing, and compared
+//!      on A's write-set (what B wrote outside it is counted); then B free-runs
 //!      the workload and the logits of every step are compared end to
 //!      end against A's: the oracle. Perf times B where A was timed. The
 //!      verdict is a pure function of what was measured (`FAIL` / `PASS`
@@ -63,13 +68,13 @@ pub use report::{Report, Summary};
 /// The var values one call runs at.
 pub type Vars = BTreeMap<String, u64>;
 
-/// Where bytes a comparison reads live on a rank: a buffer's live
-/// prefix, a byte range of a state, or a byte range of scratch. Nothing
-/// a verdict needs comes to the host as bytes; the side compares where
-/// the bytes are and hands back counts.
+/// Where bytes a comparison reads live on a rank: a byte range of a
+/// buffer, of a state, or of scratch. Nothing a verdict needs comes to
+/// the host as bytes; the side compares where the bytes are and hands
+/// back counts.
 #[derive(Clone)]
 pub enum At<'a, B> {
-    Buffer(&'a str, usize),
+    Buffer(&'a str, Range<usize>),
     State(&'a str, Range<usize>),
     Scratch(&'a B, Range<usize>),
 }
@@ -110,10 +115,10 @@ pub trait Side {
 
     /// The first `bytes` of a buffer, on the host.
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>>;
-    /// The first `bytes` of a buffer, kept on the device.
-    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Self::Buf>;
-    /// The first `bytes` of `from` into a buffer.
-    fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Self::Buf) -> Result<()>;
+    /// Bytes `at` of a buffer, kept on the device.
+    fn save(&self, rank: usize, buffer: &str, at: Range<usize>) -> Result<Self::Buf>;
+    /// The first `at.len()` bytes of `from` into bytes `at` of a buffer.
+    fn load(&mut self, rank: usize, buffer: &str, at: Range<usize>, from: &Self::Buf) -> Result<()>;
     /// Bytes `at` of `from`, allocated on `rank`, on the host.
     fn bytes(&self, rank: usize, from: &Self::Buf, at: Range<usize>) -> Result<Vec<u8>>;
 

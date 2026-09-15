@@ -145,28 +145,30 @@ impl Runtime {
         Ok(Scratch(alloc_uninit(&self.stream, bytes as u64)?))
     }
 
-    /// The first `bytes` of a buffer into new scratch, device to device (synchronous).
-    pub fn save_buffer(&self, name: &str, bytes: usize) -> Result<Scratch> {
+    /// Bytes `at` of a buffer into new scratch, device to device (synchronous).
+    pub fn save_buffer(&self, name: &str, at: std::ops::Range<usize>) -> Result<Scratch> {
         let Some(b) = self.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if bytes as u64 > b.bytes {
-            bail!(Api, "buffer `{name}`: prefix {bytes} exceeds allocation {}", b.bytes);
+        if at.end as u64 > b.bytes {
+            bail!(Api, "buffer `{name}`: bytes {at:?} exceed allocation {}", b.bytes);
         }
-        let into = self.scratch(bytes)?;
-        self.dtod(into.0.view(0..bytes)?.ptr(), b.view(0..bytes)?.ptr(), bytes)?;
+        let n = at.len();
+        let into = self.scratch(n)?;
+        self.dtod(into.0.view(0..n)?.ptr(), b.view(at)?.ptr(), n)?;
         Ok(into)
     }
 
-    /// The first `bytes` of scratch into a buffer, device to device (synchronous).
-    pub fn load_buffer(&mut self, name: &str, bytes: usize, from: &Scratch) -> Result<()> {
+    /// The first `at.len()` bytes of scratch into bytes `at` of a buffer, device to device (synchronous).
+    pub fn load_buffer(&mut self, name: &str, at: std::ops::Range<usize>, from: &Scratch) -> Result<()> {
         let Some(b) = self.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if bytes as u64 > b.bytes {
-            bail!(Api, "buffer `{name}`: got {bytes} bytes, buffer is {}", b.bytes);
+        if at.end as u64 > b.bytes {
+            bail!(Api, "buffer `{name}`: bytes {at:?} exceed allocation {}", b.bytes);
         }
-        self.dtod(b.view(0..bytes)?.ptr(), from.0.view(0..bytes)?.ptr(), bytes)
+        let n = at.len();
+        self.dtod(b.view(at)?.ptr(), from.0.view(0..n)?.ptr(), n)
     }
 
     /// A state's whole allocation into new scratch, device to device (synchronous).

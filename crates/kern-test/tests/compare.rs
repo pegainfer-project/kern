@@ -4,7 +4,7 @@
 
 use kern_manifest::types::DType;
 use kern_manifest::values::{from_f64, to_f64};
-use kern_test::compare::{changed_blocks, compare, logit_stats, Cmp, BLOCK, TOP};
+use kern_test::compare::{changed_blocks, coalesce, compare, logit_stats, outside, Cmp, BLOCK, TOP};
 use kern_test::workload::Rng;
 
 const FLOATS: [DType; 4] = [DType::Bf16, DType::F16, DType::F32, DType::Fp8E4m3];
@@ -165,4 +165,31 @@ fn changed_blocks_name_every_block_that_differs_and_only_those() {
             }
         }
     }
+}
+
+#[test]
+fn merged_comparisons_add_counts_and_keep_the_worst_distance() {
+    let (x, y, z) = (1.0f32.to_le_bytes(), 1.5f32.to_le_bytes(), 3.0f32.to_le_bytes());
+    let a = compare(DType::F32, &[x, x].concat(), &[x, y].concat());
+    let b = compare(DType::F32, &[x, x, x].concat(), &[z, x, x].concat());
+    let m = a.clone().merge(b.clone());
+    assert_eq!((m.n, m.n_diff, m.max_abs), (5, 2, 2.0));
+    assert_eq!(m.max_ulp, a.max_ulp.max(b.max_ulp));
+    assert_eq!(Cmp::default().merge(a.clone()), a);
+}
+
+#[test]
+fn bytes_outside_a_write_set_are_those_no_range_covers() {
+    let a = [64..128, 256..320];
+    assert_eq!(outside(&[64..128, 256..320], &a), 0);
+    assert_eq!(outside(&[0..64, 64..128, 300..400], &a), 64 + 80);
+    assert_eq!(outside(&[], &a), 0);
+    assert_eq!(outside(&[0..64, 128..192], &[]), 128);
+}
+
+#[test]
+fn coalescing_closes_gaps_below_the_limit_only() {
+    assert_eq!(coalesce(vec![0..64, 128..192, 4096..4160, 9000..9064], 100), [0..192, 4096..4160, 9000..9064]);
+    assert_eq!(coalesce(vec![0..64, 128..192], 0), [0..64, 128..192]);
+    assert_eq!(coalesce(vec![0..64, 64..128, 256..320], 0), [0..128, 256..320]);
 }

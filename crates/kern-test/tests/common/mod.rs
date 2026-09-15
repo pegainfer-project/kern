@@ -23,6 +23,7 @@ pub const D: usize = 4;
 pub const VOCAB: usize = 16;
 pub const LAYERS: usize = 2;
 pub const CAPACITY: u64 = 16;
+pub const SLAB: usize = 4096;
 
 /// One manifest of the family: which entry each op launches, and the
 /// structural variations.
@@ -51,6 +52,9 @@ pub struct Fixture {
     pub once: Option<&'static str>,
     /// `act` declared one column wider: the same name, another shape.
     pub wide_act: bool,
+    /// A 4 KB `slab` carry the `scale` op writes one 64-byte block of per
+    /// layer (a persistent kernel's workspace: big, touched in places).
+    pub slab: bool,
 }
 
 impl Default for Fixture {
@@ -66,6 +70,7 @@ impl Default for Fixture {
             peer: false,
             once: None,
             wide_act: false,
+            slab: false,
         }
     }
 }
@@ -101,14 +106,23 @@ impl Fixture {
     pub fn wide_act(self) -> Self {
         Fixture { wide_act: true, ..self }
     }
+    pub fn slab(self) -> Self {
+        Fixture { slab: true, ..self }
+    }
 
     pub fn manifest(&self) -> Verified {
         let op = |params: &[&str], entry: &str| serde_json::json!({"params": params, "impl": {"launches": [{"entry": format!("extern:{entry}")}]}});
         let mut ops = serde_json::Map::new();
         ops.insert("embed".into(), op(&["in buffer<i64>", "out buffer<f32>"], "embed"));
         let ranked = self.ranks > 1;
-        let scale_params: &[&str] =
-            if ranked { &["in buffer<f32>", "out buffer<f32>", "i32"] } else { &["in buffer<f32>", "out buffer<f32>"] };
+        let mut scale_params: Vec<&str> = vec!["in buffer<f32>", "out buffer<f32>"];
+        if ranked {
+            scale_params.push("i32");
+        }
+        if self.slab {
+            scale_params.extend(["inout buffer<u8>", "i32"]);
+        }
+        let scale_params = &scale_params[..];
         ops.insert("scale".into(), op(scale_params, self.scale));
         if let Some((_, e)) = self.alt {
             ops.insert("scale_alt".into(), op(scale_params, e));
@@ -130,6 +144,9 @@ impl Fixture {
             let mut args = vec![serde_json::json!({"buf": "hidden"}), serde_json::json!({"buf": "act"})];
             if ranked {
                 args.push(serde_json::json!({"rank": "ep"}));
+            }
+            if self.slab {
+                args.extend([serde_json::json!({"buf": "slab"}), serde_json::json!({"i32": l})]);
             }
             calls.push(serde_json::json!({"op": sc, "args": args}));
             calls.push(serde_json::json!({"op": "mix", "args": [
@@ -186,6 +203,9 @@ impl Fixture {
         }
         if self.once.is_some() {
             m["buffers"]["table"] = serde_json::json!({"kind": "carry", "dtype": "f32", "shape": [D]});
+        }
+        if self.slab {
+            m["buffers"]["slab"] = serde_json::json!({"kind": "carry", "dtype": "u8", "shape": [SLAB]});
         }
         if self.peer {
             m["buffers"]["hidden"]["export"] = true.into();
@@ -286,7 +306,7 @@ impl Rank {
                     .iter()
                     .enumerate()
                     .map(|(i, &v)| match e {
-                        "extern:scale" | "extern:scale_same" => v * 0.5,
+                        "extern:scale" | "extern:scale_same" | "extern:scale_slab_leak" => v * 0.5,
                         "extern:scale_negzero" if v == 0.0 => -0.0,
                         "extern:scale_negzero" => v * 0.5,
                         "extern:scale_round" => v * 0.5 * (1.0 + 2f32.powi(-9)),
@@ -303,6 +323,23 @@ impl Rank {
                     })
                     .collect();
                 self.bufs.get_mut(&buf(1)).unwrap()[..t * D * 4].copy_from_slice(&bytes_f32(&y));
+                // the slab: this layer's block gets the row sums; the leaky
+                // variant also stamps a block nobody asked for
+                if let Some(Arg::I32 { i32: layer }) = args.iter().find(|a| matches!(a, Arg::I32 { .. })) {
+                    let slab = args.iter().find_map(|a| match a {
+                        Arg::Buf { buf, .. } if buf == "slab" => Some(buf.clone()),
+                        _ => None,
+                    });
+                    if let Some(slab) = slab {
+                        let sums: Vec<u8> = (0..64).map(|i| (y[i % y.len()] as i64 + i as i64) as u8).collect();
+                        let s = self.bufs.get_mut(&slab).unwrap();
+                        let at = *layer as usize * 64;
+                        s[at..at + 64].copy_from_slice(&sums);
+                        if e == "extern:scale_slab_leak" {
+                            s[2048..2048 + 64].copy_from_slice(&sums);
+                        }
+                    }
+                }
             }
             e if e.starts_with("extern:mix") => {
                 let act = f32s(&self.bufs[&buf(0)][..t * D * 4]);
@@ -369,7 +406,7 @@ impl Rank {
 impl Fake {
     fn at<'a>(&'a self, rank: usize, at: At<'a, Vec<u8>>) -> &'a [u8] {
         match at {
-            At::Buffer(name, bytes) => &self.ranks[rank].bufs[name][..bytes],
+            At::Buffer(name, r) => &self.ranks[rank].bufs[name][r],
             At::State(name, r) => &self.ranks[rank].states[name][r],
             At::Scratch(b, r) => &b[r],
         }
@@ -435,11 +472,12 @@ impl Side for Fake {
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
         Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
     }
-    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
-        Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
+    fn save(&self, rank: usize, buffer: &str, at: Range<usize>) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].bufs[buffer][at].to_vec())
     }
-    fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Vec<u8>) -> Result<()> {
-        self.ranks[rank].bufs.get_mut(buffer).unwrap()[..bytes].copy_from_slice(&from[..bytes]);
+    fn load(&mut self, rank: usize, buffer: &str, at: Range<usize>, from: &Vec<u8>) -> Result<()> {
+        let n = at.len();
+        self.ranks[rank].bufs.get_mut(buffer).unwrap()[at].copy_from_slice(&from[..n]);
         Ok(())
     }
     fn bytes(&self, _rank: usize, from: &Vec<u8>, at: Range<usize>) -> Result<Vec<u8>> {

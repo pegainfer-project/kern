@@ -25,8 +25,8 @@ use crate::{Result, Runtime};
 /// harness set aside on this device.
 #[derive(Clone)]
 pub enum At<'a> {
-    /// The first `bytes` of a buffer.
-    Buffer(&'a str, usize),
+    /// A byte range of a buffer.
+    Buffer(&'a str, Range<usize>),
     /// A byte range of a state's allocation.
     State(&'a str, Range<usize>),
     /// A byte range of scratch.
@@ -105,14 +105,20 @@ fn cmp_of(v: &[u64], n: u64) -> Cmp {
 
 /// Byte ranges of the 64-byte blocks whose bit is set, adjacent blocks
 /// merged, the last clipped to `bytes`.
+/// The set bits as merged block ranges; a word of zeros (32 unchanged
+/// blocks, the common case over a large buffer) costs one test.
 fn ranges_of(bits: &[u32], bytes: usize) -> Vec<Range<usize>> {
-    let blocks = bytes.div_ceil(BLOCK);
     let mut out: Vec<Range<usize>> = Vec::new();
-    for i in (0..blocks).filter(|i| bits[i / 32] >> (i % 32) & 1 == 1) {
-        let (lo, hi) = (i * BLOCK, ((i + 1) * BLOCK).min(bytes));
-        match out.last_mut() {
-            Some(r) if r.end == lo => r.end = hi,
-            _ => out.push(lo..hi),
+    for (w, &word) in bits.iter().enumerate().filter(|(_, w)| **w != 0) {
+        let mut rest = word;
+        while rest != 0 {
+            let i = w * 32 + rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            let (lo, hi) = (i * BLOCK, ((i + 1) * BLOCK).min(bytes));
+            match out.last_mut() {
+                Some(r) if r.end == lo => r.end = hi,
+                _ => out.push(lo..hi),
+            }
         }
     }
     out
@@ -141,14 +147,14 @@ impl Runtime {
 
     fn view_at(&self, at: At) -> Result<BufView> {
         match at {
-            At::Buffer(name, bytes) => {
+            At::Buffer(name, r) => {
                 let Some(b) = self.buffers.get(name) else {
                     bail!(Api, "no buffer `{name}`");
                 };
-                if bytes as u64 > b.bytes {
-                    bail!(Api, "buffer `{name}`: prefix {bytes} exceeds allocation {}", b.bytes);
+                if r.end as u64 > b.bytes {
+                    bail!(Api, "buffer `{name}`: bytes {r:?} exceed allocation {}", b.bytes);
                 }
-                b.view(0..bytes)
+                b.view(r)
             }
             At::State(name, r) => {
                 self.whole_state(name)?;

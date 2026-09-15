@@ -91,12 +91,12 @@ fn device_compare_agrees_with_the_host_definition_on_every_dtype_and_operand() {
         rt.write_buffer("b", &b).unwrap();
         let want = compare(dt, &a, &b);
         let len = a.len();
-        let got = cmp_of(rt.compare(dt, At::Buffer("a", len), At::Buffer("b", len)).unwrap());
+        let got = cmp_of(rt.compare(dt, At::Buffer("a", 0..len), At::Buffer("b", 0..len)).unwrap());
         assert_eq!(got, want, "{dt:?} buffer vs buffer");
-        let s = rt.save_buffer("a", len).unwrap();
-        let got = cmp_of(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("b", len)).unwrap());
+        let s = rt.save_buffer("a", 0..len).unwrap();
+        let got = cmp_of(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("b", 0..len)).unwrap());
         assert_eq!(got, want, "{dt:?} scratch vs buffer");
-        let same = cmp_of(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("a", len)).unwrap());
+        let same = cmp_of(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("a", 0..len)).unwrap());
         assert_eq!(same, compare(dt, &a, &a), "{dt:?} against itself");
     }
 }
@@ -119,16 +119,16 @@ fn device_changed_blocks_agree_with_the_host_definition() {
         rt.write_buffer("a", &pre).unwrap();
         rt.write_buffer("b", &post).unwrap();
         let want = changed_blocks(&pre, &post);
-        let got = rt.changed(At::Buffer("a", n), At::Buffer("b", n)).unwrap();
+        let got = rt.changed(At::Buffer("a", 0..n), At::Buffer("b", 0..n)).unwrap();
         assert_eq!(got, want, "{n} bytes");
-        let none = rt.changed(At::Buffer("a", n), At::Buffer("a", n)).unwrap();
+        let none = rt.changed(At::Buffer("a", 0..n), At::Buffer("a", 0..n)).unwrap();
         assert!(none.is_empty(), "{n} bytes against itself: {none:?}");
         // the same bytes three past a 16-byte boundary: the byte path
         let mut off = vec![0u8; 3];
         off.extend_from_slice(&pre);
         rt.write_buffer("a", &off).unwrap();
-        let s = rt.save_buffer("a", n + 3).unwrap();
-        let got = rt.changed(At::Scratch(&s, 3..n + 3), At::Buffer("b", n)).unwrap();
+        let s = rt.save_buffer("a", 0..n + 3).unwrap();
+        let got = rt.changed(At::Scratch(&s, 3..n + 3), At::Buffer("b", 0..n)).unwrap();
         assert_eq!(got, want, "{n} bytes, misaligned");
     }
 }
@@ -162,7 +162,7 @@ fn device_logit_rows_agree_with_the_host_definition() {
             let (a, b) = (from_f64(dt, &va), from_f64(dt, &vb));
             rt.write_buffer("a", &a).unwrap();
             rt.write_buffer("b", &b).unwrap();
-            let got = rt.logits(dt, cols, TOP, At::Buffer("a", a.len()), At::Buffer("b", b.len())).unwrap();
+            let got = rt.logits(dt, cols, TOP, At::Buffer("a", 0..a.len()), At::Buffer("b", 0..b.len())).unwrap();
             assert_eq!(got.len(), rows, "{dt:?} {cols}");
             let w = dt.bytes() as usize;
             for (r, l) in got.into_iter().enumerate() {

@@ -10,7 +10,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::compare::{Cmp, TOP};
+use crate::compare::{BufCmp, Cmp, TOP};
 use crate::diff::Diff;
 
 /// Differing comparisons a section names before saying "more".
@@ -104,6 +104,13 @@ impl Finding {
             cmp: Some(c.clone()),
         }
     }
+    pub fn of_buf(program: &str, span: &str, buffer: &str, c: &BufCmp) -> Finding {
+        let mut what = cell(&c.cmp);
+        if c.outside > 0 {
+            what += &format!(" · wrote {} outside A's write-set", kb(c.outside));
+        }
+        Finding { program: program.into(), span: span.into(), buffer: buffer.into(), what, cmp: Some(c.cmp.clone()) }
+    }
     pub fn text(program: &str, span: &str, buffer: &str, what: String) -> Finding {
         Finding { program: program.into(), span: span.into(), buffer: buffer.into(), what, cmp: None }
     }
@@ -142,6 +149,7 @@ pub struct Tap {
     /// Spans kept with their state write-set (the first run of each program).
     pub spans: usize,
     pub snapshot_bytes: usize,
+    pub snapshot_pieces: usize,
     pub state_pre_image_bytes: usize,
     pub load_s: f32,
     pub record_s: f32,
@@ -152,7 +160,7 @@ pub struct Tap {
 impl Tap {
     pub fn lines(&self) -> Vec<String> {
         let mut s = format!(
-            "seed {} · prefill {} ({}) in chunks of {} · decode {} · vocab {} · {} runs replayed · {} kept ({}) · load {} · record {}",
+            "seed {} · prefill {} ({}) in chunks of {} · decode {} · vocab {} · {} runs replayed · {} kept ({} in {} pieces) · load {} · record {}",
             self.seed,
             self.prefill,
             self.how,
@@ -162,6 +170,7 @@ impl Tap {
             self.runs,
             spans(self.spans),
             kb(self.snapshot_bytes),
+            self.snapshot_pieces,
             secs(self.load_s),
             secs(self.record_s)
         );

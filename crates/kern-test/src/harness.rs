@@ -1,21 +1,30 @@
 //! Recording A: the seeded workload once, keeping at every span of every
 //! program run what the span consumed and what A produced, and an image
 //! of A's state at the start of each run; then A's noise floor and A's
-//! timings. Everything B is later judged
-//! against lives in the [`Recording`]; A is not needed after this.
-//! Generic over [`Side`]; every decision here is made on numbers the
-//! side handed back.
+//! timings. Everything B is later judged against lives in the
+//! [`Recording`]; A is not needed after this. Generic over [`Side`];
+//! every decision here is made on numbers the side handed back.
+//!
+//! A buffer is kept as a [`Snap`]: the first time whole, after that as
+//! the 64-byte blocks that differ from the time before, found on the
+//! device against a shadow copy. The same bytes seen twice cost nothing
+//! (the moment is the same snapshot), and a span's write to a buffer is
+//! exactly the delta between its pre- and post-snapshot: the range the
+//! other side is compared on. A delta of half the buffer or more is a
+//! whole again, so a chain is never longer than the writes that made it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use kern_manifest::protocol::{Forward, Rows};
-use kern_manifest::types::{BufferKind, Manifest};
+use kern_manifest::types::{BufferKind, DType, Manifest};
 use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
 
-use crate::compare::{Cmp, LogitRow};
+use crate::compare::{coalesce, outside, BufCmp, Cmp, LogitRow};
 use crate::diff::{access, constants, frontier_inputs, live_bytes, row_elems, Diff, Span};
 use crate::report::{cap, kb, row, Finding, Floor, Noise};
 use crate::workload::{self, Rng, Workload};
@@ -24,14 +33,130 @@ use crate::{At, Options, Side, Vars};
 /// `state -> [(offset, bytes)]`: the runs of a state a span changed.
 pub(crate) type Runs = BTreeMap<String, Vec<(usize, Vec<u8>)>>;
 
+/// Gaps under this many bytes between changed blocks are kept too: a
+/// scattered write-set as few pieces, each piece one copy and one
+/// comparison.
+const GAP: usize = 256 << 10;
+
+/// A buffer's bytes at one moment of the recording, on the device: a
+/// whole copy of the live prefix (the base) and, over it, the pieces
+/// written since, in load order. A later piece covers an earlier one;
+/// an earlier piece a later one covers whole is dropped, so the list
+/// is as long as the distinct regions written since the base.
+pub(crate) struct Snap<B> {
+    len: usize,
+    base: Arc<B>,
+    pieces: Vec<(Range<usize>, Arc<B>)>,
+}
+
+impl<B> Snap<B> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    /// The snapshot into a side's buffer: the base, then every piece.
+    pub fn load<S: Side<Buf = B>>(&self, c: &mut S, q: usize, name: &str) -> Result<()> {
+        c.load(q, name, 0..self.len, &self.base)?;
+        self.pieces.iter().try_for_each(|(r, b)| c.load(q, name, r.clone(), b))
+    }
+    /// Where bytes `r` of this snapshot are: the last piece holding all
+    /// of them, else the base.
+    pub fn piece(&self, r: Range<usize>) -> (&B, Range<usize>) {
+        match self.pieces.iter().rev().find(|(at, _)| at.start <= r.start && r.end <= at.end) {
+            Some((at, b)) => (b, r.start - at.start..r.end - at.start),
+            None => (&self.base, r),
+        }
+    }
+    /// Every device allocation this snapshot holds: its address and size.
+    fn allocs(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        std::iter::once((Arc::as_ptr(&self.base) as usize, self.len))
+            .chain(self.pieces.iter().map(|(r, b)| (Arc::as_ptr(b) as usize, r.len())))
+    }
+    /// Over `prev`, the bytes at `ranges` as they are now.
+    fn over<S: Side<Buf = B>>(prev: &Snap<B>, c: &S, q: usize, name: &str, ranges: &[Range<usize>]) -> Result<Self> {
+        let covered = |r: &Range<usize>| ranges.iter().any(|n| n.start <= r.start && r.end <= n.end);
+        let mut pieces: Vec<_> = prev.pieces.iter().filter(|(r, _)| !covered(r)).cloned().collect();
+        for r in ranges {
+            pieces.push((r.clone(), Arc::new(c.save(q, name, r.clone())?)));
+        }
+        Ok(Snap { len: prev.len, base: prev.base.clone(), pieces })
+    }
+}
+
+/// The latest snapshot of every buffer on every rank, with a whole copy
+/// of it on the device (the shadow) the next delta is found against.
+struct Chains<B> {
+    last: BTreeMap<(usize, String), (Arc<Snap<B>>, Arc<B>)>,
+}
+
+impl<B> Chains<B> {
+    fn new() -> Self {
+        Chains { last: BTreeMap::new() }
+    }
+    /// The buffer's live prefix now, and what changed since it was last
+    /// snapped (everything, the first time). Unchanged is the same
+    /// snapshot; changed by half or more is a new base.
+    fn snap<S: Side<Buf = B>>(
+        &mut self,
+        c: &S,
+        q: usize,
+        name: &str,
+        len: usize,
+    ) -> Result<(Arc<Snap<B>>, Vec<Range<usize>>)> {
+        let key = (q, name.to_string());
+        if let Some((last, shadow)) = self.last.get(&key).filter(|(s, _)| s.len() == len) {
+            let ranges = coalesce(c.changed(q, At::Scratch(shadow, 0..len), At::Buffer(name, 0..len))?, GAP);
+            if ranges.is_empty() {
+                return Ok((last.clone(), ranges));
+            }
+            let fresh = Arc::new(c.save(q, name, 0..len)?);
+            let delta: usize = ranges.iter().map(|r| r.len()).sum();
+            let snap = if delta * 2 >= len {
+                Arc::new(Snap { len, base: fresh.clone(), pieces: Vec::new() })
+            } else {
+                Arc::new(Snap::over(last, c, q, name, &ranges)?)
+            };
+            self.last.insert(key, (snap.clone(), fresh));
+            return Ok((snap, ranges));
+        }
+        let fresh = Arc::new(c.save(q, name, 0..len)?);
+        let snap = Arc::new(Snap { len, base: fresh.clone(), pieces: Vec::new() });
+        self.last.insert(key, (snap.clone(), fresh));
+        Ok((snap, std::iter::once(0..len).collect()))
+    }
+}
+
+/// A buffer a span writes, as A saw it: before, after, and the ranges the
+/// span changed (A's write-set: the comparison's range).
+pub(crate) struct Out<B> {
+    pub pre: Arc<Snap<B>>,
+    pub post: Arc<Snap<B>>,
+    pub wrote: Vec<Range<usize>>,
+}
+
+/// How a side's write to a state compares with A's, on a span: bytes of
+/// A's write-set (`set`), how many of them the side wrote differently
+/// (`n_diff`), and how many bytes it changed outside A's write-set.
+#[derive(Clone, Default)]
+pub(crate) struct StateCmp {
+    pub set: usize,
+    pub n_diff: usize,
+    pub outside: usize,
+}
+
+/// One span replayed on a side: every written buffer and every touched
+/// state against A, per rank.
+pub(crate) struct Replayed {
+    pub bufs: Vec<BTreeMap<String, BufCmp>>,
+    pub states: Vec<BTreeMap<String, StateCmp>>,
+}
+
 /// One span of one program run, as A saw it, per rank.
 pub(crate) struct SpanRec<B> {
     pub span: Span,
-    /// A's frontier inputs: name, live bytes, the bytes (on the device).
-    pub inputs: Vec<Vec<(String, usize, B)>>,
-    /// What A wrote that both sides write: live bytes and where they are
-    /// kept (on the device).
-    pub ref_out: Vec<BTreeMap<String, (usize, B)>>,
+    /// A's frontier inputs.
+    pub inputs: Vec<Vec<(String, Arc<Snap<B>>)>>,
+    /// What A wrote that both sides write.
+    pub ref_out: Vec<BTreeMap<String, Out<B>>>,
     /// Kept runs only: pre-image and post-image of every state byte the
     /// span changed. A span with inout state is not idempotent (replaying
     /// it on its own output shifts the conv window again, advances the SSM
@@ -143,16 +268,21 @@ impl<B> Recording<B> {
             .map(|(n, _)| n.clone())
             .collect()
     }
-    /// Bytes the kept spans' inputs and reference outputs take.
-    pub(crate) fn snapshot_bytes(&self) -> usize {
-        self.kept
-            .iter()
-            .map(|&(r, s)| {
-                let sr = &self.runs[r].spans[s];
-                sr.inputs.iter().flatten().map(|(_, b, _)| *b).sum::<usize>()
-                    + sr.ref_out.iter().flatten().map(|(_, (b, _))| *b).sum::<usize>()
-            })
-            .sum()
+    /// What the spans' inputs and reference outputs hold on the device:
+    /// bytes and allocations, each counted once.
+    pub(crate) fn snapshot_bytes(&self) -> (usize, usize) {
+        let mut seen = BTreeMap::new();
+        let snaps = self.runs.iter().flat_map(|r| &r.spans).flat_map(|sr| {
+            sr.inputs
+                .iter()
+                .flatten()
+                .map(|(_, s)| s)
+                .chain(sr.ref_out.iter().flatten().flat_map(|(_, o)| [&o.pre, &o.post]))
+        });
+        for (ptr, bytes) in snaps.flat_map(|s| s.allocs()) {
+            seen.insert(ptr, bytes);
+        }
+        (seen.values().sum(), seen.len())
     }
     pub(crate) fn pre_image_bytes(&self) -> usize {
         self.kept
@@ -196,30 +326,6 @@ pub(crate) fn write_runs<S: Side>(c: &mut S, q: usize, runs: &Runs) -> Result<()
         }
     }
     Ok(())
-}
-
-/// The bytes now at the offsets of `runs`.
-fn read_runs<S: Side>(c: &S, q: usize, runs: &Runs) -> Result<Runs> {
-    runs.iter()
-        .map(|(name, rs)| {
-            let v = rs
-                .iter()
-                .map(|(off, b)| Ok((*off, c.read_state(q, name, *off..*off + b.len())?)))
-                .collect::<Result<_>>()?;
-            Ok((name.clone(), v))
-        })
-        .collect()
-}
-
-/// Bytes differing between two run sets over the same offsets.
-fn runs_differ(x: &Runs, y: &Runs) -> BTreeMap<String, usize> {
-    x.iter()
-        .map(|(name, rs)| {
-            let d =
-                rs.iter().zip(&y[name]).map(|((_, a), (_, b))| a.iter().zip(b).filter(|(p, q)| p != q).count()).sum();
-            (name.clone(), d)
-        })
-        .collect()
 }
 
 /// Put a side's shared states to the image a run started from.
@@ -267,7 +373,7 @@ fn read_logits<S: Side>(
         .into_iter()
         .map(|n| {
             let len = live_bytes(ma, &n, e);
-            let bufs = (0..c.ranks()).map(|q| Ok((len, c.save(q, &n, len)?))).collect::<Result<_>>()?;
+            let bufs = (0..c.ranks()).map(|q| Ok((len, c.save(q, &n, 0..len)?))).collect::<Result<_>>()?;
             Ok(LogitsAt { label: label.to_string(), cols: row_elems(ma, &n, e), buffer: n, bufs })
         })
         .collect()
@@ -331,46 +437,77 @@ pub(crate) fn logit_rows<S: Side>(
     Ok(rows_out)
 }
 
-/// Replay one recorded span on a side from the recorded inputs. Returns
-/// the state post-image over the recorded write-set, per rank; what the
-/// span wrote is in its buffers for the caller to compare where it is.
-/// The state is put back to A's pre-image first (so the span sees what it
-/// saw in the recording, on either side) and to A's post-image after (so
-/// the next span's reads see the reference, not this replay's output).
-fn replay_span<S: Side>(c: &mut S, sr: &SpanRec<S::Buf>, run: &Run<S::Buf>, side_b: bool) -> Result<Vec<Runs>> {
+/// Replay one recorded span on a side from the recording and compare what
+/// it wrote with A's, where it is. Every buffer the span reads or writes
+/// is first put to A's snapshot before the span and the state to A's
+/// pre-image, so the span sees what A saw on either side and what it
+/// writes is its own doing; the state goes to A's post-image after, so
+/// the next span's reads see the reference, not this replay's output.
+/// A buffer is compared on A's write-set; a state on A's write-set with
+/// the bytes changed outside it counted.
+pub(crate) fn replay_span<S: Side>(
+    c: &mut S,
+    m: &Manifest,
+    sr: &SpanRec<S::Buf>,
+    run: &Run<S::Buf>,
+    side_b: bool,
+) -> Result<Replayed> {
     let ranks = c.ranks();
+    let mut pre_bufs: Vec<BTreeMap<String, S::Buf>> = Vec::new();
+    let mut pre_states: Vec<BTreeMap<String, S::Buf>> = Vec::new();
     for q in 0..ranks {
         write_runs(c, q, &sr.pre[q])?;
-        for (n, len, b) in &sr.inputs[q] {
-            c.load(q, n, *len, b)?;
+        for (n, s) in &sr.inputs[q] {
+            s.load(c, q, n)?;
         }
+        for (n, o) in &sr.ref_out[q] {
+            if !sr.inputs[q].iter().any(|(i, s)| i == n && Arc::ptr_eq(s, &o.pre)) {
+                o.pre.load(c, q, n)?;
+            }
+        }
+        pre_bufs.push(
+            sr.ref_out[q].iter().map(|(n, o)| Ok((n.clone(), c.save(q, n, 0..o.pre.len())?))).collect::<Result<_>>()?,
+        );
+        pre_states.push(sr.pre[q].keys().map(|st| Ok((st.clone(), c.save_state(q, st)?))).collect::<Result<_>>()?);
     }
     let r = if side_b { sr.span.b.clone() } else { sr.span.a.clone() };
     c.run(&run.program, &run.vars, r)?;
-    let mut st = Vec::new();
+    let (mut bufs, mut states) = (Vec::new(), Vec::new());
     for q in 0..ranks {
-        st.push(read_runs(c, q, &sr.post[q])?);
+        let mut bq = BTreeMap::new();
+        for (n, o) in &sr.ref_out[q] {
+            let dt = m.buffers[n].dtype;
+            let mut cmp = Cmp::default();
+            for w in &o.wrote {
+                let (b, r) = o.post.piece(w.clone());
+                cmp = cmp.merge(c.compare(q, dt, At::Buffer(n, w.clone()), At::Scratch(b, r))?);
+            }
+            let len = o.pre.len();
+            let changed = c.changed(q, At::Scratch(&pre_bufs[q][n], 0..len), At::Buffer(n, 0..len))?;
+            bq.insert(n.clone(), BufCmp { cmp, outside: outside(&changed, &o.wrote) });
+        }
+        bufs.push(bq);
+        let mut sq = BTreeMap::new();
+        for (st, runs) in &sr.pre[q] {
+            let len = c.state_bytes(st)?;
+            let img = &pre_states[q][st];
+            let set: usize = runs.iter().map(|(_, b)| b.len()).sum();
+            // A's write-set is small and comes to the host; the rest of the
+            // state is compared where it is
+            let (mut n_diff, mut inside) = (0usize, 0usize);
+            for (off, ap) in &sr.post[q][st] {
+                let now = c.read_state(q, st, *off..off + ap.len())?;
+                let was = c.bytes(q, img, *off..off + ap.len())?;
+                n_diff += ap.iter().zip(&now).filter(|(x, y)| x != y).count();
+                inside += was.iter().zip(&now).filter(|(x, y)| x != y).count();
+            }
+            let total = c.compare(q, DType::U8, At::Scratch(img, 0..len), At::State(st, 0..len))?.n_diff;
+            sq.insert(st.clone(), StateCmp { set, n_diff, outside: total - inside });
+        }
+        states.push(sq);
         write_runs(c, q, &sr.post[q])?;
     }
-    Ok(st)
-}
-
-/// Every written buffer of a span against a kept copy, per rank.
-pub(crate) fn compare_outputs<S: Side>(
-    c: &S,
-    m: &Manifest,
-    kept: &[BTreeMap<String, (usize, S::Buf)>],
-) -> Result<Vec<BTreeMap<String, Cmp>>> {
-    (0..c.ranks())
-        .map(|q| {
-            kept[q]
-                .iter()
-                .map(|(n, (len, b))| {
-                    Ok((n.clone(), c.compare(q, m.buffers[n].dtype, At::Buffer(n, *len), At::Scratch(b, 0..*len))?))
-                })
-                .collect()
-        })
-        .collect()
+    Ok(Replayed { bufs, states })
 }
 
 /// Values a side produced that lie outside their buffer's declared
@@ -450,6 +587,7 @@ pub fn record<S: Side>(
     let chunk_name = chunk_f.as_ref().map_or("", |f| f.name.as_str());
 
     // ---- the workload: one run at a time, spans recorded as A passes them
+    let mut chains = Chains::new();
     a.reset();
     let mut i = 0;
     let mut n_chunks = 0usize;
@@ -457,7 +595,18 @@ pub fn record<S: Side>(
         let c = (wl.prefill.len() - i).min(wl.chunk);
         let tokens = wl.prefill[i..i + c].to_vec();
         let keep = n_chunks == 0;
-        record_run(a, &mut rec, chunk_name, format!("chunk {n_chunks}"), tokens, c as u64, keep, &shared, &fixed)?;
+        record_run(
+            a,
+            &mut rec,
+            &mut chains,
+            chunk_name,
+            format!("chunk {n_chunks}"),
+            tokens,
+            c as u64,
+            keep,
+            &shared,
+            &fixed,
+        )?;
         a.advance(c as u64);
         i += c;
         n_chunks += 1;
@@ -468,7 +617,18 @@ pub fn record<S: Side>(
     for (k, &tok) in wl.decode.iter().enumerate() {
         let f = &step_fs[k % step_fs.len()];
         let tokens = vec![tok; rows_of(f) as usize];
-        record_run(a, &mut rec, &f.name, format!("step {k}"), tokens, 1, k < step_fs.len(), &shared, &fixed)?;
+        record_run(
+            a,
+            &mut rec,
+            &mut chains,
+            &f.name,
+            format!("step {k}"),
+            tokens,
+            1,
+            k < step_fs.len(),
+            &shared,
+            &fixed,
+        )?;
         a.advance(1);
     }
     // What a caller would get: the outputs and the states after the workload.
@@ -511,27 +671,26 @@ pub fn record<S: Side>(
                 cur = Some(r);
             }
             let sr = &run.spans[s];
-            let st = replay_span(a, sr, run, false)?;
-            let cmps = compare_outputs(a, &ma, &sr.ref_out)?;
+            let rp = replay_span(a, &ma, sr, run, false)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
-                for (n, c) in &cmps[q] {
+                for (n, c) in &rp.bufs[q] {
                     compared += 1;
                     if c.identical() {
                         clean += 1;
                     } else {
-                        findings.push(Finding::of(&run.program, &label, n, c));
+                        findings.push(Finding::of_buf(&run.program, &label, n, c));
                     }
                     res.entry(run.program.clone())
                         .or_default()
                         .entry(n.clone())
                         .or_default()
-                        .push((label.clone(), c.clone()));
+                        .push((label.clone(), c.cmp.clone()));
                 }
-                for (name, d) in runs_differ(&st[q], &sr.post[q]) {
-                    if d > 0 {
+                for (name, sc) in &rp.states[q] {
+                    if sc.n_diff > 0 {
                         noisy_states.insert((run.program.clone(), name.clone()));
-                        state_noise.push(format!("state {name}: {d} bytes at {} {label}", run.program));
+                        state_noise.push(format!("state {name}: {} bytes at {} {label}", sc.n_diff, run.program));
                     }
                 }
             }
@@ -588,13 +747,15 @@ pub fn record<S: Side>(
     }
     rec.record_s = t0.elapsed().as_secs_f32();
     let image_bytes = image_bytes(&rec, a)?;
+    let (snap_bytes, pieces) = rec.snapshot_bytes();
     out(&[row(
         "record",
         format!(
-            "A: {} runs · {} spans kept ({}) · state images {} · workload {}",
+            "A: {} runs · {} spans kept ({} in {} pieces) · state images {} · workload {}",
             rec.runs.len(),
             rec.kept.len(),
-            kb(rec.snapshot_bytes()),
+            kb(snap_bytes),
+            pieces,
             kb(image_bytes),
             crate::report::secs(workload_s)
         ),
@@ -621,6 +782,7 @@ fn image_bytes<S: Side>(rec: &Recording<S::Buf>, c: &S) -> Result<usize> {
 fn record_run<S: Side>(
     a: &mut S,
     rec: &mut Recording<S::Buf>,
+    chains: &mut Chains<S::Buf>,
     pname: &str,
     label: String,
     tokens: Vec<i64>,
@@ -659,22 +821,38 @@ fn record_run<S: Side>(
             .cloned()
             .partition(|n| alike(ma, mb, n));
         rec.one_sided.extend(apart);
+        let (aa, ab) = (access(ma, pname, span.a.clone()), access(mb, pname, span.b.clone()));
+        // Compared: what both sides write into the same declaration.
+        let (written, apart): (Vec<String>, Vec<String>) = aa
+            .writes
+            .union(&ab.writes)
+            .cloned()
+            .partition(|n| aa.writes.contains(n) && ab.writes.contains(n) && alike(ma, mb, n));
+        rec.one_sided.extend(apart);
+        let live = |n: &String| live_bytes(ma, n, &e);
         let mut inputs = Vec::new();
+        let mut pre_out: Vec<BTreeMap<String, Arc<Snap<S::Buf>>>> = Vec::new();
         for q in 0..ranks {
             let mut v = Vec::new();
-            for n in &names {
-                let bytes = live_bytes(ma, n, &e);
-                if bytes == 0 {
-                    continue;
-                }
-                let buf = a
-                    .save(q, n, bytes)
-                    .with_context(|| format!("recording `{n}` ({bytes} B) at {pname} span {}", span.label()))?;
-                v.push((n.clone(), bytes, buf));
+            for n in names.iter().filter(|n| live(n) > 0) {
+                let (s, _) = chains
+                    .snap(a, q, n, live(n))
+                    .with_context(|| format!("recording `{n}` at {pname} span {}", span.label()))?;
+                v.push((n.clone(), s));
+            }
+            // a buffer the span writes without reading: its bytes before,
+            // so the write-set is exactly the span's
+            let mut pre = BTreeMap::new();
+            for n in written.iter().filter(|n| live(n) > 0) {
+                let s = match v.iter().find(|(i, _)| i == n) {
+                    Some((_, s)) => s.clone(),
+                    None => chains.snap(a, q, n, live(n))?.0,
+                };
+                pre.insert(n.clone(), s);
             }
             inputs.push(v);
+            pre_out.push(pre);
         }
-        let (aa, ab) = (access(ma, pname, span.a.clone()), access(mb, pname, span.b.clone()));
         // State is compared on the span's write-set — the bytes A's run
         // changed — not on the whole allocation (the rest is other layers'
         // history). Whole-state reads only on the kept run; every other run
@@ -710,27 +888,16 @@ fn record_run<S: Side>(
             pre.push(pq);
             post.push(oq);
         }
-        // Compared: what both sides write into the same declaration.
-        let (written, apart): (Vec<String>, Vec<String>) = aa
-            .writes
-            .union(&ab.writes)
-            .cloned()
-            .partition(|n| aa.writes.contains(n) && ab.writes.contains(n) && alike(ma, mb, n));
-        rec.one_sided.extend(apart);
         let mut ref_out = Vec::new();
-        for q in 0..ranks {
-            ref_out.push(
-                written
-                    .iter()
-                    .map(|n| {
-                        let bytes = live_bytes(ma, n, &e);
-                        let buf = a
-                            .save(q, n, bytes)
-                            .with_context(|| format!("keeping `{n}` after {pname} span {}", span.label()))?;
-                        Ok((n.clone(), (bytes, buf)))
-                    })
-                    .collect::<Result<_>>()?,
-            );
+        for (q, pre) in pre_out.into_iter().enumerate() {
+            let mut outs = BTreeMap::new();
+            for (n, pre) in pre {
+                let (post, wrote) = chains
+                    .snap(a, q, &n, live(&n))
+                    .with_context(|| format!("keeping `{n}` after {pname} span {}", span.label()))?;
+                outs.insert(n, Out { pre, post, wrote });
+            }
+            ref_out.push(outs);
         }
         spans.push(SpanRec { span: span.clone(), inputs, ref_out, pre, post });
     }

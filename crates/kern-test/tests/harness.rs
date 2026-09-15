@@ -167,7 +167,7 @@ fn a_write_outside_the_reference_write_set_is_reported() {
     let local = r.summary.local.as_ref().unwrap();
     let leak = local.findings.iter().find(|f| f.buffer == "state kv").expect("a state finding");
     assert!(leak.what.contains("outside A's write-set"), "{leak:?}");
-    assert!(lines.iter().any(|l| l.contains("B wrote") && l.contains("outside A's write-set")), "{lines:#?}");
+    assert!(lines.iter().any(|l| l.contains("wrote") && l.contains("outside A's write-set")), "{lines:#?}");
 }
 
 #[test]
@@ -286,4 +286,38 @@ fn a_changed_once_program_is_each_sides_own_setup_not_an_untapped_program() {
     assert!(r.summary.diff.spans.contains_key("prep"), "{:?}", r.summary.diff.spans.keys());
     assert_eq!(verdict(&r), (0, "bit-identical at every span".into()), "{lines:#?}");
     assert!(r.summary.local.as_ref().unwrap().undriven.is_empty());
+}
+
+#[test]
+fn a_workspace_written_in_places_is_kept_and_compared_as_its_write_set() {
+    let (r, lines) =
+        test(&Fixture::default().slab(), &Fixture::default().slab().scale("scale_same"), &options()).unwrap();
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()), "{lines:#?}");
+    let local = r.summary.local.as_ref().unwrap();
+    // act and slab at every span; the slab compared on the 64 bytes its layer wrote
+    assert_eq!((local.compared, local.bit_identical), (24, 24));
+    // whole copies of the 4 KB slab before and after each of the 12 spans would be
+    // 96 KB; as deltas it is one whole slab, one block per write, and the acts
+    let tap = r.summary.tap.as_ref().unwrap();
+    assert!(
+        tap.snapshot_bytes >= common::SLAB + 12 * 64 && tap.snapshot_bytes < 2 * common::SLAB,
+        "{}",
+        tap.snapshot_bytes
+    );
+}
+
+#[test]
+fn a_write_outside_the_reference_write_set_of_a_buffer_is_reported() {
+    let (r, lines) =
+        test(&Fixture::default().slab(), &Fixture::default().slab().scale("scale_slab_leak"), &options()).unwrap();
+    let local = r.summary.local.as_ref().unwrap();
+    let leak = local.findings.iter().find(|f| f.buffer == "slab").expect("a slab finding");
+    assert!(leak.what.contains("wrote 64 B outside A's write-set"), "{leak:?}");
+    assert!(leak.cmp.as_ref().unwrap().identical(), "{leak:?}");
+    // the block A wrote agrees; only the leak differs, and the logits never see it
+    assert_eq!(
+        verdict(&r),
+        (0, "spans differ, but the end-to-end logits are bit-identical on all 9 rows".into()),
+        "{lines:#?}"
+    );
 }

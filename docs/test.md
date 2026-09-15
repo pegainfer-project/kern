@@ -54,6 +54,18 @@ Flash EP4 每 rank 119 GB 权重）也能测，代价是装载两次。录下来
 context，B 直接 D2D 读 A 的镜像；只有要下判断的字节走 host。A 的噪声地板
 在 A 还在时测（每个保留的 span 重放对自己）；A 的计时同理。
 
+**快照存的是"这次和上次的差"，不是 buffer 有多大。** 一个 buffer 第一次
+被快照时整块留（活跃前缀），之后每次只留与上一次不同的 64 B 块——差异在
+设备上对着一份影子副本用 `changed` 找，块间隙 < 4 KB 的并起来少切几段；
+内容没变就是同一个快照，不占字节；差异过半就重新整块留，链不会比写它的
+次数长。装回去沿链走到整块再逐段叠。这样 DSv4.1 Mega kernel 那块 1 GB
+的 `moe.e384.slab`（carry，活跃前缀恒为整块）每层只花它真写的几百 KB，
+整套 sm148 换核的快照从 360 GB 变成几 GB；而 span 对每个 buffer 的
+**写集**——它前后两个快照的差——恰好是这个 span 自己写的字节，比较只在
+这上面做，另计 B 在写集之外写了多少（`wrote N outside A's write-set`，与
+state 同一规则）。整块比会把 kernel 工作区里的陈旧内容当成差异：gate 那
+次 noise 报 A 自己在 slab 上 60 万个元素不确定，其实 gate 只写了几 KB。
+
 **端到端只看 logits，不生成。** 每个 span bit 相同 ⇒ 整体必相同，不需要
 再证；span 有差异时，oracle 是 B 自由跑同一 workload 后每一步的 `logits`
 （manifest 里的 buffer，读出来就行）：量的是分布不是存储——每行算
@@ -140,12 +152,14 @@ CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_bl
    固定是为了两次运行可比；覆盖靠换 seed（`--seed`），抓到问题的 seed
    写进报告钉成回归。
    **record**：A 一个 run 一个 run 地跑，每个 run 之前把共有 state 全量
-   D2D 存成镜像，每个 span 之前把 frontier 输入（按当前 var 值取活跃前
-   缀）D2D 存下，跑完读参考输出。weight 和 `once` program 写出的 buffer
+   D2D 存成镜像，每个 span 之前把 frontier 输入和它要写的 buffer（按当前
+   var 值取活跃前缀）快照下来，跑完再快照写出的 buffer：前后两个快照的差
+   就是写集（快照是差分链，见上）。weight 和 `once` program 写出的 buffer
    （打包好的权重、rope 表：装载期常量，B 有自己的一份，可能是别的布局）
    不算 frontier 输入——DSv4.1 每个 attention span 都读 268 MB 的 rope
    表，120 个 span × 9 个 run 会把卡塞满；**replay**：B 每个 run 先装 A 的镜像，
-   每个 span 先装 A 的输入再跑，比 B 写出的 buffer。所以每一行 span 结果
+   每个 span 先装 A 的输入（和它要写的 buffer 在 A 那里跑前的样子）再
+   跑，在 A 的写集上比 B 写出的 buffer、另计 B 写到写集外的字节。所以每一行 span 结果
    都是 **span-local**：B 拿 A 的输入、A 的 state 跑这一刀，差多少就是这
    一刀自己的事，不混前面层漂移下来的误差（早先不注入时，c7 那种 state
    差会让下游每个 buffer 都显示 47/48 spans differ、几十万 ulp，看不出哪
@@ -329,6 +343,27 @@ noise 0.55 s、perf 3.3 s；判定、计数、perf 与前两跑逐项相同。st
 从 84 GB 变成 339.5 MB（12 MB/rank/run，即活跃部分）：master 的 pool 改
 按 capacity 的 token 数分配 state，与 harness 无关。一次四 rank 的
 DSv4.1 换核验证现在是两次装载加 10 秒。
+
+**2026-09-15 master b325e82 之上，tray06 / tray09，`hbm-sm152`（1M context，
+Engram 表在 HBM）对 B300 的 148-SM 实例**：整块快照时，换 `dsv41_mhc` /
+`dsv41_mega_moe` 在 record 就 OOM——这份 manifest 权重 126 GiB、workspace/carry
+另要 ~89 GiB，每卡剩 ~70 GiB，而这两个 op 的 span 把 1 GB 的 `moe.e384.slab`
+（carry，活跃前缀恒为整块）整块当输入/输出快照，40 层 × 3 program 装不下；
+只换 draft 的 `dsv41_gate_e128` 能跑（47 s），但整块比把 slab 里的陈旧工作区
+当差异（local 4/72、noise "A 不确定" 60 万元素）。改成差分快照 + 写集比较后：
+
+| B | 换的 op / span | 快照 | 装 A + B | record | replay（tap · noise） | 判定 | 全程 |
+|---|---|---|---|---|---|---|---|
+| gate（draft 的 `dsv41_gate_e128`） | 1 op / 3 span | 2.6 GB、3949 段 | 19.3 + 14.4 s | 4.4 s | 0.5 · 2.5 s | **PASS，72/72 bit 相同，noise 24/24 clean** | **42 s** |
+| 全套 sm148（mhc ×4、mega_moe ×2、gate ×1） | 7 op / 262 span | 26.4 GB、162k 段 | 20.0 + 17.6 s | 40.3 s（workload 22.7 s） | 30.6 · 15.2 s | PASS：span 上 slab 写集 4M/12M 字节不同，A 对自己同样不同（Mega kernel 的工作区不确定），端到端 64516 行 logits bit 相同 | **113 s** |
+
+同一份全套换核三跑的路：整块链 479 s（tap 302 s：链长几百、逐段同步拷）→
+扁平 piece 181 s → `changed` 的 host 端按字跳零 113 s（1 GB 的 bitmap 逐块扫
+是 20–40 ms 一次，三千多次就是 record 那 65 s）。剩下的 record 22.7 s 主要是
+16 万段各一次同步 D2D（`save` 每段一次分配加拷贝）。gen 的 manifest 之前没给
+`input_ids` 声明 vocab 域（workload 抽不到 token），`tools/dsv41/gen.py` 现在给
+`input_ids` / `anchor_token` 加 `index_into embed.weight`。存档
+`~/bench_results/2026-09-15-dsv41-e2e-swap/`。
 
 ## 位置
 

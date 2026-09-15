@@ -64,6 +64,20 @@ impl Cmp {
     ) -> Cmp {
         Cmp { n, n_diff, max_ulp: (measured > 0).then_some(max_ulp), max_abs, nan_only_one_side, signed_zero }
     }
+    /// Two comparisons of disjoint ranges of one buffer as one.
+    pub fn merge(self, o: Cmp) -> Cmp {
+        Cmp {
+            n: self.n + o.n,
+            n_diff: self.n_diff + o.n_diff,
+            max_ulp: match (self.max_ulp, o.max_ulp) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+            max_abs: self.max_abs.max(o.max_abs),
+            nan_only_one_side: self.nan_only_one_side + o.nan_only_one_side,
+            signed_zero: self.signed_zero + o.signed_zero,
+        }
+    }
     pub fn identical(&self) -> bool {
         self.n_diff == 0
     }
@@ -75,6 +89,58 @@ impl Cmp {
     pub fn severity(&self) -> (usize, u64) {
         (self.n_diff - self.signed_zero, self.max_ulp.unwrap_or(u64::MAX))
     }
+}
+
+/// One buffer at one span: A's write-set compared element by element, and
+/// the bytes the other side wrote outside it (a block A left alone that
+/// the other side changed: not compared, since A has no reference there,
+/// but not nothing either).
+#[derive(Serialize, Clone, Default, Debug, PartialEq)]
+pub struct BufCmp {
+    pub cmp: Cmp,
+    pub outside: usize,
+}
+
+impl BufCmp {
+    pub fn identical(&self) -> bool {
+        self.cmp.identical() && self.outside == 0
+    }
+    pub fn value_identical(&self) -> bool {
+        self.cmp.value_identical() && self.outside == 0
+    }
+    /// Worst first: a write outside the reference set outranks any ulp.
+    pub fn severity(&self) -> (usize, u64) {
+        if self.outside > 0 {
+            (usize::MAX, u64::MAX)
+        } else {
+            self.cmp.severity()
+        }
+    }
+}
+
+/// Bytes of `b` that no range of `a` covers; both sorted and disjoint.
+pub fn outside(b: &[Range<usize>], a: &[Range<usize>]) -> usize {
+    b.iter()
+        .map(|r| {
+            let covered: usize = a.iter().map(|x| r.end.min(x.end).saturating_sub(r.start.max(x.start))).sum();
+            r.len() - covered
+        })
+        .sum()
+}
+
+/// `ranges` with gaps under `gap` bytes closed: a scattered write-set as
+/// few pieces (the bytes between are kept too, and compared, which is
+/// harmless: they are the same on both sides unless the other side wrote
+/// them, which is then seen as a difference rather than counted outside).
+pub fn coalesce(ranges: Vec<Range<usize>>, gap: usize) -> Vec<Range<usize>> {
+    let mut out: Vec<Range<usize>> = Vec::new();
+    for r in ranges {
+        match out.last_mut() {
+            Some(last) if r.start <= last.end + gap => last.end = last.end.max(r.end),
+            _ => out.push(r),
+        }
+    }
+    out
 }
 
 /// How many of A's most likely tokens the report follows: enough to see

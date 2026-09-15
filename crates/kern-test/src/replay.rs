@@ -9,22 +9,12 @@ use std::time::Instant;
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::compare::{Cmp, LogitRow, TOP};
+use crate::compare::{BufCmp, LogitRow, TOP};
 use crate::diff::{access, live_bytes};
-use crate::harness::{at_rank, compare_outputs, domain_violations, free_run, image, logit_rows, write_runs, Recording};
+use crate::harness::{at_rank, domain_violations, free_run, image, logit_rows, replay_span, Recording, StateCmp};
 use crate::report::*;
 use crate::{At, Options, Side, Vars};
 use kern_manifest::types::DType;
-
-/// How B's write to a state compares with A's, on this span: bytes of A's
-/// write-set (`set`), how many of them B wrote differently (`n_diff`), and
-/// how many bytes B changed outside A's write-set (`outside`).
-#[derive(Clone, Default)]
-struct StateCmp {
-    set: usize,
-    n_diff: usize,
-    outside: usize,
-}
 
 /// Replay B against `rec` and judge it. `out` receives each section's
 /// lines as it finishes.
@@ -46,7 +36,7 @@ pub fn replay<S: Side>(
     // ---- 2. the workload on B, run by run from A's image, span by span from A's inputs
     let t_tap = Instant::now();
     // program -> buffer -> [(span label, cmp)]
-    let mut local_res: BTreeMap<String, BTreeMap<String, Vec<(String, Cmp)>>> = BTreeMap::new();
+    let mut local_res: BTreeMap<String, BTreeMap<String, Vec<(String, BufCmp)>>> = BTreeMap::new();
     let mut local_states: BTreeMap<String, BTreeMap<String, Vec<(String, StateCmp)>>> = BTreeMap::new();
     b.reset();
     for run in &rec.runs {
@@ -57,29 +47,10 @@ pub fn replay<S: Side>(
         for sr in &run.spans {
             b.run(p, e, ib..sr.span.b.start)?;
             ib = sr.span.b.end;
-            // A's pre-image and inputs in, so this span is B's own doing;
-            // A's post-image out afterwards, so the next span's reads see
-            // the reference, not what B made of this one.
-            for q in 0..ranks {
-                write_runs(b, q, &sr.pre[q])?;
-                for (n, len, buf) in &sr.inputs[q] {
-                    b.load(q, n, *len, buf)?;
-                }
-            }
-            let kept = sr.pre.iter().any(|r| !r.is_empty());
-            let mut b_pre: Vec<BTreeMap<String, S::Buf>> = Vec::new();
-            if kept {
-                for q in 0..ranks {
-                    b_pre.push(
-                        sr.pre[q].keys().map(|st| Ok((st.clone(), b.save_state(q, st)?))).collect::<Result<_>>()?,
-                    );
-                }
-            }
-            b.run(p, e, sr.span.b.clone())?;
-            let cmps = compare_outputs(b, ma, &sr.ref_out)?;
+            let rp = replay_span(b, ma, sr, run, true)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
-                for (n, c) in &cmps[q] {
+                for (n, c) in &rp.bufs[q] {
                     local_res
                         .entry(p.into())
                         .or_default()
@@ -87,32 +58,14 @@ pub fn replay<S: Side>(
                         .or_default()
                         .push((label.clone(), c.clone()));
                 }
-                for (st, runs) in &sr.pre[q] {
-                    let len = b.state_bytes(st)?;
-                    let img = &b_pre[q][st];
-                    let set: usize = runs.iter().map(|(_, b)| b.len()).sum();
-                    // A's write-set is small and comes to the host; the rest
-                    // of the state is compared where it is
-                    let (mut n_diff, mut inside) = (0usize, 0usize);
-                    for (off, ap) in &sr.post[q][st] {
-                        let now = b.read_state(q, st, *off..off + ap.len())?;
-                        let was = b.bytes(q, img, *off..off + ap.len())?;
-                        n_diff += ap.iter().zip(&now).filter(|(x, y)| x != y).count();
-                        inside += was.iter().zip(&now).filter(|(x, y)| x != y).count();
-                    }
-                    let total = b.compare(q, DType::U8, At::Scratch(img, 0..len), At::State(st, 0..len))?.n_diff;
-                    // bytes B changed that lie outside A's write-set
-                    let outside = total - inside;
+                for (st, c) in &rp.states[q] {
                     local_states
                         .entry(p.into())
                         .or_default()
                         .entry(st.clone())
                         .or_default()
-                        .push((label.clone(), StateCmp { set, n_diff, outside }));
+                        .push((label.clone(), c.clone()));
                 }
-            }
-            for q in 0..ranks {
-                write_runs(b, q, &sr.post[q])?;
             }
         }
         b.run(p, e, ib..b.calls(p)?)?;
@@ -133,7 +86,8 @@ pub fn replay<S: Side>(
         ranks,
         runs: rec.runs.len(),
         spans: rec.kept.len(),
-        snapshot_bytes: rec.snapshot_bytes(),
+        snapshot_bytes: rec.snapshot_bytes().0,
+        snapshot_pieces: rec.snapshot_bytes().1,
         state_pre_image_bytes: rec.pre_image_bytes(),
         load_s: rec.load_s,
         record_s: rec.record_s,
@@ -155,7 +109,7 @@ pub fn replay<S: Side>(
                     continue;
                 }
                 n_val += c.value_identical() as usize;
-                all_local.push(Finding::of(p, l, bn, c));
+                all_local.push(Finding::of_buf(p, l, bn, c));
             }
         }
     }
@@ -169,7 +123,7 @@ pub fn replay<S: Side>(
                 }
                 let mut t = format!("{}/{} bytes of the write-set differ", c.n_diff, c.set);
                 if c.outside > 0 {
-                    t += &format!(" · B wrote {} outside A's write-set", kb(c.outside));
+                    t += &format!(" · wrote {} outside A's write-set", kb(c.outside));
                 }
                 all_local.push(Finding::text(p, l, &format!("state {st}"), t));
             }
@@ -420,7 +374,7 @@ pub fn replay<S: Side>(
             bufs.iter().all(|(bn, res)| {
                 let worst_local = res
                     .iter()
-                    .filter_map(|(_, c)| if c.value_identical() { None } else { c.max_ulp.or(Some(u64::MAX)) })
+                    .filter_map(|(_, c)| if c.value_identical() { None } else { c.cmp.max_ulp.or(Some(u64::MAX)) })
                     .max();
                 let worst_noise = noise_res.get(p).and_then(|nb| nb.get(bn)).and_then(|nr| {
                     nr.iter()

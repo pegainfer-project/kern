@@ -293,11 +293,13 @@ impl Side for Ranks {
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
         self.rt(rank).read_buffer_prefix(buffer, bytes).with_context(|| format!("rank {rank}: reading `{buffer}`"))
     }
-    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Scratch> {
-        self.rt(rank).save_buffer(buffer, bytes).with_context(|| format!("rank {rank}: saving `{buffer}`"))
+    fn save(&self, rank: usize, buffer: &str, at: Range<usize>) -> Result<Scratch> {
+        self.rt(rank).save_buffer(buffer, at.clone()).with_context(|| format!("rank {rank}: saving `{buffer}` {at:?}"))
     }
-    fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Scratch) -> Result<()> {
-        self.rt_mut(rank).load_buffer(buffer, bytes, from).with_context(|| format!("rank {rank}: loading `{buffer}`"))
+    fn load(&mut self, rank: usize, buffer: &str, at: Range<usize>, from: &Scratch) -> Result<()> {
+        self.rt_mut(rank)
+            .load_buffer(buffer, at.clone(), from)
+            .with_context(|| format!("rank {rank}: loading `{buffer}` {at:?}"))
     }
     fn bytes(&self, rank: usize, from: &Scratch, at: Range<usize>) -> Result<Vec<u8>> {
         self.rt(rank).read_scratch(from, at.clone()).with_context(|| format!("rank {rank}: reading scratch at {at:?}"))
@@ -372,7 +374,7 @@ impl Side for Ranks {
 
 fn on_device(at: At<'_, Scratch>) -> kern_runtime::At<'_> {
     match at {
-        At::Buffer(n, bytes) => kern_runtime::At::Buffer(n, bytes),
+        At::Buffer(n, r) => kern_runtime::At::Buffer(n, r),
         At::State(n, r) => kern_runtime::At::State(n, r),
         At::Scratch(s, r) => kern_runtime::At::Scratch(s, r),
     }
