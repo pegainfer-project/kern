@@ -20,13 +20,12 @@ fn line<'a>(lines: &'a [String], key: &str) -> &'a str {
 #[test]
 fn a_no_op_swap_is_bit_identical_at_every_span() {
     let (r, lines) = run(Fixture::default().scale("scale_same"));
-    assert_eq!(verdict(&r), (0, "bit-identical at every span, real and perturbed inputs".into()));
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()));
     let local = r.summary.local.as_ref().unwrap();
     // two layers × (2 prefill chunks + 4 decode steps) spans compared, all identical
     assert_eq!((local.compared, local.bit_identical, local.findings.len()), (12, 12, 0));
     assert_eq!(r.summary.tap.as_ref().unwrap().spans, 4);
     assert!(line(&lines, "diff").contains("scale impl extern:scale → extern:scale_same"), "{lines:#?}");
-    assert!(line(&lines, "fuzz").starts_with("fuzz      24/24 bit-identical"), "{lines:#?}");
 }
 
 #[test]
@@ -52,16 +51,16 @@ fn a_rounding_change_passes_on_logit_evidence() {
     let (code, head) = verdict(&r);
     assert_eq!((code, head.as_str()), (0, "logit evidence"), "{}", r.summary.verdict.summary);
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.differ > 0 && lg.max_ulp <= 4.0 && lg.flips == lg.near_ties, "{lg:?}");
+    assert!(lg.differ > 0 && lg.kl_max <= 0.01 && lg.flips == lg.within, "{lg:?}");
 }
 
 #[test]
 fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
     // A is ±3% on every `scale` call, the sign flipping on each repeat of
-    // an input; B is the exact op. Fuzz is off: with a noisy A, perturbed
-    // inputs are never value-identical.
+    // an input; B is the exact op.
+    // The KL limit is below A's own band, so logit evidence cannot decide.
     let mut o = options();
-    o.fuzz = 0;
+    o.logit_kl = 1e-4;
     let (r, lines) = test(&Fixture::default().scale("scale_noisy"), &Fixture::default(), &o).unwrap();
     assert_eq!(verdict(&r), (0, "differences at every span lie within A's own noise floor".into()), "{lines:#?}");
     assert!(line(&lines, "noise").contains("A is not deterministic"), "{lines:#?}");
@@ -70,28 +69,33 @@ fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
 }
 
 #[test]
+fn a_wide_argmax_flip_fails_when_a_reproduces_itself_end_to_end() {
+    // A is noisy at its spans (±3% on `scale`) yet lands on the same
+    // distribution every time; B swaps the head's argmax. The flip is B's.
+    let (r, lines) =
+        test(&Fixture::default().scale("scale_noisy"), &Fixture::default().head("head_swap"), &options()).unwrap();
+    let v = &r.summary.verdict;
+    assert!(v.code == 1 && v.summary.starts_with("B changes the argmax end-to-end at prefill chunk 0"), "{lines:#?}");
+    let n = r.summary.noise.as_ref().unwrap();
+    let f = n.floor.as_ref().unwrap();
+    assert!(n.clean < n.compared && f.kl_max <= 0.01 && f.flips == 0, "{n:?}");
+}
+
+#[test]
 fn a_wide_argmax_flip_fails() {
     let (r, lines) = run(Fixture::default().head("head_swap"));
     let v = &r.summary.verdict;
     assert!(v.code == 1 && v.summary.starts_with("B changes the argmax end-to-end at prefill chunk 0"), "{lines:#?}");
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.flips > lg.near_ties, "{lg:?}");
+    assert!(lg.flips > lg.within, "{lg:?}");
     assert!(lines.iter().any(|l| l.starts_with("logits    ✗ flip")), "{lines:#?}");
 }
 
 #[test]
 fn a_value_outside_the_declared_domain_fails() {
     let (r, lines) = run(Fixture::default().head("head_bad"));
-    assert_eq!(verdict(&r), (1, "B violates a declared domain (or crashed) under fuzz".into()));
-    assert!(line(&lines, "fuzz      ✗ domain").contains("B next_token[0] = 99 outside domain"), "{lines:#?}");
-}
-
-#[test]
-fn a_crash_under_fuzz_is_an_error_naming_the_span_and_the_mode() {
-    let err = test(&Fixture::default(), &Fixture::default().scale("scale_crash"), &options()).unwrap_err();
-    let msg = format!("{err:#}");
-    assert!(msg.contains("B crashed under fuzz (jitter) at prefill span A[1..2) B[1..2)"), "{msg}");
-    assert!(msg.contains("illegal memory access"), "{msg}");
+    assert_eq!(verdict(&r), (1, "B writes a value outside a declared domain end to end".into()));
+    assert!(line(&lines, "local     ✗ domain").contains("B next_token[0] = 99 outside domain"), "{lines:#?}");
 }
 
 #[test]
@@ -107,9 +111,9 @@ fn a_changed_program_the_driver_cannot_stage_is_inconclusive() {
 fn logits_moving_past_the_limit_without_a_flip_are_inconclusive() {
     let (r, _) = run(Fixture::default().scale("scale_drift"));
     let v = &r.summary.verdict;
-    assert!(v.code == 2 && v.summary.starts_with("spans differ; end-to-end logits move up to"), "{}", v.summary);
+    assert!(v.code == 2 && v.summary.starts_with("spans differ; end-to-end KL up to"), "{}", v.summary);
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.max_ulp > 4.0 && lg.flips == lg.near_ties, "{lg:?}");
+    assert!(lg.kl_max > 0.01 && lg.flips == lg.within, "{lg:?}");
 }
 
 #[test]
@@ -149,11 +153,12 @@ fn nan_on_one_side_is_counted_and_never_passes_as_logit_evidence() {
     let local = r.summary.local.as_ref().unwrap();
     assert!(local.findings.iter().all(|f| f.cmp.as_ref().unwrap().nan_only_one_side == 1), "{:#?}", local.findings);
     assert!(line(&lines, "local     ✗").contains("· 1 nan"), "{lines:#?}");
-    // a NaN row has no finite delta to measure against the limit: it is an
+    // a NaN row has no finite move to measure against the limit: it is an
     // infinite one, not a zero one
     let lg = r.summary.logits.as_ref().unwrap();
-    assert!(lg.max_ulp.is_infinite(), "{lg:?}");
-    assert_eq!(verdict(&r).0, 2, "{}", r.summary.verdict.summary);
+    assert!(lg.kl_max.is_infinite(), "{lg:?}");
+    assert_eq!(verdict(&r).0, 1, "{}", r.summary.verdict.summary);
+    assert!(r.summary.verdict.summary.contains("KL inf above the limit"), "{}", r.summary.verdict.summary);
 }
 
 #[test]
@@ -195,10 +200,90 @@ fn identical_manifests_have_nothing_to_test() {
 fn the_json_summary_names_every_section_and_the_archive_every_finding() {
     let (r, _) = run(Fixture::default().scale("scale_round"));
     let v = serde_json::to_value(&r.summary).unwrap();
-    for k in ["a", "b", "diff", "tap", "local", "logits", "noise", "fuzz", "verdict"] {
+    for k in ["a", "b", "diff", "tap", "local", "logits", "noise", "verdict"] {
         assert!(v.get(k).is_some(), "no `{k}` in {v}");
     }
     assert!(v.get("perf").is_none());
     assert_eq!(v["diff"]["programs"][0]["spans"], 2);
     assert!(r.detail["local"].as_array().unwrap().len() >= r.summary.local.as_ref().unwrap().findings.len());
+}
+
+#[test]
+fn a_side_of_several_ranks_is_compared_rank_by_rank() {
+    let (r, lines) =
+        test(&Fixture::default().ranks(2), &Fixture::default().ranks(2).scale("scale_rank1_wrong"), &options())
+            .unwrap();
+    let tap = r.summary.tap.as_ref().unwrap();
+    assert_eq!((tap.ranks, tap.spans), (2, 4));
+    let local = r.summary.local.as_ref().unwrap();
+    // every rank's span is compared against its own rank of A; only rank 1 differs
+    assert_eq!((local.compared, local.bit_identical), (24, 12));
+    assert!(local.findings.iter().all(|f| f.span.starts_with("rank 1 ")), "{:#?}", local.findings);
+    assert!(local.outputs.iter().all(|f| f.buffer.starts_with("rank ")), "{:#?}", local.outputs);
+    let lg = r.summary.logits.as_ref().unwrap();
+    assert!(lg.kl_at.starts_with("rank 1 ") && lg.flipped.iter().all(|f| f.row.starts_with("rank 1 ")), "{lg:#?}");
+    assert!(verdict(&r).0 != 0 && line(&lines, "tap").contains("2 ranks"), "{lines:#?}");
+}
+
+#[test]
+fn a_and_b_must_run_as_the_same_number_of_ranks() {
+    let err = test(&Fixture::default().ranks(2), &Fixture::default(), &options()).unwrap_err();
+    assert!(format!("{err:#}").contains("A recorded 2 ranks; B runs as 1"), "{err:#}");
+}
+
+#[test]
+fn a_buffer_declared_differently_on_the_two_sides_is_not_compared() {
+    let (r, lines) = run(Fixture::default().scale("scale_same").wide_act());
+    assert!(
+        line(&lines, "diff").contains("buffer act changed") || lines.iter().any(|l| l.contains("act changed")),
+        "{lines:#?}"
+    );
+    let local = r.summary.local.as_ref().unwrap();
+    assert_eq!((local.compared, local.one_sided.clone()), (0, vec!["act".to_string()]));
+    assert!(line(&lines, "local     declared differently").contains("act"), "{lines:#?}");
+    // nothing compared is not everything identical: the oracle decides
+    assert_eq!(
+        verdict(&r),
+        (0, "spans differ, but the end-to-end logits are bit-identical on all 9 rows".into()),
+        "{lines:#?}"
+    );
+}
+
+#[test]
+fn nothing_compared_is_not_everything_identical() {
+    // B declares the only compared buffer differently and drifts: no span
+    // is comparable, and the verdict comes from the oracle, not from 0/0.
+    let (r, lines) = run(Fixture::default().scale("scale_drift").wide_act());
+    assert_eq!(r.summary.local.as_ref().unwrap().compared, 0);
+    assert_eq!(verdict(&r).0, 2, "{lines:#?}");
+    assert!(
+        r.summary.verdict.summary.starts_with("spans differ; end-to-end KL up to"),
+        "{}",
+        r.summary.verdict.summary
+    );
+}
+
+#[test]
+fn a_logits_buffer_is_found_by_the_last_segment_of_its_name() {
+    let (r, _) = test(
+        &Fixture::default().logits("target_head.logits"),
+        &Fixture::default().logits("target_head.logits").scale("scale_round"),
+        &options(),
+    )
+    .unwrap();
+    assert_eq!(verdict(&r).1, "logit evidence", "{}", r.summary.verdict.summary);
+    assert_eq!(r.summary.logits.as_ref().unwrap().rows, 9);
+}
+
+#[test]
+fn a_changed_once_program_is_each_sides_own_setup_not_an_untapped_program() {
+    let (r, lines) = test(
+        &Fixture::default().once("fill_table"),
+        &Fixture::default().once("fill_table_v2").scale("scale_same"),
+        &options(),
+    )
+    .unwrap();
+    assert!(r.summary.diff.spans.contains_key("prep"), "{:?}", r.summary.diff.spans.keys());
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()), "{lines:#?}");
+    assert!(r.summary.local.as_ref().unwrap().undriven.is_empty());
 }

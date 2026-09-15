@@ -26,8 +26,7 @@ sources = "tools/kernels-src"
 [test]
 seed = 0x5eed
 decode_steps = 32
-logit_ulp = 4
-fuzz = 6
+logit_kl = 0.01
 prompt = "Optional real-text prompt"
 
 [run]

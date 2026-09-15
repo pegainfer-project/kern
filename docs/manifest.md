@@ -206,8 +206,7 @@ impl 不必重写先验，kernel package 零改动。两种形式互斥：
 完全合法**——e2e 一模一样地跑；填了以后 runtime 在 `write_input` 时校验
 host 写入（O(n)，免费），`kern test` 据此为整数 buffer 合成合法随机值、
 并检查 kernel 产出的值落在声明域内（后置条件）。浮点 buffer 不写 = 任意
-有限值，kern test 自己决定分布。整数 buffer 不写 = kern test 跳过它的 fuzz 并
-在报告里列为 unfuzzed。
+有限值。整数 buffer 不写 = kern test 不检查它的产出。
 
 **可插拔**：换一个 op 的实现 = 只改它的 `impl` 块（可能在 `modules` 里
 多一行），接口、程序连线、其余 manifest 一字不动；verifier 静态把关新

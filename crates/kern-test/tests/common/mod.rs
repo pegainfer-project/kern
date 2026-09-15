@@ -11,12 +11,13 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use kern_manifest::protocol::Axis;
 use kern_manifest::types::{Arg, DType, Dim, Fill, Provision};
 use kern_manifest::values;
 use kern_manifest::{verify, Manifest, Protocol, Verified};
-use kern_test::{Options, Side, Vars};
+use kern_test::compare::{changed_blocks, compare, logit_stats, Cmp, LogitStats};
+use kern_test::{At, Options, Side, Vars};
 
 pub const D: usize = 4;
 pub const VOCAB: usize = 16;
@@ -39,11 +40,33 @@ pub struct Fixture {
     /// An extra program without a `batch` (a harness-only layer): changed
     /// but undriven.
     pub probe: bool,
+    /// Ranks of the `ep` group the manifest is SPMD over; above 1 the
+    /// `scale` op takes the rank as an argument.
+    pub ranks: usize,
+    /// A `gather` program over a `peer` buffer of `hidden`, for the diff
+    /// (its op is a module kernel the fake never runs).
+    pub peer: bool,
+    /// A `prep` program run once after load that fills a carry `table`,
+    /// through the entry named.
+    pub once: Option<&'static str>,
+    /// `act` declared one column wider: the same name, another shape.
+    pub wide_act: bool,
 }
 
 impl Default for Fixture {
     fn default() -> Self {
-        Fixture { scale: "scale", mix: "mix", head: "head", alt: None, logits: "logits", probe: false }
+        Fixture {
+            scale: "scale",
+            mix: "mix",
+            head: "head",
+            alt: None,
+            logits: "logits",
+            probe: false,
+            ranks: 1,
+            peer: false,
+            once: None,
+            wide_act: false,
+        }
     }
 }
 
@@ -66,14 +89,29 @@ impl Fixture {
     pub fn probe(self) -> Self {
         Fixture { probe: true, ..self }
     }
+    pub fn ranks(self, n: usize) -> Self {
+        Fixture { ranks: n, ..self }
+    }
+    pub fn peer(self) -> Self {
+        Fixture { peer: true, ..self }
+    }
+    pub fn once(self, e: &'static str) -> Self {
+        Fixture { once: Some(e), ..self }
+    }
+    pub fn wide_act(self) -> Self {
+        Fixture { wide_act: true, ..self }
+    }
 
     pub fn manifest(&self) -> Verified {
         let op = |params: &[&str], entry: &str| serde_json::json!({"params": params, "impl": {"launches": [{"entry": format!("extern:{entry}")}]}});
         let mut ops = serde_json::Map::new();
         ops.insert("embed".into(), op(&["in buffer<i64>", "out buffer<f32>"], "embed"));
-        ops.insert("scale".into(), op(&["in buffer<f32>", "out buffer<f32>"], self.scale));
+        let ranked = self.ranks > 1;
+        let scale_params: &[&str] =
+            if ranked { &["in buffer<f32>", "out buffer<f32>", "i32"] } else { &["in buffer<f32>", "out buffer<f32>"] };
+        ops.insert("scale".into(), op(scale_params, self.scale));
         if let Some((_, e)) = self.alt {
-            ops.insert("scale_alt".into(), op(&["in buffer<f32>", "out buffer<f32>"], e));
+            ops.insert("scale_alt".into(), op(scale_params, e));
         }
         ops.insert(
             "mix".into(),
@@ -89,7 +127,11 @@ impl Fixture {
                 Some((k, _)) if k == l => "scale_alt",
                 _ => "scale",
             };
-            calls.push(serde_json::json!({"op": sc, "args": [{"buf": "hidden"}, {"buf": "act"}]}));
+            let mut args = vec![serde_json::json!({"buf": "hidden"}), serde_json::json!({"buf": "act"})];
+            if ranked {
+                args.push(serde_json::json!({"rank": "ep"}));
+            }
+            calls.push(serde_json::json!({"op": sc, "args": args}));
             calls.push(serde_json::json!({"op": "mix", "args": [
                 {"buf": "act"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"state": "kv"}, {"i32": l},
                 {"buf": "hidden"}]}));
@@ -103,7 +145,23 @@ impl Fixture {
         if self.probe {
             programs["probe"] = serde_json::json!({"calls": calls});
         }
-        let m = serde_json::json!({
+        if let Some(e) = self.once {
+            ops.insert("fill_table".into(), op(&["out buffer<f32>"], e));
+            programs["prep"] =
+                serde_json::json!({"once": true, "calls": [{"op": "fill_table", "args": [{"buf": "table"}]}]});
+        }
+        let mut modules = serde_json::json!({});
+        if self.peer {
+            modules["toy"] = serde_json::json!({"source": "toy.cubin", "sha256": "ab".repeat(32)});
+            ops.insert("gather".into(), serde_json::json!({
+                "params": ["in buffer<f32>", "in buffer<u64>", "out buffer<f32>"],
+                "impl": {"launches": [{"module": "toy", "entry": "gather_k", "block": [128, 1, 1], "grid": [1, 1, 1]}]},
+            }));
+            programs["gather"] = serde_json::json!({"calls": [
+                calls[0],
+                {"op": "gather", "args": [{"buf": "hidden"}, {"buf": "hidden_peers"}, {"buf": "act"}]}]});
+        }
+        let mut m = serde_json::json!({
             "schema_version": 5, "model": "fake",
             "vars": {"tokens": {"max": 8}, "seqs": {"max": 1}},
             "states": {"kv": {"bytes_per_token": LAYERS * D * 4}},
@@ -114,27 +172,45 @@ impl Fixture {
                                  "domain": {"index_into": "kv"}},
                 "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
                 "hidden": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", D]},
-                "act": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", D]},
+                "act": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", if self.wide_act { D + 1 } else { D }]},
                 self.logits: {"kind": "output", "dtype": "bf16", "shape": ["tokens", VOCAB]},
                 "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"], "fill": "tokens",
                                "domain": {"min": 0, "max": VOCAB - 1}},
             },
-            "modules": {},
+            "modules": modules,
             "ops": ops,
             "programs": programs,
         });
+        if ranked {
+            m["topology"] = serde_json::json!({"groups": {"ep": self.ranks}});
+        }
+        if self.once.is_some() {
+            m["buffers"]["table"] = serde_json::json!({"kind": "carry", "dtype": "f32", "shape": [D]});
+        }
+        if self.peer {
+            m["buffers"]["hidden"]["export"] = true.into();
+            m["buffers"]["hidden_peers"] = serde_json::json!(
+                {"kind": "peer", "dtype": "u64", "shape": [self.ranks], "of": "hidden", "group": "ep"});
+        }
         let m: Manifest = serde_json::from_value(m).expect("fixture parses");
         verify(m).unwrap_or_else(|e| panic!("fixture does not verify: {e}"))
     }
 }
 
-/// The interpreter over one manifest of the family.
+/// The interpreter over one manifest of the family: one [`Rank`] per
+/// member of its `ep` group, all fed the same sequence.
 pub struct Fake {
     m: Verified,
     protocol: Protocol,
+    ranks: Vec<Rank>,
+    pos: i64,
+}
+
+/// One rank's memory.
+struct Rank {
+    q: usize,
     bufs: BTreeMap<String, Vec<u8>>,
     states: BTreeMap<String, Vec<u8>>,
-    pos: i64,
     /// How often `scale_noisy` has seen each input: it flips sign on every
     /// repeat, so no replay reproduces the original.
     seen: BTreeMap<Vec<u8>, u64>,
@@ -156,19 +232,34 @@ impl Fake {
     pub fn new(m: Verified) -> Fake {
         let protocol = Protocol::check(&m).expect("fixture has a protocol");
         let max: Vars = m.vars.iter().map(|(k, v)| (k.clone(), v.max)).collect();
-        let bufs = m.buffers.keys().map(|n| (n.clone(), vec![0u8; kern_test::diff::live_bytes(&m, n, &max)])).collect();
-        let states =
-            m.states.iter().map(|(n, s)| (n.clone(), vec![0u8; (s.bytes_per_token * CAPACITY) as usize])).collect();
-        Fake { m, protocol, bufs, states, pos: 0, seen: BTreeMap::new() }
+        let n = m.group_size("ep").unwrap_or(1) as usize;
+        let ranks = (0..n)
+            .map(|q| Rank {
+                q,
+                bufs: m
+                    .buffers
+                    .keys()
+                    .map(|n| (n.clone(), vec![0u8; kern_test::diff::live_bytes(&m, n, &max)]))
+                    .collect(),
+                states: m
+                    .states
+                    .iter()
+                    .map(|(n, s)| (n.clone(), vec![0u8; (s.bytes_per_token * CAPACITY) as usize]))
+                    .collect(),
+                seen: BTreeMap::new(),
+            })
+            .collect();
+        Fake { m, protocol, ranks, pos: 0 }
     }
 
     fn rows(&self, vars: &Vars) -> usize {
         vars[&self.protocol.rows.var] as usize
     }
+}
 
-    fn call(&mut self, op: &str, args: &[Arg], vars: &Vars) -> Result<()> {
-        let t = self.rows(vars);
-        let entry = self.m.ops[op].imp.launches[0].entry().to_string();
+impl Rank {
+    fn call(&mut self, m: &Verified, t: usize, op: &str, args: &[Arg]) -> Result<()> {
+        let entry = m.ops[op].imp.launches[0].entry().to_string();
         let buf = |k: usize| match &args[k] {
             Arg::Buf { buf, .. } => buf.clone(),
             _ => panic!("expected a buffer arg"),
@@ -199,23 +290,18 @@ impl Fake {
                         "extern:scale_negzero" if v == 0.0 => -0.0,
                         "extern:scale_negzero" => v * 0.5,
                         "extern:scale_round" => v * 0.5 * (1.0 + 2f32.powi(-9)),
-                        "extern:scale_drift" => v * 0.5 * 1.05,
+                        "extern:scale_drift" => v * 0.5 * 1.25,
                         "extern:scale_wrong" => v * 0.5 + 1.0,
                         "extern:scale_nan" if i == 0 => f32::NAN,
                         "extern:scale_nan" => v * 0.5,
                         "extern:scale_dim3" if i % D == 3 => v * 0.5 + 1.0,
                         "extern:scale_dim3" => v * 0.5,
                         "extern:scale_noisy" => v * 0.5 * noisy,
-                        "extern:scale_crash" => v * 0.5,
+                        "extern:scale_rank1_wrong" if self.q == 1 => v * 0.5 + 1.0,
+                        "extern:scale_rank1_wrong" => v * 0.5,
                         _ => panic!("no such scale: {e}"),
                     })
                     .collect();
-                // A kernel with a baked-in assumption: the exact model only
-                // ever produces multiples of 1/16, and the first input off
-                // that grid (fuzz's jitter) kills it.
-                if e == "extern:scale_crash" && x.iter().any(|v| (v * 16.0).fract() != 0.0) {
-                    bail!("scale_crash: illegal memory access");
-                }
                 self.bufs.get_mut(&buf(1)).unwrap()[..t * D * 4].copy_from_slice(&bytes_f32(&y));
             }
             e if e.starts_with("extern:mix") => {
@@ -280,6 +366,16 @@ impl Fake {
     }
 }
 
+impl Fake {
+    fn at<'a>(&'a self, rank: usize, at: At<'a, Vec<u8>>) -> &'a [u8] {
+        match at {
+            At::Buffer(name, bytes) => &self.ranks[rank].bufs[name][..bytes],
+            At::State(name, r) => &self.ranks[rank].states[name][r],
+            At::Scratch(b, r) => &b[r],
+        }
+    }
+}
+
 impl Side for Fake {
     type Buf = Vec<u8>;
 
@@ -295,6 +391,9 @@ impl Side for Fake {
     fn vocab(&self) -> u64 {
         VOCAB as u64
     }
+    fn ranks(&self) -> usize {
+        self.ranks.len()
+    }
     fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
         let c = ids.len();
         let pos = self.pos;
@@ -302,7 +401,9 @@ impl Side for Fake {
         let p = self.protocol.clone();
         let mut put = |f: &kern_manifest::protocol::Filled, v: &[i64]| {
             let b = f.encode(v);
-            self.bufs.get_mut(&f.name).unwrap()[..b.len()].copy_from_slice(&b);
+            for r in &mut self.ranks {
+                r.bufs.get_mut(&f.name).unwrap()[..b.len()].copy_from_slice(&b);
+            }
         };
         put(p.token_rows(), ids);
         put(p.slots(), &(pos..pos + c as i64).collect::<Vec<_>>());
@@ -323,63 +424,74 @@ impl Side for Fake {
     }
     fn run(&mut self, program: &str, vars: &Vars, calls: Range<usize>) -> Result<()> {
         let cs = self.m.programs[program].calls[calls].to_vec();
-        for c in cs {
-            self.call(&c.op, &c.args, vars)?;
+        let t = self.rows(vars);
+        for r in &mut self.ranks {
+            for c in &cs {
+                r.call(&self.m, t, &c.op, &c.args)?;
+            }
         }
         Ok(())
     }
-    fn read(&self, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
-        Ok(self.bufs[buffer][..bytes].to_vec())
+    fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
     }
-    fn write(&mut self, buffer: &str, bytes: &[u8]) -> Result<()> {
-        self.bufs.get_mut(buffer).ok_or_else(|| anyhow!("no buffer `{buffer}`"))?[..bytes.len()].copy_from_slice(bytes);
+    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
+    }
+    fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Vec<u8>) -> Result<()> {
+        self.ranks[rank].bufs.get_mut(buffer).unwrap()[..bytes].copy_from_slice(&from[..bytes]);
         Ok(())
     }
-    fn alloc(&self, bytes: usize) -> Result<Vec<u8>> {
-        Ok(vec![0; bytes])
+    fn bytes(&self, _rank: usize, from: &Vec<u8>, at: Range<usize>) -> Result<Vec<u8>> {
+        Ok(from[at].to_vec())
     }
-    fn save(&self, buffer: &str, bytes: usize, into: &mut Vec<u8>) -> Result<()> {
-        into[..bytes].copy_from_slice(&self.bufs[buffer][..bytes]);
-        Ok(())
+    fn compare(&self, rank: usize, dtype: DType, a: At<Vec<u8>>, b: At<Vec<u8>>) -> Result<Cmp> {
+        Ok(compare(dtype, self.at(rank, a), self.at(rank, b)))
     }
-    fn load(&mut self, buffer: &str, bytes: usize, from: &Vec<u8>) -> Result<()> {
-        self.bufs.get_mut(buffer).unwrap()[..bytes].copy_from_slice(&from[..bytes]);
-        Ok(())
+    fn changed(&self, rank: usize, a: At<Vec<u8>>, b: At<Vec<u8>>) -> Result<Vec<Range<usize>>> {
+        Ok(changed_blocks(self.at(rank, a), self.at(rank, b)))
     }
-    fn bytes(&self, from: &Vec<u8>, len: usize) -> Result<Vec<u8>> {
-        Ok(from[..len].to_vec())
+    fn logits(
+        &self,
+        rank: usize,
+        dtype: DType,
+        cols: usize,
+        a: At<Vec<u8>>,
+        b: At<Vec<u8>>,
+    ) -> Result<Vec<LogitStats>> {
+        let row = cols * dtype.bytes() as usize;
+        let (x, y) = (self.at(rank, a), self.at(rank, b));
+        Ok(x.chunks_exact(row).zip(y.chunks_exact(row)).map(|(p, q)| logit_stats(dtype, p, q)).collect())
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {
-        Ok(self.states[state].len())
+        Ok(self.ranks[0].states[state].len())
     }
-    fn read_state(&self, state: &str, at: Range<usize>) -> Result<Vec<u8>> {
-        Ok(self.states[state][at].to_vec())
+    fn read_state(&self, rank: usize, state: &str, at: Range<usize>) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].states[state][at].to_vec())
     }
-    fn write_state(&mut self, state: &str, at: usize, bytes: &[u8]) -> Result<()> {
-        self.states.get_mut(state).unwrap()[at..at + bytes.len()].copy_from_slice(bytes);
+    fn write_state(&mut self, rank: usize, state: &str, at: usize, bytes: &[u8]) -> Result<()> {
+        self.ranks[rank].states.get_mut(state).unwrap()[at..at + bytes.len()].copy_from_slice(bytes);
         Ok(())
     }
-    fn save_state(&self, state: &str, into: &mut Vec<u8>) -> Result<()> {
-        into.copy_from_slice(&self.states[state]);
-        Ok(())
+    fn save_state(&self, rank: usize, state: &str) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].states[state].clone())
     }
-    fn load_state(&mut self, state: &str, from: &Vec<u8>) -> Result<()> {
-        self.states.get_mut(state).unwrap().copy_from_slice(from);
+    fn load_state(&mut self, rank: usize, state: &str, from: &Vec<u8>) -> Result<()> {
+        self.ranks[rank].states.get_mut(state).unwrap().copy_from_slice(from);
         Ok(())
     }
     fn zero_states(&mut self) -> Result<()> {
-        for s in self.states.values_mut() {
-            s.fill(0);
+        for r in &mut self.ranks {
+            for s in r.states.values_mut() {
+                s.fill(0);
+            }
         }
         Ok(())
     }
     fn time(&mut self, _program: &str, _vars: &Vars, calls: Range<usize>, _iters: usize) -> Result<Vec<f32>> {
         Ok(vec![0.01; calls.len()])
     }
-    fn capture(&mut self, _program: &str, _vars: &Vars) -> Result<()> {
-        Ok(())
-    }
-    fn time_captured(&mut self, _program: &str, _vars: &Vars, _iters: usize) -> Result<f32> {
+    fn time_graph(&mut self, _program: &str, _vars: &Vars, _iters: usize) -> Result<f32> {
         Ok(0.5)
     }
 }
@@ -393,8 +505,7 @@ pub fn options() -> Options {
         prompt: None,
         prefill: 5,
         decode_steps: 4,
-        logit_ulp: 4,
-        fuzz: 6,
+        logit_kl: 0.01,
         chunk: 3,
         iters: 1,
         graph_step: false,
@@ -406,13 +517,15 @@ pub fn options() -> Options {
     }
 }
 
-/// Run A against B with `o`; the report and the lines it printed.
+/// Run A against B with `o`: record A, drop it, replay B. The report and
+/// the lines it printed.
 pub fn test(a: &Fixture, b: &Fixture, o: &Options) -> Result<(kern_test::Report, Vec<String>)> {
     let (ma, mb) = (a.manifest(), b.manifest());
     let diff = kern_test::diff::diff(&ma, &mb);
     let mut lines = diff.lines();
-    let mut sides = kern_test::Sides { a: Fake::new(ma), b: Fake::new(mb), load_s: 0.0 };
-    let report = kern_test::run(o, diff, &mut sides, &mut |ls: &[String]| lines.extend_from_slice(ls))?;
+    let mut out = |ls: &[String]| lines.extend_from_slice(ls);
+    let rec = kern_test::record(o, diff, &mb, &mut Fake::new(ma), &mut out)?;
+    let report = kern_test::replay(o, rec, &mut Fake::new(mb), &mut out)?;
     lines.extend(report.summary.verdict.lines());
     Ok((report, lines))
 }

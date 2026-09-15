@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use cudarc::driver::sys;
 
 use crate::compile::Dense;
-use crate::device::{alloc, DeviceBuf, Events};
+use crate::device::{alloc_uninit, DeviceBuf, Events};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
@@ -20,7 +20,7 @@ use crate::{Error, Result, Runtime};
 /// image, copied device to device and handed back to any runtime on the
 /// same device. Opaque to the host; what a harness keeps instead of a
 /// `Vec<u8>` so a snapshot or a state sync never crosses the bus.
-pub struct Scratch(DeviceBuf);
+pub struct Scratch(pub(crate) DeviceBuf);
 
 impl Scratch {
     pub fn bytes(&self) -> usize {
@@ -139,21 +139,23 @@ impl Runtime {
         }
     }
 
-    /// Device scratch of `bytes`, zeroed.
-    pub fn scratch(&self, bytes: usize) -> Result<Scratch> {
+    /// Device scratch of `bytes`, uninitialized: filled before it is read.
+    fn scratch(&self, bytes: usize) -> Result<Scratch> {
         self.ctx.bind_to_thread()?;
-        Ok(Scratch(alloc(&self.stream, bytes as u64)?))
+        Ok(Scratch(alloc_uninit(&self.stream, bytes as u64)?))
     }
 
-    /// The first `bytes` of a buffer into scratch, device to device (synchronous).
-    pub fn save_buffer(&self, name: &str, bytes: usize, into: &mut Scratch) -> Result<()> {
+    /// The first `bytes` of a buffer into new scratch, device to device (synchronous).
+    pub fn save_buffer(&self, name: &str, bytes: usize) -> Result<Scratch> {
         let Some(b) = self.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
         if bytes as u64 > b.bytes {
             bail!(Api, "buffer `{name}`: prefix {bytes} exceeds allocation {}", b.bytes);
         }
-        self.dtod(into.0.view(0..bytes)?.ptr(), b.view(0..bytes)?.ptr(), bytes)
+        let into = self.scratch(bytes)?;
+        self.dtod(into.0.view(0..bytes)?.ptr(), b.view(0..bytes)?.ptr(), bytes)?;
+        Ok(into)
     }
 
     /// The first `bytes` of scratch into a buffer, device to device (synchronous).
@@ -167,14 +169,16 @@ impl Runtime {
         self.dtod(b.view(0..bytes)?.ptr(), from.0.view(0..bytes)?.ptr(), bytes)
     }
 
-    /// A state's whole allocation into scratch, device to device (synchronous).
-    pub fn save_state(&self, name: &str, into: &mut Scratch) -> Result<()> {
+    /// A state's whole allocation into new scratch, device to device (synchronous).
+    pub fn save_state(&self, name: &str) -> Result<Scratch> {
         self.whole_state(name)?;
         let Some(s) = self.states.get(name) else {
             bail!(Api, "no state `{name}`");
         };
         let n = s.bytes as usize;
-        self.dtod(into.0.view(0..n)?.ptr(), s.view(0..n)?.ptr(), n)
+        let into = self.scratch(n)?;
+        self.dtod(into.0.view(0..n)?.ptr(), s.view(0..n)?.ptr(), n)?;
+        Ok(into)
     }
 
     /// Scratch over a state's whole allocation, device to device (synchronous).
@@ -187,10 +191,10 @@ impl Runtime {
         self.dtod(s.view(0..n)?.ptr(), from.0.view(0..n)?.ptr(), n)
     }
 
-    /// The first `len` bytes of scratch, on the host.
-    pub fn read_scratch(&self, from: &Scratch, len: usize) -> Result<Vec<u8>> {
+    /// Bytes `at` of scratch, on the host.
+    pub fn read_scratch(&self, from: &Scratch, at: std::ops::Range<usize>) -> Result<Vec<u8>> {
         self.ctx.bind_to_thread()?;
-        Ok(self.stream.clone_dtoh(&from.0.view(0..len)?)?)
+        Ok(self.stream.clone_dtoh(&from.0.view(at)?)?)
     }
 
     fn dtod(&self, dst: u64, src: u64, bytes: usize) -> Result<()> {

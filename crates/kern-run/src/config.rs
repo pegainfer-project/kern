@@ -26,7 +26,7 @@
 //! [test]
 //! seed = 0x5eed
 //! decode_steps = 32
-//! logit_ulp = 4
+//! logit_kl = 0.01
 //!
 //! [run]
 //! steps = 32
@@ -80,8 +80,7 @@ pub struct Kernels {
 pub struct Test {
     pub(crate) seed: Option<u64>,
     pub(crate) decode_steps: Option<u64>,
-    pub(crate) logit_ulp: Option<u64>,
-    pub(crate) fuzz: Option<usize>,
+    pub(crate) logit_kl: Option<f64>,
     pub(crate) prompt: Option<String>,
 }
 

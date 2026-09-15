@@ -21,7 +21,7 @@ sources = "tools/kernels-src"
 [test]
 seed = 0x5eed
 decode_steps = 32
-logit_ulp = 4
+logit_kl = 0.01
 
 [run]
 prompt = "The capital of France is"

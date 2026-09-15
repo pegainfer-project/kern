@@ -109,21 +109,29 @@ bf16 链，E1 按近平局口径判而非逐位。明确不做：K4 DCP、空间
   embedding 的 token_ids 直接由 next_token 喂，positions/slot_mapping/seq_lens
   可预知提前写，host 滞后一步异步取结果，步间不再 sync。E4 直接依赖它。
 - kern test 后续（harness 已是独立 crate `kern-test`，`Side` 的 `Buf` 是
-  设备侧句柄、state 同步全 D2D，2026-09-15）：
-  - 设备侧比较：compare / 差异 bitmap / logits 行（argmax、margin、
-    Δ、KL）各一个 kernel，checked-in PTX + driver JIT（先例
-    `kern-runtime/src/profile.ptx`），host 的 `compare` 仍是定义，kernel
-    对它做性质测试；之后 host 只读事实（计数、ulp、行号），快照的输出
-    也不再下设备。live 区域按 var 值只读活跃前缀。
+  设备侧句柄、state 同步全 D2D；先录 A 再放 B、一侧可为多 rank，
+  2026-09-15）：
   - 事件模型：list → record → run → report 四个动词，一条 case 一个事
     件，报告是事件的折叠（现在 `run` 一口气产出 `Report`）；step 级（整
     个 program 一步）在 span 与 sequence 之间补上；每个 program 快照第
     一个与最后一个 run（现在只有第一个）。
-  - 判定补全：NaN / Inf 只出现在 B 一侧直接 FAIL（现在 logits 行记为
-    无限 Δ、判 INCONCLUSIVE）；noise floor 两边都测（B 自己不确定也是事实）；
+  - 判定补全：noise floor 两边都测（B 自己不确定也是事实）；
     `kern.toml` 里给 target 配 profile（seed / steps / chunk / prompt）。
   - 老条目：kernel-as-package 目录里带上 test report 当证据；bs>1 的
     workload（现在 bs=1 下 elementwise 核全是 launch 主导，roofline 列
     0.1%）；GEMM extern 的 FLOPs roofline（现在只算字节）；结构输入的
     domain 校验扩到 debug 模式下的设备侧 buffer（现在只查 host 写入）。
-    多卡时：A、B 共用一个 runtime 装载；rank-local 比较。
+  - 端到端行的可比性：B 自由跑时 program 内部由模型自己产出的整数决策
+    （spec 的 draft token、indexer 的 window_indices、MoE 的路由）一旦和
+    A 不同，后面的 logits 行算的就不是同一个输入（DSv4.1 实测 step 5 的
+    verify 行 KL 到 12，全是 step 1 一个 draft 平局翻转的后果）。做法是
+    teacher forcing：record 时在每个整数中间量的写点后读下 A 的值，B
+    自由跑到同一写点后覆盖成 A 的，数值自己算、决策照 A 的走；决策翻没
+    翻由 tap 的整数输出比较另报。改完后 KL 门在 spec / MoE 上才能收紧。
+  - 大换核的 `diff` 段：DSv4.1 paged → fused 换了 20 个 op，`diff` 打
+    211 行，其中 program 行把 120 个 span 逐个展开成一行 95 KB——按 op
+    折叠、只点名前几个 span，其余进 `--out`。
+  - 分布外覆盖走多 seed 的 workload（`--seed`），不做 span 级扰动：fuzz
+    段 2026-09-15 删除（没有浮点 domain 就没有判据、shuffle/resample 破坏
+    张量语义、从未改变过判定、占 DSv4.1 一次 test 的 5 分钟），后置条件
+    （output 落在声明域内）留在端到端行。

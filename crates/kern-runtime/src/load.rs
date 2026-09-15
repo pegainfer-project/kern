@@ -255,6 +255,7 @@ impl Runtime {
             ranks,
             peers,
             imports: Vec::new(),
+            compare: Default::default(),
         };
         rt.zero_fresh(&initial)?;
         rt.stream.synchronize()?;

@@ -158,3 +158,26 @@ fn diff_spans_every_program_that_calls_a_changed_op_and_no_other() {
     let probe = diff(&Fixture::default().probe().manifest(), &Fixture::default().probe().mix("mix_leak").manifest());
     assert_eq!(probe.spans.keys().cloned().collect::<Vec<_>>(), ["decode", "prefill", "probe"]);
 }
+
+#[test]
+fn a_peer_buffer_stands_for_the_exported_buffer_it_holds_addresses_of() {
+    use kern_test::diff::{access, frontier_inputs};
+    let m = Fixture::default().ranks(2).peer().manifest();
+    let acc = access(&m, "gather", 1..2);
+    // the kernel given every rank's `hidden` reads and writes `hidden`;
+    // the address array itself is nothing a span consumes or produces
+    assert_eq!(acc.reads.iter().cloned().collect::<Vec<_>>(), ["hidden"]);
+    assert_eq!(acc.writes.iter().cloned().collect::<Vec<_>>(), ["act", "hidden"]);
+    assert_eq!(frontier_inputs(&m, "gather", 1..2).into_iter().collect::<Vec<_>>(), ["hidden"]);
+}
+
+#[test]
+fn what_a_once_program_writes_is_a_load_time_constant() {
+    use kern_manifest::Protocol;
+    use kern_test::diff::constants;
+    let m = Fixture::default().once("fill_table").manifest();
+    let once = Protocol::check(&m).unwrap().once;
+    assert_eq!(once, ["prep"]);
+    assert_eq!(constants(&m, &once).into_iter().collect::<Vec<_>>(), ["table"]);
+    assert!(constants(&m, &[]).is_empty());
+}
