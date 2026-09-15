@@ -113,6 +113,8 @@ def generate(raw, constants, *, cubin_dir, auxiliary_cubin, attention_dir,
                         max_seqs=max_seqs)
     aux = serving.pieces(programs)
     buffers.update(aux["buffers"])
+    for name in ("input_ids","anchor_token"):
+        buffers[name] = {**buffers[name],"domain":{"index_into":"embed.weight"}}
     used = {a["buf"] for p in programs.values() for c in p["calls"] for a in c["args"] if "buf" in a}
     for name in sorted(used - buffers.keys()):
         buffers[name] = raw[name]
