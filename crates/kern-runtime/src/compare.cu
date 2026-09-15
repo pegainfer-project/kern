@@ -69,7 +69,7 @@ __device__ __forceinline__ long long ulp_key(int kind, const unsigned char* p) {
         case BF16: case F16: bits = load16(p); sign_bit = 1ll << 15; break;
         case F32: bits = load32(p); sign_bit = 1ll << 31; break;
         case E4M3: bits = p[0]; sign_bit = 1ll << 7; break;
-        default: return p[0]; // E8M0: the byte is the exponent, already monotone
+        default: return 0; // never: pair() measures ulps for is_float kinds only
     }
     return (bits & sign_bit) ? sign_bit - (bits & (sign_bit - 1)) - sign_bit : bits;
 }

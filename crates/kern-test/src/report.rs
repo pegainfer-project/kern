@@ -262,7 +262,6 @@ pub struct Flip {
 #[derive(Serialize, Debug)]
 pub struct Logits {
     pub rows: usize,
-    pub runs: usize,
     pub differ: usize,
     pub flips: usize,
     /// Flips whose row stays within the KL limit.

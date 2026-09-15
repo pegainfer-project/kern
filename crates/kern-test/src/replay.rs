@@ -11,9 +11,7 @@ use serde_json::{json, Value};
 
 use crate::compare::{Cmp, LogitRow, TOP};
 use crate::diff::{access, live_bytes};
-use crate::harness::{
-    at_rank, compare_outputs, domain_violations, image, logit_rows, read_logits, write_runs, Recording,
-};
+use crate::harness::{at_rank, compare_outputs, domain_violations, free_run, image, logit_rows, write_runs, Recording};
 use crate::report::*;
 use crate::{At, Options, Side, Vars};
 use kern_manifest::types::DType;
@@ -73,14 +71,7 @@ pub fn replay<S: Side>(
             if kept {
                 for q in 0..ranks {
                     b_pre.push(
-                        sr.pre[q]
-                            .keys()
-                            .map(|st| {
-                                let mut img = b.alloc(q, b.state_bytes(st)?)?;
-                                b.save_state(q, st, &mut img)?;
-                                Ok((st.clone(), img))
-                            })
-                            .collect::<Result<_>>()?,
+                        sr.pre[q].keys().map(|st| Ok((st.clone(), b.save_state(q, st)?))).collect::<Result<_>>()?,
                     );
                 }
             }
@@ -130,15 +121,7 @@ pub fn replay<S: Side>(
     // B free-runs the same workload from zero state, nothing injected: what
     // a caller would get.
     let t_free = Instant::now();
-    b.zero_states()?;
-    b.reset();
-    let mut b_logits = Vec::new();
-    for run in &rec.runs {
-        let e = b.stage(&run.tokens)?;
-        b.run(&run.program, &e, 0..b.calls(&run.program)?)?;
-        b_logits.extend(read_logits(b, ma, mb, &run.program, &e, "")?);
-        b.advance(run.advance);
-    }
+    let b_logits = free_run(b, ma, mb, &rec.runs)?;
     let free_t = elapsed(&t_free);
     let tap = Tap {
         seed: format!("{:#x}", o.seed),
@@ -262,7 +245,6 @@ pub fn replay<S: Side>(
     let top_full = |r: &&LogitRow| r.stats.top == TOP.min(r.stats.cmp.n);
     let logits = Logits {
         rows: logit_rows.len(),
-        runs: rec.logits.len(),
         differ: logit_rows.iter().filter(|r| !r.stats.cmp.identical()).count(),
         flips: n_flips,
         within: n_within,
@@ -348,10 +330,7 @@ pub fn replay<S: Side>(
             let e = b.stage(&vec![st.token; st.rows as usize])?;
             let tb = b.time(p, &e, 0..b.calls(p)?, o.iters)?;
             let graph_ms = match st.graph_ms {
-                Some(ga) => {
-                    b.capture(p, &e)?;
-                    Some([ga, b.time_captured(p, &e, 100)?])
-                }
+                Some(ga) => Some([ga, b.time_graph(p, &e, 100)?]),
                 None => None,
             };
             let (a, bb) = (attribute(0, p, &st.times, &e, true), attribute(1, p, &tb, &e, true));

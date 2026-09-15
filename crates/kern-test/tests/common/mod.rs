@@ -435,12 +435,8 @@ impl Side for Fake {
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
         Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
     }
-    fn alloc(&self, _rank: usize, bytes: usize) -> Result<Vec<u8>> {
-        Ok(vec![0; bytes])
-    }
-    fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Vec<u8>) -> Result<()> {
-        into[..bytes].copy_from_slice(&self.ranks[rank].bufs[buffer][..bytes]);
-        Ok(())
+    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].bufs[buffer][..bytes].to_vec())
     }
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Vec<u8>) -> Result<()> {
         self.ranks[rank].bufs.get_mut(buffer).unwrap()[..bytes].copy_from_slice(&from[..bytes]);
@@ -477,9 +473,8 @@ impl Side for Fake {
         self.ranks[rank].states.get_mut(state).unwrap()[at..at + bytes.len()].copy_from_slice(bytes);
         Ok(())
     }
-    fn save_state(&self, rank: usize, state: &str, into: &mut Vec<u8>) -> Result<()> {
-        into.copy_from_slice(&self.ranks[rank].states[state]);
-        Ok(())
+    fn save_state(&self, rank: usize, state: &str) -> Result<Vec<u8>> {
+        Ok(self.ranks[rank].states[state].clone())
     }
     fn load_state(&mut self, rank: usize, state: &str, from: &Vec<u8>) -> Result<()> {
         self.ranks[rank].states.get_mut(state).unwrap().copy_from_slice(from);
@@ -496,10 +491,7 @@ impl Side for Fake {
     fn time(&mut self, _program: &str, _vars: &Vars, calls: Range<usize>, _iters: usize) -> Result<Vec<f32>> {
         Ok(vec![0.01; calls.len()])
     }
-    fn capture(&mut self, _program: &str, _vars: &Vars) -> Result<()> {
-        Ok(())
-    }
-    fn time_captured(&mut self, _program: &str, _vars: &Vars, _iters: usize) -> Result<f32> {
+    fn time_graph(&mut self, _program: &str, _vars: &Vars, _iters: usize) -> Result<f32> {
         Ok(0.5)
     }
 }

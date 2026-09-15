@@ -48,7 +48,7 @@ use cudarc::driver::{sys, CudaContext, CudaStream, HostSlice, PinnedHostSlice};
 use kern_manifest::types::{BufferKind, Manifest, Provision, State};
 use kern_manifest::Verified;
 
-pub use compare::{ranges_of, At, Cmp, Logit, TOP_MAX};
+pub use compare::{At, Cmp, Logit, TOP_MAX};
 use compile::{CompiledProgram, Dense};
 use cublas::Blas;
 use device::{alloc, DeviceBuf, Pinned};

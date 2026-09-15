@@ -110,9 +110,8 @@ pub trait Side {
 
     /// The first `bytes` of a buffer, on the host.
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>>;
-    fn alloc(&self, rank: usize, bytes: usize) -> Result<Self::Buf>;
-    /// The first `bytes` of a buffer into `into`.
-    fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Self::Buf) -> Result<()>;
+    /// The first `bytes` of a buffer, kept on the device.
+    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Self::Buf>;
     /// The first `bytes` of `from` into a buffer.
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Self::Buf) -> Result<()>;
     /// Bytes `at` of `from`, allocated on `rank`, on the host.
@@ -138,8 +137,8 @@ pub trait Side {
     fn state_bytes(&self, state: &str) -> Result<usize>;
     fn read_state(&self, rank: usize, state: &str, at: Range<usize>) -> Result<Vec<u8>>;
     fn write_state(&mut self, rank: usize, state: &str, at: usize, bytes: &[u8]) -> Result<()>;
-    /// A state's whole allocation into `into`.
-    fn save_state(&self, rank: usize, state: &str, into: &mut Self::Buf) -> Result<()>;
+    /// A state's whole allocation, kept on the device.
+    fn save_state(&self, rank: usize, state: &str) -> Result<Self::Buf>;
     fn load_state(&mut self, rank: usize, state: &str, from: &Self::Buf) -> Result<()>;
     /// Every state on every rank zeroed: a fresh sequence from position 0.
     fn zero_states(&mut self) -> Result<()>;
@@ -147,10 +146,10 @@ pub trait Side {
     /// Per-call time in ms for calls `calls`, minimum over `iters` replays;
     /// with several ranks, the slowest rank's.
     fn time(&mut self, program: &str, vars: &Vars, calls: Range<usize>, iters: usize) -> Result<Vec<f32>>;
-    /// Capture a program as a graph at `vars`, for [`Side::time_captured`].
-    fn capture(&mut self, program: &str, vars: &Vars) -> Result<()>;
-    /// Median wall time per replay of the captured program, in ms.
-    fn time_captured(&mut self, program: &str, vars: &Vars, iters: usize) -> Result<f32>;
+    /// Capture a program as a graph at `vars` and replay it `iters` times:
+    /// the median wall time per replay in ms; with several ranks, the
+    /// slowest rank's.
+    fn time_graph(&mut self, program: &str, vars: &Vars, iters: usize) -> Result<f32>;
 }
 
 /// What the harness is told beyond the two manifests; the knobs of

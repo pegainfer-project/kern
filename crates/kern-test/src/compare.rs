@@ -156,10 +156,6 @@ pub fn logit_stats(dt: DType, a: &[u8], b: &[u8]) -> LogitStats {
     LogitStats::from_parts(cmp, argmax_a, argmax_b, top1, top2, kl, top, rank_in_b)
 }
 
-pub fn logit_row(label: String, dt: DType, a: &[u8], b: &[u8]) -> LogitRow {
-    LogitRow { label, stats: logit_stats(dt, a, b) }
-}
-
 /// The 64-byte blocks where `pre` and `post` differ, as merged byte
 /// ranges (adjacent changed blocks are one range; the last block is
 /// clipped to the length). The unit a state's write-set is found in: a

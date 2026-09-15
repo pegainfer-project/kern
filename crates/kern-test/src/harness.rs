@@ -21,7 +21,6 @@ use crate::report::{cap, kb, row, Finding, Floor, Noise};
 use crate::workload::{self, Rng, Workload};
 use crate::{At, Options, Side, Vars};
 
-pub(crate) type Bytes = Vec<u8>;
 /// `state -> [(offset, bytes)]`: the runs of a state a span changed.
 pub(crate) type Runs = BTreeMap<String, Vec<(usize, Vec<u8>)>>;
 
@@ -118,7 +117,7 @@ pub struct Recording<B> {
     pub(crate) kept: Vec<(usize, usize)>,
     pub(crate) logits: Vec<LogitsAt<B>>,
     /// Output buffers after the workload, per rank.
-    pub(crate) outputs: BTreeMap<String, Vec<Bytes>>,
+    pub(crate) outputs: BTreeMap<String, Vec<Vec<u8>>>,
     /// Per rank: A's shared states after the workload.
     pub(crate) states: Vec<BTreeMap<String, B>>,
     pub(crate) one_sided: BTreeSet<String>,
@@ -252,11 +251,11 @@ fn declares_same<T: serde::Serialize>(a: &T, b: &T) -> bool {
 /// A buffer both sides declare with the same dtype and shape: the only
 /// kind whose bytes mean the same thing on either side, so the only kind
 /// A can hand over or B's copy can be compared against.
-pub(crate) fn alike(ma: &Manifest, mb: &Manifest, n: &str) -> bool {
+fn alike(ma: &Manifest, mb: &Manifest, n: &str) -> bool {
     ma.buffers.get(n).zip(mb.buffers.get(n)).is_some_and(|(x, y)| x.dtype == y.dtype && x.shape == y.shape)
 }
 
-pub(crate) fn read_logits<S: Side>(
+fn read_logits<S: Side>(
     c: &S,
     ma: &Manifest,
     mb: &Manifest,
@@ -268,16 +267,30 @@ pub(crate) fn read_logits<S: Side>(
         .into_iter()
         .map(|n| {
             let len = live_bytes(ma, &n, e);
-            let bufs = (0..c.ranks())
-                .map(|q| {
-                    let mut b = c.alloc(q, len)?;
-                    c.save(q, &n, len, &mut b)?;
-                    Ok((len, b))
-                })
-                .collect::<Result<_>>()?;
+            let bufs = (0..c.ranks()).map(|q| Ok((len, c.save(q, &n, len)?))).collect::<Result<_>>()?;
             Ok(LogitsAt { label: label.to_string(), cols: row_elems(ma, &n, e), buffer: n, bufs })
         })
         .collect()
+}
+
+/// The workload once more from zero state with nothing injected, on
+/// either side: what a caller would get, as its `logits*` reads per run.
+pub(crate) fn free_run<S: Side>(
+    c: &mut S,
+    ma: &Manifest,
+    mb: &Manifest,
+    runs: &[Run<S::Buf>],
+) -> Result<Vec<LogitsAt<S::Buf>>> {
+    c.zero_states()?;
+    c.reset();
+    let mut out = Vec::new();
+    for run in runs {
+        let e = c.stage(&run.tokens)?;
+        c.run(&run.program, &e, 0..c.calls(&run.program)?)?;
+        out.extend(read_logits(c, ma, mb, &run.program, &e, "")?);
+        c.advance(run.advance);
+    }
+    Ok(out)
 }
 
 /// The end-to-end rows of two sides' `logits*` reads, in workload order:
@@ -467,12 +480,7 @@ pub fn record<S: Side>(
         }
     }
     for q in 0..ranks {
-        let mut img = BTreeMap::new();
-        for n in &shared {
-            let mut b = a.alloc(q, a.state_bytes(n)?)?;
-            a.save_state(q, n, &mut b)?;
-            img.insert(n.clone(), b);
-        }
+        let img = shared.iter().map(|n| Ok((n.clone(), a.save_state(q, n)?))).collect::<Result<_>>()?;
         rec.states.push(img);
     }
     let workload_s = t0.elapsed().as_secs_f32();
@@ -481,15 +489,7 @@ pub fn record<S: Side>(
     // and the whole workload once more for the end-to-end band
     if o.noise {
         let t_n = Instant::now();
-        a.zero_states()?;
-        a.reset();
-        let mut again = Vec::new();
-        for run in &rec.runs {
-            let e = a.stage(&run.tokens)?;
-            a.run(&run.program, &e, 0..a.calls(&run.program)?)?;
-            again.extend(read_logits(a, &ma, mb, &run.program, &e, "")?);
-            a.advance(run.advance);
-        }
+        let again = free_run(a, &ma, mb, &rec.runs)?;
         let rows = logit_rows(a, &ma, ranks, &rec.logits, &again)?;
         let worst = rows.iter().max_by(|x, y| x.stats.kl.total_cmp(&y.stats.kl));
         let floor = worst.map(|w| Floor {
@@ -561,12 +561,7 @@ pub fn record<S: Side>(
             }
             let e = a.stage(&vec![last_tok; rows_of(f) as usize])?;
             let times = a.time(p, &e, 0..a.calls(p)?, o.iters)?;
-            let graph_ms = if o.graph_step {
-                a.capture(p, &e)?;
-                Some(a.time_captured(p, &e, 100)?)
-            } else {
-                None
-            };
+            let graph_ms = if o.graph_step { Some(a.time_graph(p, &e, 100)?) } else { None };
             steps.push(StepRec { program: p.into(), rows: rows_of(f), token: last_tok, times, graph_ms });
         }
         let mut sweep = Vec::new();
@@ -640,8 +635,7 @@ fn record_run<S: Side>(
     for q in 0..ranks {
         let mut img = BTreeMap::new();
         for n in shared {
-            let mut b = a.alloc(q, a.state_bytes(n)?)?;
-            a.save_state(q, n, &mut b).with_context(|| format!("imaging state `{n}` before {pname} {label}"))?;
+            let b = a.save_state(q, n).with_context(|| format!("imaging state `{n}` before {pname} {label}"))?;
             img.insert(n.clone(), b);
         }
         image.push(img);
@@ -673,8 +667,8 @@ fn record_run<S: Side>(
                 if bytes == 0 {
                     continue;
                 }
-                let mut buf = a.alloc(q, bytes)?;
-                a.save(q, n, bytes, &mut buf)
+                let buf = a
+                    .save(q, n, bytes)
                     .with_context(|| format!("recording `{n}` ({bytes} B) at {pname} span {}", span.label()))?;
                 v.push((n.clone(), bytes, buf));
             }
@@ -690,16 +684,7 @@ fn record_run<S: Side>(
         let mut a_pre: Vec<BTreeMap<String, S::Buf>> = Vec::new();
         if keep {
             for q in 0..ranks {
-                a_pre.push(
-                    touched
-                        .iter()
-                        .map(|st| {
-                            let mut b = a.alloc(q, a.state_bytes(st)?)?;
-                            a.save_state(q, st, &mut b)?;
-                            Ok((st.clone(), b))
-                        })
-                        .collect::<Result<_>>()?,
-                );
+                a_pre.push(touched.iter().map(|st| Ok((st.clone(), a.save_state(q, st)?))).collect::<Result<_>>()?);
             }
         }
         a.run(pname, &e, span.a.clone())?;
@@ -739,8 +724,8 @@ fn record_run<S: Side>(
                     .iter()
                     .map(|n| {
                         let bytes = live_bytes(ma, n, &e);
-                        let mut buf = a.alloc(q, bytes)?;
-                        a.save(q, n, bytes, &mut buf)
+                        let buf = a
+                            .save(q, n, bytes)
                             .with_context(|| format!("keeping `{n}` after {pname} span {}", span.label()))?;
                         Ok((n.clone(), (bytes, buf)))
                     })

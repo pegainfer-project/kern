@@ -341,7 +341,7 @@ DSv4.1 换核验证现在是两次装载加 10 秒。
   和 `kern run` 共用）。
 - runtime 只加了不在服务路径上的原语：`run_range`（按 call 区间
   eager 执行）、`read_buffer_prefix` / `write_buffer` / `read_state_at` /
-  `write_state_at`、`scratch` 与 `save_* / load_*`（设备侧暂存的 D2D
+  `write_state_at`、`save_* / load_*`（设备侧暂存的 D2D
   存取）、`compare` / `changed` / `logits`（`compare.rs` + `compare.cu`
   的三个比较 kernel，操作数 `At::{Buffer, State, Scratch}`）、`time_range`
   （区间内逐 call event 计时）、`time_captured`（graph 中位数）、

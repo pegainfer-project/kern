@@ -1,29 +1,33 @@
 //! The runtime's comparison kernels against kern-test's host definitions:
 //! every dtype over random bytes (NaNs, infinities and signed zeros come
 //! with them), every operand kind, block-granular change detection on a
-//! length that is not a multiple of the block, and logits rows from fewer
-//! columns than the top set to a real vocabulary. Counts and maxima must
-//! match exactly; the floating-point sums to rounding.
+//! length that is not a multiple of the block and on an operand off the
+//! 16-byte alignment, and logits rows from one column to a real
+//! vocabulary with a tie across the whole row, a NaN on either side and a
+//! signed zero. Counts and maxima must match exactly; the floating-point
+//! sums to rounding. The device counts reach kern-test's types through
+//! the same `cmp_of` / `logit_of` the real side uses.
 
 use kern_manifest::types::DType;
 use kern_manifest::values::from_f64;
 use kern_manifest::Verified;
+use kern_run::test::{cmp_of, logit_of};
 use kern_runtime::{At, Capacity, HostWeights, Runtime};
-use kern_test::compare::{changed_blocks, compare, logit_stats, Cmp, LogitStats, TOP};
+use kern_test::compare::{changed_blocks, compare, logit_stats, TOP};
 use kern_test::workload::Rng;
 
-const BYTES: usize = 4 * 129_280 * 3;
+const BYTES: usize = 4 * 129_280 * 5;
 
 /// Two byte arrays, declared as the operands of a program that is never
 /// run (a manifest has to use every buffer).
 fn runtime() -> Runtime {
-    let cols = BYTES / 2 / 3;
+    let cols = BYTES / 2 / 5;
     let manifest = serde_json::json!({
         "schema_version": 5, "model": "device-compare-test", "vars": {}, "states": {},
         "buffers": {
-            "a": {"kind": "input", "dtype": "bf16", "shape": [3, cols]},
-            "b": {"kind": "input", "dtype": "bf16", "shape": [3, cols]},
-            "out": {"kind": "output", "dtype": "bf16", "shape": [3, 3]}
+            "a": {"kind": "input", "dtype": "bf16", "shape": [5, cols]},
+            "b": {"kind": "input", "dtype": "bf16", "shape": [5, cols]},
+            "out": {"kind": "output", "dtype": "bf16", "shape": [5, 5]}
         },
         "modules": {},
         "ops": {"gemm": {
@@ -31,7 +35,7 @@ fn runtime() -> Runtime {
             "impl": {"launches": [{"entry": "extern:cublaslt_bf16_tn"}]}
         }},
         "programs": {"never": {"calls": [{"op": "gemm", "args": [
-            {"buf": "a"}, {"buf": "b"}, {"buf": "out"}, {"i32": 3}, {"i32": 3}, {"i32": cols}
+            {"buf": "a"}, {"buf": "b"}, {"buf": "out"}, {"i32": 5}, {"i32": 5}, {"i32": cols}
         ]}]}}
     });
     let verified = Verified::from_json(&manifest.to_string()).unwrap();
@@ -41,31 +45,6 @@ fn runtime() -> Runtime {
     let gpu = std::env::var("KERN_TEST_GPU").ok().and_then(|g| g.parse().ok()).unwrap_or(0);
     Runtime::load_with_host_weights(&verified, &dir, gpu, Some(Capacity { tokens: Some(1), seqs: 1 }), None, &scope)
         .unwrap()
-}
-
-fn host_cmp(c: kern_runtime::Cmp) -> Cmp {
-    Cmp::from_counts(
-        c.n as usize,
-        c.n_diff as usize,
-        c.signed_zero as usize,
-        c.nan_one_side as usize,
-        c.measured as usize,
-        c.max_ulp,
-        c.max_abs,
-    )
-}
-
-fn host_logit(l: kern_runtime::Logit) -> LogitStats {
-    LogitStats::from_parts(
-        host_cmp(l.cmp),
-        l.argmax_a as usize,
-        l.argmax_b as usize,
-        l.top1,
-        l.top2,
-        l.kl,
-        l.top as usize,
-        l.rank_in_b as usize,
-    )
 }
 
 /// `a` random; `b` mostly `a`, with bytes flipped, elements replaced and
@@ -112,13 +91,12 @@ fn device_compare_agrees_with_the_host_definition_on_every_dtype_and_operand() {
         rt.write_buffer("b", &b).unwrap();
         let want = compare(dt, &a, &b);
         let len = a.len();
-        let got = host_cmp(rt.compare(dt, At::Buffer("a", len), At::Buffer("b", len)).unwrap());
+        let got = cmp_of(rt.compare(dt, At::Buffer("a", len), At::Buffer("b", len)).unwrap());
         assert_eq!(got, want, "{dt:?} buffer vs buffer");
-        let mut s = rt.scratch(len).unwrap();
-        rt.save_buffer("a", len, &mut s).unwrap();
-        let got = host_cmp(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("b", len)).unwrap());
+        let s = rt.save_buffer("a", len).unwrap();
+        let got = cmp_of(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("b", len)).unwrap());
         assert_eq!(got, want, "{dt:?} scratch vs buffer");
-        let same = host_cmp(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("a", len)).unwrap());
+        let same = cmp_of(rt.compare(dt, At::Scratch(&s, 0..len), At::Buffer("a", len)).unwrap());
         assert_eq!(same, compare(dt, &a, &a), "{dt:?} against itself");
     }
 }
@@ -145,6 +123,13 @@ fn device_changed_blocks_agree_with_the_host_definition() {
         assert_eq!(got, want, "{n} bytes");
         let none = rt.changed(At::Buffer("a", n), At::Buffer("a", n)).unwrap();
         assert!(none.is_empty(), "{n} bytes against itself: {none:?}");
+        // the same bytes three past a 16-byte boundary: the byte path
+        let mut off = vec![0u8; 3];
+        off.extend_from_slice(&pre);
+        rt.write_buffer("a", &off).unwrap();
+        let s = rt.save_buffer("a", n + 3).unwrap();
+        let got = rt.changed(At::Scratch(&s, 3..n + 3), At::Buffer("b", n)).unwrap();
+        assert_eq!(got, want, "{n} bytes, misaligned");
     }
 }
 
@@ -153,17 +138,27 @@ fn device_changed_blocks_agree_with_the_host_definition() {
 fn device_logit_rows_agree_with_the_host_definition() {
     let mut rt = runtime();
     let mut rng = Rng(42);
-    let rows = 3;
+    let rows = 5;
     for dt in [DType::F32, DType::Bf16] {
-        for cols in [7usize, 1000, 4096, 129_280] {
+        for cols in [1usize, 7, 1000, 4096, 129_280] {
             let gauss = |rng: &mut Rng| (0..12).map(|_| rng.below(1000) as f64 / 1000.0).sum::<f64>() - 6.0;
-            let va: Vec<f64> = (0..rows * cols).map(|_| gauss(&mut rng) * 4.0).collect();
-            // B: A plus a small drift, one confident swap in row 1, a NaN in row 2
+            let mut va: Vec<f64> = (0..rows * cols).map(|_| gauss(&mut rng) * 4.0).collect();
+            // B: A plus a small drift; row 1 a confident swap, row 2 a NaN
+            // in B, row 3 one value everywhere on both sides (the argmax
+            // and the top set are ties broken by index), row 4 a NaN in A;
+            // row 0 opens with a signed zero on each side.
             let mut vb: Vec<f64> = va.iter().map(|x| x + gauss(&mut rng) * 0.05).collect();
+            va[0] = 0.0;
+            vb[0] = -0.0;
             if cols > 1 {
                 vb.swap(cols, cols + 1);
-                vb[2 * cols + 3] = f64::NAN;
             }
+            vb[2 * cols + 3.min(cols - 1)] = f64::NAN;
+            for j in 0..cols {
+                va[3 * cols + j] = 1.5;
+                vb[3 * cols + j] = 1.5;
+            }
+            va[4 * cols + 3.min(cols - 1)] = f64::NAN;
             let (a, b) = (from_f64(dt, &va), from_f64(dt, &vb));
             rt.write_buffer("a", &a).unwrap();
             rt.write_buffer("b", &b).unwrap();
@@ -173,11 +168,18 @@ fn device_logit_rows_agree_with_the_host_definition() {
             for (r, l) in got.into_iter().enumerate() {
                 let (lo, hi) = (r * cols * w, (r + 1) * cols * w);
                 let want = logit_stats(dt, &a[lo..hi], &b[lo..hi]);
-                let g = host_logit(l);
+                let g = logit_of(l);
                 assert_eq!(
-                    (g.cmp.clone(), g.argmax_a, g.argmax_b, g.rank_in_b, g.top, g.margin_a),
-                    (want.cmp.clone(), want.argmax_a, want.argmax_b, want.rank_in_b, want.top, want.margin_a),
+                    (g.cmp.clone(), g.argmax_a, g.argmax_b, g.rank_in_b, g.top),
+                    (want.cmp.clone(), want.argmax_a, want.argmax_b, want.rank_in_b, want.top),
                     "{dt:?} {cols} row {r}"
+                );
+                // a NaN argmax has a NaN margin on both sides
+                assert!(
+                    g.margin_a == want.margin_a || (g.margin_a.is_nan() && want.margin_a.is_nan()),
+                    "{dt:?} {cols} row {r}: margin {} vs {}",
+                    g.margin_a,
+                    want.margin_a
                 );
                 if want.kl.is_finite() {
                     assert!(

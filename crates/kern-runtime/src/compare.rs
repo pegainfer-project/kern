@@ -105,7 +105,7 @@ fn cmp_of(v: &[u64], n: u64) -> Cmp {
 
 /// Byte ranges of the 64-byte blocks whose bit is set, adjacent blocks
 /// merged, the last clipped to `bytes`.
-pub fn ranges_of(bits: &[u32], bytes: usize) -> Vec<Range<usize>> {
+fn ranges_of(bits: &[u32], bytes: usize) -> Vec<Range<usize>> {
     let blocks = bytes.div_ceil(BLOCK);
     let mut out: Vec<Range<usize>> = Vec::new();
     for i in (0..blocks).filter(|i| bits[i / 32] >> (i % 32) & 1 == 1) {

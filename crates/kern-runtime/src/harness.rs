@@ -139,22 +139,23 @@ impl Runtime {
         }
     }
 
-    /// Device scratch of `bytes`, uninitialized: a harness fills it
-    /// before it reads it.
-    pub fn scratch(&self, bytes: usize) -> Result<Scratch> {
+    /// Device scratch of `bytes`, uninitialized: filled before it is read.
+    fn scratch(&self, bytes: usize) -> Result<Scratch> {
         self.ctx.bind_to_thread()?;
         Ok(Scratch(alloc_uninit(&self.stream, bytes as u64)?))
     }
 
-    /// The first `bytes` of a buffer into scratch, device to device (synchronous).
-    pub fn save_buffer(&self, name: &str, bytes: usize, into: &mut Scratch) -> Result<()> {
+    /// The first `bytes` of a buffer into new scratch, device to device (synchronous).
+    pub fn save_buffer(&self, name: &str, bytes: usize) -> Result<Scratch> {
         let Some(b) = self.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
         if bytes as u64 > b.bytes {
             bail!(Api, "buffer `{name}`: prefix {bytes} exceeds allocation {}", b.bytes);
         }
-        self.dtod(into.0.view(0..bytes)?.ptr(), b.view(0..bytes)?.ptr(), bytes)
+        let into = self.scratch(bytes)?;
+        self.dtod(into.0.view(0..bytes)?.ptr(), b.view(0..bytes)?.ptr(), bytes)?;
+        Ok(into)
     }
 
     /// The first `bytes` of scratch into a buffer, device to device (synchronous).
@@ -168,14 +169,16 @@ impl Runtime {
         self.dtod(b.view(0..bytes)?.ptr(), from.0.view(0..bytes)?.ptr(), bytes)
     }
 
-    /// A state's whole allocation into scratch, device to device (synchronous).
-    pub fn save_state(&self, name: &str, into: &mut Scratch) -> Result<()> {
+    /// A state's whole allocation into new scratch, device to device (synchronous).
+    pub fn save_state(&self, name: &str) -> Result<Scratch> {
         self.whole_state(name)?;
         let Some(s) = self.states.get(name) else {
             bail!(Api, "no state `{name}`");
         };
         let n = s.bytes as usize;
-        self.dtod(into.0.view(0..n)?.ptr(), s.view(0..n)?.ptr(), n)
+        let into = self.scratch(n)?;
+        self.dtod(into.0.view(0..n)?.ptr(), s.view(0..n)?.ptr(), n)?;
+        Ok(into)
     }
 
     /// Scratch over a state's whole allocation, device to device (synchronous).

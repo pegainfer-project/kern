@@ -293,11 +293,8 @@ impl Side for Ranks {
     fn read(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Vec<u8>> {
         self.rt(rank).read_buffer_prefix(buffer, bytes).with_context(|| format!("rank {rank}: reading `{buffer}`"))
     }
-    fn alloc(&self, rank: usize, bytes: usize) -> Result<Scratch> {
-        self.rt(rank).scratch(bytes).with_context(|| format!("rank {rank}: scratch of {bytes} bytes"))
-    }
-    fn save(&self, rank: usize, buffer: &str, bytes: usize, into: &mut Scratch) -> Result<()> {
-        self.rt(rank).save_buffer(buffer, bytes, into).with_context(|| format!("rank {rank}: saving `{buffer}`"))
+    fn save(&self, rank: usize, buffer: &str, bytes: usize) -> Result<Scratch> {
+        self.rt(rank).save_buffer(buffer, bytes).with_context(|| format!("rank {rank}: saving `{buffer}`"))
     }
     fn load(&mut self, rank: usize, buffer: &str, bytes: usize, from: &Scratch) -> Result<()> {
         self.rt_mut(rank).load_buffer(buffer, bytes, from).with_context(|| format!("rank {rank}: loading `{buffer}`"))
@@ -331,21 +328,7 @@ impl Side for Ranks {
             .rt(rank)
             .logits(dtype, cols, TOP, on_device(a), on_device(b))
             .with_context(|| format!("rank {rank}: logits rows of {cols}"))?;
-        Ok(rows
-            .into_iter()
-            .map(|l| {
-                LogitStats::from_parts(
-                    cmp_of(l.cmp),
-                    l.argmax_a as usize,
-                    l.argmax_b as usize,
-                    l.top1,
-                    l.top2,
-                    l.kl,
-                    l.top as usize,
-                    l.rank_in_b as usize,
-                )
-            })
-            .collect())
+        Ok(rows.into_iter().map(logit_of).collect())
     }
     fn state_bytes(&self, state: &str) -> Result<usize> {
         Ok(self.rt(0).state_bytes(state)?)
@@ -360,8 +343,8 @@ impl Side for Ranks {
             .write_state_at(state, at, bytes)
             .with_context(|| format!("rank {rank}: writing state `{state}` at {at}"))
     }
-    fn save_state(&self, rank: usize, state: &str, into: &mut Scratch) -> Result<()> {
-        self.rt(rank).save_state(state, into).with_context(|| format!("rank {rank}: saving state `{state}`"))
+    fn save_state(&self, rank: usize, state: &str) -> Result<Scratch> {
+        self.rt(rank).save_state(state).with_context(|| format!("rank {rank}: saving state `{state}`"))
     }
     fn load_state(&mut self, rank: usize, state: &str, from: &Scratch) -> Result<()> {
         self.rt_mut(rank).load_state(state, from).with_context(|| format!("rank {rank}: loading state `{state}`"))
@@ -378,12 +361,11 @@ impl Side for Ranks {
         // the slowest rank per call: what a step waits for
         Ok((0..calls.len()).map(|i| per_rank.iter().map(|t| t[i]).fold(0.0, f32::max)).collect())
     }
-    fn capture(&mut self, program: &str, vars: &Vars) -> Result<()> {
-        self.each(&format!("capturing `{program}`"), |c| Ok(c.rt.capture(program, vars)?)).map(drop)
-    }
-    fn time_captured(&mut self, program: &str, vars: &Vars, iters: usize) -> Result<f32> {
-        let t =
-            self.each(&format!("timing captured `{program}`"), |c| Ok(c.rt.time_captured(program, vars, iters)?))?;
+    fn time_graph(&mut self, program: &str, vars: &Vars, iters: usize) -> Result<f32> {
+        let t = self.each(&format!("timing `{program}` as a graph"), |c| {
+            c.rt.capture(program, vars)?;
+            Ok(c.rt.time_captured(program, vars, iters)?)
+        })?;
         Ok(t.into_iter().fold(0.0, f32::max))
     }
 }
@@ -404,7 +386,9 @@ fn name_of(at: &At<Scratch>) -> String {
     }
 }
 
-fn cmp_of(c: kern_runtime::Cmp) -> Cmp {
+/// The device counts as kern-test's [`Cmp`]: the one place the two
+/// crates' definitions meet, so the GPU oracle test goes through it too.
+pub fn cmp_of(c: kern_runtime::Cmp) -> Cmp {
     Cmp::from_counts(
         c.n as usize,
         c.n_diff as usize,
@@ -413,6 +397,20 @@ fn cmp_of(c: kern_runtime::Cmp) -> Cmp {
         c.measured as usize,
         c.max_ulp,
         c.max_abs,
+    )
+}
+
+/// A device logits row as kern-test's [`LogitStats`].
+pub fn logit_of(l: kern_runtime::Logit) -> LogitStats {
+    LogitStats::from_parts(
+        cmp_of(l.cmp),
+        l.argmax_a as usize,
+        l.argmax_b as usize,
+        l.top1,
+        l.top2,
+        l.kl,
+        l.top as usize,
+        l.rank_in_b as usize,
     )
 }
 
