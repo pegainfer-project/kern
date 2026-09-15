@@ -279,10 +279,11 @@ decode + fp8 `attention_raw`），2026-09-10 的 A/B 对，4 rank × 1 GPU，
 `~/bench_results/2026-09-15-kern-test-multirank/`）。20 个 op 换掉，三个
 program 各 120–129 个 span，`load`（once）也有 span 但不算未驱动。
 
-- 时间：装 A 34 s → record 364 s（workload 本身 3 s，其余是 noise / fuzz
-  / perf：369 个 span × 4 rank）→ 装 B 34 s → replay ~400 s（tap 54 s、
-  noise 13 s、fuzz 288 s、perf 3 s），全程 797 s。设备上留了 13.5 GB 的
-  span 快照和 84 GB 的 state 镜像（后者是整块分配的尺寸，见 roadmap）。
+- 时间：装 A 34 s → record 364 s（workload 本身 3 s，其余是每个 span
+  之后把整个 state 读回 host 找写集）→ 装 B 34 s → replay ~400 s（tap
+  54 s、noise 13 s、fuzz 288 s、perf 3 s：都是 host 上逐元素比较），全程
+  797 s。设备上留了 13.5 GB 的 span 快照和 84 GB 的 state 镜像（后者是
+  整块分配的尺寸，见 roadmap）。
 - local：0/2312 bit-identical——B 的 `q` 是 fused prep 重排过的布局，同名
   不同义；`attention_raw`（bf16 → fp8）、`attention_sf`、`o`、`q_rotated`
   按"声明不同 / 单侧写"不比。端到端 `next_token` 四个 rank 全部 bit 相同，
@@ -304,6 +305,22 @@ program 各 120–129 个 span，`load`（once）也有 span 但不算未驱动�
 - 判定 INCONCLUSIVE：logits 动得超过阈值但没有 wide flip，A 自己不确定。
   按 lessons 的规则看 margin：翻转都在 near-tie 上，decode 的 token 一致，
   是"合理一致"还是 fp8 attention 的精度代价，交给人判。
+
+**同日复跑（比较下设备 + KL 判据，`results/ab2.log`）**：同一对 manifest、
+同一 seed、同一 tray，比较改成设备 kernel 之后全程 797 → **402 s**：装 A
+34 s、record 323 s（workload 1.3 s）、装 B 34 s、tap 54 s → **0.9 s**、
+logits 0.2 s、noise 13 s → 0.55 s、fuzz 288 s → **7 s**、perf 3.3 s。数字
+逐项与首跑一致（local 0/2312、noise 492/984、fuzz 1045/5904、perf
+decode_batch TPOT 11.41 → 10.57 ms、round 12.97 → 11.93、prefill 22.5 →
+19.0 ms），只有判定变了：A 对自己端到端 4036 行 max KL 0、0 次翻转
+（noise 底线成立），B 在 3960/4036 行 argmax 一致、76 次翻转全部超过
+`logit_kl = 0.01`（prefill chunk 0：A 271 → B 201，KL 0.127，margin 0.19，
+A 的 token 在 B 里排第 2；step 1/3/5 的 verify 行 KL 4–12 是 draft 分叉后
+的不同输入，见 roadmap 的 teacher forcing），所以 **FAIL**：A 自己能复现，
+差异就是 B 的。0.01 nat 对 fp8 attention 是否过严，由跑的人按
+`--logit-kl` 定，harness 只负责把 A 的底线和 B 的差摆在一行里。剩下的
+323 s 全在 record：workload 只占 1.3 s，其余是 84 GB 的 state 镜像、每个
+输入一次 `cuMemAlloc` 和逐 span 的 fan-out，下一步先分相计时再动手。
 
 ## 位置
 
