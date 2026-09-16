@@ -139,7 +139,7 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
 ///
 /// Every fill a caller of one rank produces is written; `blocks` is the
 /// tray batch's and only a caller that spans a rank group can fill it.
-pub(crate) fn stage(
+fn stage(
     rt: &mut Runtime,
     p: &Protocol,
     leases: &[Lease],
@@ -170,7 +170,7 @@ pub(crate) fn stage(
 
 /// `rows` rows of a page table: row `i` from lease `i`, the last lease
 /// repeating past the ones given.
-pub(crate) fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
+fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
     let mut v = Vec::with_capacity(rows * t.width);
     for r in 0..rows {
         leases[r.min(leases.len() - 1)].extend_row(&t.name, &mut v)?;
@@ -182,7 +182,7 @@ pub(crate) fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<
 /// line in entry 0 and zeros through the rest of a wide cell (a program
 /// that moves along one does so on the device). Columns past the leases
 /// given repeat the last.
-pub(crate) fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
+fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
     let mut v = Vec::with_capacity(t.lines * cols * t.width);
     for line in 0..t.lines {
         for c in 0..cols {
@@ -196,14 +196,14 @@ pub(crate) fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<
 /// What the manifest runs once after load (the derived tables a weight
 /// prep program computes), with every var at 1: a once program takes no
 /// call shape.
-pub(crate) fn run_once(rt: &Runtime, p: &Protocol) -> Result<()> {
+fn run_once(rt: &Runtime, p: &Protocol) -> Result<()> {
     let vars: Vars = rt.manifest.vars.keys().map(|v| (v.clone(), 1)).collect();
     p.once.iter().try_for_each(|name| rt.run(name, &vars).with_context(|| format!("`{name}`")))
 }
 
 /// Ranks a manifest runs as: the size its topology groups share; 1
 /// without a topology.
-pub(crate) fn ranks_of(m: &Verified) -> Result<usize> {
+fn ranks_of(m: &Verified) -> Result<usize> {
     let sizes: Vec<u64> = m.topology.iter().flat_map(|t| t.groups.values().copied()).collect();
     match sizes.as_slice() {
         [] => Ok(1),
@@ -213,7 +213,7 @@ pub(crate) fn ranks_of(m: &Verified) -> Result<usize> {
 }
 
 /// Rank `q`'s place in every group of the manifest's topology.
-pub(crate) fn topology_of(m: &Verified, q: usize) -> Topology {
+fn topology_of(m: &Verified, q: usize) -> Topology {
     Topology {
         groups: m
             .topology
@@ -226,7 +226,7 @@ pub(crate) fn topology_of(m: &Verified, q: usize) -> Topology {
 
 /// Every rank's peer buffers imported from every other, group by group,
 /// until no rank has one unfilled. Nothing to do without a topology.
-pub(crate) fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
+fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
     let Some(topo) = &m.topology else { return Ok(()) };
     let handles: Vec<BTreeMap<String, PeerHandle>> =
         rts.iter().map(Runtime::export_handles).collect::<Result<_, _>>()?;
@@ -250,7 +250,7 @@ const HUNG: Duration = Duration::from_secs(600);
 /// joined before the borrow ends. The `Runtime` inside holds raw CUDA
 /// handles; it is used from one thread at a time and binds its context on
 /// every entry, so either is sound.
-pub(crate) struct Sent<T>(pub(crate) T);
+struct Sent<T>(T);
 #[allow(unsafe_code)]
 unsafe impl<T> Send for Sent<T> {}
 struct Lent<'a, R>(&'a mut R);
@@ -259,7 +259,7 @@ unsafe impl<R> Send for Lent<'_, R> {}
 
 /// `f` on every rank at once, so a collective inside it finds its peers
 /// issuing; the results in rank order, the first error if any.
-pub(crate) fn each<R, T: Send>(ranks: &mut [R], what: &str, f: impl Fn(&mut R) -> Result<T> + Sync) -> Result<Vec<T>> {
+fn each<R, T: Send>(ranks: &mut [R], what: &str, f: impl Fn(&mut R) -> Result<T> + Sync) -> Result<Vec<T>> {
     let n = ranks.len();
     let (tx, rx) = std::sync::mpsc::channel();
     let mut out: Vec<Option<Result<T>>> = (0..n).map(|_| None).collect();
@@ -295,7 +295,7 @@ pub(crate) fn each<R, T: Send>(ranks: &mut [R], what: &str, f: impl Fn(&mut R) -
 }
 
 /// A runtime plus the single sequence: its token slots and position cursor.
-pub(crate) struct Caller {
+struct Caller {
     rt: Runtime,
     protocol: Protocol,
     /// The sequence's slots: as many as one page-table row (or the whole
