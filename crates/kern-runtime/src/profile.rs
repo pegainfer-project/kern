@@ -1,6 +1,8 @@
 //! Opt-in measurement primitives. Preparation is graph ordered but outside
 //! event brackets; every sample restores declared writes to its pre-image.
 //! No samples are discarded. Profiling never changes the serving path.
+//! Like every runtime entry point, a probe's binds the runtime's context
+//! on entry: a rank is measured from whichever thread holds it.
 //!
 //! This lives inside the runtime, not beside `kern test`, because a sample
 //! is a captured range of the compiled launch list bracketed by external
@@ -139,6 +141,7 @@ pub struct Anchor {
 
 impl Probe {
     pub fn new(rt: &Runtime) -> Result<Self> {
+        rt.ctx.bind_to_thread()?;
         let l2_bytes = rt.ctx.attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)? as u64;
         let sm_count = rt.ctx.attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
         let eviction_bytes = (l2_bytes * 8).max(256 << 20);
@@ -209,6 +212,7 @@ impl Probe {
     /// Local-device calibration. Traffic includes both reads and writes;
     /// the copy payload is retained separately to avoid a factor-of-two error.
     pub fn calibrate(&self, rt: &Runtime, samples: usize) -> Result<Vec<Anchor>> {
+        rt.ctx.bind_to_thread()?;
         let mut anchors = Vec::new();
         let l2_work = (self.l2_bytes / 4).max(1 << 20);
         for (name, bytes, traffic, kind) in [
@@ -321,6 +325,7 @@ impl Probe {
         index: usize,
         samples: usize,
     ) -> Result<CallSamples> {
+        rt.ctx.bind_to_thread()?;
         let call = &rt.manifest.programs[program].calls[index];
         let op = &rt.manifest.ops[&call.op];
         let mut buffers = BTreeSet::new();
@@ -394,6 +399,7 @@ impl Probe {
         vars: &BTreeMap<String, u64>,
         samples: usize,
     ) -> Result<ProgramSamples> {
+        rt.ctx.bind_to_thread()?;
         let carries =
             rt.manifest.buffers.iter().filter(|(_, b)| b.kind == BufferKind::Carry).map(|(n, _)| n.clone()).collect();
         let snapshot = Snapshot::new(rt, carries, rt.states.keys().cloned().collect())?;
