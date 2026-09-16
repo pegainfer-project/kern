@@ -11,18 +11,21 @@
 
 pub mod bench;
 pub mod config;
+pub mod inputs;
+pub mod probe;
 pub mod run;
 pub mod server;
 pub mod test;
 pub mod weights;
 
+pub use inputs::{Given, Inputs};
 pub use weights::Weights;
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use anyhow::{ensure, Context, Result};
-use kern_manifest::protocol::{Axis, Forward, Rows};
+use kern_manifest::protocol::{Axis, Forward, LineTable, PageTable, Rows};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::Lease;
@@ -130,11 +133,72 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
     unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("mapping weights {}", f.display()))
 }
 
-/// What one call handed back for the sequence: the tokens it takes, in
-/// order (one for a decode step or a prefill chunk, `count` of `rows` for
-/// a speculative round).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Emitted(Vec<i64>);
+/// Stage one call: `rows` rows for each lease, at that sequence's
+/// position, `ids` in row order. Returns the call's vars.
+///
+/// Every fill a caller of one rank produces is written; `blocks` is the
+/// tray batch's and only a caller that spans a rank group can fill it.
+pub(crate) fn stage(
+    rt: &mut Runtime,
+    p: &Protocol,
+    leases: &[Lease],
+    positions: &[usize],
+    rows: usize,
+    ids: &[i64],
+) -> Result<Vars> {
+    let b = leases.len();
+    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64);
+    for f in &p.fills {
+        let v: Vec<i64> = match (f.fill, f.axis) {
+            // Each sequence's first token: the anchor a drafting program
+            // splices its own rows from.
+            (Fill::Token, Axis::Groups) => ids.chunks(rows).map(|x| x[0]).collect(),
+            (Fill::Token, _) => ids.to_vec(),
+            (Fill::Valid, _) => vec![1; b * rows],
+            (Fill::Position, _) => positions.iter().flat_map(|&pos| (pos..pos + rows).map(|v| v as i64)).collect(),
+            (Fill::Slot, _) => leases.iter().zip(positions).flat_map(|(l, &pos)| l.slots(pos..pos + rows)).collect(),
+            (Fill::SeqLen, _) => positions.iter().map(|&pos| (pos + rows) as i64).collect(),
+            (Fill::CuSeqlens, _) => (0..=b).map(|i| (i * rows) as i64).collect(),
+            (Fill::SpanAt, _) => vec![0],
+            (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error, _) => continue,
+        };
+        rt.write_input_at(&f.name, &f.encode(&v), &vars)?;
+    }
+    Ok(vars)
+}
+
+/// `rows` rows of a page table: row `i` from lease `i`, the last lease
+/// repeating past the ones given.
+pub(crate) fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
+    let mut v = Vec::with_capacity(rows * t.width);
+    for r in 0..rows {
+        leases[r.min(leases.len() - 1)].extend_row(&t.name, &mut v)?;
+    }
+    Ok(v)
+}
+
+/// A line table whole: cell `[line, col]` carries column `col`'s lease's
+/// line in entry 0 and zeros through the rest of a wide cell (a program
+/// that moves along one does so on the device). Columns past the leases
+/// given repeat the last.
+pub(crate) fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
+    let mut v = Vec::with_capacity(t.lines * cols * t.width);
+    for line in 0..t.lines {
+        for c in 0..cols {
+            v.push(leases[c.min(leases.len() - 1)].seq_line(&t.name, line)?);
+            v.extend(std::iter::repeat_n(0, t.width - 1));
+        }
+    }
+    Ok(v)
+}
+
+/// What the manifest runs once after load (the derived tables a weight
+/// prep program computes), with every var at 1: a once program takes no
+/// call shape.
+pub(crate) fn run_once(rt: &Runtime, p: &Protocol) -> Result<()> {
+    let vars: Vars = rt.manifest.vars.keys().map(|v| (v.clone(), 1)).collect();
+    p.once.iter().try_for_each(|name| rt.run(name, &vars).with_context(|| format!("`{name}`")))
+}
 
 /// A runtime plus the single sequence: its token slots and position cursor.
 pub(crate) struct Caller {
@@ -152,36 +216,26 @@ impl Caller {
         self.rt
     }
 
-    /// Leases the sequence's slots and writes its row into every page table
-    /// once. A table has a row per sequence the manifest allows; this
-    /// caller is sequence 0, but every row must hold valid page ids. Line
-    /// tables of a per-sequence state likewise get this sequence's lines
-    /// in every column, in entry 0 of a wide cell.
+    /// Leases the sequence's slots, writes its row into every table, and
+    /// runs what the manifest runs once. A table has a row per sequence
+    /// the manifest allows; this caller is sequence 0, but every row must
+    /// hold valid page ids, so its lease fills them all.
     fn new(mut rt: Runtime) -> Result<Caller> {
         let protocol = Protocol::check(&rt.manifest)?;
         let lease = rt.lease(rt.max_seq_tokens().min(rt.capacity() as usize))?;
+        let one = std::slice::from_ref(&lease);
         for t in &protocol.page_tables {
-            let mut table = Vec::new();
-            for _ in 0..protocol.groups.max {
-                lease.extend_row(&t.name, &mut table)?;
-            }
-            rt.write_input(&t.name, &le_bytes_i32(&table))?;
+            let rows = page_rows(t, one, protocol.groups.max as usize)?;
+            rt.write_input(&t.name, &le_bytes_i32(&rows))?;
         }
         for t in &protocol.line_tables {
             let cols = match t.axis {
                 Axis::Tray => protocol.tray.as_ref().map_or(1, |b| b.max),
                 _ => protocol.groups.max,
             };
-            let mut table = Vec::new();
-            for r in 0..t.lines {
-                let line = lease.seq_line(&t.name, r)?;
-                for _ in 0..cols {
-                    table.push(line);
-                    table.extend(std::iter::repeat_n(0, t.width - 1));
-                }
-            }
-            rt.write_input(&t.name, &le_bytes_i32(&table))?;
+            rt.write_input(&t.name, &le_bytes_i32(&line_rows(t, one, cols as usize)?))?;
         }
+        run_once(&rt, &protocol)?;
         Ok(Caller { rt, protocol, lease, pos: 0 })
     }
 
@@ -191,31 +245,11 @@ impl Caller {
     }
 
     /// Stage one call's rows at the cursor: `ids` as consecutive positions
-    /// of this one sequence, in every fill the manifest declares. Does not
-    /// advance. Returns the call's var vars.
+    /// of this one sequence. Does not advance. Returns the call's vars.
     fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
-        let c = ids.len();
         let pos = self.pos as usize;
-        let e = self.protocol.vars(1, c as u64, c as u64);
-        let p = self.protocol.clone();
-        let mut put =
-            |f: &kern_manifest::protocol::Filled, v: &[i64]| self.rt.write_input_at(&f.name, &f.encode(v), &e);
-        put(p.token_rows(), ids)?;
-        put(p.slots(), &self.lease.slots(pos..pos + c))?;
-        put(p.seq_lens(), &[(pos + c) as i64])?;
-        if let Some(f) = p.filled(Fill::Token, Axis::Groups) {
-            put(f, &ids[..1])?;
-        }
-        if let Some(f) = p.filled(Fill::Valid, Axis::Rows) {
-            put(f, &vec![1; c])?;
-        }
-        if let Some(f) = p.filled(Fill::Position, Axis::Rows) {
-            put(f, &(self.pos..self.pos + c as i64).collect::<Vec<_>>())?;
-        }
-        if let Some(f) = p.any(Fill::CuSeqlens) {
-            put(f, &[0, c as i64])?;
-        }
-        Ok(e)
+        let one = std::slice::from_ref(&self.lease);
+        crate::stage(&mut self.rt, &self.protocol, one, &[pos], ids.len(), ids)
     }
 
     /// Stage a fixed-rows call at the cursor: `tok` is the sequence's next
@@ -255,6 +289,15 @@ impl Caller {
         self.forward(Rows::Var)
     }
 
+    /// How many of a prompt's tokens go through the chunk program: all of
+    /// them when it hands a token back (a hybrid model's chunked prefill
+    /// is a different arithmetic from its decode kernel, and the
+    /// reference runs the last prompt token through the former), else all
+    /// but the last, which goes through the step program.
+    fn prefill_len(&self, prompt: usize) -> Result<usize> {
+        Ok(prompt - usize::from(self.chunk_forward()?.emits.is_none()))
+    }
+
     /// Chunked prefill of `ids` (eager or graph-captured full chunks),
     /// advancing the cursor past them. Returns the token the last chunk
     /// handed back, if the chunk program emits one, and whether a graph
@@ -269,7 +312,7 @@ impl Caller {
             self.rt.issue(&f.name, &e)?;
             self.rt.synchronize()?;
             self.advance(c as u64);
-            last = self.emitted(&f)?.0.first().copied();
+            last = self.emitted(&f)?.first().copied();
             i += c;
         }
         Ok(last)
@@ -287,9 +330,10 @@ impl Caller {
     }
 
     /// What the last run of `f` handed back for this sequence: its `tokens`
-    /// output's first cell, cut to its `count` (one without a count).
-    fn emitted(&self, f: &Forward) -> Result<Emitted> {
-        let Some(i) = f.emits else { return Ok(Emitted(Vec::new())) };
+    /// output's first cell, in order, cut to its `count` (one without a
+    /// count).
+    fn emitted(&self, f: &Forward) -> Result<Vec<i64>> {
+        let Some(i) = f.emits else { return Ok(Vec::new()) };
         let t = &self.protocol.fills[i];
         let mut v = t.decode(&self.rt.read_output(&t.name)?);
         let n = match f.count {
@@ -302,7 +346,7 @@ impl Caller {
             None => 1,
         };
         v.truncate(n);
-        Ok(Emitted(v))
+        Ok(v)
     }
 }
 

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::config::{Config, Target};
-use crate::{Caller, Weights};
+use crate::{Caller, Given, Inputs};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::types::{DType, Provision};
@@ -108,13 +108,12 @@ pub struct TestOpts {
     json: bool,
 }
 
-/// Resolved options: flag, else kern.toml, else default.
+/// Resolved options: the shared inputs, plus what only `kern test` has
+/// an opinion about.
 struct Opts {
+    inputs: Inputs,
+    /// The reference manifest A; B is `inputs.manifest`.
     a: PathBuf,
-    b: PathBuf,
-    kernels: PathBuf,
-    weights: Weights,
-    tokenizer: Option<PathBuf>,
     prompt: Option<String>,
     gpus: Vec<usize>,
     capacity: u64,
@@ -126,30 +125,23 @@ struct Opts {
 
 impl TestOpts {
     fn resolve(self, cfg: Option<&Config>, t: Option<&Target>) -> Result<Opts> {
-        let need = |what: &str| match cfg {
-            Some(c) => anyhow::anyhow!("no --{what}, and the target in {} does not give one", c.path.display()),
-            None => anyhow::anyhow!("no --{what}, and no {} found at or above the cwd", crate::config::FILE),
+        let given = Given {
+            manifest: self.manifest,
+            reference: self.reference,
+            kernels: self.kernels,
+            weights: self.weights,
+            tokenizer: self.tokenizer,
+            ..Default::default()
         };
+        let inputs = Inputs::resolve(given, cfg, t)?;
+        let a = inputs
+            .reference
+            .clone()
+            .ok_or_else(|| crate::inputs::need(cfg, "reference").context("kern test is A/B"))?;
         let test = cfg.map(|c| &c.test);
-        let entries = if self.weights.is_empty() {
-            t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
-        } else {
-            self.weights
-        };
-        let weights = Weights::parse(&entries)?;
-        let gpus = match self.gpu.is_empty() {
-            true => vec![cfg.and_then(|c| c.gpu).unwrap_or(0)],
-            false => self.gpu,
-        };
-        let tokenizer = match self.tokenizer.or_else(|| t.and_then(|t| t.tokenizer.clone())) {
-            Some(tk) => Some(tk),
-            None => crate::checkpoint(&weights.dirs()).tokenizer,
-        };
-        let a = self.reference.or_else(|| t.and_then(|t| t.reference.clone())).ok_or_else(|| need("reference"))?;
-        let b = self.manifest.or_else(|| t.map(|t| t.manifest.clone())).ok_or_else(|| need("manifest"))?;
         let harness = Options {
             a: a.display().to_string(),
-            b: b.display().to_string(),
+            b: inputs.manifest.display().to_string(),
             prompt: None,
             prefill: self.prefill,
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),
@@ -165,17 +157,17 @@ impl TestOpts {
         };
         Ok(Opts {
             a,
-            b,
-            kernels: self.kernels.or_else(|| t.map(|t| t.kernels.clone())).ok_or_else(|| need("kernels"))?,
-            weights,
-            tokenizer,
             prompt: self.prompt.or_else(|| test.and_then(|x| x.prompt.clone())),
-            gpus,
+            gpus: match self.gpu.is_empty() {
+                true => vec![inputs.gpu],
+                false => self.gpu,
+            },
             capacity: self.capacity.or_else(|| cfg.and_then(|c| c.capacity)).unwrap_or(4096),
             out: self.out,
             diff_only: self.diff_only,
             json: self.json,
             harness,
+            inputs,
         })
     }
 }
@@ -480,13 +472,20 @@ fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Optio
                 s.spawn(move || -> Result<Sent> {
                     let topology = m.topology.is_some().then_some(&topo);
                     let mut rt = match resident {
-                        Some(r) => Runtime::load_over(m, &o.kernels, gpu, Some(capacity), topology, host_weights, r),
-                        None => {
-                            Runtime::load_with_host_weights(m, &o.kernels, gpu, Some(capacity), topology, host_weights)
+                        Some(r) => {
+                            Runtime::load_over(m, &o.inputs.kernels, gpu, Some(capacity), topology, host_weights, r)
                         }
+                        None => Runtime::load_with_host_weights(
+                            m,
+                            &o.inputs.kernels,
+                            gpu,
+                            Some(capacity),
+                            topology,
+                            host_weights,
+                        ),
                     }
                     .with_context(|| format!("rank {q} on gpu {gpu}"))?;
-                    o.weights.bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
+                    o.inputs.weights.bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
                     Ok(Sent(rt))
                 })
             })
@@ -507,13 +506,6 @@ fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Optio
             if !pending.is_empty() {
                 bail!("rank {q}: peer buffers {pending:?} still unfilled after every group was imported");
             }
-        }
-    }
-    let protocol = Protocol::check(m)?;
-    let vars = protocol.vars(1, 1, 1);
-    for p in &protocol.once {
-        for (q, rt) in rts.iter().enumerate() {
-            rt.run(p, &vars).with_context(|| format!("rank {q}: `{p}`"))?;
         }
     }
     Ok(Ranks { ranks: rts.into_iter().map(Caller::new).collect::<Result<_>>()? })
@@ -565,11 +557,12 @@ fn finish(o: &Opts, report: Report) -> Result<i32> {
 fn execute(mut o: Opts) -> Result<i32> {
     let t_start = Instant::now();
     let ja = std::fs::read_to_string(&o.a).with_context(|| format!("reading {}", o.a.display()))?;
-    let jb = std::fs::read_to_string(&o.b).with_context(|| format!("reading {}", o.b.display()))?;
+    let jb = std::fs::read_to_string(&o.inputs.manifest)
+        .with_context(|| format!("reading {}", o.inputs.manifest.display()))?;
     let ma = Verified::from_json(&ja).with_context(|| format!("A ({}) failed verification", o.a.display()))?;
-    let mb = Verified::from_json(&jb).with_context(|| format!("B ({}) failed verification", o.b.display()))?;
+    let mb = Verified::from_json(&jb).with_context(|| format!("B ({}) failed verification", o.harness.b))?;
     Protocol::check(&ma).with_context(|| format!("A ({}) does not fit the serving protocol", o.a.display()))?;
-    Protocol::check(&mb).with_context(|| format!("B ({}) does not fit the serving protocol", o.b.display()))?;
+    Protocol::check(&mb).with_context(|| format!("B ({}) does not fit the serving protocol", o.harness.b))?;
     let out = Out { json: o.json };
     let (a, b) = (o.harness.a.clone(), o.harness.b.clone());
     out.show(&[row("kern test", format!("A {a} → B {b}"), None)]);
@@ -586,7 +579,7 @@ fn execute(mut o: Opts) -> Result<i32> {
     }
     o.harness.prompt = match &o.prompt {
         Some(text) => {
-            let Some(tk) = &o.tokenizer else {
+            let Some(tk) = &o.inputs.tokenizer else {
                 bail!("--prompt needs a tokenizer (--tokenizer or the target's `tokenizer`)")
             };
             let tokenizer = tokenizers::Tokenizer::from_file(tk).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;

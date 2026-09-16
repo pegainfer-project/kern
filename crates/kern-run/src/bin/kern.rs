@@ -11,7 +11,7 @@ use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use kern_run::config::Config;
+use kern_run::config::{Config, Target};
 use kern_run::run::RunOpts;
 use kern_run::test::TestOpts;
 
@@ -89,50 +89,15 @@ fn main() -> Result<()> {
         _ => Config::find(cli.config.as_deref())?,
     };
     match cli.cmd {
-        Cmd::Bench { target, opts } => {
-            let t = cfg.as_ref().map(|c| c.one(target.as_deref()).map(|(_, t)| t)).transpose()?;
-            kern_run::bench::run(opts, cfg.as_ref(), t)
-        }
-        Cmd::Run { target, opts } => {
-            let t = match &cfg {
-                Some(c) if !c.targets.is_empty() => Some(c.one(target.as_deref())?.1),
-                _ => {
-                    ensure!(
-                        target.is_none(),
-                        "no kern.toml with targets found at or above the cwd; `{}` cannot be looked up",
-                        target.unwrap_or_default()
-                    );
-                    None
-                }
-            };
-            kern_run::run::run(opts, cfg.as_ref(), t)
-        }
+        Cmd::Bench { target, opts } => kern_run::bench::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
+        Cmd::Run { target, opts } => kern_run::run::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
         Cmd::Server { target, args } => {
             let cfg = cfg.as_ref().context("kern server needs a kern.toml with targets")?;
             let (_, target) = cfg.one(Some(&target))?;
             kern_run::server::run(target, &args)
         }
         Cmd::Test { target, opts } => {
-            let t = match &cfg {
-                Some(c) if !c.targets.is_empty() => {
-                    let (name, t) = c.one(target.as_deref())?;
-                    ensure!(
-                        opts.reference.is_some() || t.reference.is_some(),
-                        "target `{name}` in {} has no `reference`; kern test is A/B and needs one (or --reference)",
-                        c.path.display()
-                    );
-                    Some(t)
-                }
-                _ => {
-                    ensure!(
-                        target.is_none(),
-                        "no kern.toml with targets found at or above the cwd; `{}` cannot be looked up",
-                        target.unwrap_or_default()
-                    );
-                    None
-                }
-            };
-            let code = kern_run::test::run(opts, cfg.as_ref(), t)?;
+            let code = kern_run::test::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?)?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -144,6 +109,23 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
             Ok(())
+        }
+    }
+}
+
+/// The target a command runs on: the named one, else the only one, else
+/// none at all — every command takes its inputs from flags when there is
+/// no `kern.toml` to look in.
+fn target_of(cfg: Option<&Config>, name: Option<String>) -> Result<Option<&Target>> {
+    match cfg {
+        Some(c) if !c.targets.is_empty() => Ok(Some(c.one(name.as_deref())?.1)),
+        _ => {
+            ensure!(
+                name.is_none(),
+                "no kern.toml with targets found at or above the cwd; `{}` cannot be looked up",
+                name.unwrap_or_default()
+            );
+            Ok(None)
         }
     }
 }

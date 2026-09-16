@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
-use kern_manifest::protocol::{Axis, Rows};
-use kern_manifest::types::{Arg, BufferKind, Dim, Fill, Manifest};
+use kern_manifest::protocol::Rows;
+use kern_manifest::types::{Arg, BufferKind, Dim, Manifest};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::profile::{Anchor, Probe};
@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Config, Target};
-use crate::{le_bytes_i32, Vars, Weights};
+use crate::{le_bytes_i32, Vars};
 
 #[derive(clap::Args, Debug)]
 pub struct BenchOpts {
@@ -195,6 +195,9 @@ fn signature(m: &Manifest, program: &str, index: usize, vars: &Vars) -> Value {
     json!({"op":c.op,"args":args,"vars":vars})
 }
 
+/// One call staged for `leases`, tables included: a scenario's batch
+/// changes the leases from call to call, so every table is rewritten
+/// with the rows it is about to be read with.
 fn stage(
     rt: &mut Runtime,
     p: &Protocol,
@@ -203,43 +206,14 @@ fn stage(
     rows: usize,
     ids: &[i64],
 ) -> Result<Vars> {
-    let b = leases.len();
-    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64);
-    for f in &p.fills {
-        let vals: Vec<i64> = match f.fill {
-            Fill::Token => match f.axis {
-                Axis::Groups => ids.chunks(rows).map(|x| x[0]).collect(),
-                _ => ids.to_vec(),
-            },
-            Fill::Valid => vec![1; b * rows],
-            Fill::Position => positions.iter().flat_map(|pos| (*pos..*pos + rows).map(|v| v as i64)).collect(),
-            Fill::Slot => leases.iter().zip(positions).flat_map(|(l, pos)| l.slots(*pos..*pos + rows)).collect(),
-            Fill::SeqLen => positions.iter().map(|pos| (*pos + rows) as i64).collect(),
-            Fill::CuSeqlens => (0..=b).map(|i| (i * rows) as i64).collect(),
-            Fill::SpanAt => vec![0],
-            Fill::Blocks => anyhow::bail!("multi-device workload is outside this profiler"),
-            _ => continue,
-        };
-        rt.write_input_at(&f.name, &f.encode(&vals), &vars)?;
-    }
+    let vars = crate::stage(rt, p, leases, positions, rows, ids)?;
     for t in &p.page_tables {
-        let mut vals = Vec::new();
-        for lease in leases {
-            lease.extend_row(&t.name, &mut vals)?;
-        }
-        rt.write_input_at(&t.name, &le_bytes_i32(&vals), &vars)?;
+        rt.write_input_at(&t.name, &le_bytes_i32(&crate::page_rows(t, leases, leases.len())?), &vars)?;
     }
+    // Line tables use their declared maximum column stride, even when
+    // only a prefix of columns is active.
     for t in &p.line_tables {
-        let mut vals = Vec::new();
-        // Line tables use their declared maximum column stride, even when
-        // only a prefix of columns is active.
-        for line in 0..t.lines {
-            for col in 0..p.groups.max as usize {
-                vals.push(leases[col.min(b - 1)].seq_line(&t.name, line)?);
-                vals.extend(std::iter::repeat_n(0, t.width - 1));
-            }
-        }
-        rt.write_input_at(&t.name, &le_bytes_i32(&vals), &vars)?;
+        rt.write_input_at(&t.name, &le_bytes_i32(&crate::line_rows(t, leases, p.groups.max as usize)?), &vars)?;
     }
     Ok(vars)
 }
@@ -283,18 +257,16 @@ fn output_fingerprints(rt: &Runtime, p: &Protocol, batch: usize) -> Result<Vec<V
 }
 
 pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Result<()> {
-    let manifest = o.manifest.as_ref().or(target.map(|t| &t.manifest)).context("--manifest or target required")?;
-    let kernels = o.kernels.as_ref().or(target.map(|t| &t.kernels)).context("--kernels or target required")?;
-    let entries = if o.weights.is_empty() { target.map(|t| t.weights.as_slice()).unwrap_or(&[]) } else { &o.weights };
-    let weights = Weights::parse(entries).context("weights required")?;
-    let gpu = o.gpu.or(cfg.and_then(|c| c.gpu)).unwrap_or(0);
-    let ck = crate::checkpoint(&weights.dirs());
-    let tokenizer = o
-        .tokenizer
-        .as_ref()
-        .or(target.and_then(|t| t.tokenizer.as_ref()))
-        .or(ck.tokenizer.as_ref())
-        .context("tokenizer required for prose workloads")?;
+    let given = crate::Given {
+        manifest: o.manifest.clone(),
+        kernels: o.kernels.clone(),
+        weights: o.weights.clone(),
+        tokenizer: o.tokenizer.clone(),
+        gpu: o.gpu,
+        ..Default::default()
+    };
+    let inputs = crate::Inputs::resolve(given, cfg, target)?;
+    let (gpu, tokenizer) = (inputs.gpu, inputs.tokenizer()?.to_path_buf());
     let workload: Workload = serde_json::from_slice(&std::fs::read(&o.workload)?)?;
     ensure!((12..=256).contains(&workload.samples), "samples must be in 12..=256");
     ensure!(!workload.scenarios.is_empty(), "no scenarios");
@@ -305,7 +277,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         s.lengths()?;
         max_batch = max_batch.max(s.batch);
     }
-    let json_bytes = std::fs::read(manifest)?;
+    let json_bytes = std::fs::read(&inputs.manifest)?;
     let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?;
     let unit = kern_pool::page_unit(&m) as usize;
     let capacity = workload
@@ -323,13 +295,13 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     }
     let mut rt = Runtime::load(
         &m,
-        kernels,
+        &inputs.kernels,
         gpu,
         Some(Capacity { tokens: Some(capacity as u64), seqs: max_batch as u64 }),
         None,
     )?;
-    weights.bind(&mut rt, &Topology::default())?;
-    let corpus = corpus(tokenizer, workload.seed)?;
+    inputs.weights.bind(&mut rt, &Topology::default())?;
+    let corpus = corpus(&tokenizer, workload.seed)?;
     let probe = Probe::new(&rt)?;
     eprintln!("calibrating {} · L2 {} MiB", probe.device, probe.l2_bytes >> 20);
     let before = anchors(probe.calibrate(&rt, workload.samples)?);

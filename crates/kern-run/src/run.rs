@@ -10,16 +10,16 @@
 //! `info`); stdout carries only the generated text.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::time::Instant;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::Args;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Vars, Weights};
-use kern_manifest::protocol::{Forward, Rows};
-use kern_manifest::types::{Arg, Dim, Dir};
+use crate::{Caller, Given, Inputs};
+use kern_manifest::protocol::Rows;
+use kern_manifest::types::BufferKind;
 use kern_manifest::Verified;
 use kern_runtime::{Capacity, Runtime, Topology};
 use tracing::info;
@@ -106,21 +106,18 @@ pub struct RunOpts {
     probe_steps: usize,
 }
 
-/// Resolved options: flag, else kern.toml, else default.
+/// Resolved options: the shared inputs, plus what only `kern run` has an
+/// opinion about.
 struct Opts {
-    manifest: PathBuf,
-    kernels: PathBuf,
-    weights: Weights,
+    inputs: Inputs,
     tokenizer: PathBuf,
     prompt: String,
     prompt_ids: Vec<i64>,
     steps: usize,
-    gpu: usize,
     capacity: Option<u64>,
     chunk: Option<u64>,
     eager: bool,
     rows: Option<u64>,
-    stop_tokens: Vec<i64>,
     probe_dir: Option<PathBuf>,
     probe_labels: String,
     probe_steps: usize,
@@ -128,54 +125,36 @@ struct Opts {
 
 impl RunOpts {
     fn resolve(self, cfg: Option<&Config>, t: Option<&Target>) -> Result<Opts> {
-        let need = |what: &str| {
-            anyhow::anyhow!(
-                "no --{what} and no target in {} to take it from",
-                cfg.map_or(crate::config::FILE.to_string(), |c| c.path.display().to_string())
-            )
+        let given = Given {
+            manifest: self.manifest,
+            kernels: self.kernels,
+            weights: self.weights,
+            tokenizer: self.tokenizer,
+            stop_tokens: self.stop_tokens,
+            gpu: self.gpu,
+            ..Default::default()
         };
-        let entries = if self.weights.is_empty() {
-            t.map(|t| t.weights.clone()).filter(|w| !w.is_empty()).ok_or_else(|| need("weights"))?
-        } else {
-            self.weights
-        };
-        let weights = Weights::parse(&entries)?;
-        let gpu = self.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0);
-        let ck = crate::checkpoint(&weights.dirs());
-        let stop_tokens: Vec<i64> = ck.stop_tokens.iter().chain(&self.stop_tokens).fold(Vec::new(), |mut v, &id| {
-            if !v.contains(&id) {
-                v.push(id);
-            }
-            v
-        });
-        anyhow::ensure!(
-            !stop_tokens.is_empty(),
+        let inputs = Inputs::resolve(given, cfg, t)?;
+        ensure!(
+            !inputs.stop_tokens.is_empty(),
             "no stop tokens: no eos_token_id in the weights dir(s)' generation_config.json / config.json and no --stop-tokens"
         );
         Ok(Opts {
-            manifest: self.manifest.or_else(|| t.map(|t| t.manifest.clone())).ok_or_else(|| need("manifest"))?,
-            kernels: self.kernels.or_else(|| t.map(|t| t.kernels.clone())).ok_or_else(|| need("kernels"))?,
-            weights,
-            tokenizer: self
-                .tokenizer
-                .or_else(|| t.and_then(|t| t.tokenizer.clone()))
-                .or(ck.tokenizer)
-                .ok_or_else(|| need("tokenizer"))?,
+            tokenizer: inputs.tokenizer()?.to_path_buf(),
             prompt: self
                 .prompt
                 .or_else(|| cfg.and_then(|c| c.run.prompt.clone()))
                 .unwrap_or_else(|| "The capital of France is".into()),
             prompt_ids: self.prompt_ids,
             steps: self.steps.or_else(|| cfg.and_then(|c| c.run.steps)).unwrap_or(32),
-            gpu,
             capacity: self.capacity.or_else(|| cfg.and_then(|c| c.capacity)),
             chunk: self.chunk.or_else(|| cfg.and_then(|c| c.run.chunk)),
             eager: self.eager,
             rows: self.rows,
-            stop_tokens,
             probe_dir: self.probe_dir,
             probe_labels: self.probe_labels,
             probe_steps: self.probe_steps,
+            inputs,
         })
     }
 }
@@ -202,23 +181,13 @@ fn ellipsize(s: &str, n: usize) -> String {
     }
 }
 
-fn execute(o: Opts) -> Result<()> {
-    let manifest_json =
-        std::fs::read_to_string(&o.manifest).with_context(|| format!("reading manifest {}", o.manifest.display()))?;
-    let t0 = Instant::now();
-    let verified = Verified::from_json(&manifest_json)?;
-    // One sequence: its reach, unless told otherwise (a manifest without
-    // paged state takes the runtime's fit).
-    let capacity = o
-        .capacity
-        .or_else(|| kern_runtime::seq_capacity(&verified))
-        .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
-    let mut rt = Runtime::load(&verified, &o.kernels, o.gpu, capacity, None)?;
-    rt.set_eager(o.eager);
-    let load_t = t0.elapsed();
-
+/// What was loaded, before anything runs: the sizes the manifest asked
+/// for and the module every op resolved to. A run that is wrong in a
+/// boring way (the wrong kernels dir, a state far bigger than expected)
+/// is visible here rather than in the output.
+fn banner(rt: &Runtime, manifest: &Path, kernels: &Path, load: Duration) {
     let m = &rt.manifest;
-    info!("manifest `{}` (schema v{}, {}): verified", m.model, m.schema_version, o.manifest.display());
+    info!("manifest `{}` (schema v{}, {}): verified", m.model, m.schema_version, manifest.display());
     for (name, v) in &m.vars {
         info!("  var      {name} ∈ [{}, {}] (caller-provided per call)", kern_manifest::types::Var::MIN, v.max);
     }
@@ -261,22 +230,20 @@ fn execute(o: Opts) -> Result<()> {
         };
         info!("  program  `{name}`: {} calls{shape}", p.calls.len());
     }
-
     info!(
         "op resolution: {} of the {} modules the manifest pins loaded from {}, entries matched by \
-         cuFuncGetParamInfo layout vs declared params ({:?}):",
+         cuFuncGetParamInfo layout vs declared params ({load:?}):",
         rt.module_count(),
         m.modules.len(),
-        o.kernels.display(),
-        load_t
+        kernels.display(),
     );
-    let e1 = BTreeMap::from_iter(m.vars.keys().map(|v| (v.clone(), 1)));
+    let ones = BTreeMap::from_iter(m.vars.keys().map(|v| (v.clone(), 1)));
     for (name, modules) in rt.op_resolution() {
-        let op = &rt.manifest.ops[&name];
+        let op = &m.ops[&name];
         for (li, (l, module)) in op.imp.launches.iter().zip(&modules).enumerate() {
             let label = if li == 0 { name.clone() } else { format!("  ·launch{li}") };
             let sm = match l.kernel().and_then(|k| k.shared_mem.as_ref()) {
-                Some(e) => format!(", shmem {:?}", e.eval(&e1).unwrap_or(0)),
+                Some(e) => format!(", shmem {:?}", e.eval(&ones).unwrap_or(0)),
                 None => String::new(),
             };
             let block = l.kernel().map_or(String::new(), |k| format!(", block {:?}", k.block));
@@ -287,14 +254,30 @@ fn execute(o: Opts) -> Result<()> {
             );
         }
     }
+}
+
+fn execute(o: Opts) -> Result<()> {
+    let manifest_json = std::fs::read_to_string(&o.inputs.manifest)
+        .with_context(|| format!("reading manifest {}", o.inputs.manifest.display()))?;
+    let t0 = Instant::now();
+    let verified = Verified::from_json(&manifest_json)?;
+    // One sequence: its reach, unless told otherwise (a manifest without
+    // paged state takes the runtime's fit).
+    let capacity = o
+        .capacity
+        .or_else(|| kern_runtime::seq_capacity(&verified))
+        .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
+    let mut rt = Runtime::load(&verified, &o.inputs.kernels, o.inputs.gpu, capacity, None)?;
+    rt.set_eager(o.eager);
+    banner(&rt, &o.inputs.manifest, &o.inputs.kernels, t0.elapsed());
 
     let t0 = Instant::now();
-    o.weights.bind(&mut rt, &Topology::default())?;
-    let n_weights = by_kind.get("weight").map_or(0, |e| e.0);
-    info!("weights: {n_weights} buffers assembled from {} in {:?}", o.weights, t0.elapsed());
+    o.inputs.weights.bind(&mut rt, &Topology::default())?;
+    let n_weights = rt.buffer_sizes().iter().filter(|(_, k, _)| *k == BufferKind::Weight).count();
+    info!("weights: {n_weights} buffers assembled from {} in {:?}", o.inputs.weights, t0.elapsed());
 
     let tokenizer = tokenizers::Tokenizer::from_file(&o.tokenizer).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
-    info!("tokenizer {} · stop tokens {:?}", o.tokenizer.display(), o.stop_tokens);
+    info!("tokenizer {} · stop tokens {:?}", o.tokenizer.display(), o.inputs.stop_tokens);
     let prompt_ids: Vec<i64> = if o.prompt_ids.is_empty() {
         tokenizer
             .encode(o.prompt.as_str(), false)
@@ -310,9 +293,6 @@ fn execute(o: Opts) -> Result<()> {
     info!("prompt: {} tokens {prompt_ids:?}", prompt_ids.len());
 
     let mut caller = Caller::new(rt)?;
-    for p in caller.protocol.once.clone() {
-        caller.rt.run(&p, &e1)?;
-    }
     let rows = o.rows.or_else(|| caller.protocol.row_shapes().last().copied()).unwrap_or(1);
     let step = caller.forward(Rows::Const(rows))?;
     let chunk_f = caller.chunk_forward()?;
@@ -333,18 +313,10 @@ fn execute(o: Opts) -> Result<()> {
 
     let chunk = chunk_size(o.chunk, caller.protocol.rows.max)?;
     if let Some(dir) = &o.probe_dir {
-        return probe(&mut caller, &prompt_ids, dir, &o.probe_labels, chunk, &step, o.probe_steps);
+        return crate::probe::probe(&mut caller, &prompt_ids, dir, &o.probe_labels, chunk, &step, o.probe_steps);
     }
 
-    // Chunked prefill. A chunk program that hands a token back takes every
-    // prompt token and yields the first generated one (a hybrid GDN model:
-    // its chunked prefill kernels are a different arithmetic from the
-    // decode kernel, and the reference runs the last prompt token through
-    // the former). One that only writes state takes the first n-1 prompt
-    // tokens, and the last one goes through the step program.
-    let n_prompt = prompt_ids.len();
-    let prefill_all = chunk_f.emits.is_some();
-    let n_pre = if prefill_all { n_prompt } else { n_prompt - 1 };
+    let n_pre = caller.prefill_len(prompt_ids.len())?;
     let mut generated: Vec<i64> = Vec::new();
     if n_pre > 0 {
         let t = Instant::now();
@@ -355,10 +327,10 @@ fn execute(o: Opts) -> Result<()> {
         info!(
             "prefill: {pos} tokens in {n_chunks} chunk(s) of <= {chunk} ({dt:?}, {:.0} tok/s{})",
             pos as f64 / dt.as_secs_f64(),
-            if prefill_all { ", emits the first token" } else { "" }
+            if first.is_some() { ", emits the first token" } else { "" }
         );
         if let Some(first) = first {
-            if o.stop_tokens.contains(&first) {
+            if o.inputs.stop_tokens.contains(&first) {
                 info!("stop token {first} at pos {pos}");
                 println!("{}", o.prompt);
                 return Ok(());
@@ -379,13 +351,13 @@ fn execute(o: Opts) -> Result<()> {
         let t = Instant::now();
         caller.rt.issue(&step.name, &vars)?;
         caller.rt.synchronize()?;
-        let out = caller.emitted(&step)?.0;
+        let out = caller.emitted(&step)?;
         decode_ns += t.elapsed().as_nanos();
         steps += 1;
         caller.advance(out.len() as u64);
         taken += out.len() - 1;
         for next in out {
-            if o.stop_tokens.contains(&next) {
+            if o.inputs.stop_tokens.contains(&next) {
                 info!("stop token {next} at pos {}", caller.pos);
                 break 'steps;
             }
@@ -430,108 +402,4 @@ fn chunk_size(asked: Option<u64>, max: u64) -> Result<u64> {
         Some(c) if (1..=max).contains(&c) => Ok(c),
         Some(c) => anyhow::bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
     }
-}
-
-/// Activation probe for reference comparison (`--probe-dir`): the first
-/// prefill chunk and `steps` decode steps, each run as consecutive call
-/// ranges cut after every call whose label equals or ends with one of
-/// `labels`, dumping the
-/// buffer that call writes (live rows) as `<tag>.<point>.bin` where
-/// `point` is the label minus its last `.part`, then the step's logits
-/// (the buffer its `tokens` output is taken from) and the tokens.
-fn probe(
-    caller: &mut Caller,
-    prompt_ids: &[i64],
-    dir: &std::path::Path,
-    labels: &str,
-    chunk: u64,
-    step: &Forward,
-    steps: usize,
-) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let labels: Vec<&str> = labels.split(',').filter(|p| !p.is_empty()).collect();
-    let matches = |l: &str| labels.iter().any(|p| l == *p || l.ends_with(p));
-    let row_bytes = |rt: &Runtime, name: &str| -> usize {
-        let b = &rt.manifest.buffers[name];
-        b.shape[1..]
-            .iter()
-            .map(|d| match d {
-                Dim::Const(c) => *c as usize,
-                _ => 1,
-            })
-            .product::<usize>()
-            * b.dtype.bytes() as usize
-    };
-    // The buffer a call reads or writes through its first param of `dir`.
-    let param_buf = |rt: &Runtime, c: &kern_manifest::types::Call, want: &[Dir]| -> Option<String> {
-        let op = &rt.manifest.ops[&c.op];
-        c.args.iter().zip(&op.params).find_map(|(a, p)| match (a, p.dir()) {
-            (Arg::Buf { buf, .. }, Some(d)) if want.contains(&d) => Some(buf.clone()),
-            _ => None,
-        })
-    };
-    let run_probed = |caller: &Caller, f: &Forward, vars: &Vars, rows: usize, tag: &str| -> Result<()> {
-        let rt = &caller.rt;
-        let calls = &rt.manifest.programs[&f.name].calls;
-        let mut lo = 0;
-        for (i, c) in calls.iter().enumerate() {
-            let l = c.label.clone().unwrap_or_default();
-            if !matches(&l) {
-                continue;
-            }
-            let Some(bufname) = param_buf(rt, c, &[Dir::Out, Dir::InOut]) else { continue };
-            rt.run_range(&f.name, vars, lo, i + 1)?;
-            lo = i + 1;
-            let n = match rt.manifest.buffers[&bufname].shape[0] {
-                Dim::Const(c) => c as usize,
-                _ => rows,
-            };
-            let point = l.rsplit_once('.').map_or(l.as_str(), |(head, _)| head);
-            let data = rt.read_buffer_prefix(&bufname, n * row_bytes(rt, &bufname))?;
-            std::fs::write(dir.join(format!("{tag}.{point}.bin")), data)?;
-        }
-        rt.run_range(&f.name, vars, lo, calls.len())?;
-        if let Some(i) = f.emits {
-            let tokens = &caller.protocol.fills[i];
-            if let Some(logits) = calls
-                .iter()
-                .rev()
-                .find(|c| param_buf(rt, c, &[Dir::Out, Dir::InOut]).as_deref() == Some(&tokens.name))
-                .and_then(|c| param_buf(rt, c, &[Dir::In]))
-            {
-                std::fs::write(dir.join(format!("{tag}.logits.bin")), rt.read_buffer(&logits)?)?;
-            }
-            std::fs::write(dir.join(format!("{tag}.tokens.bin")), rt.read_output(&tokens.name)?)?;
-        }
-        Ok(())
-    };
-    let chunk_f = caller.chunk_forward()?;
-    let chunk = chunk as usize;
-    let prefill_all = chunk_f.emits.is_some();
-    let n_pre = if prefill_all { prompt_ids.len() } else { prompt_ids.len() - 1 };
-    let c = n_pre.min(chunk);
-    let e = caller.stage(&prompt_ids[..c])?;
-    run_probed(caller, &chunk_f, &e, c, "chunk")?;
-    caller.advance(c as u64);
-    let mut first = caller.emitted(&chunk_f)?.0.first().copied();
-    if c < n_pre {
-        first = caller.prefill(&prompt_ids[c..n_pre], chunk as u64)?;
-    }
-    let mut tok = match first {
-        Some(t) => t,
-        None => prompt_ids[n_pre],
-    };
-    let rows = match step.rows {
-        Rows::Const(r) => r,
-        Rows::Var => bail!("the step program takes rows as fed; probe steps need a fixed-rows program"),
-    };
-    for s in 0..steps {
-        let e = caller.stage_rows(tok, rows)?;
-        run_probed(caller, step, &e, rows as usize, &format!("decode{s}"))?;
-        let out = caller.emitted(step)?.0;
-        caller.advance(out.len() as u64);
-        tok = *out.last().unwrap();
-    }
-    info!("probe: wrote activations to {}", dir.display());
-    Ok(())
 }
