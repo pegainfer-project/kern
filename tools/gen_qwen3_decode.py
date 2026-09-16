@@ -564,7 +564,11 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
     # （26/27/28），它们是实现细节，降为 impl scratch
     UNIFIED_PARAMS = [
         "out buffer<bf16>",  # 3D 实例不写它，ABI 要求非空指针；reduce 写
-        "in buffer<bf16>", "inout state", "inout state",
+        # `kernel_unified_attention` only loads the KV pages: its two stores go
+        # to the output and the segment scratch. `reshape_and_cache` is the
+        # writer. Declaring the state `in` keeps a profiler from snapshotting
+        # the whole cache around every isolated call.
+        "in buffer<bf16>", "in state", "in state",
         "in buffer<i32>", "in buffer<i32>", "f32",
         "in buffer<f32>", "in buffer<f32>", "f32", "f32",
         "i64", "i64", "i64", "i64", "i64", "i64",
