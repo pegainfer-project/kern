@@ -301,6 +301,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         None,
     )?;
     inputs.weights.bind(&mut rt, &Topology::default())?;
+    crate::run_once(&rt, &p)?;
     let corpus = corpus(&tokenizer, workload.seed)?;
     let probe = Probe::new(&rt)?;
     eprintln!("calibrating {} · L2 {} MiB", probe.device, probe.l2_bytes >> 20);
