@@ -105,6 +105,29 @@ impl Snapshot {
     }
 }
 
+/// The buffers and states calls `calls` of `program` declare they write:
+/// what a sample restores to its pre-image.
+fn declared_writes(rt: &Runtime, program: &str, calls: std::ops::Range<usize>) -> (BTreeSet<String>, BTreeSet<String>) {
+    let m = &rt.manifest;
+    let (mut buffers, mut states) = (BTreeSet::new(), BTreeSet::new());
+    for call in &m.programs[program].calls[calls] {
+        for (a, p) in call.args.iter().zip(&m.ops[&call.op].params) {
+            if matches!(p.dir(), Some(Dir::Out | Dir::InOut)) {
+                match a {
+                    Arg::Buf { buf, .. } => {
+                        buffers.insert(buf.clone());
+                    }
+                    Arg::State { state, .. } => {
+                        states.insert(state.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    (buffers, states)
+}
+
 pub struct Probe {
     pub device: String,
     pub l2_bytes: u64,
@@ -326,23 +349,7 @@ impl Probe {
         samples: usize,
     ) -> Result<CallSamples> {
         rt.ctx.bind_to_thread()?;
-        let call = &rt.manifest.programs[program].calls[index];
-        let op = &rt.manifest.ops[&call.op];
-        let mut buffers = BTreeSet::new();
-        let mut states = BTreeSet::new();
-        for (a, p) in call.args.iter().zip(&op.params) {
-            if matches!(p.dir(), Some(Dir::Out | Dir::InOut)) {
-                match a {
-                    Arg::Buf { buf, .. } => {
-                        buffers.insert(buf.clone());
-                    }
-                    Arg::State { state, .. } => {
-                        states.insert(state.clone());
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let (buffers, states) = declared_writes(rt, program, index..index + 1);
         let snapshot = Snapshot::new(rt, buffers, states)?;
         let prog = &rt.programs[program];
         let dense = Dense::check(&rt.manifest, vars, &prog.vars)?;
@@ -400,9 +407,22 @@ impl Probe {
         samples: usize,
     ) -> Result<ProgramSamples> {
         rt.ctx.bind_to_thread()?;
-        let carries =
-            rt.manifest.buffers.iter().filter(|(_, b)| b.kind == BufferKind::Carry).map(|(n, _)| n.clone()).collect();
-        let snapshot = Snapshot::new(rt, carries, rt.states.keys().cloned().collect())?;
+        // The program's pre-image is what outlives a run and it writes: its
+        // carries and states. Workspace is written before it is read within
+        // a run, so it is left alone; snapshotting every carry and state of
+        // a large manifest would not fit beside them. An exported carry is
+        // not this rank's to restore either: peers write into it on their
+        // own clock, and the barrier epochs inside it must only advance.
+        let n_calls = rt.manifest.programs[program].calls.len();
+        let (written, states) = declared_writes(rt, program, 0..n_calls);
+        let carries = written
+            .into_iter()
+            .filter(|b| {
+                let buffer = &rt.manifest.buffers[b];
+                buffer.kind == BufferKind::Carry && !buffer.export
+            })
+            .collect();
+        let snapshot = Snapshot::new(rt, carries, states)?;
         let prog = &rt.programs[program];
         let dense = Dense::check(&rt.manifest, vars, &prog.vars)?;
         let n = prog.call_ranges.len();
