@@ -52,6 +52,7 @@ def duration(body):return (max(x[1] for x in body)-min(x[0] for x in body))/1000
 
 
 def attach(raw,database):
+    assert raw.get("isolated"), "activity attribution needs the per-call sequences an --isolate run records"
     groups=iter(segments(database)); n=raw["workload"]["samples"]
     def take(kind,count):
         out=[]

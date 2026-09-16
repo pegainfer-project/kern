@@ -1,0 +1,23 @@
+# The sweep behind the published operator explorer: a decode grid over
+# batch and context, one batch at mixed depths, prefill chunks over an
+# empty cache, and chunks extending one that is already filled.
+samples = 32
+seed = 24301
+
+[[sweep]]
+groups = [1, 2, 4, 8, 16]
+rows = [1]
+context = [128, 512, 1024, 2048]
+
+[[sweep]]
+groups = [4]
+rows = [1]
+context = [[128, 512, 1024, 2048]]
+
+[[sweep]]
+rows = [1, 16, 64, 128, 256, 512, 1024, 2048]
+context = [0]
+
+[[sweep]]
+rows = [64, 128, 512]
+context = [512, 2048]

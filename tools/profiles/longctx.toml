@@ -1,0 +1,18 @@
+# The same runner out to 32k of cached context, where the mix stops being
+# about matrix multiply. Fewer samples: each scenario builds its prefix by
+# running the chunk program over the whole context first.
+samples = 12
+seed = 7
+
+[[sweep]]
+rows = [1]
+context = [2048, 8192, 32768]
+
+[[sweep]]
+groups = [4]
+rows = [1]
+context = [16384]
+
+[[sweep]]
+rows = [1024]
+context = [16384]

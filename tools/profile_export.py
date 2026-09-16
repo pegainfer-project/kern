@@ -4,6 +4,10 @@
 Composition calibration withholds whole-program times for holdout scenarios.
 Their op microbenchmarks ARE used: this tests composition, not unseen-shape
 interpolation. Report that distinction along with every error and raw tail.
+
+The workload does not name the holdouts. Which shapes are spare is a
+property of the fit, not of what someone wanted measured, so they are
+chosen here: every Nth scenario of each program in id order.
 """
 import argparse
 import gzip
@@ -19,7 +23,7 @@ def median(xs):
 
 
 def attach_control(raw, control):
-    assert control.get("program_only") and control.get("calibration_after"), "incomplete program-only control"
+    assert not control.get("isolated") and control.get("calibration_after"), "incomplete attribution-only control"
     for key in ("model", "manifest_sha256", "workload", "hardware"):
         assert raw[key] == control[key], f"control differs in {key}"
     others = {r["scenario"]["id"]: r for r in control["scenarios"]}
@@ -33,7 +37,7 @@ def attach_control(raw, control):
         deltas.append(abs(r["trace_vs_untraced_pct"]))
     raw["repeat_check"] = dict(scenarios=len(deltas), median_abs_delta_pct=median(deltas),
         max_abs_delta_pct=max(deltas), token_outputs_match=True, runner_sha256=control["runner_sha256"],
-        interpretation="Separate untraced program-only run with the same protocol; difference is not pure tracer overhead")
+        interpretation="Separate untraced attribution-only run with the same protocol; difference is not pure tracer overhead")
 
 
 def aggregate(record):
@@ -64,12 +68,24 @@ def aggregate(record):
     return sorted(ops.values(), key=lambda x: -x["attributed_us"])
 
 
-def export(raw):
-    assert not raw.get("program_only"), "whole-program-only reports have no operator evidence"
+def mark_holdouts(records, every):
+    """Every `every`-th scenario of a program, in id order, so the fit is
+    judged on shapes spread across the sweep rather than clustered at one
+    end. A program with a single scenario keeps it: nothing would be left
+    to fit."""
+    for program in sorted({r["program"] for r in records}):
+        of = sorted((r for r in records if r["program"] == program), key=lambda r: r["scenario"]["id"])
+        for i, r in enumerate(of):
+            r["scenario"]["holdout"] = every > 0 and len(of) > 1 and i % every == every - 1
+
+
+def export(raw, holdout=8):
+    assert raw.get("isolated"), "an attribution-only report has no operator evidence; rerun with --isolate"
     assert raw.get("calibration_after"), "incomplete sweep: final hardware calibration missing"
     assert raw.get("trace_validation",{}).get("all_program_activity_sequences_matched"), "attach and validate GPU activity timing first"
     records = raw["scenarios"]
     assert len(records) == len(raw["workload"]["scenarios"]), "missing scenarios"
+    mark_holdouts(records, holdout)
     for r in records:
         assert r.get("output_check"), "trajectory output validation missing"
         assert all(0 <= c["case"] < len(r["cases"]) for c in r["calls"])
@@ -140,7 +156,8 @@ def quick_view(raw):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("inputs",nargs="+",type=pathlib.Path)
-    p.add_argument("--controls",nargs="*",default=[],type=pathlib.Path,help="optional untraced program-only repeats, matched by model")
+    p.add_argument("--controls",nargs="*",default=[],type=pathlib.Path,help="optional untraced attribution-only repeats, matched by model")
+    p.add_argument("--holdout",type=int,default=8,help="hold out one scenario in N per program; 0 holds out none")
     p.add_argument("--out",required=True,type=pathlib.Path)
     args=p.parse_args(); args.out.mkdir(parents=True,exist_ok=True)
     index=[];controls={}
@@ -149,7 +166,7 @@ def main():
         assert control["model"] not in controls,"duplicate control model"
         controls[control["model"]]=(control,hashlib.sha256(source).hexdigest())
     for path in args.inputs:
-        source=path.read_bytes(); raw=export(json.loads(source))
+        source=path.read_bytes(); raw=export(json.loads(source),args.holdout)
         if raw["model"] in controls:
             control,control_hash=controls.pop(raw["model"])
             attach_control(raw,control)

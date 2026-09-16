@@ -1,0 +1,9 @@
+# A smoke sweep: four shapes, enough to see where a decode step and a
+# prefill chunk spend their time. Seconds, not minutes.
+samples = 16
+seed = 24301
+
+[[sweep]]
+groups = [1, 4]
+rows = [1]
+context = [128, 512]

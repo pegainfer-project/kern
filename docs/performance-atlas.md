@@ -34,10 +34,11 @@ the cost prediction.
 The runner has no context bound of its own: a prefix longer than the
 manifest's `tokens` max is built by running the chunk program repeatedly, and
 state capacity is sized from the workload. The checked-in atlas workload
-(`tools/profiles/atlas-2k.json`) stops at 2,048 cached context tokens because
+(`tools/profiles/atlas.toml`) stops at 2,048 cached context tokens because
 that is what the published page shows, not because the runner cannot go
-further. `tools/profiles/longctx-32k.json` is the same runner at 8k to 32k
-(Qwen3.8-27B, one GB300, `--program-only`, 2026-09-07):
+further. `tools/profiles/longctx.toml` is the same runner at 8k to 32k
+(Qwen3.8-27B, one GB300, attribution only, 2026-09-07; scenario ids predate
+the sweep language):
 
 | Scenario | Program | p50 |
 | --- | --- | ---: |
@@ -77,7 +78,7 @@ cargo build --release -p kern-run --bin kern
 nsys profile --trace=cuda --cuda-graph-trace=node --sample=none --cpuctxsw=none \
   --output results/sweep \
   target/release/kern bench qwen3-4b --gpu 0 \
-    --workload tools/profiles/atlas-2k.json --out results/raw.json
+    --workload tools/profiles/atlas.toml --out results/raw.json --isolate
 nsys export --type sqlite --output results/sweep.sqlite results/sweep.nsys-rep
 python3 tools/profile_trace.py results/raw.json results/sweep.sqlite \
   --out results/activity.json
@@ -86,10 +87,12 @@ python3 tools/profile_export.py results/activity.json --out website/public/perf/
 
 Pass multiple activity reports to the export command to populate the model
 selector. `qwen3.8-27b` uses the same runner and workload. Full trace archives
-are experiment artifacts, not website assets. The checked-in workload has 31
-scenarios with 32 timed samples per mode: batches 1–16, contexts 128–2048,
-mixed-context batches, prompt lengths 1–2048, and extensions of existing KV.
-Four whole-program target times are held out from composition calibration.
+are experiment artifacts, not website assets. The checked-in workload expands
+to batches 1–16 over contexts 128–2,048, one mixed-context batch, prompt
+lengths 1–2,048, and chunks extending an existing cache, at 32 timed samples
+per mode. `profile_export.py --holdout N` withholds one whole-program time in
+N per program from composition calibration; the workload does not choose
+them.
 
 ```sh
 cd website
@@ -109,12 +112,13 @@ directly in a browser; it does not need a server, web fonts or a network
 connection. JSON downloads work offline too. This does not publish the page
 to production.
 
-`kern bench ... --program-only` skips op microbenchmarks and records whole
-programs for a quick repeat without an activity tracer. Those reports are
-diagnostics, not valid inputs to the operator explorer exporter.
-Supply these repeats with `profile_export.py --controls results/control.json`
-to attach a same-workload cross-check. Output tokens must agree; the page
-reports differences without interpreting them as pure tracing overhead.
+`kern bench` without `--isolate` skips the op microbenchmarks and records
+whole programs and their attribution, for a quick repeat without an activity
+tracer. Those reports are diagnostics, not valid inputs to the operator
+explorer exporter. Supply these repeats with `profile_export.py --controls
+results/control.json` to attach a same-workload cross-check. Output tokens
+must agree; the page reports differences without interpreting them as pure
+tracing overhead. [`kern bench`](bench.md) is the command's own contract.
 
 ## What is measured
 

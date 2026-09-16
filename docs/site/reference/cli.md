@@ -15,7 +15,7 @@ reads `kern.toml`; it requires an explicit manifest path.
 | `kern verify <MANIFEST>` | Verify a manifest and print its serving protocol | No |
 | `kern run [TARGET]` | Greedy single-sequence generation | Yes |
 | `kern test [TARGET]` | A/B a candidate manifest against a reference | Yes |
-| `kern bench [TARGET]` | Export raw program and call measurements | Yes |
+| `kern bench [TARGET]` | Measure a sweep of call shapes and export raw samples | Yes |
 | `kern kernels [TARGET...]` | Build and collect modules pinned by targets | Depends on inputs |
 
 Use `kern <command> --help` for all command-specific flags. That output is

@@ -31,8 +31,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Profile every call of single-device workloads and export raw measurements
+    /// Measure a sweep of call shapes: where a program's time goes, and what its calls cost alone
     Bench {
+        /// Target in kern.toml (needed when it declares several)
         target: Option<String>,
         #[command(flatten)]
         opts: kern_run::bench::BenchOpts,

@@ -5,21 +5,21 @@ import sqlite3
 import tempfile
 import unittest
 
-from profile_export import export, aggregate, attach_control
+from profile_export import export, aggregate, attach_control, mark_holdouts
 from profile_trace import series, segments, duration
 
 
-def record(name, cold, warm, graph, holdout=False):
-    return dict(scenario=dict(id=name, holdout=holdout), program="example",
+def record(name, cold, warm, graph):
+    return dict(scenario=dict(id=name), program="example",
         graph=series([graph]*12), instrumented=series([graph*2]*3), output_check="matched",
         calls=[dict(index=0, case=0, op="matmul", launches=[{}], in_program=series([graph]*12))],
         cases=[dict(cold=series([cold]*12), warm=series([warm]*12))])
 
 
 def report():
-    records=[record("train-a",10,8,9),record("train-b",20,12,16),record("held",30,16,23,True)]
+    records=[record("a-train",10,8,9),record("b-train",20,12,16),record("c-held",30,16,23)]
     anchors=[dict(name="l2_read",timing=series([2]*12)),dict(name="evicted_read",timing=series([6]*12))]
-    return dict(workload=dict(samples=12,scenarios=[r["scenario"] for r in records]), scenarios=records,
+    return dict(isolated=True,workload=dict(samples=12,scenarios=[r["scenario"] for r in records]), scenarios=records,
         calibration_before=anchors,calibration_after=copy.deepcopy(anchors),
         trace_validation=dict(all_program_activity_sequences_matched=True))
 
@@ -37,10 +37,17 @@ class StatisticsTests(unittest.TestCase):
     def test_holdout_target_cannot_change_fit_or_prediction(self):
         a=report();b=copy.deepcopy(a)
         b["scenarios"][-1]["graph"]=series([23000.]*12)
-        x,y=export(a),export(b)
+        x,y=export(a,3),export(b,3)
         self.assertEqual(x["composition"]["fits"],y["composition"]["fits"])
         self.assertEqual(x["scenarios"][-1]["prediction"]["us"],y["scenarios"][-1]["prediction"]["us"])
         self.assertNotEqual(x["scenarios"][-1]["prediction"]["error_pct"],y["scenarios"][-1]["prediction"]["error_pct"])
+
+    def test_the_workload_does_not_choose_the_holdouts(self):
+        records=[record(f"s{i}",10,8,9) for i in range(9)]
+        mark_holdouts(records,4)
+        self.assertEqual([r["scenario"]["id"] for r in records if r["scenario"]["holdout"]],["s3","s7"])
+        mark_holdouts(records,0)
+        self.assertEqual([r["scenario"]["holdout"] for r in records],[False]*9)
 
     def test_program_variation_is_not_hidden_by_stable_microbench(self):
         r=record("variable",10,8,9)
@@ -51,7 +58,7 @@ class StatisticsTests(unittest.TestCase):
         a=report();b=copy.deepcopy(a)
         for r in b["scenarios"]:
             r["calls"][0]["in_program"]=series([9000.]*12)
-        x,y=export(a),export(b)
+        x,y=export(a,3),export(b,3)
         self.assertEqual(x["composition"]["fits"],y["composition"]["fits"])
         self.assertEqual([r["prediction"] for r in x["scenarios"]],
                          [r["prediction"] for r in y["scenarios"]])
@@ -63,7 +70,7 @@ class StatisticsTests(unittest.TestCase):
         for mode in ("cold","warm"):
             case=b["scenarios"][-1]["cases"][0]
             case[mode]=series([v*2 for v in case[mode]["samples_us"]])
-        x,y=export(a),export(b)
+        x,y=export(a,3),export(b,3)
         self.assertEqual(x["composition"]["fits"],y["composition"]["fits"])
         self.assertAlmostEqual(y["scenarios"][-1]["prediction"]["us"],
                                2*x["scenarios"][-1]["prediction"]["us"])
@@ -71,19 +78,19 @@ class StatisticsTests(unittest.TestCase):
     def test_incomplete_and_untraced_reports_are_rejected(self):
         for field in ("calibration_after","trace_validation"):
             r=report();del r[field]
-            with self.assertRaises(AssertionError):export(r)
+            with self.assertRaises(AssertionError):export(r,3)
         r=report();r["scenarios"].pop()
-        with self.assertRaises(AssertionError):export(r)
+        with self.assertRaises(AssertionError):export(r,3)
 
     def test_missing_tail_sample_is_rejected(self):
         r=report();r["scenarios"][0]["cases"][0]["cold"]["samples_us"].pop()
-        with self.assertRaises(AssertionError):export(r)
+        with self.assertRaises(AssertionError):export(r,3)
 
     def test_control_must_match_workload_and_outputs(self):
         raw=report()
         raw.update(model="example",manifest_sha256="abc",hardware={})
         for r in raw["scenarios"]:r["outputs"]=[1]
-        control=copy.deepcopy(raw);control.update(program_only=True,runner_sha256="def")
+        control=copy.deepcopy(raw);control.update(isolated=False,runner_sha256="def")
         attach_control(raw,control)
         self.assertEqual(raw["repeat_check"]["max_abs_delta_pct"],0.)
         control["scenarios"][0]["outputs"]=[2]
