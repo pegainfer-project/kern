@@ -8,10 +8,9 @@
 //! [`Ranks`]: the manifest on one GPU, or on one GPU per rank of its
 //! topology, each rank a [`Caller`] over its own runtime.
 
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::config::{Config, Target};
 use crate::{Caller, Given, Inputs};
@@ -19,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use kern_manifest::types::{DType, Provision};
 use kern_manifest::{Protocol, Verified};
-use kern_runtime::{Capacity, GroupRank, HostWeights, PeerHandle, Resident, Runtime, Scratch, Topology};
+use kern_runtime::{Capacity, HostWeights, Resident, Runtime, Scratch};
 use kern_test::compare::{Cmp, LogitStats, TOP};
 use kern_test::report::{plural, row, Report, Verdict};
 use kern_test::{At, Options, Side, Vars};
@@ -186,21 +185,6 @@ struct Ranks {
     ranks: Vec<Caller>,
 }
 
-/// The `Runtime` holds raw CUDA handles; it is used from one thread at a
-/// time and binds its context on every entry, so loading it on one thread
-/// and moving it once, or lending it to a thread for one call that is
-/// joined before the borrow ends, is sound.
-struct Sent(Runtime);
-#[allow(unsafe_code)]
-unsafe impl Send for Sent {}
-struct Lent<'a>(&'a mut Caller);
-#[allow(unsafe_code)]
-unsafe impl Send for Lent<'_> {}
-
-/// A rank that has not returned in this long is hung: a collective
-/// waiting for a peer that failed. Nothing in the process can go on.
-const HUNG: Duration = Duration::from_secs(600);
-
 impl Ranks {
     /// Every rank's weights, the rest of each rank dropped.
     fn into_resident(self) -> Vec<Resident> {
@@ -214,38 +198,7 @@ impl Ranks {
     /// `f` on every rank at once; the results in rank order, the first
     /// error if any.
     fn each<T: Send>(&mut self, what: &str, f: impl Fn(&mut Caller) -> Result<T> + Sync) -> Result<Vec<T>> {
-        let n = self.ranks.len();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut out: Vec<Option<Result<T>>> = (0..n).map(|_| None).collect();
-        std::thread::scope(|s| {
-            for (q, r) in self.ranks.iter_mut().enumerate() {
-                let (lent, tx, f) = (Lent(r), tx.clone(), &f);
-                s.spawn(move || {
-                    let lent = lent;
-                    let _ = tx.send((q, f(lent.0)));
-                });
-            }
-            drop(tx);
-            for _ in 0..n {
-                match rx.recv_timeout(HUNG) {
-                    Ok((q, r)) => out[q] = Some(r),
-                    Err(_) => {
-                        let hung: Vec<String> =
-                            out.iter().enumerate().filter(|(_, r)| r.is_none()).map(|(q, _)| q.to_string()).collect();
-                        eprintln!(
-                            "rank {} did not return within {}s at {what}: a collective waiting for a peer that failed",
-                            hung.join(", "),
-                            HUNG.as_secs()
-                        );
-                        std::process::exit(2);
-                    }
-                }
-            }
-        });
-        out.into_iter()
-            .enumerate()
-            .map(|(q, r)| r.expect("every rank replied").with_context(|| format!("rank {q}: {what}")))
-            .collect()
+        crate::each(&mut self.ranks, what, f)
     }
 
     fn rt(&self, rank: usize) -> &Runtime {
@@ -417,17 +370,6 @@ pub fn logit_of(l: kern_runtime::Logit) -> LogitStats {
     )
 }
 
-/// Ranks a manifest runs as: the size its topology groups share; 1
-/// without a topology.
-fn ranks_of(m: &Verified) -> Result<usize> {
-    let sizes: Vec<u64> = m.topology.iter().flat_map(|t| t.groups.values().copied()).collect();
-    match sizes.as_slice() {
-        [] => Ok(1),
-        [n, rest @ ..] if rest.iter().all(|r| r == n) => Ok(*n as usize),
-        _ => bail!("the manifest's topology groups differ in size; kern test spans every group with all its ranks"),
-    }
-}
-
 /// The GPU of each rank: the list as given, or `n` from the one given.
 fn gpus_of(given: &[usize], n: usize) -> Result<Vec<usize>> {
     match given {
@@ -441,20 +383,12 @@ fn gpus_of(given: &[usize], n: usize) -> Result<Vec<usize>> {
 /// what the last side left resident on it, if anything), connect the
 /// peers, run what the manifest runs once.
 fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Option<Vec<Resident>>) -> Result<Ranks> {
-    let n = ranks_of(m)?;
+    let n = crate::ranks_of(m)?;
     let gpus = gpus_of(&o.gpus, n)?;
     let resident: Vec<Option<Resident>> = match resident {
         Some(r) if r.len() == n => r.into_iter().map(Some).collect(),
         Some(r) => bail!("{} ranks left their weights resident; this side runs {n}", r.len()),
         None => (0..n).map(|_| None).collect(),
-    };
-    let topology = |q: usize| Topology {
-        groups: m
-            .topology
-            .iter()
-            .flat_map(|t| &t.groups)
-            .map(|(g, &size)| (g.clone(), GroupRank { index: q as u64, size }))
-            .collect(),
     };
     // The test drives one sequence (`Caller` leases one and writes its
     // lines into every table column), so one slot is all the per-sequence
@@ -462,14 +396,14 @@ fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Optio
     // whole-state read of a span copy 128 slots: on qwen3.8-27b (154 MB of
     // GDN state per slot) a run grew past 700 GB of host memory.
     let capacity = Capacity { tokens: Some(o.capacity), seqs: 1 };
-    let loaded: Vec<Result<Sent>> = std::thread::scope(|s| {
+    let loaded: Vec<Result<crate::Sent<Runtime>>> = std::thread::scope(|s| {
         let handles: Vec<_> = gpus
             .iter()
             .zip(resident)
             .enumerate()
             .map(|(q, (&gpu, resident))| {
-                let topo = topology(q);
-                s.spawn(move || -> Result<Sent> {
+                let topo = crate::topology_of(m, q);
+                s.spawn(move || -> Result<crate::Sent<Runtime>> {
                     let topology = m.topology.is_some().then_some(&topo);
                     let mut rt = match resident {
                         Some(r) => {
@@ -486,28 +420,14 @@ fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Optio
                     }
                     .with_context(|| format!("rank {q} on gpu {gpu}"))?;
                     o.inputs.weights.bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
-                    Ok(Sent(rt))
+                    Ok(crate::Sent(rt))
                 })
             })
             .collect();
         handles.into_iter().map(|h| h.join().expect("a rank's load thread panicked")).collect()
     });
     let mut rts: Vec<Runtime> = loaded.into_iter().map(|r| r.map(|s| s.0)).collect::<Result<_>>()?;
-    if let Some(topo) = &m.topology {
-        let handles: Vec<BTreeMap<String, PeerHandle>> =
-            rts.iter().map(Runtime::export_handles).collect::<Result<_, _>>()?;
-        for g in topo.groups.keys() {
-            for (q, rt) in rts.iter_mut().enumerate() {
-                rt.import_peers(g, &handles).with_context(|| format!("rank {q}: peers of `{g}`"))?;
-            }
-        }
-        for (q, rt) in rts.iter().enumerate() {
-            let pending = rt.pending_peers();
-            if !pending.is_empty() {
-                bail!("rank {q}: peer buffers {pending:?} still unfilled after every group was imported");
-            }
-        }
-    }
+    crate::connect_peers(m, &mut rts)?;
     Ok(Ranks { ranks: rts.into_iter().map(Caller::new).collect::<Result<_>>()? })
 }
 

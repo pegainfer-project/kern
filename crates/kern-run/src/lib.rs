@@ -23,13 +23,14 @@ pub use weights::Weights;
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use kern_manifest::protocol::{Axis, Forward, LineTable, PageTable, Rows};
 use kern_manifest::types::Fill;
-use kern_manifest::Protocol;
+use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
-use kern_runtime::Runtime;
+use kern_runtime::{GroupRank, PeerHandle, Runtime, Topology};
 
 /// What `kern --version` prints: the crate version, the commit it was built
 /// from, and the CUDA API the runtime binds; the three facts a bug report
@@ -198,6 +199,99 @@ pub(crate) fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<
 pub(crate) fn run_once(rt: &Runtime, p: &Protocol) -> Result<()> {
     let vars: Vars = rt.manifest.vars.keys().map(|v| (v.clone(), 1)).collect();
     p.once.iter().try_for_each(|name| rt.run(name, &vars).with_context(|| format!("`{name}`")))
+}
+
+/// Ranks a manifest runs as: the size its topology groups share; 1
+/// without a topology.
+pub(crate) fn ranks_of(m: &Verified) -> Result<usize> {
+    let sizes: Vec<u64> = m.topology.iter().flat_map(|t| t.groups.values().copied()).collect();
+    match sizes.as_slice() {
+        [] => Ok(1),
+        [n, rest @ ..] if rest.iter().all(|r| r == n) => Ok(*n as usize),
+        _ => bail!("the manifest's topology groups differ in size; a caller spans every group with all its ranks"),
+    }
+}
+
+/// Rank `q`'s place in every group of the manifest's topology.
+pub(crate) fn topology_of(m: &Verified, q: usize) -> Topology {
+    Topology {
+        groups: m
+            .topology
+            .iter()
+            .flat_map(|t| &t.groups)
+            .map(|(g, &size)| (g.clone(), GroupRank { index: q as u64, size }))
+            .collect(),
+    }
+}
+
+/// Every rank's peer buffers imported from every other, group by group,
+/// until no rank has one unfilled. Nothing to do without a topology.
+pub(crate) fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
+    let Some(topo) = &m.topology else { return Ok(()) };
+    let handles: Vec<BTreeMap<String, PeerHandle>> =
+        rts.iter().map(Runtime::export_handles).collect::<Result<_, _>>()?;
+    for g in topo.groups.keys() {
+        for (q, rt) in rts.iter_mut().enumerate() {
+            rt.import_peers(g, &handles).with_context(|| format!("rank {q}: peers of `{g}`"))?;
+        }
+    }
+    for (q, rt) in rts.iter().enumerate() {
+        let pending = rt.pending_peers();
+        ensure!(pending.is_empty(), "rank {q}: peer buffers {pending:?} still unfilled after every group was imported");
+    }
+    Ok(())
+}
+
+/// A rank that has not returned in this long is hung: a collective
+/// waiting for a peer that failed. Nothing in the process can go on.
+const HUNG: Duration = Duration::from_secs(600);
+
+/// A rank moved to a thread once, or lent to one for a call that is
+/// joined before the borrow ends. The `Runtime` inside holds raw CUDA
+/// handles; it is used from one thread at a time and binds its context on
+/// every entry, so either is sound.
+pub(crate) struct Sent<T>(pub(crate) T);
+#[allow(unsafe_code)]
+unsafe impl<T> Send for Sent<T> {}
+struct Lent<'a, R>(&'a mut R);
+#[allow(unsafe_code)]
+unsafe impl<R> Send for Lent<'_, R> {}
+
+/// `f` on every rank at once, so a collective inside it finds its peers
+/// issuing; the results in rank order, the first error if any.
+pub(crate) fn each<R, T: Send>(ranks: &mut [R], what: &str, f: impl Fn(&mut R) -> Result<T> + Sync) -> Result<Vec<T>> {
+    let n = ranks.len();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut out: Vec<Option<Result<T>>> = (0..n).map(|_| None).collect();
+    std::thread::scope(|s| {
+        for (q, r) in ranks.iter_mut().enumerate() {
+            let (lent, tx, f) = (Lent(r), tx.clone(), &f);
+            s.spawn(move || {
+                let lent = lent;
+                let _ = tx.send((q, f(lent.0)));
+            });
+        }
+        drop(tx);
+        for _ in 0..n {
+            match rx.recv_timeout(HUNG) {
+                Ok((q, r)) => out[q] = Some(r),
+                Err(_) => {
+                    let hung: Vec<String> =
+                        out.iter().enumerate().filter(|(_, r)| r.is_none()).map(|(q, _)| q.to_string()).collect();
+                    eprintln!(
+                        "rank {} did not return within {}s at {what}: a collective waiting for a peer that failed",
+                        hung.join(", "),
+                        HUNG.as_secs()
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+    });
+    out.into_iter()
+        .enumerate()
+        .map(|(q, r)| r.expect("every rank replied").with_context(|| format!("rank {q}: {what}")))
+        .collect()
 }
 
 /// A runtime plus the single sequence: its token slots and position cursor.
