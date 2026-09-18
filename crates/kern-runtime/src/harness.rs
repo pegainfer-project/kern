@@ -229,6 +229,7 @@ impl Runtime {
             bail!(Api, "program `{program}`: call range [{lo}, {hi}) outside 0..{n}");
         }
         self.require_peers()?;
+        self.require_nccl()?;
         let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         if lo < hi {
@@ -261,6 +262,7 @@ impl Runtime {
             bail!(Api, "program `{program}`: call range [{lo}, {hi}) outside 0..{}", prog.call_ranges.len());
         }
         self.require_peers()?;
+        self.require_nccl()?;
         let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         let n = hi - lo;

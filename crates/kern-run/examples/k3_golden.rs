@@ -888,12 +888,18 @@ fn main() {
     let posted: Arc<Mutex<Vec<Option<Handles>>>> = Arc::new(Mutex::new(vec![None; n]));
     let table: Arc<Mutex<Option<Vec<Handles>>>> = Arc::new(Mutex::new(None));
     let gate = Arc::new(Barrier::new(n));
+    // One NCCL id per group, minted here and joined by every rank's thread
+    // (an id crosses processes over no channel yet: a world of several
+    // processes runs no nccl collective).
+    let ids: Arc<BTreeMap<String, kern_runtime::NcclId>> = Arc::new(
+        ["ep", "tp"].into_iter().map(|g| (g.to_string(), kern_runtime::NcclId::new().expect("an nccl id"))).collect(),
+    );
     let results: Arc<Mutex<Vec<Option<Result<Outcome, String>>>>> =
         Arc::new(Mutex::new((0..n).map(|_| None).collect()));
     let mut threads = Vec::new();
     for (local, &gpu) in gpus.iter().enumerate() {
         let rank = rank_base + local;
-        let (json, kernels, posted, table, gate, results, golden, weights, addr) = (
+        let (json, kernels, posted, table, gate, results, golden, weights, addr, ids) = (
             json.clone(),
             kernels.clone(),
             posted.clone(),
@@ -903,6 +909,7 @@ fn main() {
             golden.clone(),
             weights.clone(),
             rendezvous_addr.clone(),
+            ids.clone(),
         );
         threads.push(std::thread::spawn(move || {
             let rendezvous = |rt: &mut Runtime| -> kern_runtime::Result<()> {
@@ -932,6 +939,14 @@ fn main() {
                     let group: Vec<Handles> =
                         posted.lock().unwrap()[local / tp * tp..][..tp].iter().map(|m| m.clone().unwrap()).collect();
                     rt.import_peers("tp", &group)?;
+                }
+                for g in rt.nccl_groups() {
+                    if world > n {
+                        return Err(kern_runtime::Error::Api(format!(
+                            "nccl group `{g}` spans processes; every rank of it runs in one process here"
+                        )));
+                    }
+                    rt.join_nccl(&g, &ids[&g])?;
                 }
                 Ok(())
             };

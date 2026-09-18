@@ -142,6 +142,18 @@ park 31 ms、wake 28 ms，发起 0.9 / 0.5 ms（2500 页折成 ~50 次拷贝）�
 workspace，可捕获）：K3 的每条稠密投影都是 f32 partial 再由认证的 `k3_land`
 核落成 bf16，所以 landing 的舍入链与 pegainfer 一致；权重行带 / 输出列带
 用 arg 的字节 `offset` 加第 7 参 `ldc` 表达。
+`extern:nccl_allreduce_{f32,bf16}` / `extern:nccl_allgather_{f32,bf16}`：tray
+collective 走 NCCL（`nccl.rs`），launch 连线 `[send, recv, count, {"rank": g}]`，
+rank 参点名 topology 组，count 是每 rank 的元素数（allgather 的 recv 是
+`count × 组大小`，按 rank 序排列）。每组一个 communicator：单进程持有全组时
+`connect_nccl(group, &mut [Runtime])`（一个 NCCL group call 里逐 rank
+`join_nccl`），跨进程则 `NcclId` 走 fabric handle 的通道再各自 `join_nccl`；
+没有 join 的组一律拒绝 issue（`require_nccl`，与 `require_peers` 并列）。
+NCCL 版本钉在 cudarc 的 `nccl` 绑定（2.30），运行时 dlopen 无版本号的
+`libnccl.so`。`join_nccl` 在 init 前钉两个 NCCL 变量（调用者已设则不动）：
+`NCCL_RUNTIME_CONNECT=0`，否则懒连接会落进图捕获里被拒；`NCCL_PROTO=LL128`，
+因为 Simple 协议在 runtime 的进程里给出错的结果而 NCCL 自测无恙（lessons.md
+2026-09-18，根因开在 roadmap P5）。
 
 **多卡（E0/K0）**：state 一律 VMM 分配（`cuMemCreate` + `cuMemAddressReserve`
 + `cuMemMap` + `cuMemSetAccess`），`export: true` 的 buffer 同样。设备报

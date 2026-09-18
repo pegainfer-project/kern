@@ -522,6 +522,16 @@ impl Tray {
                     bail!("rank {q}: peer buffers {pending:?} still unfilled after every group was imported");
                 }
             }
+            // A `tp` group's communicator spans its members; any other
+            // group's, every rank.
+            for g in ranks[0].nccl_groups() {
+                let spans: Vec<std::ops::Range<usize>> =
+                    if g == "tp" { (0..n).step_by(t).map(|s| s..s + t).collect() } else { vec![0..n] };
+                for span in spans {
+                    kern_runtime::connect_nccl(&g, &mut ranks[span.clone()])
+                        .with_context(|| format!("ranks {span:?}: joining nccl group `{g}`"))?;
+                }
+            }
         }
         // Once after load, the peers mapped: a tray manifest's setup (the
         // allreduce's Lamport stages are poisoned, not zeroed).

@@ -19,6 +19,7 @@ use std::os::raw::c_void;
 use crate::cubin::{param_sizes, LoadedModule, MulticastScan};
 use crate::device::{alloc, DeviceBuf};
 use crate::error::{bail, cuda_check, Error, Result};
+use crate::nccl::{Coll, Elem};
 
 /// A scalar expression with var names resolved to indices into the dense
 /// vars (manifest var order). Division by zero is rejected at compile
@@ -160,6 +161,8 @@ pub(crate) enum LaunchKind {
     Gemm { beta: f32 },
     /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
     GemmF32,
+    /// `extern:nccl_*`: a collective over `group`, `[send, recv, count, rank]`.
+    Nccl { coll: Coll, elem: Elem, group: String },
 }
 
 pub(crate) struct Launch {
@@ -216,6 +219,12 @@ enum LaunchImpl {
     },
     /// cublasGemmEx with an f32 result (`extern:cublas_bf16_tn_f32`).
     GemmBf16TnF32,
+    /// `extern:nccl_<coll>_<elem>` over the group the launch's rank arg names.
+    Nccl {
+        coll: Coll,
+        elem: Elem,
+        group: String,
+    },
 }
 
 /// An op implementation, resolved: one entry per launch, plus the private
@@ -235,6 +244,9 @@ impl ResolvedOp {
                 LaunchImpl::Cubin { module, .. } => module.clone(),
                 LaunchImpl::GemmBf16Tn { .. } => "runtime built-in (cublasLt)".into(),
                 LaunchImpl::GemmBf16TnF32 => "runtime built-in (cublasGemmEx, f32 out)".into(),
+                LaunchImpl::Nccl { coll, elem, group } => {
+                    format!("runtime built-in (nccl {coll:?} {elem:?} over `{group}`)")
+                }
             })
             .collect()
     }
@@ -281,7 +293,19 @@ pub(crate) fn resolve_ops(
                         "cublaslt_bf16_tn" => launches.push(LaunchImpl::GemmBf16Tn { beta: 0.0 }),
                         "cublaslt_bf16_tn_acc" => launches.push(LaunchImpl::GemmBf16Tn { beta: 1.0 }),
                         "cublas_bf16_tn_f32" => launches.push(LaunchImpl::GemmBf16TnF32),
-                        _ => bail!(Manifest, "op `{name}` launch #{li}: unsupported extern `{ext}`"),
+                        _ => match crate::nccl::extern_op(ext) {
+                            Some((coll, elem)) => {
+                                let group = l.args_of(op).iter().find_map(|a| match a {
+                                    LaunchArg::Rank { rank } => Some(rank.clone()),
+                                    _ => None,
+                                });
+                                let Some(group) = group else {
+                                    bail!(Manifest, "op `{name}` launch #{li}: an nccl collective names its group with a `{{\"rank\": g}}` arg");
+                                };
+                                launches.push(LaunchImpl::Nccl { coll, elem, group });
+                            }
+                            None => bail!(Manifest, "op `{name}` launch #{li}: unsupported extern `{ext}`"),
+                        },
                     }
                     continue;
                 }
@@ -500,6 +524,19 @@ fn compile_call(
                     LaunchImpl::GemmBf16Tn { beta } => LaunchKind::Gemm { beta: *beta },
                     _ => LaunchKind::GemmF32,
                 }
+            }
+            LaunchImpl::Nccl { coll, elem, group } => {
+                if touches_peer {
+                    bail!(Manifest, "launch #{li}: a peer buffer reaches the nccl collective; runtime built-ins never receive peer memory");
+                }
+                if slots.len() != 4 {
+                    bail!(
+                        Manifest,
+                        "launch #{li}: an nccl collective takes [send, recv, count, rank], got {} args",
+                        slots.len()
+                    );
+                }
+                LaunchKind::Nccl { coll: *coll, elem: *elem, group: group.clone() }
             }
             LaunchImpl::Cubin { func, path, entry, .. } => {
                 let Some(k) = l.kernel() else {

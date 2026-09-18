@@ -88,6 +88,7 @@ impl Runtime {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
+        self.require_nccl()?;
         let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         self.replay(prog, &vars)
@@ -104,6 +105,7 @@ impl Runtime {
             bail!(Api, "no program `{program}`");
         };
         self.require_peers()?;
+        self.require_nccl()?;
         let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(
@@ -215,6 +217,7 @@ impl Runtime {
         match &l.kind {
             LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
+            LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];
                 let smem = match shared_mem {

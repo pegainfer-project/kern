@@ -35,6 +35,7 @@ mod harness;
 mod host_weights;
 mod lease;
 mod load;
+mod nccl;
 mod park;
 mod peers;
 pub mod profile;
@@ -60,6 +61,7 @@ pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
 use lease::Remaps;
 pub use load::Resident;
+pub use nccl::{connect_nccl, NcclId};
 pub use park::{Room, Waking};
 use peers::PeerSlot;
 pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
@@ -163,6 +165,8 @@ pub struct Runtime {
     ranks: BTreeMap<String, u64>,
     /// Every `peer` buffer, by name.
     peers: BTreeMap<String, PeerSlot>,
+    /// The communicator of every topology group joined so far.
+    nccl: BTreeMap<String, nccl::Comm>,
     /// Peer mappings kept alive as long as the addresses in `peers`.
     #[allow(dead_code)]
     imports: Vec<DeviceBuf>,

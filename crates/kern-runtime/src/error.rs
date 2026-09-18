@@ -53,6 +53,12 @@ pub enum Error {
     #[error("cuda: {0}")]
     Cuda(String),
 
+    /// NCCL refused or failed a call: a communicator not initialized the
+    /// way the group expected, or the library itself (its version, the
+    /// devices' fabric) is not what the runtime was built against.
+    #[error("nccl: {0}")]
+    Nccl(String),
+
     /// A CUDA driver call through cudarc failed (allocation, memcpy,
     /// synchronize, context/stream setup).
     #[error(transparent)]

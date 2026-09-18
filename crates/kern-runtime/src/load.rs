@@ -298,6 +298,7 @@ impl Runtime {
             graphs: BTreeMap::new(),
             eager: false,
             gpu,
+            nccl: BTreeMap::new(),
             ranks,
             peers,
             imports: Vec::new(),

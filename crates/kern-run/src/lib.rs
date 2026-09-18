@@ -30,7 +30,7 @@ use kern_manifest::protocol::{Axis, Forward, LineTable, PageTable, Rows};
 use kern_manifest::types::Fill;
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
-use kern_runtime::{GroupRank, PeerHandle, Runtime, Topology};
+use kern_runtime::{connect_nccl, GroupRank, PeerHandle, Runtime, Topology};
 
 /// What `kern --version` prints: the crate version, the commit it was built
 /// from, and the CUDA API the runtime binds; the three facts a bug report
@@ -226,7 +226,8 @@ fn topology_of(m: &Verified, q: usize) -> Topology {
 }
 
 /// Every rank's peer buffers imported from every other, group by group,
-/// until no rank has one unfilled. Nothing to do without a topology.
+/// until no rank has one unfilled, and every group an NCCL collective
+/// names joined. Nothing to do without a topology.
 fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
     let Some(topo) = &m.topology else { return Ok(()) };
     let handles: Vec<BTreeMap<String, PeerHandle>> =
@@ -239,6 +240,9 @@ fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
     for (q, rt) in rts.iter().enumerate() {
         let pending = rt.pending_peers();
         ensure!(pending.is_empty(), "rank {q}: peer buffers {pending:?} still unfilled after every group was imported");
+    }
+    for g in rts[0].nccl_groups() {
+        connect_nccl(&g, rts).with_context(|| format!("joining nccl group `{g}`"))?;
     }
     Ok(())
 }

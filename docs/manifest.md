@@ -83,7 +83,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     module 里同名的 Triton constexpr 实例靠 `params` 布局区分）+ `entry`
     （module 里的入口点）+ 几何；**extern launch**：`entry` 写
     `extern:<name>` 表示 runtime 内置（`cublaslt_bf16_tn` / `_acc` /
-    `cublas_bf16_tn_f32`，见 runtime.md），没有 module 也没有几何。其余字段：
+    `cublas_bf16_tn_f32`，NCCL collective `nccl_allreduce_{f32,bf16}` /
+    `nccl_allgather_{f32,bf16}`，见 runtime.md），没有 module 也没有几何。其余字段：
     `params`（该 launch 自己的 ABI；**不写 = 同接口**）、
     `block`/`grid`（grid 用下述表达式集合；可选 `shared_mem`，上限 227KB
     opt-in；可选 `cluster: [x, y, z]` 线程块簇，grid 每轴必须是它的倍数，
