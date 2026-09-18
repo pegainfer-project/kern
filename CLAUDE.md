@@ -112,6 +112,14 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
   Acceptance is reasonable agreement, not bit-exactness. At a divergence, read
   the top-1 / top-2 margin before calling it a bug; a near-tie that flips is
   kernel noise, a confident token that flips is a bug.
+- `kern test <target>` is one command and, on the qwen3-4b fixture, a 7 s
+  PASS: record A, replay B span by span, noise floor, perf, verdict in one
+  report, so a kernel swap is never discussed without its report. `kern bench
+  <target> --workload <sweep.toml> --out <json>` says where a program's time
+  goes per shape, and the mix moves with the shape (Qwen3-4B: attention 47%
+  of a 2k chunk over an empty cache, 95% of 512 rows over 32k of hit), so a
+  workload names the shapes the service actually sees, never one
+  representative one.
 - kern-serve: conc1 output is identical to `kern run`; `--spec` acceptance
   rate does not collapse under load. Measured numbers go into `docs/serve.md`
   with date and machine, or they did not happen.
