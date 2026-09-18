@@ -339,7 +339,6 @@ fn execute(o: Opts) -> Result<()> {
         }
     }
 
-    let vars = caller.protocol.vars(1, rows, rows);
     let mut decode_ns: u128 = 0;
     let mut steps = 0u32;
     let mut taken = 0usize;
@@ -347,7 +346,7 @@ fn execute(o: Opts) -> Result<()> {
     'steps: while generated.len() < o.steps {
         let pos = caller.pos as usize;
         let tok = if pos < prompt_ids.len() { prompt_ids[pos] } else { *generated.last().unwrap() };
-        caller.stage_rows(tok, rows)?;
+        let vars = caller.stage_rows(tok, rows)?;
         let t = Instant::now();
         caller.rt.issue(&step.name, &vars)?;
         caller.rt.synchronize()?;

@@ -487,7 +487,7 @@ impl Side for Fake {
     fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
         let c = ids.len();
         let pos = self.pos;
-        let vars = self.protocol.vars(1, c as u64, c as u64);
+        let vars = self.protocol.vars(1, c as u64, c as u64, pos as u64 + c as u64);
         let p = self.protocol.clone();
         let mut put = |f: &kern_manifest::protocol::Filled, v: &[i64]| {
             let b = f.encode(v);

@@ -56,7 +56,7 @@ fn spanned() -> Manifest {
     );
     m.ops.insert("read_span".into(), op(&["in buffer<i32>"]));
     let mut span = m.programs["decode"].clone();
-    span.batch = Some(Batch { groups: 4, rows: Dim::Const(1), span: Some("span".into()) });
+    span.batch = Some(Batch { groups: 4, rows: Dim::Const(1), span: Some("span".into()), context: None });
     span.calls.push(serde_json::from_str(r#"{"op": "read_span", "args": [{"buf": "span_at"}]}"#).unwrap());
     m.programs.insert("decode_span".into(), span);
     m
@@ -112,7 +112,7 @@ fn plain_contract() {
     assert_eq!(p.forward(5, Rows::Const(1)), None);
     assert_eq!(p.chunk().map(|f| f.name.as_str()), Some("prefill"));
     assert_eq!((p.row_shapes(), p.max_groups(Rows::Const(1))), (vec![1], 4));
-    assert_eq!(p.vars(3, 2, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
+    assert_eq!(p.vars(3, 2, 6, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
 }
 
 #[test]
@@ -140,6 +140,32 @@ fn span_contract() {
     assert_eq!(p.forward(3, Rows::Const(1)).map(|f| f.name.as_str()), Some("decode_batch"));
     assert_eq!((p.spanned(5), p.row_shapes(), p.max_groups(Rows::Const(1))), (None, vec![1], 4));
     assert_eq!(protocol(&plain()).unwrap().span, None);
+}
+
+/// The plain contract plus a program sized by its context: the prefill
+/// chunk's `batch` names `ctx`, a var nothing else reads.
+fn contextual() -> Manifest {
+    let mut m = plain();
+    m.vars.insert("ctx".into(), serde_json::from_str(r#"{"max": 64}"#).unwrap());
+    m.programs.get_mut("prefill").unwrap().batch.as_mut().unwrap().context = Some("ctx".into());
+    m
+}
+
+#[test]
+fn context_contract() {
+    let p = protocol(&contextual()).unwrap();
+    assert_eq!(p.context, Some(Bound { var: "ctx".into(), max: 64 }));
+    assert_eq!(p.vars(1, 5, 5, 37).get("ctx"), Some(&37));
+    let plain = protocol(&plain()).unwrap();
+    assert_eq!((plain.context.clone(), plain.vars(1, 5, 5, 37).get("ctx")), (None, None));
+    let mut m = contextual();
+    m.programs.get_mut("prefill").unwrap().batch.as_mut().unwrap().context = Some("tokens".into());
+    m.vars.remove("ctx");
+    rejects(&m, "batch.context is `tokens`, which sizes the call itself");
+    let mut m = contextual();
+    m.vars.insert("other".into(), serde_json::from_str(r#"{"max": 2}"#).unwrap());
+    m.programs.get_mut("decode").unwrap().batch.as_mut().unwrap().context = Some("other".into());
+    rejects(&m, "one var bounds every context");
 }
 
 #[test]
@@ -174,7 +200,7 @@ fn tray_contract() {
     assert_eq!(p.line_tables[0].axis, Axis::Tray);
     assert_eq!(p.any(Fill::Error).map(|f| f.name.as_str()), Some("tp_err"));
     assert_eq!(p.once, vec!["tp_init".to_string()]);
-    assert_eq!(p.vars(2, 1, 8), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
+    assert_eq!(p.vars(2, 1, 8, 9), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
 }
 
 #[test]
@@ -218,20 +244,24 @@ fn shape_rules() {
 #[test]
 fn batch_rules() {
     let mut m = plain();
-    m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 5, rows: Dim::Const(1), span: None });
+    m.programs.get_mut("decode_batch").unwrap().batch =
+        Some(Batch { groups: 5, rows: Dim::Const(1), span: None, context: None });
     rejects(&m, "5 groups exceed the 4");
     let mut m = plain();
-    m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 4, rows: Dim::Const(3), span: None });
+    m.programs.get_mut("decode_batch").unwrap().batch =
+        Some(Batch { groups: 4, rows: Dim::Const(3), span: None, context: None });
     rejects(&m, "4 sequences of 3 rows exceed the 8");
     let mut m = plain();
     m.programs.get_mut("prefill").unwrap().batch =
-        Some(Batch { groups: 2, rows: Dim::Var("tokens".into()), span: None });
+        Some(Batch { groups: 2, rows: Dim::Var("tokens".into()), span: None, context: None });
     rejects(&m, "one sequence, not 2 groups");
     let mut m = plain();
-    m.programs.get_mut("prefill").unwrap().batch = Some(Batch { groups: 1, rows: Dim::Var("seqs".into()), span: None });
+    m.programs.get_mut("prefill").unwrap().batch =
+        Some(Batch { groups: 1, rows: Dim::Var("seqs".into()), span: None, context: None });
     rejects(&m, "the rows of a call go in `tokens`");
     let mut m = plain();
-    m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 1, rows: Dim::Const(1), span: None });
+    m.programs.get_mut("decode_batch").unwrap().batch =
+        Some(Batch { groups: 1, rows: Dim::Const(1), span: None, context: None });
     rejects(&m, "accept the same call shape");
     let mut m = plain();
     for p in m.programs.values_mut() {
@@ -252,7 +282,8 @@ fn batch_rules() {
 fn what_a_forward_hands_back_is_dataflow() {
     // A round handing back 4 per sequence must be a 4-row call.
     let mut m = speculative();
-    m.programs.get_mut("round").unwrap().batch = Some(Batch { groups: 2, rows: Dim::Const(3), span: None });
+    m.programs.get_mut("round").unwrap().batch =
+        Some(Batch { groups: 2, rows: Dim::Const(3), span: None, context: None });
     rejects(&m, "hands back `verify_tokens` of 4 per sequence, but a call has 3 rows");
     // A count needs several tokens per sequence to count.
     let mut m = speculative();

@@ -166,6 +166,9 @@ pub struct Batch {
     /// The var whose value is the length of the call's span: one of the sequences (rows `1` each) feeds a run of that many consecutive tokens, a row each, starting at the row the `span_at` fill names, e.g. `"span"` (a prompt chunk riding a decode step). Absent for a call whose sequences all feed `rows`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<String>,
+    /// The var whose value is the length of the call's longest sequence once its rows are in, e.g. `"ctx"`: what a kernel sized by the context rather than by the call runs over (a prefill's expansion of the cached rows). Absent for a program whose kernels are sized by the call alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 /// The role a caller-facing buffer plays in a call: what the serving loop writes into an input or reads from an output. A closed set; the runtime never reads it.

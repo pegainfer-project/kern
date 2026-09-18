@@ -42,6 +42,12 @@
 //! sequence and whose others see rows like any other. The driver stages a
 //! run as that many rows of the sequence (each with its position, slot,
 //! length and page-table row) and reads the last row's token.
+//!
+//! A kernel sized by the context rather than by the call (a prefill that
+//! expands every cached row of its sequence) runs over a var the program's
+//! `batch` names as `context`: the length of the call's longest sequence
+//! once its rows are in, which the driver already knows from the lengths
+//! it stages. One var bounds every context in a manifest.
 
 use crate::types::*;
 use crate::Verified;
@@ -186,6 +192,9 @@ pub struct Protocol {
     pub tray: Option<Bound>,
     /// The var a run's length goes in, when some program takes one.
     pub span: Option<Bound>,
+    /// The var the call's longest sequence length goes in, when some
+    /// program is sized by its context.
+    pub context: Option<Bound>,
     /// Every buffer with a fill, in name order.
     pub fills: Vec<Filled>,
     pub page_tables: Vec<PageTable>,
@@ -390,6 +399,7 @@ impl Protocol {
         let mut forwards: Vec<Forward> = Vec::new();
         let mut once = Vec::new();
         let mut span_var: Option<Bound> = None;
+        let mut context_var: Option<Bound> = None;
         for (pname, p) in &m.programs {
             if p.once {
                 once.push(pname.clone());
@@ -526,6 +536,23 @@ impl Protocol {
                     )),
                 }
             }
+            if let Some(v) = &batch.context {
+                if *v == rows.var || *v == groups.var || span.as_ref().is_some_and(|s| s.var == *v) {
+                    errs.push(format!(
+                        "{ctx}: batch.context is `{v}`, which sizes the call itself; the context needs its own var"
+                    ));
+                }
+                // A verified manifest's batch.context names a declared var.
+                let max = var_max(v).expect("verified: batch.context names a var");
+                match &context_var {
+                    Some(other) if other.var != *v => errs.push(format!(
+                        "{ctx}: batch.context is `{v}`, but `{}` is the context in another program; one var bounds every context",
+                        other.var
+                    )),
+                    Some(_) => {}
+                    None => context_var = Some(Bound { var: v.clone(), max }),
+                }
+            }
             let spanned = batch.span.is_some();
             if let Some(same) =
                 forwards.iter().find(|f| f.groups == batch.groups && f.rows == rows_of && f.span == spanned)
@@ -551,7 +578,18 @@ impl Protocol {
         }
 
         if errs.is_empty() {
-            Ok(Protocol { rows, groups, tray, span: span_var, fills, page_tables, line_tables, forwards, once })
+            Ok(Protocol {
+                rows,
+                groups,
+                tray,
+                span: span_var,
+                context: context_var,
+                fills,
+                page_tables,
+                line_tables,
+                forwards,
+                once,
+            })
         } else {
             Err(ProtocolErrors(errs))
         }
@@ -595,11 +633,16 @@ impl Protocol {
 
     /// The var vars of a call: `b` sequences of `per` rows on this rank,
     /// `tray` rows in the whole tray batch (the sum of its members' blocks;
-    /// this rank's `b * per` when it is alone).
-    pub fn vars(&self, b: u64, per: u64, tray: u64) -> BTreeMap<String, u64> {
+    /// this rank's `b * per` when it is alone), `longest` the length of
+    /// the call's longest sequence once its rows are in (only read into a
+    /// context var).
+    pub fn vars(&self, b: u64, per: u64, tray: u64, longest: u64) -> BTreeMap<String, u64> {
         let mut vars = BTreeMap::from([(self.rows.var.clone(), b * per), (self.groups.var.clone(), b)]);
         if let Some(t) = &self.tray {
             vars.insert(t.var.clone(), tray);
+        }
+        if let Some(c) = &self.context {
+            vars.insert(c.var.clone(), longest);
         }
         vars
     }

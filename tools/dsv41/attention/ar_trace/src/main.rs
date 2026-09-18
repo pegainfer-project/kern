@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
                 handles.lock().unwrap()[rank] = Some(rt.export_handles()?);
                 gate.wait();
                 rt.import_peers("ep", &handles.lock().unwrap().iter().map(|x| x.clone().unwrap()).collect::<Vec<_>>())?;
-                for once in &protocol.once { rt.run(once, &protocol.vars(1, 1, 1))?; }
+                for once in &protocol.once { rt.run(once, &protocol.vars(1, 1, 1, 1))?; }
                 let pad = rt.lease(1)?;
                 let lease = rt.lease(prompt.len() + count + 6)?;
                 let mut ids = prompt.clone();
@@ -92,7 +92,7 @@ fn main() -> anyhow::Result<()> {
                     let rows = if processed < prompt.len() { (prompt.len() - processed).min(protocol.rows.max as usize) } else { 1 };
                     let prefill = processed < prompt.len();
                     let program = if prefill { "prefill" } else { "decode_batch" };
-                    let vars = protocol.vars(1, rows as u64, rows as u64);
+                    let vars = protocol.vars(1, rows as u64, rows as u64, (processed + rows) as u64);
                     let chunk = &ids[processed..processed + rows];
                     for f in &protocol.fills {
                         let values: Vec<i64> = match f.fill {
@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
                         // only the draft prefix, then continue canonical AR.
                         // Draft writes future draft-cache slots only; the next
                         // target call publishes its true context at those slots.
-                        let dv = protocol.vars(1, 6, 6);
+                        let dv = protocol.vars(1, 6, 6, (processed + 6) as u64);
                         for f in &protocol.fills {
                             let values: Vec<i64> = match f.fill {
                                 Fill::Token => match f.axis { Axis::Groups => vec![token], _ => vec![token; 6] },

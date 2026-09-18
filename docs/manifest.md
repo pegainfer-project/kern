@@ -328,7 +328,11 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   `"span": var 名`（K5，`{"groups": 256, "rows": 1, "span": "span"}`）：
   这是一个每组 1 行的 decode 步，其中**一组**可以喂一段 run——同一序列的
   连续 token 各占一行，run 的长度是这次调用的 `span` 值、首行写进 `span_at`
-  fill 的 `[1]` i32 输入（没有 run 时写 0）；只有带 run 的调用走它。没有
+  fill 的 `[1]` i32 输入（没有 run 时写 0）；只有带 run 的调用走它。可选的
+  `"context": var 名`（K13）：这个 program 里有按上下文而不是按本次调用
+  定尺寸的 kernel（prefill 把序列缓存的 latent 行全部展开），driver 把这次
+  调用最长序列**含本次行**的长度写进该 var——它本来就从自己 stage 的
+  `seq_len` 里知道；全 manifest 一个 context var。没有
   `batch` 的 program 不被循环驱动（kern test 按段切的材料、k3 的单层 MoE
   测试）。
 - **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
@@ -351,11 +355,13 @@ verify 之后的第二遍）：每个 fill 至多一个 buffer、形状与角色
 `[seqs, r]` 的 `tokens` 的 r 是某个 `batch` 的 `rows`、`count` 只在有它时
 合法、两个 program 不得同形状（span 算形状的一部分）、`groups × rows ≤
 tokens.max`、`span` 只落在 `rows: 1` 的 program 上、全 manifest 一个 span
-var 且 `span.max ≤ tokens.max`、有 span 就得有 `span_at` fill、至少一个
+var 且 `span.max ≤ tokens.max`、有 span 就得有 `span_at` fill、`context`
+不得是行 / 组 / span 的 var 且全 manifest 一个、至少一个
 `batch` program。得到的 `Protocol` 是只读投影：`forward(groups, rows)`
 选形状包含 `(b, r)` 的 program 里 `groups` 上界最紧的那个，`chunk()` 是
 接受 `(1, var)` 的那个，`spanned(b)` 是接受 b 组、其中一组带 run 的那个，
-`vars(b, per, t)` 是一次调用的 var 表（run 的 `span` 由 caller 加），每个
+`vars(b, per, t, longest)` 是一次调用的 var 表（run 的 `span` 由 caller
+加，`longest` 落进 context var），每个
 `Filled` 带 dtype 与轴，每个 `Forward` 知道自己 emit 不 emit token、按哪
 个 `count` 取。`kern verify <manifest>` 打印这层事实；kern-run 与
 kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证它们

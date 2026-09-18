@@ -207,6 +207,13 @@ fn batch_span_names_a_var() {
 }
 
 #[test]
+fn batch_context_names_a_var() {
+    let mut v = base();
+    v["programs"]["decode"]["batch"] = serde_json::json!({"groups": 1, "rows": "tokens", "context": "nope"});
+    assert_err(v, "batch.context names unknown var `nope`");
+}
+
+#[test]
 fn graph_needs_a_batch() {
     let mut v = base();
     v["programs"]["decode"]["graph"] = true.into();

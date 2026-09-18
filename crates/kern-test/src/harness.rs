@@ -450,7 +450,8 @@ pub(crate) fn replay_span<S: Side>(
     c: &mut S,
     m: &Manifest,
     sr: &SpanRec<S::Buf>,
-    run: &Run<S::Buf>,
+    program: &str,
+    vars: &Vars,
     side_b: bool,
 ) -> Result<Replayed> {
     let ranks = c.ranks();
@@ -472,7 +473,7 @@ pub(crate) fn replay_span<S: Side>(
         pre_states.push(sr.pre[q].keys().map(|st| Ok((st.clone(), c.save_state(q, st)?))).collect::<Result<_>>()?);
     }
     let r = if side_b { sr.span.b.clone() } else { sr.span.a.clone() };
-    c.run(&run.program, &run.vars, r)?;
+    c.run(program, vars, r)?;
     let (mut bufs, mut states) = (Vec::new(), Vec::new());
     for q in 0..ranks {
         let mut bq = BTreeMap::new();
@@ -675,7 +676,7 @@ pub fn record<S: Side>(
                 cur = Some(r);
             }
             let sr = &run.spans[s];
-            let rp = replay_span(a, &ma, sr, run, false)?;
+            let rp = replay_span(a, &ma, sr, &run.program, &run.vars, false)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
                 for (n, c) in &rp.bufs[q] {

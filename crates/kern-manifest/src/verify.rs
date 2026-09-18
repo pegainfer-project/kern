@@ -762,6 +762,13 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                     errs.push(format!("program `{pname}`: batch.span names unknown var `{v}`"));
                 }
             }
+            if let Some(v) = &batch.context {
+                if m.vars.contains_key(v) {
+                    used_vars.insert(v.clone());
+                } else {
+                    errs.push(format!("program `{pname}`: batch.context names unknown var `{v}`"));
+                }
+            }
         }
         let mut written = initially_written.clone();
         for (i, c) in p.calls.iter().enumerate() {

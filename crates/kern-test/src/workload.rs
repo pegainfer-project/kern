@@ -54,7 +54,7 @@ pub fn sample(o: &Options, m: &Manifest, pr: &Protocol, p: Provision, page: u64)
     let vocab = m.buffers[tokens]
         .domain
         .as_ref()
-        .map(|d| d.resolve(m, &pr.vars(1, 1, 1), &p))
+        .map(|d| d.resolve(m, &pr.vars(1, 1, 1, 1), &p))
         .transpose()?
         .and_then(|r| r.hi)
         .map(|hi| hi as u64 + 1)

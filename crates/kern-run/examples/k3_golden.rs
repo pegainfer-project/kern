@@ -337,7 +337,10 @@ impl Batch {
             anyhow::ensure!(b == 1 && tp == 1, "a prefill chunk is staged for one row of one rank");
             self.stage_tables(rt, &[0])?;
             let n = span as u64;
-            let e = BTreeMap::from([("tokens".to_string(), n), ("seqs".to_string(), 1), ("rows".to_string(), n)]);
+            let mut e = BTreeMap::from([("tokens".to_string(), n), ("seqs".to_string(), 1), ("rows".to_string(), n)]);
+            if rt.manifest.vars.contains_key("ctx") {
+                e.insert("ctx".to_string(), (self.pos[0] + span) as u64);
+            }
             rt.write_input_at("token_ids", &le_bytes_i64(&toks[0]), &e)?;
             let slots: Vec<i64> = (0..span).map(|j| self.own()[0].slot(self.pos[0] + j)).collect();
             rt.write_input_at("slot_mapping", &le_bytes_i64(&slots), &e)?;

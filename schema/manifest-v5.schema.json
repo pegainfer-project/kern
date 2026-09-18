@@ -202,6 +202,13 @@
       "additionalProperties": false,
       "description": "The shape of one call of a program: up to `groups` sequences, each contributing `rows` rows, e.g. `{\"groups\": 256, \"rows\": 1}` (a decode step over a batch) or `{\"groups\": 1, \"rows\": \"tokens\"}` (a prefill chunk).",
       "properties": {
+        "context": {
+          "description": "The var whose value is the length of the call's longest sequence once its rows are in, e.g. `\"ctx\"`: what a kernel sized by the context rather than by the call runs over (a prefill's expansion of the cached rows). Absent for a program whose kernels are sized by the call alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "groups": {
           "anyOf": [
             {

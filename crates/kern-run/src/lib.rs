@@ -148,7 +148,8 @@ fn stage(
     ids: &[i64],
 ) -> Result<Vars> {
     let b = leases.len();
-    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64);
+    let longest = positions.iter().map(|&pos| pos + rows).max().unwrap_or(rows);
+    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64, longest as u64);
     for f in &p.fills {
         let v: Vec<i64> = match (f.fill, f.axis) {
             // Each sequence's first token: the anchor a drafting program
@@ -418,7 +419,7 @@ impl Caller {
         m.buffers[&self.protocol.token_rows().name]
             .domain
             .as_ref()
-            .and_then(|d| d.resolve(m, &self.protocol.vars(1, 1, 1), &self.rt.provision()).ok())
+            .and_then(|d| d.resolve(m, &self.protocol.vars(1, 1, 1, 1), &self.rt.provision()).ok())
             .and_then(|r| r.hi)
             .map_or(1000, |hi| hi as u64 + 1)
     }

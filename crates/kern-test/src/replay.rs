@@ -41,13 +41,15 @@ pub fn replay<S: Side>(
     b.reset();
     for run in &rec.runs {
         image(b, run)?;
-        b.stage(&run.tokens)?;
-        let (p, e) = (run.program.as_str(), &run.vars);
+        // B's own var table: the same call shape as A's, plus whatever
+        // vars B's manifest declares and A's does not.
+        let e = &b.stage(&run.tokens)?;
+        let p = run.program.as_str();
         let mut ib = 0;
         for sr in &run.spans {
             b.run(p, e, ib..sr.span.b.start)?;
             ib = sr.span.b.end;
-            let rp = replay_span(b, ma, sr, run, true)?;
+            let rp = replay_span(b, ma, sr, p, e, true)?;
             for q in 0..ranks {
                 let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
                 for (n, c) in &rp.bufs[q] {
