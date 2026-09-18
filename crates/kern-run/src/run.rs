@@ -21,7 +21,7 @@ use crate::{Caller, Given, Inputs};
 use kern_manifest::protocol::Rows;
 use kern_manifest::types::BufferKind;
 use kern_manifest::Verified;
-use kern_runtime::{Capacity, Runtime, Topology};
+use kern_runtime::{Capacity, Runtime};
 use tracing::info;
 
 /// Flags of `kern run`; anything not given comes from the target in
@@ -272,7 +272,7 @@ fn execute(o: Opts) -> Result<()> {
     banner(&rt, &o.inputs.manifest, &o.inputs.kernels, t0.elapsed());
 
     let t0 = Instant::now();
-    o.inputs.weights.bind(&mut rt, &Topology::default())?;
+    o.inputs.weights.bind(&mut rt)?;
     let n_weights = rt.buffer_sizes().iter().filter(|(_, k, _)| *k == BufferKind::Weight).count();
     info!("weights: {n_weights} buffers assembled from {} in {:?}", o.inputs.weights, t0.elapsed());
 

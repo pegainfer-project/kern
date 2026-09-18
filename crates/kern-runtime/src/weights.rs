@@ -11,9 +11,9 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use kern_manifest::types::{Buffer, DType, Rows, TensorSource};
+use kern_manifest::types::{Buffer, DType, Ranges, TensorSource};
 
 use crate::error::{bail, Error, Result};
 
@@ -135,11 +135,14 @@ impl<'a> Safetensors<'a> {
         Self::index(sources)
     }
 
+    /// Every path is one artifact, or a directory standing for every
+    /// `.safetensors` in it (a checkpoint's shards) in name order.
     pub fn open(paths: &[impl AsRef<Path>]) -> Result<Self> {
-        let sources = paths
+        let files = paths.iter().map(|p| shards(p.as_ref())).collect::<Result<Vec<_>>>()?;
+        let sources = files
             .iter()
+            .flatten()
             .map(|p| {
-                let p = p.as_ref();
                 let io = |e: std::io::Error| Error::WeightArtifact(format!("weights {}: {e}", p.display()));
                 let file = File::open(p).map_err(io)?;
                 let len = file.metadata().map_err(io)?.len() as usize;
@@ -164,6 +167,23 @@ impl<'a> Safetensors<'a> {
         }
         Ok(Self { sources, tensors })
     }
+}
+
+fn shards(p: &Path) -> Result<Vec<PathBuf>> {
+    if !p.is_dir() {
+        return Ok(vec![p.to_path_buf()]);
+    }
+    let io = |e: std::io::Error| Error::WeightArtifact(format!("weights dir {}: {e}", p.display()));
+    let mut files: Vec<PathBuf> = std::fs::read_dir(p)
+        .map_err(io)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|f| f.extension().is_some_and(|x| x == "safetensors"))
+        .collect();
+    if files.is_empty() {
+        bail!(WeightArtifact, "weights dir {}: no .safetensors in it", p.display());
+    }
+    files.sort();
+    Ok(files)
 }
 
 impl Error {

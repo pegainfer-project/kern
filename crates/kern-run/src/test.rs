@@ -419,7 +419,7 @@ fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Optio
                         ),
                     }
                     .with_context(|| format!("rank {q} on gpu {gpu}"))?;
-                    o.inputs.weights.bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
+                    o.inputs.weights.bind(&mut rt).with_context(|| format!("rank {q}: binding weights"))?;
                     Ok(crate::Sent(rt))
                 })
             })

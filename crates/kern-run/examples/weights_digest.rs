@@ -44,7 +44,7 @@ fn main() -> Result<()> {
     let capacity = Some(Capacity { tokens: Some(kern_pool::page_unit(&verified)), seqs: 1 });
     let mut rt =
         Runtime::load(&verified, &kernels.context("--kernels")?, gpu, capacity, has_topology.then_some(&topo))?;
-    Weights::parse(&weights)?.bind(&mut rt, &topo)?;
+    Weights::parse(&weights)?.bind(&mut rt)?;
     let names: Vec<(String, u64)> = rt
         .buffer_sizes()
         .into_iter()

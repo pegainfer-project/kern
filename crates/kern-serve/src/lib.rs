@@ -136,7 +136,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         .spawn(move || {
             let load = || -> Result<KernScheduler> {
                 let t0 = Instant::now();
-                let bind = |rt: &mut Runtime, topo: &Topology| weights.bind(rt, topo);
+                let bind = |rt: &mut Runtime, _: &Topology| weights.bind(rt);
                 let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &bind, host_bytes, o.eager)?;
                 info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
                 KernScheduler::new(tray, policy)

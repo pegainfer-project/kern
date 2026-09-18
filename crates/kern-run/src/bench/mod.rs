@@ -528,7 +528,7 @@ impl Bench {
                             host_weights,
                         )
                         .with_context(|| format!("rank {q} on gpu {gpu}"))?;
-                        inputs.weights.bind(&mut rt, &topo).with_context(|| format!("rank {q}: binding weights"))?;
+                        inputs.weights.bind(&mut rt).with_context(|| format!("rank {q}: binding weights"))?;
                         Ok(crate::Sent(rt))
                     })
                 })

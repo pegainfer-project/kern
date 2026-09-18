@@ -14,8 +14,7 @@ manifest / kernels / weights 走 `--manifest` `--kernels` `--weights`（与 `ker
 （reference、dumps、test seed），服务进程的输入全在命令行上，和 vLLM 一样。
 API 里的模型名缺省是 manifest 的 `model`，`--served-model-name` 覆盖。
 **前端**要的 HF 目录（config.json、tokenizer、chat template、`generation_config.json`
-的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名、
-截到第一个 `{ep}`/`*` 分片段之前（`dense-tp4/r{tp}/l*.safetensors` → `dense-tp4`）。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
+的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
 当前钉在 pegainfer `139d925e` / vLLM `89dbb264`（2026-09-11）。包含上游 #56260：
@@ -337,8 +336,8 @@ page_table 是 256 × 8192 i32 = 8 MiB，每步每卡整块 DMA。改成只拷�
   二轮踩过，t=1 conc1 的 sha 全部对不上，runtime 用 93 层 12.9k oracle 证明是同的）。没有 span program 时
   逐 token（12.9k 的 prompt 要 12.9k 步）。b>1 走形状包含
   `(b, 1)` 的 program 里 `groups` 上界最紧的那个；没有 chunk program 时 `--rows` 只能是 1。
-- 权重按 rank：`--weights` 里 `{ep}` / `{tp}` 换成该 rank 在组里的下标，文件
-  名里的 `*` 按名字序展开（`dense-tp4/r{tp}/l*.safetensors`），mmap 不读入。
+- 权重不分 rank 文件：每个 rank 打开同一份 checkpoint（目录 = 全部分片），manifest 的
+  bind 按 rank 选行 / 列 / 张量（manifest.md"权重"）。
   `--capacity` / `--host-gib` / `--max-seqs` 都是 per rank。
 
 **t=1 smoke（2026-09-03，tray03 GPU 1，qwen3-4b，`--capacity 65536`）**：conc1 输出与 `kern run`
