@@ -32,7 +32,9 @@ that split by rows — the MLA q path and attention, the routed experts —
 take this rank's share, chunk rows [blocks[r], blocks[r+1]) of the deal
 `chunk_plan` writes (`own_rows` copies the share out; a row past the share
 repeats the chunk's last row), and their outputs are all-gathered back into
-chunk order (the collectives built -DNATURAL). The MLA projections stay
+chunk order (NCCL: the deal's blocks are `ceil(T / R)` rows each, the last
+short, so an all-gather of `ceil(T / R)` rows per rank lays them in chunk
+order). The MLA projections stay
 whole: kv_a and its append run on every row of every rank, so every rank
 holds the sequence's latent cache.
 
@@ -508,17 +510,15 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             "impl": {"launches": [launch("k3_land", "kern_k3_rms", var=R)]},
         },
     }
-    if tp > 1:
+    if tp > 1 and not split:
         # The tray-local all-gather (peer_collective.cu): one op per row dtype,
-        # both over the same symmetric buffer and epoch carry. A split chunk
-        # gathers in natural order.
-        natural = {"NATURAL": 1} if split else {}
+        # both over the same symmetric buffer and epoch carry.
         coll = ["inout buffer<u8>", "in buffer<u64>", "inout buffer<u32>", "out buffer<i32>", "in buffer<i32>",
                 "i32", "i32", "i32", "i32", "i64"]
         for dt in ["f32", "bf16"]:
             ops[f"tp_allgather_{dt}"] = {
                 "params": [f"in buffer<{dt}>", f"out buffer<{dt}>"] + coll,
-                "impl": {"launches": [launch("peer_collective", "kern_peer_allgather", defines=natural or None,
+                "impl": {"launches": [launch("peer_collective", "kern_peer_allgather",
                                              grid=[TP_GRID, 1, 1], block=[256, 1, 1])]},
             }
     if split:
@@ -526,7 +526,18 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             "params": ["out buffer<bf16>", "in buffer<bf16>", "in buffer<i32>", "i32", "i32", "i32"],
             "impl": {"launches": [launch("copy_rows", "kern_own_rows", grid=[OG, 1, 1], block=[256, 1, 1])]},
         }
-    if tp > 1:
+    if tp > 1 and split:
+        # A chunk's collectives move hundreds of MB: NCCL (multi-gpu.md "大消息
+        # collective 走 NCCL"), one launch each, `count` elements per rank.
+        def nccl(coll, dt):
+            io = [f"in buffer<{dt}>", f"out buffer<{dt}>", "i64"]
+            return {"params": io,
+                    "impl": {"launches": [{"entry": f"extern:nccl_{coll}_{dt}", "params": io + ["i32"],
+                                           "args": [{"param": 0}, {"param": 1}, {"param": 2}, {"rank": "tp"}]}]}}
+        ops["nccl_allreduce_f32"] = nccl("allreduce", "f32")
+        for dt in ["f32", "bf16"]:
+            ops[f"nccl_allgather_{dt}"] = nccl("allgather", dt)
+    if tp > 1 and not split:
         # The allreduce is TensorRT-LLM's protocol (peer_allreduce.cu): one
         # token per cluster of 8 CTAs, one float4 per thread; the Lamport
         # stages are poisoned once by `tp_init` after the peers are imported.
@@ -536,7 +547,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                        "inout buffer<i32>", "out buffer<i32>", "in buffer<i32>", "i32", "i32", "i32", "i64", "i32",
                        "i64"],
             "impl": {"launches": [launch("peer_allreduce", "kern_peer_allreduce_f32",
-                                         defines={"NRANKS": tp, **natural}, grid=[TP_AR_GRID, 1, 1],
+                                         defines={"NRANKS": tp}, grid=[TP_AR_GRID, 1, 1],
                                          block=[H // 4 // 8, 1, 1], cluster=[8, 1, 1])]},
         }
         ops["tp_lamport_init"] = {
@@ -586,7 +597,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     }
     ag_region = own_max * H * 4 // 8  # packs: the widest gathered row is the f32 attention landing
     ar_stage = tp * min(rows_max, ONESHOT_MAX_ROWS) * H * 4  # bytes: one Lamport stage, `tp` slots of f32 [rows, H]
-    if tp > 1:
+    if tp > 1 and not split:
         buffers.update({
             "tp_sym": {"dtype": "u8", "shape": [2 * tp * ag_region * 16], "kind": "carry", "export": True},
             "tp_peers": {"dtype": "u64", "shape": [tp], "kind": "peer", "of": "tp_sym", "group": "tp"},
@@ -658,8 +669,9 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     buffers["blocks"] = {"dtype": "bf16", "shape": [R, NB_MAX, H], "kind": "workspace"}
     work("hidden_partial", H, "f32", var=OV)
     if tp > 1:
-        work("hidden_partial_all", H, "f32", var=R)
-        work("routed_latent_all", LATENT, var=R)
+        # An all-gather lays every rank's `own_max` rows in rank order.
+        work("hidden_partial_all", H, "f32", var=tp * own_max if split else R)
+        work("routed_latent_all", LATENT, var=tp * own_max if split else R)
         work("o_partial", H, "f32", var=R)
         work("gated_kda", inner_l, var=R)
     work("kda_partial", fused_l, "f32", var=KV)
@@ -764,12 +776,19 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         the all-gather with tp > 1, `own` itself otherwise."""
         if tp == 1:
             return own
+        if split:
+            elems = row_bytes // {"f32": 4, "bf16": 2}[dt]
+            step(label, f"nccl_allgather_{dt}", own, whole, {"expr": {"mul": [{"ceil_div": [T, tp]}, elems]}})
+            return whole
         step(label, f"tp_allgather_{dt}", own, whole, b("tp_sym"), b("tp_peers"), b("tp_epochs"), b("tp_err"),
              b("tp_blocks"), {"rank": "tp"}, i32(tp), i32(row_bytes), i32(ag_region), i64(TP_TIMEOUT_NS))
         return whole
 
     def reduced(label, partial, whole):
         """The tray group's sum of a head-sharded f32 [rows, H] partial."""
+        if split:
+            step(label, "nccl_allreduce_f32", partial, whole, {"expr": {"mul": [R, H]}})
+            return whole
         step(label, "tp_allreduce_f32", partial, whole, b("tp_ar_comm"), b("tp_ar_comm_peers"), b("tp_ar_flags"),
              b("tp_ar_flag_peers"), b("tp_ar_lamport"), b("tp_ar_lamport_peers"), b("tp_ar_state"), b("tp_err"),
              b("tp_blocks"), {"rank": "tp"}, RB, i32(H), i64(ar_stage), i32(0), i64(TP_TIMEOUT_NS))
@@ -1001,7 +1020,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                                                     context=CTX if v2 else None)
     # Run once after the peers are imported: the Lamport stages must read
     # -0.0 before the first allreduce, and a carry starts at zero.
-    if tp > 1:
+    if tp > 1 and not split:
         programs["tp_init"] = kern_manifest.program(
             [{"label": "tp_init", "op": "tp_lamport_init", "args": [b("tp_ar_lamport"), i64(3 * ar_stage)]}],
             once=True)

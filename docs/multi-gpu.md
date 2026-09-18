@@ -262,6 +262,37 @@ f32 累加再减半字节。再往上是 NVLS 多播（驱动报 `MULTICAST_SUPP
 1× 数据），要 runtime 多一种分配（`cuMulticastCreate`），且要先在能重启的 tray 上探针——
 lessons 里挂卡的是 multicast TMA，multimem 没人试过。
 
+### 大消息 collective 走 NCCL（2026-09-18）
+
+prefill chunk 的 collective 是另一个 regime：16k 行 × 7168 f32 = 470 MB 一次，
+上面的 Lamport / two-shot 核（为 ≤192 行的 decode 步设计）实测 2.1 ms ≈ 335 GB/s，
+只吃到 NVLink 单向的 ~37%，空 cache 的 16k chunk 里两个 allreduce 占 29%。这个
+regime 的 SOTA 是 NCCL 的 NVLS（multimem 多播归约），TRT-LLM 的 MNNVL allreduce /
+FlashInfer 的 `trtllm_mnnvl_allreduce` 都是小消息的低延迟路径，对它没有优势；通信
+不自己写（用户 2026-09-18 定），所以 runtime 加 `extern:nccl_*`，与 cuBLAS extern
+同级：manifest 一个 launch `[send, recv, count, {"rank": g}]`，runtime 按 topology 组
+建 communicator（`nccl.rs`），driver 装载后 `connect_nccl` / `join_nccl`。
+prefill-only 的 tray 形态四个 collective 全换：`reduce_attn` / `reduce_mlp` 是
+allreduce；`gather_attn` / `gather_moe` 是 allgather，`chunk_plan` 的 deal 本来就是
+`blocks[q] = min(q · ceil(T/R), T)`，NCCL allgather 按 rank 序放 `count` 元素，第 q
+块正好落在 `q · ceil(T/R)` 行，末卡多发的行落在 T 之后没人读，所以 recv 缓冲是
+`R · ceil(T_max/R)` 行、行序天然是 chunk 序，不需要 `-DNATURAL` 那套。decode tray
+批（≤192 行）仍走 Lamport 核。`tp_err` / 自旋超时在 NCCL 路径上没有对应（NCCL
+默认挂死），先不管（用户定）。
+
+**落地（2026-09-18）**：4 层 TP4 c8/c40/c7 全 exact，93 层 12.9k 单块 2/2；tray07 16k over
+0 / 64k / 128k / 240k = 1174 / 1471 / 1770 / 2296 ms（peer 核 1317 / 1609 / 1904 / 2420），4k over
+240k 709（736）；256k 阶梯累加 27.75 s（29.91），对 SGLang 1.62–1.73×。470 MB f32 allreduce
+2.1 → ~1.4 ms，占空 cache chunk 的 19.7%。runtime 在 `join_nccl` 钉两个 NCCL 变量（调用者
+设了就不动）：`NCCL_RUNTIME_CONNECT=0`——默认的懒连接会落在图捕获里，
+`cudaDeviceEnablePeerAccess` 在捕获中被拒（`kern bench` 第一次就撞上）；`NCCL_PROTO=LL128`——
+**Simple 协议在 kern 的进程里给出错的 sum / gather**（93 层 0/2、logits 退化），二分表在
+demo 的 `results/kern/93l/README.md`：与 NVLS、算法、进程内 direct 指针、分配方式
+（stream-ordered pool 换 `cuMemAlloc`）、库版本（2.31.2 / 2.30.7）都无关，LL / LL128 全对，而
+NCCL 自带的 `all_reduce_perf -g 4`（同样单进程四卡）在 1 MB–2 GB 与本块的精确尺寸上 Simple 全
+对（512 MB：Simple 419 GB/s，LL128 331）。根因未找到，记在 roadmap P5；钉 LL128 的代价约每
+470 MB allreduce 0.2 ms、每 16k chunk ~30 ms。lessons.md 有这一条。
+
 ### GPU 自提交
 
 `cudaGraphInstantiateFlagDeviceLaunch` + 图尾 kernel
