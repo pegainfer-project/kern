@@ -189,6 +189,31 @@ fn perf_reports_every_driven_program_and_never_the_verdict() {
 }
 
 #[test]
+fn a_prefill_only_manifest_takes_its_steps_as_one_row_chunks() {
+    let mut o = options();
+    o.perf = true;
+    let a = Fixture::default().prefill_only();
+    let (r, lines) = test(&a, &a.clone().scale("scale_same"), &o).unwrap();
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()));
+    let local = r.summary.local.as_ref().unwrap();
+    // the same 2 chunks + 4 steps as with a decode program, all through `prefill`
+    assert_eq!((local.compared, local.bit_identical), (12, 12));
+    let perf = r.summary.perf.as_ref().unwrap();
+    assert!(perf.steps.iter().all(|s| s.program == "prefill") && !perf.sweep.is_empty(), "{lines:#?}");
+}
+
+#[test]
+fn a_span_program_is_not_driven_and_a_change_in_it_is_untapped() {
+    let a = Fixture::default().span();
+    let (r, lines) = test(&a, &a.clone().scale("scale_same"), &options()).unwrap();
+    // the workload stages no run, so the span program's change stays untapped: inconclusive, not a panic
+    assert_eq!(verdict(&r), (2, "a changed program was not tapped — the workload driver can't stage it".into()));
+    let local = r.summary.local.as_ref().unwrap();
+    assert_eq!((local.compared, local.bit_identical), (12, 12));
+    assert_eq!(local.undriven, ["decode_span"], "{lines:#?}");
+}
+
+#[test]
 fn identical_manifests_have_nothing_to_test() {
     let (ma, mb) = (Fixture::default().manifest(), Fixture::default().manifest());
     let d = kern_test::diff::diff(&ma, &mb);

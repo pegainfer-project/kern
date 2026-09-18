@@ -295,11 +295,12 @@ impl<B> Recording<B> {
 }
 
 /// The workload's programs: the chunk program over the prompt, then every
-/// fixed-rows forward in rotation (a caller may switch between them at any
-/// step: same state contract).
+/// fixed-rows forward without a span in rotation (a caller may switch
+/// between them at any step: same state contract; a span program needs a
+/// run staged by a caller that has one, and the workload stages none).
 fn driven(p: &Protocol) -> (Option<Forward>, Vec<Forward>) {
     let chunk = p.chunk().cloned();
-    let steps = p.forwards.iter().filter(|f| matches!(f.rows, Rows::Const(_))).cloned().collect();
+    let steps = p.forwards.iter().filter(|f| matches!(f.rows, Rows::Const(_)) && !f.span).cloned().collect();
     (chunk, steps)
 }
 
@@ -613,19 +614,22 @@ pub fn record<S: Side>(
     }
     // Every step stages the drawn token in a forward's rows at the cursor
     // and advances one position: a wide forward's extra rows are
-    // overwritten by the next step, on both sides alike.
+    // overwritten by the next step, on both sides alike. A prefill-only
+    // manifest takes its steps as chunks of one row.
     for (k, &tok) in wl.decode.iter().enumerate() {
-        let f = &step_fs[k % step_fs.len()];
-        let tokens = vec![tok; rows_of(f) as usize];
+        let (name, rows, keep) = match step_fs.get(k % step_fs.len().max(1)) {
+            Some(f) => (f.name.as_str(), rows_of(f), k < step_fs.len()),
+            None => (chunk_name, 1, false),
+        };
         record_run(
             a,
             &mut rec,
             &mut chains,
-            &f.name,
+            name,
             format!("step {k}"),
-            tokens,
+            vec![tok; rows as usize],
             1,
-            k < step_fs.len(),
+            keep,
             &shared,
             &fixed,
         )?;
