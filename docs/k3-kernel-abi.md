@@ -456,6 +456,67 @@ extern "C" __global__ void kern_last_row_bf16(bf16* dst, const bf16* src, int sr
 TP4 split 形态 chunk 8 / 40 / 7（7 = 不等分：[0,2,4,6,7]，rank 3 一行实 + 一行 pad）四卡各 5/5、1/1、6/6 exact。
 prefill 之后的 16 个 free token 与 `decode_span` 的 chunk 逐字节同。
 
+### K13 MLA prefill v2：kv_b 物化展开 + TensorRT-LLM gen 的 context FMHA（`--mla v2`）
+
+v1 的 chunk attention 是 K5 的 decode 核逐行展开：每个 (query, token) 对在 absorb 后的 576 维 latent 上
+算，209 kFLOP/对，TP4 下每张卡对全部 96 头算自己那份行，93 层 16k chunk over 240k 的 65% 是它。
+v2 是 SGLang 走的形态：latent 行先经 kv_b 展开成每头 k (192) | v (128)，attention 在 192/128 维上算
+（61 kFLOP/对），核是 TensorRT-LLM gen 的 ragged context FMHA——FlashInfer `flashinfer-cubin` 0.6.18 里
+`trtllm_ragged_attention_deepseek` 在 GB300 上选的那个 cubin 原样收进 `tools/kernels-bin/trtllm_fmha_ctx_h192_v128.cubin`
+（README 有来源与 sha）。
+
+一层的链（`tools/gen_k3.py` 的 v2 分支，只在 `prefill` program）：
+
+```
+q_b       gemm_bf16   q_norm_own [rows, 1536] × w_q_b → q [rows, 96, 192] bf16（v1 是 f32 partial + absorb）
+gather    kern_k3_latent_gather   这条序列的 latent 行（页表行 0）铺成 [ctx↑128, 576]，前 kv_len 行来自页，其余零
+expand    gemm_bf16   latent [ctx↑128, 576] × w_aug [96·320, 576]ᵀ → kv_exp [ctx↑128, 96, 192 | 128] bf16
+attn      mla_fmha    q, k = kv_exp, v = kv_exp + 384 B, o [rows, 96, 128] bf16；因果按序列末尾对齐
+gate      kern_sigmoid_mul_bf16   gated = o · bf16(σ(gate))（K5c 的 landing，权重不再进核）
+o_proj    照旧
+```
+
+`w_aug` 是 `load` once program 从 `kv_b_proj` 派生的 carry（`kern_k3_kvb_aug`，`k3_weight_prep.cu`）：每头
+320 行 = W_UK 的 128 行 | 64 行单位阵选 latent 行的 rope 段（列 512..576）| W_UV 的 128 行，各补零到 576，
+所以一次 GEMM 出 k 的 nope+rope 与 v。rope 段无 RoPE（K3 的 MLA 就是裸的 64 维），单位阵在 bf16 里精确。
+
+```c
+// 一个 chunk 一次，chunk_plan 之后：FMHA 的长度表
+extern "C" __global__ void kern_k3_fmha_plan(const int* seq_lens, const int* blocks, int* lens, int T, int rank);
+// grid (1,1,1) block 32。lens = {kv_len, 0, 0, q_len, 0, kv_len, 0, 0}：seq_lens_kv[1] 在字节 0、cum_seq_lens_q[2]
+// 在 8、cum_seq_lens_kv[2] 在 16。本卡的行是 chunk 行 [blocks[rank], blocks[rank+1])，q_len 是它们的个数，
+// kv_len = seq_lens[0] − T + blocks[rank+1]：末行的 token 号 + 1。核的 causal 是末尾对齐的（行 i 看到
+// token ≤ kv_len − q_len + i），所以自己那份行只看到自己之前的 token，不等分的末卡也对。
+
+// 每个 MLA 层：latent 行铺平
+extern "C" __global__ void kern_k3_latent_gather(const bf16* slab, const int* block_table, long long page_stride,
+                                                 const int* lens, bf16* out, int n);
+// grid (ceil(n/8),1,1) block 576：一行 72 × 16 B，8 行一个 block。slab 是 state 基址 + 该层偏移；
+// t < lens[0] 的行从页 block_table[t/64] 取，其余写零。n 是这次调用的序列长度（prefill 的 batch.context
+// var `ctx`，含本 chunk）向上取整到 FMHA 的 128 行 KV tile：末 tile 越过 kv_len 的行读到的是这里写的零。
+```
+
+`mla_fmha` op（`tools/trtllm_fmha_abi.py`）：一个 launch，`bytes<1344>` = FlashInfer `KernelParams`
+（`include/flashinfer/trtllm/fmha/kernelParams.h`），字段用 `tools/kernel-capture` 从 `tools/trtllm-fmha/probe.py`
+的启动抓下来逐字段对照头文件填，核没读的一律留零：
+
+| 偏移 | 内容 |
+|---|---|
+| 0 / 128 / 384 / 512 | tensormap Q `[192, 1, 96, rows_max]`、K `[192, kv_max, 96, 1]`、V（同 K，基址 +384 B，`[128, …]`）、O `[128, rows_max, 96, 1, 1]`；bf16、box `[64, 1, 1, 128]` / `[64, 128, 1, 1]`、swizzle 128B、L2 promotion 128B；单位维的 stride 填 16（manifest 不收 0，核不会用它走位） |
+| 912 / 936 / 944 / 1096 | ptrO、ptrCumSeqLensQ、ptrCumSeqLensKv、ptrSeqLensKv |
+| 1024 / 1032 | ptrPartialO / ptrPartialStats：一块 8 MiB 的 scratch（stats 在 0、partial O 在 sm·256·8 = 311296），单 CTA per KV 时不用 |
+| 1128 / 1132 | window ∞、batch 1 |
+| 1172 / 1176 / 1180 / 1184 | mMaxSeqLenQ = rows（表达式）、mMaxSeqLenKv = kv_max、mMaxNumCtasQ = ceil(rows/256)、mMaxNumCtasKv 1 |
+| 1192..1220 | heads 96 / 96 / 1，FastModDivInt32(1) = {1, 0x80000000, 0, −1} |
+| 1224 / 1236 / 1240 / 1244 | mNumHiddenEltsO 96·192、mNumTokensPerCtaQ 256、mNumTokensPerPageLog2 −1、mReshapeFactorKv 1 |
+| 1248 / 1252 / 1260 | output scale 1.0、softmax scale 192^-0.5·log2e（f32 0x3dd53b95）、mScaleSfO 1.0 |
+| 1276 / 1280 | mSumOfSeqLensQ = rows、mSumOfSeqLensKv = kv_max |
+
+grid (ceil(rows/256), 96, 1)，block 512，dyn smem 199296，无 cluster。**门禁**（2026-09-18 tray02，
+`tools/gen_trtllm_fmha_probe.py` + `program_io` 喂 probe 的 dump）：512 over 1536、1000 over 3000（行数不是
+256 的倍数）、4096 over 8192 三种形状的 `o` 与 FlashInfer 自己的输出逐位相同；probe 另外验证了 max_kv 传
+262144 与传实际长度输出相同（核只按 seq_lens 走），以及因果确实是末尾对齐（左上对齐的参考差 2.4）。
+
 ## 2. 验收（每个核）
 
 1. **harness 通过**：`tools/k3-harness/`（见其 README）——对每个核、每个规定形状，随机输入 + CPU 参考，

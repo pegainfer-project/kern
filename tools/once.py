@@ -38,6 +38,7 @@ KERNELS = {
     "k3_wsm": ("k3_weight_prep", "kern_k3_wsm", ["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32"]),
     "k3_mega_sf_pack": ("k3_weight_prep", "kern_k3_mega_sf_pack",
                         ["in buffer<u8>", "out buffer<i32>", "i32", "i32", "i32", "i32"]),
+    "k3_kvb_aug": ("k3_weight_prep", "kern_k3_kvb_aug", ["in buffer<bf16>", "out buffer<bf16>", "i32"]),
 }
 FILL = {"f32": ("fill_f32", "f32"), "bf16": ("fill_bf16", "f32"), "i32": ("fill_i32", "i32"),
         "i64": ("fill_i64", "i64"), "u8": ("fill_u8", "i32")}

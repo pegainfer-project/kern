@@ -36,6 +36,8 @@ examples/k3_golden.rs`）。
 | `k3_oracle_dump.py` | 任一 OpenAI 兼容服务 → fixture（teacher-forced greedy）。vLLM 带 top-5 logprob，给 `k3_golden --margin-abs` 做 noise-floor 判定；pegainfer 的 K3 不出 logprob，用 `--no-logprobs`（`return_token_ids`，只记 argmax，逐步必须精确一致）。长 prompt 用 `--check-last N`：只对最后 N 个 prompt 位置和续写步请求参考，前面的位置记 `argmax=-1`（runner 只喂不比） |
 | `flash_kda_abi.py` | FlashKDA（MoonshotAI，`tools/flash-kda/`）作为 kern op 的数据：prepare / recurrence 两个 launch 的 `bytes<256>` TiledCopy pack、workspace buffer、参数表（从 kernel-capture 提出，见 k3-kernel-abi.md K8）；`gen_k3.py --span-max` / `--chunk` 用它 |
 | `gen_flash_kda_probe.py` | 只含 `flash_kda` 一个 op 的 manifest，`program_io` 例子喂 `tools/flash-kda/probe.cu` 的 dump 做逐位门禁（C2） |
+| `trtllm_fmha_abi.py` | TensorRT-LLM gen 的 ragged context FMHA（FlashInfer 的 cubin，`tools/kernels-bin/trtllm_fmha_ctx_h192_v128.cubin`）作为 kern op 的数据：`bytes<1344>` 的 `KernelParams` pack（四个 tensormap + 指针 + 标量，从 kernel-capture 提出，见 k3-kernel-abi.md K13）；`gen_k3.py --mla v2` 用它 |
+| `gen_trtllm_fmha_probe.py` | 只含 `mla_fmha` 一个 op 的 manifest，`program_io` 喂 `tools/trtllm-fmha/probe.py` 的 dump 做逐位门禁（K13） |
 | `flash_kda_ref.py` | numpy f64 的 K3 KDA 逐 token 参考，对 probe dump 报 out / state 的 relRMS（两种 state 朝向都报） |
 | `k3_tokenizer_json.py` | Kimi-K3 的 tiktoken checkpoint → HF `tokenizer.json`（kern-serve 的前端只认这个），special token 与样例文本对 checkpoint 自己的 tokenizer round-trip 后才写出 |
 | `vmm_bench.py` | CUDA VMM 块池的代价（roadmap K1b）：`cuMemMap` / `cuMemSetAccess` / `cuMemUnmap` 每块延迟，拼一页 KV / 一个 state slot / 一份 K3 state 的总耗时与首次访问，以及 map/unmap 进行时同卡带宽循环的抖动；只用 driver API（ctypes），不用编译，`python3 tools/vmm_bench.py <gpu>` |

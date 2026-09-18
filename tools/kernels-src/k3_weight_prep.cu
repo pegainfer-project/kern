@@ -19,6 +19,12 @@
 //                        L1), four bytes packed LSB-first into one i32 per
 //                        128 elements, laid out [k/128, n] (pegainfer's
 //                        transform_weights_for_mega_moe, tools/gen_k3_moe.py)
+//   kern_k3_kvb_aug      the MLA prefill v2 expansion weight [96 * 320, 576]
+//                        from kv_b_proj [96 * 256, 512]: per head 128 rows of
+//                        W_UK, 64 rows selecting the latent row's rope part
+//                        (an identity onto columns 512..576) and 128 rows of
+//                        W_UV, each padded to 576 with zeros, so one GEMM of
+//                        the latent rows gives k (192) | v (128) per head
 //
 //   nvcc -cubin -arch=sm_103a -O3 tools/kernels-src/k3_weight_prep.cu
 #include <cuda_bf16.h>
@@ -70,4 +76,18 @@ extern "C" __global__ void kern_k3_mega_sf_pack(const unsigned char* __restrict_
   const int r = (int)(i % n), w = (int)(i / n % words), e = (int)(i / n / words);
   const unsigned char* s = raw + ((long long)e * n + sf_src_row(r, n, interleave)) * kg + w * 4;
   out[i] = (int)((unsigned)s[0] | ((unsigned)s[1] << 8) | ((unsigned)s[2] << 16) | ((unsigned)s[3] << 24));
+}
+
+extern "C" __global__ void kern_k3_kvb_aug(const __nv_bfloat16* __restrict__ w_kv_b, __nv_bfloat16* __restrict__ out,
+                                           int n) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  const int r = i / 576, c = i % 576, h = r / 320, d = r % 320;
+  float v = 0.f;
+  if (d < 128 || d >= 192) {
+    if (c < 512) v = __bfloat162float(w_kv_b[(h * 256 + (d < 128 ? d : d - 64)) * 512 + c]);
+  } else if (c == 512 + (d - 128)) {
+    v = 1.f;
+  }
+  out[i] = __float2bfloat16_rn(v);
 }

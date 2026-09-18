@@ -56,3 +56,34 @@ in `docs/k3-kernel-abi.md` and was lifted with `tools/kernel-capture`.
 Rebuild (host nvcc, no GPU needed):
 
     CUTLASS_INCLUDE=<cutlass>/include NVCC=/usr/local/cuda-13.1/bin/nvcc tools/flash-kda/build.sh
+
+## `trtllm_fmha_ctx_h192_v128.cubin`
+
+TensorRT-LLM gen's ragged context FMHA for a DeepSeek-style MLA prefill
+(head dim 192 for q/k, 128 for v, bf16 in and out, separate Q/K/V, causal
+aligned to the end of the KV, variable sequence lengths, 256-token Q tiles
+against 128-token KV tiles, persistent tile scheduler), the kernel
+`flashinfer.prefill.trtllm_ragged_attention_deepseek` selects on GB300 for one
+sequence. Taken as is from FlashInfer 0.6.18's `flashinfer-cubin` wheel,
+bundle `2d6a5a029eefcc388ec0ceb87efb55d8bcce5c3c`, file
+`fmha/trtllm-gen/fmhaSm103aKernel_QkvBfloat16OBfloat16HQk192HV128SeparateQkvCausalVarSeqQ256Kv128PersistentContext.cubin`
+(sha256 `240811d976c01e4a9bee00041d98343f6f9254fefae598df46a97ff07c7df508`, the
+bundle's own `checksums.txt` entry). Apache-2.0 (the wheel's license).
+
+One entry of the same name: 512 threads, no cluster, 199296 B dynamic smem,
+grid (ceil(rows / 256), heads, 1). The 1344-byte `KernelParams` the manifest
+packs (four TMA descriptors, the pointers and scalars the kernel reads) is
+`tools/trtllm_fmha_abi.py`, lifted with `tools/kernel-capture` from
+`tools/trtllm-fmha/probe.py`'s launch and documented in
+`docs/k3-kernel-abi.md` K13.
+
+| parameter | value |
+|---|---|
+| q | bf16 `[rows, heads, 192]`, rows a chunk's share on one rank |
+| k / v | two views of one bf16 `[kv, heads, 320]` buffer (k at 0, v 384 B in) |
+| o | bf16 `[rows, heads, 128]` |
+| mask | causal, row i sees tokens up to kv_len - rows + i |
+| target | sm_103a (GB300) |
+
+Rebuild: none; a different FlashInfer release is a different bundle, and the
+manifests pin whichever file is checked in.

@@ -4394,7 +4394,7 @@
   },
   "k3_weight_prep": {
    "source": "k3_weight_prep.cubin",
-   "sha256": "0b9645046fbbf817b8c2e1c5185cc38b37f761136d1346d71bddcf2c6893a5ca"
+   "sha256": "a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02"
   }
  },
  "ops": {
