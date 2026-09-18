@@ -935,6 +935,37 @@
       ],
       "type": "object"
     },
+    "Interleave": {
+      "additionalProperties": false,
+      "description": "The other half of an interleaved segment.",
+      "properties": {
+        "rows": {
+          "anyOf": [
+            {
+              "description": "Rows per block; the tensors' row count is a multiple of it, e.g. `8`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Rows per block; the tensors' row count is a multiple of it, e.g. `8`."
+        },
+        "with": {
+          "$ref": "#/$defs/TensorSource",
+          "description": "The tensor whose blocks follow this segment's, fixed or selected by a declared rank group; the same shape and dtype as the segment's."
+        }
+      },
+      "required": [
+        "with",
+        "rows"
+      ],
+      "type": "object"
+    },
     "KernelLaunch": {
       "additionalProperties": false,
       "description": "A device kernel launch, e.g. `{\"module\": \"argmax\", \"entry\": \"kern_argmax_partial_bf16\", \"block\": [1024, 1, 1], \"grid\": [1, 64, 1]}`.",
@@ -1340,7 +1371,7 @@
       ],
       "type": "object"
     },
-    "Rows": {
+    "Ranges": {
       "anyOf": [
         {
           "items": {
@@ -1397,7 +1428,7 @@
           "type": "object"
         }
       ],
-      "description": "A row range of a checkpoint tensor: one range, or one per rank of a declared group (a table sharded across the group's devices, each rank loading its slice), e.g. `{\"group\": \"ep\", \"ranges\": [[0, 8], [8, 16]]}`."
+      "description": "A range along one axis of a checkpoint tensor: one range, or one per rank of a declared group (a table sharded across the group's devices, each rank loading its slice), e.g. `{\"group\": \"ep\", \"ranges\": [[0, 8], [8, 16]]}`."
     },
     "Scratch": {
       "additionalProperties": false,
@@ -1423,35 +1454,34 @@
     },
     "Segment": {
       "additionalProperties": false,
-      "description": "One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{\"tensor\": \"fc.weight\", \"cols\": [0, 5120]}`.",
+      "description": "One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{\"tensor\": \"fc.weight\", \"cols\": [0, 5120]}`. With `interleave`, this tensor and another of the same shape, whole, in alternating blocks of rows (this one's block first).",
       "properties": {
         "cols": {
-          "description": "Half-open column range `[from, to)` over the product of the remaining axes; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.",
-          "items": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "description": "Name of a numeric constant declared in constants.",
-                "minLength": 1,
-                "type": "string"
-              }
-            ]
-          },
-          "maxItems": 2,
-          "minItems": 2,
-          "type": [
-            "array",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ranges"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Half-open column range `[from, to)` over the product of the remaining axes, fixed or selected by a declared rank group; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`."
+        },
+        "interleave": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Interleave"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The second tensor of an interleaved pair and the block height: rows `[0, n)` of this tensor, then `[0, n)` of `with`, then `[n, 2n)` of this one, and so on (a kernel that reads two projections pairwise, e.g. gate and up in blocks of 8, binds them without a copy). Takes both tensors whole, e.g. `{\"with\": \"experts.0.w3.weight_packed\", \"rows\": 8}`."
         },
         "rows": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Rows"
+              "$ref": "#/$defs/Ranges"
             },
             {
               "type": "null"

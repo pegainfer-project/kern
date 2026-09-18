@@ -310,7 +310,7 @@ impl Placement {
     }
 }
 
-/// One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{"tensor": "fc.weight", "cols": [0, 5120]}`.
+/// One piece of a weight buffer: a checkpoint tensor, or a rectangle of it, copied whole into the next bytes of the buffer. The tensor is read as a matrix `[rows, cols]` (its first axis by the product of the rest); `rows` / `cols` take a half-open range of it, e.g. `{"tensor": "fc.weight", "cols": [0, 5120]}`. With `interleave`, this tensor and another of the same shape, whole, in alternating blocks of rows (this one's block first).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Segment {
@@ -318,10 +318,23 @@ pub struct Segment {
     pub tensor: TensorSource,
     /// Half-open row range `[from, to)` of the tensor's first axis, fixed or selected by a declared rank group; the whole axis when absent, e.g. `[0, 1024]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rows: Option<Rows>,
-    /// Half-open column range `[from, to)` over the product of the remaining axes; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.
+    pub rows: Option<Ranges>,
+    /// Half-open column range `[from, to)` over the product of the remaining axes, fixed or selected by a declared rank group; every column when absent (a strided copy otherwise), e.g. `[5120, 10240]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cols: Option<[u64; 2]>,
+    pub cols: Option<Ranges>,
+    /// The second tensor of an interleaved pair and the block height: rows `[0, n)` of this tensor, then `[0, n)` of `with`, then `[n, 2n)` of this one, and so on (a kernel that reads two projections pairwise, e.g. gate and up in blocks of 8, binds them without a copy). Takes both tensors whole, e.g. `{"with": "experts.0.w3.weight_packed", "rows": 8}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interleave: Option<Interleave>,
+}
+
+/// The other half of an interleaved segment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Interleave {
+    /// The tensor whose blocks follow this segment's, fixed or selected by a declared rank group; the same shape and dtype as the segment's.
+    pub with: TensorSource,
+    /// Rows per block; the tensors' row count is a multiple of it, e.g. `8`.
+    pub rows: u64,
 }
 
 /// A checkpoint tensor, fixed or selected by a declared rank group.
@@ -333,15 +346,15 @@ pub enum TensorSource {
     Ranked { group: String, tensors: Vec<String> },
 }
 
-/// A row range of a checkpoint tensor: one range, or one per rank of a declared group (a table sharded across the group's devices, each rank loading its slice), e.g. `{"group": "ep", "ranges": [[0, 8], [8, 16]]}`.
+/// A range along one axis of a checkpoint tensor: one range, or one per rank of a declared group (a table sharded across the group's devices, each rank loading its slice), e.g. `{"group": "ep", "ranges": [[0, 8], [8, 16]]}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged, deny_unknown_fields)]
-pub enum Rows {
+pub enum Ranges {
     Range([u64; 2]),
     Ranked { group: String, ranges: Vec<[u64; 2]> },
 }
 
-impl From<[u64; 2]> for Rows {
+impl From<[u64; 2]> for Ranges {
     fn from(range: [u64; 2]) -> Self {
         Self::Range(range)
     }

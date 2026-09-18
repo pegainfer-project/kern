@@ -279,13 +279,17 @@ kern 没有自己的权重格式。每个 `weight` buffer 声明 `bind`：一列
 ```
 
 张量按 `[dim0, 其余维之积]` 看成矩阵，`rows` / `cols` 是 `[from, to)`，缺省
-全取；连续段一次 memcpy，列块一次 2D copy。`tensor` 和 `rows` 都可以按
+全取；连续段一次 memcpy，列块一次 2D copy。`tensor`、`rows`、`cols` 都可以按
 rank 选：`{"group": "ep", "tensors": [...]}` 每个 rank 装不同的张量（EP 的
 专家），`"rows": {"group": "ep", "ranges": [[0, R], [R, 2R], ...]}` 每个
 rank 装同一张量的一片（一张跨组分片的大表，配 `export: true` + `peer`
 buffer 让每个 rank 读到整张；末片可以回退重叠，让各片等长，buffer 的
-shape 只有一个）。表长必须等于组大小；host placement 的权重是 rank 间
-共享的，不能按 rank 选。张量从哪来是 runtime 的 `Tensors` 接口（runtime.md
+shape 只有一个），`cols` 同理（TP 按列切的 down 投影）。表长必须等于组大小；
+host placement 的权重是 rank 间共享的，不能按 rank 选。
+`"interleave": {"with": <tensor>, "rows": n}` 把本段的张量和 `with`（同形状）整张
+交错铺开：本段的前 n 行、`with` 的前 n 行、本段的下 n 行……——kernel 成对读两个
+投影时（MegaMoE 的 gate / up 按 8 行一组）不必先拷一份重排；两张各一次 2D
+copy，落地 stride 是块的两倍。交错段不带 `rows` / `cols`。张量从哪来是 runtime 的 `Tensors` 接口（runtime.md
 「权重来源」）：本地 safetensors shard（只读 header，mmap 后按段拷进显存），或另一个进程
 映射进本 context 的设备内存（按段 device-to-device 拷）；
 张量必须在恰好一份 shard 里，dtype 要等于

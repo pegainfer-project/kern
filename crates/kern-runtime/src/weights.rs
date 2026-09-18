@@ -247,6 +247,8 @@ pub fn dtype_named(name: &str) -> Option<DType> {
 /// One copy: `rows` rows of `width` bytes, `pitch` apart in `src`, landing
 /// contiguously at byte `dst` of the buffer. `pitch == width` is a plain
 /// memcpy. `src` starts at the first byte copied and ends at the last.
+/// `rows` rows of `width` bytes, `pitch` apart in the source, `dst_pitch`
+/// apart in the buffer (`width` for a contiguous landing).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Copy<'a> {
     pub dst: u64,
@@ -254,14 +256,16 @@ pub(crate) struct Copy<'a> {
     pub width: u64,
     pub rows: u64,
     pub pitch: u64,
+    pub dst_pitch: u64,
 }
 
 /// The copies that assemble weight buffer `name` (`bytes` long) from its
 /// segments, looked up by tensor name. Every segment's dtype is the
 /// buffer's, its tensor's bytes are its shape's worth, its ranges lie
 /// inside the tensor read as `[rows, cols]`, and the segments add up to
-/// the buffer exactly. A rank-selected tensor or row range is this rank's
-/// entry of its table.
+/// the buffer exactly. A rank-selected tensor or range is this rank's
+/// entry of its table. An interleaved segment is two copies, each landing
+/// its blocks a stride of two apart.
 pub(crate) fn plan<'a>(
     name: &str,
     b: &Buffer,
@@ -274,31 +278,69 @@ pub(crate) fn plan<'a>(
     let mut dst = 0u64;
     for (i, s) in b.bind.iter().enumerate() {
         let ctx = || format!("weight `{name}` bind[{i}] (`{}`)", s.tensor);
-        let tensor = match &s.tensor {
-            TensorSource::Named(name) => name,
-            TensorSource::Ranked { group, tensors } => select(&ctx, &rank, group, tensors, "tensor")?,
+        let source = |t: &TensorSource| -> Result<Tensor<'a>> {
+            let tensor = match t {
+                TensorSource::Named(name) => name,
+                TensorSource::Ranked { group, tensors } => select(&ctx, &rank, group, tensors, "tensor")?,
+            };
+            let t = lookup(tensor)?;
+            if t.dtype != b.dtype {
+                bail!(WeightArtifact, "{}: checkpoint tensor is {}, buffer declares {}", ctx(), t.dtype, b.dtype);
+            }
+            let (rows, cols) = matrix(&t.shape);
+            if t.data.bytes() != rows * cols * elt {
+                bail!(WeightArtifact, "{}: {} bytes for shape {:?} of {}", ctx(), t.data.bytes(), t.shape, t.dtype);
+            }
+            Ok(t)
         };
-        let t = lookup(tensor)?;
-        if t.dtype != b.dtype {
-            bail!(WeightArtifact, "{}: checkpoint tensor is {}, buffer declares {}", ctx(), t.dtype, b.dtype);
-        }
+        let t = source(&s.tensor)?;
         let (rows, cols) = matrix(&t.shape);
-        if t.data.bytes() != rows * cols * elt {
-            bail!(WeightArtifact, "{}: {} bytes for shape {:?} of {}", ctx(), t.data.bytes(), t.shape, t.dtype);
+        if let Some(il) = &s.interleave {
+            let other = source(&il.with)?;
+            if other.shape != t.shape {
+                bail!(
+                    WeightArtifact,
+                    "{}: interleaves `{}` of shape {:?} with shape {:?}",
+                    ctx(),
+                    il.with,
+                    other.shape,
+                    t.shape
+                );
+            }
+            if il.rows == 0 || rows % il.rows != 0 {
+                bail!(WeightArtifact, "{}: {rows} rows are not blocks of {}", ctx(), il.rows);
+            }
+            let block = il.rows * cols * elt;
+            let n = rows / il.rows;
+            for (k, half) in [t, other].into_iter().enumerate() {
+                let src = half.data.slice(0, block * n).expect("the whole tensor");
+                copies.push(Copy {
+                    dst: dst + k as u64 * block,
+                    src,
+                    width: block,
+                    rows: n,
+                    pitch: block,
+                    dst_pitch: 2 * block,
+                });
+            }
+            dst += 2 * block * n;
+            continue;
         }
-        let row_range = match &s.rows {
-            None => None,
-            Some(Rows::Range(r)) => Some(*r),
-            Some(Rows::Ranked { group, ranges }) => Some(*select(&ctx, &rank, group, ranges, "row range")?),
+        let selected = |r: &Option<Ranges>, what: &str| -> Result<Option<[u64; 2]>> {
+            Ok(match r {
+                None => None,
+                Some(Ranges::Range(r)) => Some(*r),
+                Some(Ranges::Ranked { group, ranges }) => Some(*select(&ctx, &rank, group, ranges, what)?),
+            })
         };
-        let [r0, r1] = range(&ctx, "rows", row_range, rows)?;
-        let [c0, c1] = range(&ctx, "cols", s.cols, cols)?;
+        let [r0, r1] = range(&ctx, "rows", selected(&s.rows, "row range")?, rows)?;
+        let [c0, c1] = range(&ctx, "cols", selected(&s.cols, "column range")?, cols)?;
         let (width, pitch, rows) = ((c1 - c0) * elt, cols * elt, r1 - r0);
         let span = if rows == 0 { 0 } else { pitch * (rows - 1) + width };
         // The ranges were checked against the shape, and the bytes are
         // the shape's worth: the rectangle is inside the tensor.
         let src = t.data.slice(r0 * pitch + c0 * elt, span).expect("rectangle inside the tensor");
-        copies.push(Copy { dst, src, width, rows, pitch });
+        copies.push(Copy { dst, src, width, rows, pitch, dst_pitch: width });
         dst += width * rows;
     }
     if dst != bytes {
@@ -348,7 +390,7 @@ fn range(ctx: &dyn Fn() -> String, axis: &str, r: Option<[u64; 2]>, extent: u64)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kern_manifest::types::{BufferKind, Dim, Segment};
+    use kern_manifest::types::{BufferKind, Dim, Interleave, Segment};
 
     fn weight(dtype: DType, shape: &[u64], bind: Vec<Segment>) -> Buffer {
         Buffer {
@@ -366,7 +408,12 @@ mod tests {
     }
 
     fn seg(tensor: &str, rows: Option<[u64; 2]>, cols: Option<[u64; 2]>) -> Segment {
-        Segment { tensor: tensor.to_string().into(), rows: rows.map(Into::into), cols }
+        Segment {
+            tensor: tensor.to_string().into(),
+            rows: rows.map(Into::into),
+            cols: cols.map(Into::into),
+            interleave: None,
+        }
     }
 
     // One byte pool; every tensor's bytes are its offsets into it, so a
@@ -388,6 +435,7 @@ mod tests {
             "fc" => (100, DType::Bf16, vec![4, 8]),
             "conv" => (200, DType::Bf16, vec![6, 1, 4]),
             "a_f32" => (300, DType::F32, vec![4]),
+            "v" => (316, DType::Bf16, vec![8, 4]),
             "short" => (400, DType::Bf16, vec![8, 4]),
             _ => return Err(Error::WeightArtifact(format!("no `{name}`"))),
         };
@@ -406,27 +454,27 @@ mod tests {
         assert_eq!(
             plan("qk", &b, 80, lookup, |_| None).unwrap(),
             [
-                Copy { dst: 0, src: at(0, 64), width: 8, rows: 8, pitch: 8 },
-                Copy { dst: 64, src: at(64, 16), width: 8, rows: 2, pitch: 8 },
+                Copy { dst: 0, src: at(0, 64), width: 8, rows: 8, pitch: 8, dst_pitch: 8 },
+                Copy { dst: 64, src: at(64, 16), width: 8, rows: 2, pitch: 8, dst_pitch: 8 },
             ]
         );
         // A column block is a strided copy: from its first byte to its last.
         let b = weight(DType::Bf16, &[4, 4], vec![seg("fc", None, Some([4, 8]))]);
         assert_eq!(
             plan("fc.1", &b, 32, lookup, |_| None).unwrap(),
-            [Copy { dst: 0, src: at(108, 56), width: 8, rows: 4, pitch: 16 }]
+            [Copy { dst: 0, src: at(108, 56), width: 8, rows: 4, pitch: 16, dst_pitch: 8 }]
         );
         // A row range skips the leading rows.
         let b = weight(DType::Bf16, &[3, 4], vec![seg("q", Some([5, 8]), None)]);
         assert_eq!(
             plan("q.tail", &b, 24, lookup, |_| None).unwrap(),
-            [Copy { dst: 0, src: at(40, 24), width: 8, rows: 3, pitch: 8 }]
+            [Copy { dst: 0, src: at(40, 24), width: 8, rows: 3, pitch: 8, dst_pitch: 8 }]
         );
         // Trailing axes fold into columns.
         let b = weight(DType::Bf16, &[6, 4], vec![seg("conv", None, None)]);
         assert_eq!(
             plan("conv", &b, 48, lookup, |_| None).unwrap(),
-            [Copy { dst: 0, src: at(200, 48), width: 8, rows: 6, pitch: 8 }]
+            [Copy { dst: 0, src: at(200, 48), width: 8, rows: 6, pitch: 8, dst_pitch: 8 }]
         );
     }
 
@@ -459,13 +507,13 @@ mod tests {
         let rank = |g: &str| (g == "ep").then_some(1);
         assert_eq!(
             plan("e", &b, 16, lookup, rank).unwrap(),
-            [Copy { dst: 0, src: at(64, 16), width: 8, rows: 2, pitch: 8 }]
+            [Copy { dst: 0, src: at(64, 16), width: 8, rows: 2, pitch: 8, dst_pitch: 8 }]
         );
         b.bind[0].tensor = TensorSource::Named("q".into());
-        b.bind[0].rows = Some(Rows::Ranked { group: "ep".into(), ranges: vec![[0, 2], [2, 4]] });
+        b.bind[0].rows = Some(Ranges::Ranked { group: "ep".into(), ranges: vec![[0, 2], [2, 4]] });
         assert_eq!(
             plan("e", &b, 16, lookup, rank).unwrap(),
-            [Copy { dst: 0, src: at(16, 16), width: 8, rows: 2, pitch: 8 }]
+            [Copy { dst: 0, src: at(16, 16), width: 8, rows: 2, pitch: 8, dst_pitch: 8 }]
         );
         let e = plan("e", &b, 16, lookup, |_| None).unwrap_err().to_string();
         assert!(e.contains("no rank for `ep`"), "{e}");
@@ -473,13 +521,41 @@ mod tests {
         assert!(e.contains("rank 2 outside row range table"), "{e}");
         // A sharded table's last slice may overlap the one before it, so
         // every rank's slice is the same size.
-        b.bind[0].rows = Some(Rows::Ranked { group: "ep".into(), ranges: vec![[0, 3], [3, 6], [5, 8]] });
+        b.bind[0].rows = Some(Ranges::Ranked { group: "ep".into(), ranges: vec![[0, 3], [3, 6], [5, 8]] });
         let b = weight(DType::Bf16, &[3, 4], b.bind);
         let slice = |r| plan("shard", &b, 24, lookup, move |_| r).map(|c| c[0].src);
         assert_eq!(
             (slice(Some(0)).unwrap(), slice(Some(1)).unwrap(), slice(Some(2)).unwrap()),
             (at(0, 24), at(24, 24), at(40, 24))
         );
+    }
+
+    #[test]
+    fn columns_select_by_rank_and_interleaves_alternate_blocks() {
+        // Rank 1's right half of every row of fc: a strided rectangle.
+        let mut b = weight(DType::Bf16, &[4, 4], vec![seg("fc", None, None)]);
+        b.bind[0].cols = Some(Ranges::Ranked { group: "tp".into(), ranges: vec![[0, 4], [4, 8]] });
+        let rank = |g: &str| (g == "tp").then_some(1);
+        assert_eq!(
+            plan("half", &b, 32, lookup, rank).unwrap(),
+            [Copy { dst: 0, src: at(108, 56), width: 8, rows: 4, pitch: 16, dst_pitch: 8 }]
+        );
+        // q and v in blocks of 2 rows: two copies, each landing every other block.
+        let mut b = weight(DType::Bf16, &[16, 4], vec![seg("q", None, None)]);
+        b.bind[0].interleave = Some(Interleave { with: "v".to_string().into(), rows: 2 });
+        assert_eq!(
+            plan("qk", &b, 128, lookup, rank).unwrap(),
+            [
+                Copy { dst: 0, src: at(0, 64), width: 16, rows: 4, pitch: 16, dst_pitch: 32 },
+                Copy { dst: 16, src: at(316, 64), width: 16, rows: 4, pitch: 16, dst_pitch: 32 },
+            ]
+        );
+        b.bind[0].interleave = Some(Interleave { with: "v".to_string().into(), rows: 3 });
+        let e = plan("qk", &b, 128, lookup, rank).unwrap_err().to_string();
+        assert!(e.contains("8 rows are not blocks of 3"), "{e}");
+        b.bind[0].interleave = Some(Interleave { with: "k".to_string().into(), rows: 2 });
+        let e = plan("qk", &b, 128, lookup, rank).unwrap_err().to_string();
+        assert!(e.contains("interleaves `k`"), "{e}");
     }
 
     #[test]

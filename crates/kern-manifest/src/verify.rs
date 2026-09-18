@@ -251,11 +251,15 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             if b.kind != BufferKind::Weight || b.export {
                 errs.push(format!("{ctx}: host placement requires a non-exported immutable weight"));
             }
-            if b.bind
-                .iter()
-                .any(|s| matches!(s.tensor, TensorSource::Ranked { .. }) || matches!(s.rows, Some(Rows::Ranked { .. })))
-            {
-                errs.push(format!("{ctx}: shared host weights cannot select tensors or rows by rank"));
+            let ranked_source = |t: &TensorSource| matches!(t, TensorSource::Ranked { .. });
+            let ranked_range = |r: &Option<Ranges>| matches!(r, Some(Ranges::Ranked { .. }));
+            if b.bind.iter().any(|s| {
+                ranked_source(&s.tensor)
+                    || ranked_range(&s.rows)
+                    || ranked_range(&s.cols)
+                    || s.interleave.as_ref().is_some_and(|i| ranked_source(&i.with))
+            }) {
+                errs.push(format!("{ctx}: shared host weights cannot select tensors, rows or columns by rank"));
             }
         }
         // 9c. bind: a weight is its segments, nothing else has any
@@ -266,14 +270,15 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             (BufferKind::Weight, false) => {
                 for (i, s) in b.bind.iter().enumerate() {
                     let sctx = format!("{ctx}: bind[{i}]");
-                    match &s.tensor {
+                    let source = |t: &TensorSource, errs: &mut Vec<String>, used_groups: &mut BTreeSet<String>| match t
+                    {
                         TensorSource::Named(name) => {
                             if name.is_empty() {
                                 errs.push(format!("{sctx}: empty tensor name"));
                             }
                         }
                         TensorSource::Ranked { group, tensors } => {
-                            match group_ctx(group, &mut errs, &mut used_groups, &sctx) {
+                            match group_ctx(group, errs, used_groups, &sctx) {
                                 Some(n) if n as usize == tensors.len() => {}
                                 Some(n) => errs.push(format!(
                                     "{sctx}: group `{group}` needs {n} tensor names, got {}",
@@ -285,23 +290,41 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                                 errs.push(format!("{sctx}: empty tensor name"));
                             }
                         }
+                    };
+                    source(&s.tensor, &mut errs, &mut used_groups);
+                    if let Some(il) = &s.interleave {
+                        source(&il.with, &mut errs, &mut used_groups);
+                        if il.rows == 0 {
+                            errs.push(format!("{sctx}: interleave blocks of 0 rows"));
+                        }
+                        if s.rows.is_some() || s.cols.is_some() {
+                            errs.push(format!("{sctx}: an interleaved segment takes both tensors whole, not a range"));
+                        }
                     }
-                    let rows: Vec<[u64; 2]> = match &s.rows {
-                        None => vec![],
-                        Some(Rows::Range(r)) => vec![*r],
-                        Some(Rows::Ranked { group, ranges }) => {
-                            match group_ctx(group, &mut errs, &mut used_groups, &sctx) {
-                                Some(n) if n as usize == ranges.len() => {}
-                                Some(n) => errs.push(format!(
-                                    "{sctx}: group `{group}` needs {n} row ranges, got {}",
-                                    ranges.len()
-                                )),
-                                None => {}
+                    let axis_ranges = |axis: &str,
+                                       r: &Option<Ranges>,
+                                       errs: &mut Vec<String>,
+                                       used_groups: &mut BTreeSet<String>|
+                     -> Vec<[u64; 2]> {
+                        match r {
+                            None => vec![],
+                            Some(Ranges::Range(r)) => vec![*r],
+                            Some(Ranges::Ranked { group, ranges }) => {
+                                match group_ctx(group, errs, used_groups, &sctx) {
+                                    Some(n) if n as usize == ranges.len() => {}
+                                    Some(n) => errs.push(format!(
+                                        "{sctx}: group `{group}` needs {n} {axis} ranges, got {}",
+                                        ranges.len()
+                                    )),
+                                    None => {}
+                                }
+                                ranges.clone()
                             }
-                            ranges.clone()
                         }
                     };
-                    let ranges = rows.iter().map(|r| ("rows", *r)).chain(s.cols.map(|c| ("cols", c)));
+                    let rows = axis_ranges("row", &s.rows, &mut errs, &mut used_groups);
+                    let cols = axis_ranges("column", &s.cols, &mut errs, &mut used_groups);
+                    let ranges = rows.iter().map(|r| ("rows", *r)).chain(cols.iter().map(|c| ("cols", *c)));
                     for (axis, [from, to]) in ranges {
                         if from >= to {
                             errs.push(format!("{sctx}: {axis} [{from}, {to}) is empty"));

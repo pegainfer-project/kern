@@ -466,12 +466,15 @@ const STAGE_LANES: usize = 16;
 /// same way inside the driver, on the calling thread alone. Returns the
 /// bytes uploaded.
 fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) -> Result<u64> {
+    // A copy landing with a stride goes up row by row, so its pieces end
+    // on row boundaries.
     let pieces: Vec<(usize, u64, u64)> = copies
         .iter()
         .enumerate()
         .flat_map(|(k, (_, c))| {
             let total = c.width * c.rows;
-            (0..total).step_by(STAGE as usize).map(move |lo| (k, lo, (lo + STAGE).min(total)))
+            let step = if c.dst_pitch == c.width { STAGE } else { (STAGE / c.width).max(1) * c.width };
+            (0..total).step_by(step as usize).map(move |lo| (k, lo, (lo + step).min(total)))
         })
         .collect();
     let next = AtomicUsize::new(0);
@@ -493,7 +496,19 @@ fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) ->
                 let (dst, copy) = copies[c];
                 let block = unsafe { std::slice::from_raw_parts_mut(blocks[i].ptr() as *mut u8, STAGE as usize) };
                 gather(copy, lo, hi, block)?;
-                copy_1d(stream.cu_stream(), dst + copy.dst + lo, blocks[i].ptr(), hi - lo)?;
+                if copy.dst_pitch == copy.width {
+                    copy_1d(stream.cu_stream(), dst + copy.dst + lo, blocks[i].ptr(), hi - lo)?;
+                } else {
+                    let at = dst + copy.dst + lo / copy.width * copy.dst_pitch;
+                    let src = (blocks[i].ptr(), copy.width, Space::Host);
+                    copy_2d(
+                        stream.cu_stream(),
+                        (at, copy.dst_pitch, Space::Device),
+                        src,
+                        copy.width,
+                        (hi - lo) / copy.width,
+                    )?;
+                }
                 landed[i] = Some(record(&stream)?);
                 i ^= 1;
             }
@@ -535,12 +550,12 @@ fn gather(c: &weights::Copy, lo: u64, hi: u64, out: &mut [u8]) -> Result<()> {
 /// allocation mapped here): one device-to-device copy, 2D when the rows
 /// are strided.
 fn copy_device(stream: &Arc<CudaStream>, dst: &DeviceBuf, c: &weights::Copy, ptr: u64) -> Result<()> {
-    if c.rows == 1 || c.pitch == c.width {
+    if c.rows == 1 || (c.pitch == c.width && c.dst_pitch == c.width) {
         return copy_1d(stream.cu_stream(), dst.ptr + c.dst, ptr, c.width * c.rows);
     }
     copy_2d(
         stream.cu_stream(),
-        (dst.ptr + c.dst, c.width, Space::Device),
+        (dst.ptr + c.dst, c.dst_pitch, Space::Device),
         (ptr, c.pitch, Space::Device),
         c.width,
         c.rows,
@@ -571,7 +586,14 @@ fn copy_to_host(stream: &Arc<CudaStream>, dst: &mut [u8], copies: &[weights::Cop
 /// One copy of host or file bytes into a host buffer.
 fn copy_rows(dst: &mut [u8], c: &weights::Copy) -> Result<()> {
     let (n, dest) = ((c.width * c.rows) as usize, c.dst as usize);
-    gather(c, 0, n as u64, &mut dst[dest..dest + n])
+    if c.dst_pitch == c.width {
+        return gather(c, 0, n as u64, &mut dst[dest..dest + n]);
+    }
+    let (width, pitch) = (c.width as usize, c.dst_pitch as usize);
+    (0..c.rows as usize).try_for_each(|r| {
+        let at = dest + r * pitch;
+        gather(c, (r * width) as u64, ((r + 1) * width) as u64, &mut dst[at..at + width])
+    })
 }
 
 fn fmt_groups(t: &kern_manifest::types::Topology) -> String {
@@ -680,7 +702,7 @@ mod host_copy_tests {
         let strided = [90, 1, 2, 80, 81, 3, 4, 82, 83, 5, 6, 84];
         for (src, pitch) in [(&contiguous[2..8], 2), (&strided[1..11], 4)] {
             let mut dst = [77; 12];
-            copy(&mut dst, &weights::Copy { dst: 3, src: Blob::Host(src), width: 2, rows: 3, pitch });
+            copy(&mut dst, &weights::Copy { dst: 3, src: Blob::Host(src), width: 2, rows: 3, pitch, dst_pitch: 2 });
             assert_eq!(dst, [77, 77, 77, 1, 2, 3, 4, 5, 6, 77, 77, 77]);
         }
     }
@@ -689,12 +711,24 @@ mod host_copy_tests {
     fn mixed_segments_assemble_in_order() {
         let (a, b) = ([90, 1, 2, 3, 4, 91], [80, 5, 6, 81, 82, 7, 8, 83]);
         let copies = [
-            weights::Copy { dst: 0, src: Blob::Host(&a[1..5]), width: 2, rows: 2, pitch: 2 },
-            weights::Copy { dst: 4, src: Blob::Host(&b[1..7]), width: 2, rows: 2, pitch: 4 },
+            weights::Copy { dst: 0, src: Blob::Host(&a[1..5]), width: 2, rows: 2, pitch: 2, dst_pitch: 2 },
+            weights::Copy { dst: 4, src: Blob::Host(&b[1..7]), width: 2, rows: 2, pitch: 4, dst_pitch: 2 },
         ];
         let mut dst = [0; 8];
         copies.iter().for_each(|c| copy(&mut dst, c));
         assert_eq!(dst, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn interleaved_halves_land_in_alternate_blocks() {
+        let (a, b) = ([1, 2, 3, 4], [5, 6, 7, 8]);
+        let copies = [
+            weights::Copy { dst: 0, src: Blob::Host(&a), width: 2, rows: 2, pitch: 2, dst_pitch: 4 },
+            weights::Copy { dst: 2, src: Blob::Host(&b), width: 2, rows: 2, pitch: 2, dst_pitch: 4 },
+        ];
+        let mut dst = [0; 8];
+        copies.iter().for_each(|c| copy(&mut dst, c));
+        assert_eq!(dst, [1, 2, 5, 6, 3, 4, 7, 8]);
     }
 }
 
@@ -719,7 +753,7 @@ mod tests {
                 out
             };
             let whole: Vec<u8> = (0..rows).flat_map(row).collect();
-            let c = weights::Copy { dst: 0, src, width, rows, pitch };
+            let c = weights::Copy { dst: 0, src, width, rows, pitch, dst_pitch: width };
             for piece in 1..=width * rows {
                 let mut got = Vec::new();
                 for lo in (0..width * rows).step_by(piece as usize) {

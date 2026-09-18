@@ -954,10 +954,10 @@ fn host_placement_is_immutable_and_rank_independent() {
     v["buffers"]["w"]["export"] = serde_json::json!(false);
     v["topology"] = serde_json::json!({"groups": {"ep": 2}});
     v["buffers"]["w"]["bind"][0]["tensor"] = serde_json::json!({"group": "ep", "tensors": ["w0", "w1"]});
-    assert!(check(v.clone()).unwrap_err().to_string().contains("cannot select tensors or rows by rank"));
+    assert!(check(v.clone()).unwrap_err().to_string().contains("cannot select tensors, rows or columns by rank"));
     v["buffers"]["w"]["bind"][0]["tensor"] = serde_json::json!("w0");
     v["buffers"]["w"]["bind"][0]["rows"] = serde_json::json!({"group": "ep", "ranges": [[0, 4], [4, 8]]});
-    assert!(check(v).unwrap_err().to_string().contains("cannot select tensors or rows by rank"));
+    assert!(check(v).unwrap_err().to_string().contains("cannot select tensors, rows or columns by rank"));
     let mut v = base();
     v["buffers"]["x"]["placement"] = serde_json::json!("host");
     assert!(check(v).unwrap_err().to_string().contains("immutable weight"));
