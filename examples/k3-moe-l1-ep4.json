@@ -64,6 +64,14 @@
    ],
    "kind": "workspace"
   },
+  "y": {
+   "dtype": "bf16",
+   "shape": [
+    "tokens",
+    3584
+   ],
+   "kind": "output"
+  },
   "l1_weights": {
    "dtype": "u8",
    "shape": [
@@ -72,19 +80,1292 @@
    "kind": "weight",
    "bind": [
     {
-     "tensor": "l1_weights"
-    }
-   ]
-  },
-  "l1_weights_sf": {
-   "dtype": "i32",
-   "shape": [
-    9633792
-   ],
-   "kind": "weight",
-   "bind": [
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.0.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.56.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.112.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.168.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.56.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.112.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.168.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
     {
-     "tensor": "l1_weights_sf"
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.1.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.57.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.113.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.169.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.1.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.57.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.113.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.169.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.2.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.58.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.114.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.170.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.2.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.58.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.114.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.170.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.3.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.59.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.115.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.171.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.3.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.59.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.115.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.171.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.4.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.60.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.116.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.172.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.4.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.60.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.116.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.172.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.5.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.61.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.117.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.173.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.5.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.61.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.117.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.173.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.6.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.62.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.118.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.174.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.6.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.62.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.118.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.174.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.7.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.63.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.119.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.175.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.7.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.63.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.119.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.175.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.8.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.64.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.120.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.176.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.8.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.64.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.120.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.176.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.9.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.65.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.121.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.177.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.9.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.65.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.121.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.177.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.10.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.66.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.122.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.178.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.10.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.66.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.122.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.178.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.11.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.67.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.123.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.179.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.11.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.67.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.123.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.179.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.12.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.68.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.124.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.180.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.12.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.68.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.124.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.180.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.13.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.69.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.125.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.181.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.13.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.69.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.125.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.181.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.14.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.70.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.126.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.182.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.14.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.70.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.126.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.182.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.15.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.71.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.127.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.183.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.15.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.71.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.127.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.183.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.16.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.72.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.128.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.184.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.16.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.72.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.128.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.184.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.17.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.73.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.129.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.185.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.17.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.73.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.129.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.185.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.18.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.74.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.130.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.186.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.18.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.74.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.130.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.186.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.19.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.75.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.131.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.187.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.19.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.75.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.131.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.187.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.20.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.76.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.132.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.188.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.20.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.76.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.132.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.188.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.21.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.77.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.133.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.189.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.21.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.77.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.133.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.189.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.22.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.78.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.134.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.190.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.22.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.78.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.134.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.190.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.23.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.79.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.135.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.191.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.23.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.79.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.135.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.191.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.24.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.80.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.136.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.192.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.24.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.80.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.136.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.192.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.25.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.81.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.137.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.193.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.25.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.81.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.137.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.193.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.26.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.82.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.138.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.194.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.26.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.82.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.138.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.194.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.27.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.83.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.139.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.195.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.27.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.83.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.139.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.195.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.28.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.84.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.140.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.196.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.28.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.84.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.140.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.196.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.29.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.85.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.141.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.197.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.29.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.85.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.141.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.197.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.30.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.86.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.142.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.198.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.30.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.86.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.142.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.198.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.31.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.87.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.143.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.199.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.31.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.87.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.143.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.199.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.32.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.88.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.144.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.200.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.32.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.88.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.144.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.200.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.33.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.89.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.145.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.201.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.33.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.89.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.145.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.201.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.34.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.90.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.146.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.202.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.34.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.90.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.146.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.202.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.35.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.91.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.147.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.203.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.35.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.91.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.147.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.203.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.36.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.92.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.148.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.204.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.36.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.92.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.148.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.204.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.37.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.93.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.149.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.205.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.37.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.93.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.149.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.205.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.38.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.94.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.150.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.206.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.38.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.94.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.150.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.206.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.39.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.95.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.151.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.207.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.39.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.95.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.151.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.207.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.40.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.96.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.152.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.208.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.40.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.96.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.152.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.208.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.41.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.97.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.153.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.209.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.41.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.97.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.153.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.209.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.42.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.98.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.154.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.210.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.42.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.98.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.154.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.210.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.43.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.99.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.155.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.211.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.43.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.99.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.155.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.211.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.44.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.100.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.156.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.212.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.44.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.100.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.156.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.212.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.45.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.101.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.157.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.213.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.45.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.101.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.157.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.213.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.46.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.102.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.158.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.214.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.46.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.102.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.158.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.214.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.47.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.103.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.159.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.215.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.47.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.103.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.159.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.215.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.48.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.104.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.160.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.216.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.48.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.104.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.160.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.216.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.49.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.105.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.161.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.217.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.49.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.105.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.161.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.217.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.50.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.106.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.162.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.218.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.50.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.106.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.162.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.218.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.51.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.107.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.163.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.219.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.51.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.107.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.163.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.219.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.52.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.108.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.164.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.220.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.52.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.108.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.164.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.220.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.53.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.109.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.165.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.221.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.53.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.109.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.165.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.221.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.54.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.110.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.166.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.222.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.54.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.110.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.166.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.222.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.55.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.111.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.167.w1.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.223.w1.weight_packed"
+      ]
+     },
+     "interleave": {
+      "with": {
+       "group": "ep",
+       "tensors": [
+        "language_model.model.layers.1.block_sparse_moe.experts.55.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.111.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.167.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.223.w3.weight_packed"
+       ]
+      },
+      "rows": 8
+     }
     }
    ]
   },
@@ -96,7 +1377,2497 @@
    "kind": "weight",
    "bind": [
     {
-     "tensor": "l2_weights"
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.0.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.56.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.112.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.168.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.1.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.57.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.113.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.169.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.2.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.58.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.114.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.170.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.3.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.59.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.115.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.171.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.4.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.60.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.116.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.172.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.5.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.61.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.117.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.173.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.6.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.62.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.118.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.174.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.7.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.63.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.119.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.175.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.8.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.64.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.120.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.176.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.9.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.65.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.121.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.177.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.10.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.66.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.122.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.178.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.11.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.67.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.123.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.179.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.12.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.68.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.124.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.180.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.13.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.69.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.125.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.181.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.14.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.70.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.126.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.182.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.15.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.71.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.127.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.183.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.16.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.72.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.128.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.184.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.17.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.73.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.129.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.185.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.18.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.74.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.130.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.186.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.19.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.75.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.131.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.187.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.20.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.76.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.132.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.188.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.21.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.77.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.133.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.189.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.22.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.78.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.134.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.190.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.23.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.79.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.135.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.191.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.24.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.80.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.136.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.192.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.25.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.81.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.137.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.193.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.26.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.82.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.138.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.194.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.27.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.83.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.139.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.195.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.28.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.84.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.140.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.196.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.29.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.85.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.141.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.197.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.30.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.86.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.142.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.198.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.31.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.87.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.143.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.199.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.32.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.88.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.144.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.200.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.33.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.89.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.145.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.201.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.34.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.90.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.146.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.202.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.35.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.91.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.147.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.203.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.36.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.92.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.148.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.204.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.37.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.93.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.149.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.205.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.38.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.94.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.150.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.206.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.39.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.95.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.151.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.207.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.40.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.96.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.152.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.208.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.41.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.97.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.153.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.209.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.42.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.98.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.154.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.210.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.43.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.99.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.155.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.211.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.44.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.100.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.156.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.212.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.45.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.101.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.157.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.213.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.46.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.102.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.158.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.214.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.47.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.103.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.159.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.215.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.48.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.104.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.160.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.216.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.49.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.105.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.161.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.217.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.50.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.106.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.162.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.218.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.51.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.107.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.163.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.219.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.52.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.108.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.164.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.220.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.53.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.109.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.165.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.221.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.54.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.110.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.166.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.222.w2.weight_packed"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.55.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.111.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.167.w2.weight_packed",
+       "language_model.model.layers.1.block_sparse_moe.experts.223.w2.weight_packed"
+      ]
+     }
+    }
+   ]
+  },
+  "l1_weights_sf.raw": {
+   "dtype": "u8",
+   "shape": [
+    56,
+    6144,
+    112
+   ],
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.0.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.56.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.112.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.168.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.0.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.56.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.112.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.168.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.1.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.57.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.113.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.169.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.1.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.57.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.113.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.169.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.2.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.58.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.114.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.170.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.2.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.58.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.114.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.170.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.3.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.59.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.115.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.171.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.3.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.59.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.115.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.171.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.4.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.60.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.116.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.172.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.4.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.60.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.116.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.172.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.5.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.61.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.117.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.173.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.5.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.61.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.117.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.173.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.6.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.62.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.118.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.174.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.6.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.62.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.118.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.174.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.7.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.63.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.119.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.175.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.7.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.63.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.119.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.175.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.8.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.64.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.120.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.176.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.8.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.64.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.120.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.176.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.9.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.65.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.121.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.177.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.9.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.65.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.121.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.177.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.10.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.66.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.122.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.178.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.10.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.66.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.122.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.178.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.11.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.67.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.123.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.179.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.11.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.67.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.123.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.179.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.12.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.68.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.124.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.180.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.12.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.68.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.124.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.180.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.13.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.69.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.125.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.181.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.13.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.69.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.125.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.181.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.14.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.70.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.126.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.182.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.14.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.70.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.126.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.182.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.15.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.71.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.127.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.183.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.15.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.71.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.127.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.183.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.16.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.72.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.128.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.184.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.16.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.72.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.128.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.184.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.17.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.73.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.129.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.185.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.17.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.73.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.129.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.185.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.18.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.74.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.130.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.186.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.18.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.74.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.130.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.186.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.19.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.75.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.131.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.187.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.19.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.75.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.131.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.187.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.20.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.76.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.132.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.188.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.20.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.76.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.132.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.188.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.21.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.77.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.133.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.189.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.21.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.77.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.133.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.189.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.22.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.78.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.134.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.190.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.22.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.78.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.134.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.190.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.23.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.79.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.135.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.191.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.23.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.79.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.135.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.191.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.24.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.80.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.136.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.192.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.24.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.80.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.136.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.192.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.25.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.81.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.137.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.193.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.25.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.81.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.137.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.193.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.26.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.82.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.138.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.194.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.26.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.82.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.138.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.194.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.27.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.83.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.139.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.195.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.27.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.83.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.139.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.195.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.28.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.84.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.140.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.196.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.28.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.84.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.140.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.196.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.29.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.85.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.141.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.197.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.29.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.85.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.141.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.197.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.30.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.86.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.142.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.198.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.30.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.86.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.142.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.198.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.31.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.87.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.143.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.199.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.31.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.87.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.143.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.199.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.32.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.88.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.144.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.200.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.32.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.88.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.144.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.200.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.33.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.89.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.145.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.201.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.33.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.89.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.145.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.201.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.34.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.90.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.146.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.202.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.34.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.90.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.146.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.202.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.35.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.91.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.147.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.203.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.35.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.91.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.147.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.203.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.36.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.92.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.148.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.204.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.36.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.92.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.148.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.204.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.37.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.93.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.149.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.205.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.37.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.93.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.149.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.205.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.38.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.94.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.150.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.206.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.38.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.94.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.150.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.206.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.39.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.95.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.151.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.207.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.39.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.95.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.151.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.207.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.40.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.96.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.152.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.208.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.40.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.96.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.152.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.208.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.41.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.97.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.153.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.209.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.41.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.97.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.153.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.209.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.42.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.98.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.154.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.210.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.42.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.98.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.154.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.210.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.43.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.99.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.155.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.211.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.43.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.99.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.155.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.211.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.44.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.100.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.156.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.212.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.44.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.100.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.156.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.212.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.45.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.101.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.157.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.213.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.45.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.101.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.157.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.213.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.46.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.102.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.158.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.214.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.46.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.102.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.158.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.214.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.47.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.103.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.159.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.215.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.47.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.103.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.159.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.215.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.48.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.104.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.160.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.216.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.48.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.104.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.160.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.216.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.49.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.105.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.161.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.217.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.49.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.105.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.161.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.217.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.50.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.106.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.162.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.218.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.50.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.106.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.162.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.218.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.51.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.107.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.163.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.219.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.51.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.107.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.163.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.219.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.52.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.108.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.164.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.220.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.52.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.108.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.164.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.220.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.53.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.109.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.165.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.221.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.53.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.109.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.165.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.221.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.54.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.110.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.166.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.222.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.54.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.110.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.166.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.222.w3.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.55.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.111.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.167.w1.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.223.w1.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.55.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.111.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.167.w3.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.223.w3.weight_scale"
+      ]
+     }
+    }
+   ]
+  },
+  "l1_weights_sf": {
+   "dtype": "i32",
+   "shape": [
+    9633792
+   ],
+   "kind": "carry"
+  },
+  "l2_weights_sf.raw": {
+   "dtype": "u8",
+   "shape": [
+    56,
+    3584,
+    96
+   ],
+   "kind": "weight",
+   "bind": [
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.0.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.56.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.112.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.168.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.1.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.57.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.113.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.169.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.2.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.58.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.114.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.170.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.3.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.59.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.115.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.171.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.4.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.60.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.116.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.172.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.5.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.61.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.117.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.173.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.6.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.62.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.118.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.174.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.7.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.63.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.119.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.175.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.8.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.64.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.120.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.176.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.9.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.65.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.121.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.177.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.10.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.66.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.122.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.178.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.11.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.67.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.123.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.179.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.12.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.68.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.124.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.180.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.13.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.69.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.125.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.181.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.14.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.70.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.126.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.182.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.15.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.71.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.127.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.183.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.16.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.72.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.128.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.184.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.17.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.73.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.129.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.185.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.18.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.74.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.130.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.186.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.19.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.75.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.131.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.187.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.20.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.76.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.132.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.188.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.21.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.77.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.133.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.189.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.22.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.78.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.134.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.190.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.23.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.79.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.135.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.191.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.24.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.80.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.136.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.192.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.25.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.81.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.137.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.193.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.26.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.82.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.138.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.194.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.27.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.83.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.139.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.195.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.28.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.84.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.140.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.196.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.29.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.85.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.141.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.197.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.30.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.86.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.142.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.198.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.31.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.87.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.143.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.199.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.32.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.88.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.144.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.200.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.33.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.89.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.145.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.201.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.34.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.90.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.146.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.202.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.35.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.91.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.147.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.203.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.36.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.92.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.148.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.204.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.37.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.93.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.149.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.205.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.38.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.94.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.150.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.206.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.39.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.95.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.151.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.207.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.40.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.96.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.152.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.208.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.41.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.97.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.153.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.209.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.42.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.98.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.154.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.210.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.43.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.99.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.155.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.211.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.44.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.100.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.156.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.212.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.45.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.101.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.157.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.213.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.46.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.102.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.158.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.214.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.47.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.103.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.159.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.215.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.48.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.104.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.160.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.216.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.49.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.105.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.161.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.217.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.50.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.106.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.162.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.218.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.51.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.107.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.163.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.219.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.52.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.108.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.164.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.220.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.53.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.109.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.165.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.221.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.54.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.110.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.166.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.222.w2.weight_scale"
+      ]
+     }
+    },
+    {
+     "tensor": {
+      "group": "ep",
+      "tensors": [
+       "language_model.model.layers.1.block_sparse_moe.experts.55.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.111.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.167.w2.weight_scale",
+       "language_model.model.layers.1.block_sparse_moe.experts.223.w2.weight_scale"
+      ]
+     }
     }
    ]
   },
@@ -105,30 +3876,21 @@
    "shape": [
     4816896
    ],
-   "kind": "weight",
-   "bind": [
-    {
-     "tensor": "l2_weights_sf"
-    }
-   ]
-  },
-  "y": {
-   "dtype": "bf16",
-   "shape": [
-    "tokens",
-    3584
-   ],
-   "kind": "output"
+   "kind": "carry"
   }
  },
  "modules": {
   "k3_mega_moe": {
    "source": "k3_mega_moe.cubin",
-   "sha256": "00c8b01261f1a6bdbe31240618a24a92423a748d3783939354ce1bce231b2bf5"
+   "sha256": "5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7"
   },
   "k3_mega_stage": {
    "source": "k3_mega_stage.cubin",
-   "sha256": "0661b04545447a127fe99376380d44383599e0bd400ad0099a31ff5ef05b5ea8"
+   "sha256": "36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8"
+  },
+  "k3_weight_prep": {
+   "source": "k3_weight_prep.cubin",
+   "sha256": "0b9645046fbbf817b8c2e1c5185cc38b37f761136d1346d71bddcf2c6893a5ca"
   }
  },
  "ops": {
@@ -797,6 +4559,61 @@
      }
     ]
    }
+  },
+  "k3_mega_sf_pack": {
+   "params": [
+    "in buffer<u8>",
+    "out buffer<i32>",
+    "i32",
+    "i32",
+    "i32"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "k3_weight_prep",
+      "entry": "kern_k3_mega_sf_pack",
+      "params": [
+       "in buffer<u8>",
+       "out buffer<i32>",
+       "i32",
+       "i32",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       256,
+       1,
+       1
+      ],
+      "grid": [
+       37632,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "i32": 56
+       },
+       {
+        "param": 2
+       },
+       {
+        "param": 3
+       },
+       {
+        "param": 4
+       }
+      ]
+     }
+    ]
+   }
   }
  },
  "programs": {
@@ -896,6 +4713,53 @@
       },
       {
        "buf": "l2_weights_sf"
+      }
+     ]
+    }
+   ]
+  },
+  "load": {
+   "once": true,
+   "calls": [
+    {
+     "label": "load.k3_mega_sf_pack.0",
+     "op": "k3_mega_sf_pack",
+     "args": [
+      {
+       "buf": "l1_weights_sf.raw"
+      },
+      {
+       "buf": "l1_weights_sf"
+      },
+      {
+       "i32": 6144
+      },
+      {
+       "i32": 112
+      },
+      {
+       "i32": 1
+      }
+     ]
+    },
+    {
+     "label": "load.k3_mega_sf_pack.1",
+     "op": "k3_mega_sf_pack",
+     "args": [
+      {
+       "buf": "l2_weights_sf.raw"
+      },
+      {
+       "buf": "l2_weights_sf"
+      },
+      {
+       "i32": 3584
+      },
+      {
+       "i32": 96
+      },
+      {
+       "i32": 0
       }
      ]
     }

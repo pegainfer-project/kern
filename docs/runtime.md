@@ -181,8 +181,9 @@ program（`tools/kernels-src/k3_mega_stage.cu` 的 quant_x / write_routing
 往 slab 里写，然后 DeepGEMM MegaMoE 一个 launch：dispatch → L1 → situ →
 L2 → combine），slab 是一个 `export` 的 carry buffer，peer 数组由 kernel
 在设备上读（`tools/k3-mega/`：fork 只改签名，`SymBuffer` 的偏移表从
-`__grid_constant__` 换成 `const int64_t*`）。权重与测试向量由
-`tools/export_k3_moe.py` 导出（含 host 参考），manifest 由
+`__grid_constant__` 换成 `const int64_t*`）。权重直接 bind HF
+checkpoint（专家按 rank 选张量、gate/up 用 `interleave` 段、scale 由 `load`
+program 打包），测试向量与 host 参考由 `tools/k3_moe_reference.py` 生成，manifest 由
 `tools/gen_k3_moe.py` 生成（几何与 slab 偏移来自 `k3_mega_layout_dump`）。
 tray04 4×GB300 实测（2026-09-02）：EP4 每 rank 64 token **227 µs/层**
 （captured），四个 rank 的输出与 EP1（256 token 单卡，733 µs/层）对应行

@@ -44,8 +44,8 @@ ops that only work on their owner's rows — the attention with its paged /
 per-sequence state, the expert dispatch — run on rows 0..tokens; their
 outputs are all-gathered (tools/kernels-src/peer_collective.cu) and the
 rest runs on `rows`. The KDA layers are head-sharded: every rank holds
-HEADS / R heads of every row (weights from tools/shard_k3_tp.py, kernels
-built for that width, the state line that many heads long), runs them on
+HEADS / R heads of every row (its slice of every per-head tensor bound by
+rank, kernels built for that width, the state line that many heads long), runs them on
 all `rows`, and the o_proj partial is all-reduced. The dense FFN and the
 shared expert are column-sharded the same way (gate / up rows, down
 columns, the down partial all-reduced). Replicated on every rank: the
@@ -72,6 +72,7 @@ import flash_kda_abi
 import gen_k3_moe
 import handwritten
 import kern_manifest
+from once import Once, buf, seg
 
 H = 7168
 V = 163840
@@ -116,6 +117,7 @@ MLA_MAIN_SMEM = 232448
 MLA_REDUCE_SMEM = 1024    # 256-split reducer scratch
 
 T = "tokens"
+HF = "language_model."
 R = "rows"
 SP = "span"
 TP_GRID = 256
@@ -279,7 +281,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     mp = gen_k3_moe.mega_pieces(ranks, own_max)
     # This rank's KDA heads: whole, or the tray group's shard (heads, the
     # per-head weights and the state line all HEADS / tp wide; the kernels
-    # are built for that width, tools/shard_k3_tp.py cuts the weights).
+    # are built for that width, the binds cut the checkpoint's tensors).
     hl = HEADS // tp
     inner_l, fused_l = hl * HEAD_DIM, 4 * hl * HEAD_DIM
     line_l = hl * HEAD_DIM * HEAD_DIM * 4 + 3 * (3 * inner_l * 2)
@@ -578,8 +580,31 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         "kda": {"bytes_per_seq": n_kda * line_l},
     }
 
-    def weight(name, shape, dtype="bf16"):
-        buffers[name] = {"dtype": dtype, "shape": list(shape), "kind": "weight", "bind": [{"tensor": name}]}
+    def weight(name, shape, bind, dtype="bf16"):
+        buffers[name] = {"dtype": dtype, "shape": list(shape), "kind": "weight", "bind": bind}
+
+    def carry(name, shape, dtype="bf16"):
+        buffers[name] = {"dtype": dtype, "shape": list(shape), "kind": "carry"}
+
+    # This rank's `per`-wide slice of a tp-split axis, or all of it.
+    def shard(per):
+        return {"group": "tp", "ranges": [[r * per, (r + 1) * per] for r in range(tp)]} if tp > 1 else None
+
+    i32 = lambda v: {"i32": v}
+    i64 = lambda v: {"i64": v}
+    programs = {}
+    once = Once({"buffers": buffers, "ops": ops, "programs": programs})
+
+    def scoring(name, tensor):
+        """The folded attention-residual scoring vector f32(norm) * f32(proj)."""
+        weight(name + ".norm", [H], [seg(tensor + "norm.weight")])
+        weight(name + ".proj", [H], [seg(tensor + "proj.weight")])
+        carry(name, [H], "f32")
+        once.call("k3_scoring", [buf(name + ".norm"), buf(name + ".proj"), buf(name), i32(H)], H)
+
+    def gate_up(name, gate, up, per):
+        """[gate; up], this rank's rows of each."""
+        weight(name, [2 * per, H], [seg(gate, rows=shard(per)), seg(up, rows=shard(per))])
 
     b = lambda name, off=0: {"buf": name, "offset": off} if off else {"buf": name}
 
@@ -589,10 +614,10 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     # The rows of the ops that split by rows (see `own_max`).
     OV = own_max if split else T
 
-    weight("embed", [V, H])
-    weight("gamma_final", [H])
-    weight("sw_out", [H], "f32")
-    weight("w_lm", [V, H])
+    weight("embed", [V, H], [seg(HF + "model.embed_tokens.weight")])
+    weight("gamma_final", [H], [seg(HF + "model.norm.weight")])
+    scoring("sw_out", HF + "model.output_attn_res_")
+    weight("w_lm", [V, H], [seg(HF + "lm_head.weight")])
     for n in ["hidden", "prefix2", "normed"]:
         work(n, H, var=R)
     buffers["blocks"] = {"dtype": "bf16", "shape": [R, NB_MAX, H], "kind": "workspace"}
@@ -664,8 +689,6 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
 
     # ---- program
     prog = []
-    i32 = lambda v: {"i32": v}
-    i64 = lambda v: {"i64": v}
     B = {"var": T}
     RB = {"var": R}
 
@@ -839,42 +862,6 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                 shared = reduced(L + "reduce_mlp", b("shared_partial2"), b("mlp_all")) if tp > 1 else b("shared_partial2")
                 step(L + "hidden", "land_add2", b("routed_partial"), shared, b("prefix2"), b("hidden"), i32(1), RB)
 
-            # weights
-            weight(f"layers.{i}.gamma_in", [H])
-            weight(f"layers.{i}.gamma_post", [H])
-            if nb_in > 0:
-                weight(f"layers.{i}.sw_attn", [H], "f32")
-            weight(f"layers.{i}.sw_mlp", [H], "f32")
-            if is_mla(i):
-                weight(f"layers.{i}.wfu", [MLA_FUSED, H])
-                weight(f"layers.{i}.gamma_q_a", [Q_LORA])
-                weight(f"layers.{i}.gamma_kv_a", [KV_LORA])
-                weight(f"layers.{i}.w_q_b", [Q_B, Q_LORA])
-                weight(f"layers.{i}.w_kv_b", [HEADS * 256, KV_LORA])
-            else:
-                weight(f"layers.{i}.wbig", [fused_l, H])
-                weight(f"layers.{i}.wsm", [WSM, H])
-                weight(f"layers.{i}.w_f_b", [inner_l, HEAD_DIM])
-                weight(f"layers.{i}.cw", [3, 4, inner_l], "f32")
-                weight(f"layers.{i}.dt_bias", [inner_l], "f32")
-                weight(f"layers.{i}.a_log", [hl], "f32")
-                weight(f"layers.{i}.gamma_o", [HEAD_DIM], "f32")
-            weight(f"layers.{i}.w_o", [H, INNER if is_mla(i) else inner_l])
-            if i == 0:
-                weight(f"layers.{i}.wgu", [2 * dn_l, H])
-                weight(f"layers.{i}.w_dn", [H, dn_l])
-            else:
-                weight(f"layers.{i}.w_router", [EXPERTS, H])
-                weight(f"layers.{i}.bias", [EXPERTS], "f32")
-                weight(f"layers.{i}.rs", [1])
-                weight(f"layers.{i}.w_lat_down", [LATENT, H])
-                weight(f"layers.{i}.w_lat_up", [H, LATENT])
-                weight(f"layers.{i}.gamma_lat", [LATENT])
-                weight(f"layers.{i}.wsh", [2 * sh_l, H])
-                weight(f"layers.{i}.sh_down", [H, sh_l])
-                for n, d in mp["weights"].items():
-                    buffers[f"layers.{i}.{n}"] = {**d, "bind": [{"tensor": f"layers.{i}.{n}"}]}
-
         assert blocks == blocks_total
         step("out.res", "attnres_rms", b("hidden"), b("blocks"), b("sw_out"), b("gamma_final"), b("normed"),
              i32(blocks_total), i32(0), RB)
@@ -887,10 +874,59 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             step("out.argmax", "argmax_f32", b("logits"), b("next_token"), i32(V))
         return prog
 
+    for i in range(layers):
+        q = f"{HF}model.layers.{i}."
+        a, n = q + "self_attn.", f"layers.{i}."
+        weight(n + "gamma_in", [H], [seg(q + "input_layernorm.weight")])
+        weight(n + "gamma_post", [H], [seg(q + "post_attention_layernorm.weight")])
+        if i > 0:
+            scoring(n + "sw_attn", q + "self_attention_res_")
+        scoring(n + "sw_mlp", q + "mlp_res_")
+        if is_mla(i):
+            weight(n + "wfu", [MLA_FUSED, H],
+                   [seg(a + "q_a_proj.weight"), seg(a + "kv_a_proj_with_mqa.weight"), seg(a + "g_proj.weight")])
+            weight(n + "gamma_q_a", [Q_LORA], [seg(a + "q_a_layernorm.weight")])
+            weight(n + "gamma_kv_a", [KV_LORA], [seg(a + "kv_a_layernorm.weight")])
+            weight(n + "w_q_b", [Q_B, Q_LORA], [seg(a + "q_b_proj.weight")])
+            weight(n + "w_kv_b", [HEADS * 256, KV_LORA], [seg(a + "kv_b_proj.weight")])
+            weight(n + "w_o", [H, INNER], [seg(a + "o_proj.weight")])
+        else:
+            # This rank's heads of every per-head axis (docs/multi-gpu.md E5).
+            weight(n + "wbig", [fused_l, H], [seg(a + f"{x}_proj.weight", rows=shard(inner_l)) for x in "qkvg"])
+            weight(n + "wsm.b", [hl, H], [seg(a + "b_proj.weight", rows=shard(hl))])
+            weight(n + "wsm.f_a", [HEAD_DIM, H], [seg(a + "f_a_proj.weight")])
+            carry(n + "wsm", [WSM, H])
+            once.call("k3_wsm", [buf(n + "wsm.b"), buf(n + "wsm.f_a"), buf(n + "wsm"), i32(hl), i32(H)], WSM * H)
+            weight(n + "w_f_b", [inner_l, HEAD_DIM], [seg(a + "f_b_proj.weight", rows=shard(inner_l))])
+            for x in "qkv":
+                weight(n + f"cw.{x}", [inner_l, 4], [seg(a + f"{x}_conv1d.weight", rows=shard(inner_l))], "f32")
+            carry(n + "cw", [3, 4, inner_l], "f32")
+            once.call("k3_conv_taps", [buf(n + "cw.q"), buf(n + "cw.k"), buf(n + "cw.v"), buf(n + "cw"), i32(inner_l)],
+                      inner_l)
+            weight(n + "dt_bias", [inner_l], [seg(a + "dt_bias", cols=shard(inner_l))], "f32")
+            weight(n + "a_log", [hl], [seg(a + "A_log", cols=shard(hl) or [0, HEADS])], "f32")
+            weight(n + "gamma_o", [HEAD_DIM], [seg(a + "o_norm.weight")], "f32")
+            weight(n + "w_o", [H, inner_l], [seg(a + "o_proj.weight", cols=shard(inner_l))])
+        if i == 0:
+            d = q + "mlp."
+            gate_up(n + "wgu", d + "gate_proj.weight", d + "up_proj.weight", dn_l)
+            weight(n + "w_dn", [H, dn_l], [seg(d + "down_proj.weight", cols=shard(dn_l))])
+        else:
+            e = q + "block_sparse_moe."
+            weight(n + "w_router", [EXPERTS, H], [seg(e + "gate.weight")])
+            weight(n + "bias", [EXPERTS], [seg(e + "gate.e_score_correction_bias")], "f32")
+            carry(n + "rs", [1])
+            once.call("fill_bf16", [buf(n + "rs"), i32(1), {"f32": 1.0}], 1)
+            weight(n + "w_lat_down", [LATENT, H], [seg(e + "routed_expert_down_proj.weight")])
+            weight(n + "w_lat_up", [H, LATENT], [seg(e + "routed_expert_up_proj.weight")])
+            weight(n + "gamma_lat", [LATENT], [seg(e + "routed_expert_norm.weight")])
+            gate_up(n + "wsh", e + "shared_experts.gate_proj.weight", e + "shared_experts.up_proj.weight", sh_l)
+            weight(n + "sh_down", [H, sh_l], [seg(e + "shared_experts.down_proj.weight", cols=shard(sh_l))])
+            mp["weights"](once, buffers, i, n)
+
     groups = {"ep": ranks, **({"tp": tp} if tp > 1 else {})}
     # A decode step over the batch; with a span, the same step in which
     # rows [span_at, span_at + span) are one sequence's prompt chunk.
-    programs = {}
     if decode:
         programs["decode"] = kern_manifest.program(emit(False), groups=seqs_max, rows=1, graph=True)
     if span_max and decode:
@@ -915,6 +951,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         "ops": ops,
         "programs": programs,
     }
+    once.finish()
     return kern_manifest.normalize(m)
 
 

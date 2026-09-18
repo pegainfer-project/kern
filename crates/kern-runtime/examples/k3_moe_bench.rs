@@ -6,7 +6,7 @@
 //! FLOPs, TFLOP/s, TB/s — per rank, so the busiest rank (the one a lockstep
 //! step waits for) is visible.
 //!
-//!   k3_moe_bench --weights /data/<user>/kern-k3/moe-l1 --ranks 4 [--gpus 0,1,2,3]
+//!   k3_moe_bench --weights <HF checkpoint dir> --ranks 4 [--gpus 0,1,2,3]
 //!       [--tokens 1,8,32,64,128,256,512,1024] [--routing uniform,narrow:16,file:<path>]
 //!       [--iters 20] [--cubins target/cubins] [--manifest examples/k3-moe-l1-ep<R>.json]
 //!       [--y-out <dir>]   (writes each case's y per rank, `y-<case>-r<rank>.bin`, to diff builds)
@@ -156,7 +156,7 @@ fn run_rank(
     gpu: usize,
     rank: usize,
     ranks: usize,
-    weights: &[u8],
+    weights: &Path,
     cases: &[Case],
     iters: usize,
     y_out: Option<&Path>,
@@ -166,8 +166,14 @@ fn run_rank(
     let topo = Topology::one("ep", rank as u64, ranks as u64);
     let mut rt =
         Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(&topo))?;
-    rt.load_weights(&kern_runtime::Safetensors::parse(&[weights])?)?;
+    rt.load_weights(&kern_runtime::Safetensors::open(&[weights])?)?;
     rendezvous(&mut rt)?;
+    let once: BTreeMap<String, u64> = [("tokens".to_string(), 1)].into();
+    for (name, p) in &manifest.programs {
+        if p.once {
+            rt.run(name, &once)?;
+        }
+    }
     let mut out = Vec::new();
     for (i, c) in cases.iter().enumerate() {
         let t = c.tokens;
@@ -196,7 +202,7 @@ fn run_rank(
 }
 
 fn main() {
-    let mut weights = PathBuf::from("weights/k3-moe-l1");
+    let mut weights = PathBuf::from("weights/kimi-k3-pruned-75pct");
     let mut cubins = PathBuf::from("target/cubins");
     let mut gpus: Vec<usize> = vec![0, 1, 2, 3];
     let mut ranks = 4usize;
@@ -252,9 +258,6 @@ fn main() {
             y_out.clone(),
         );
         threads.push(std::thread::spawn(move || {
-            let file =
-                if ranks == 1 { "ep1.safetensors".to_string() } else { format!("ep{ranks}-r{rank}.safetensors") };
-            let w = std::fs::read(weights.join(&file)).unwrap_or_else(|e| panic!("{file}: {e}"));
             let rendezvous = |rt: &mut Runtime| -> kern_runtime::Result<()> {
                 let mine = rt.export_handles()?;
                 posted.lock().unwrap()[rank] = Some(mine);
@@ -271,7 +274,7 @@ fn main() {
                 gpu,
                 rank,
                 ranks,
-                &w,
+                &weights,
                 &cases,
                 iters,
                 y_out.as_deref(),

@@ -2,11 +2,12 @@
 //! checked against the same layer at EP1 and against a host reference.
 //!
 //!   cargo run --release -p kern-runtime --example k3_moe_ep -- \
-//!       --weights weights/k3-moe-l1 [--gpus 0,1,2,3] [--iters 20] [--cubins target/cubins]
+//!       --weights <HF checkpoint dir> --inputs weights/k3-moe-l1/inputs.safetensors \
+//!       [--gpus 0,1,2,3] [--iters 20] [--cubins target/cubins]
 //!
-//! `--weights` holds what tools/export_k3_moe.py wrote: ep1.safetensors,
-//! ep4-r<i>.safetensors and inputs.safetensors (x, topk_idx, topk_weight,
-//! y_ref). The EP1 world runs all ranks' tokens on the first GPU; the EP4
+//! The experts bind straight from the checkpoint's shards; `--inputs` is
+//! what tools/k3_moe_reference.py wrote (x, topk_idx, topk_weight, y_ref).
+//! The EP1 world runs all ranks' tokens on the first GPU; the EP4
 //! world runs each rank's slice on its own GPU. Rank r's output must equal
 //! rows [rT, (r+1)T) of the EP1 output bit for bit, and the EP1 output must
 //! sit within tolerance of y_ref. Prints the captured per-layer time.
@@ -71,7 +72,7 @@ fn run_world(
     kernels: &Path,
     gpu: usize,
     topo: &Topology,
-    weights: &[u8],
+    weights: &Path,
     inp: &Inputs,
     row0: usize,
     rows: usize,
@@ -81,9 +82,14 @@ fn run_world(
 ) -> kern_runtime::Result<(Vec<u8>, f64)> {
     let mut rt =
         Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(topo))?;
-    rt.load_weights(&kern_runtime::Safetensors::parse(&[weights])?)?;
+    rt.load_weights(&kern_runtime::Safetensors::open(&[weights])?)?;
     rendezvous(&mut rt)?;
     let vars: BTreeMap<String, u64> = [("tokens".to_string(), rows as u64)].into();
+    for (name, p) in &manifest.programs {
+        if p.once {
+            rt.run(name, &vars)?;
+        }
+    }
     rt.write_input_at("x", &inp.x[row0 * HIDDEN * 2..(row0 + rows) * HIDDEN * 2], &vars)?;
     rt.write_input_at("topk_idx", &inp.topk_idx[row0 * TOPK * 4..(row0 + rows) * TOPK * 4], &vars)?;
     rt.write_input_at("topk_weight", &inp.topk_weight[row0 * TOPK * 4..(row0 + rows) * TOPK * 4], &vars)?;
@@ -102,7 +108,8 @@ fn run_world(
 }
 
 fn main() {
-    let mut weights = PathBuf::from("weights/k3-moe-l1");
+    let mut weights = PathBuf::from("weights/kimi-k3-pruned-75pct");
+    let mut inputs = PathBuf::from("weights/k3-moe-l1/inputs.safetensors");
     let mut cubins = PathBuf::from("target/cubins");
     let mut gpus: Vec<usize> = vec![0, 1, 2, 3];
     let mut iters = 20usize;
@@ -111,13 +118,14 @@ fn main() {
         let mut v = || args.next().expect("value");
         match a.as_str() {
             "--weights" => weights = PathBuf::from(v()),
+            "--inputs" => inputs = PathBuf::from(v()),
             "--cubins" => cubins = PathBuf::from(v()),
             "--gpus" => gpus = v().split(',').map(|s| s.parse().unwrap()).collect(),
             "--iters" => iters = v().parse().unwrap(),
             _ => panic!("unknown arg {a}"),
         }
     }
-    let inp = read_inputs(&weights.join("inputs.safetensors"));
+    let inp = read_inputs(&inputs);
     let (n, t) = (inp.ranks, inp.tokens_per_rank);
     assert_eq!(gpus.len(), n, "--gpus must name one GPU per rank ({n})");
     let kernels = std::env::temp_dir().join(format!("kern-k3-moe-{}", std::process::id()));
@@ -131,7 +139,6 @@ fn main() {
     let inp = Arc::new(inp);
 
     // ---- EP1 oracle: all n*t tokens on the first GPU.
-    let w1 = std::fs::read(weights.join("ep1.safetensors")).expect("ep1.safetensors");
     let self_import = |rt: &mut Runtime| -> kern_runtime::Result<()> {
         let mine = rt.export_handles()?;
         rt.import_peers("ep", &[mine])
@@ -141,7 +148,7 @@ fn main() {
         &kernels,
         gpus[0],
         &Topology::one("ep", 0, 1),
-        &w1,
+        &weights,
         &inp,
         0,
         n * t,
@@ -151,7 +158,6 @@ fn main() {
     )
     .unwrap_or_else(|e| panic!("EP1: {e}"));
     println!("EP1 on gpu {}: {} tokens, {ms1:.1} us/layer (captured)", gpus[0], n * t);
-    drop(w1);
 
     // Reference check on the EP1 output.
     let y1f = bf16_to_f32(&y1);
@@ -190,7 +196,6 @@ fn main() {
             weights.clone(),
         );
         threads.push(std::thread::spawn(move || {
-            let w = std::fs::read(weights.join(format!("ep{n}-r{rank}.safetensors"))).expect("rank shard");
             let rendezvous = |rt: &mut Runtime| -> kern_runtime::Result<()> {
                 let mine = rt.export_handles()?;
                 posted.lock().unwrap()[rank] = Some(mine);
@@ -206,7 +211,7 @@ fn main() {
                 &kernels,
                 gpu,
                 &Topology::one("ep", rank as u64, n as u64),
-                &w,
+                &weights,
                 &inp,
                 rank * t,
                 t,

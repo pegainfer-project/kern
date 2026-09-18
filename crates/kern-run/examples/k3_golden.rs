@@ -2,7 +2,7 @@
 //! `decode` program, one sequence per rank, and compare every step's argmax.
 //!
 //!   cargo run --release -p kern-run --example k3_golden -- \
-//!       --manifest examples/k3-4l-ep4.json --weights /data/kern-k3/4l \
+//!       --manifest examples/k3-4l-ep4.json --weights <HF checkpoint dir> \
 //!       --fixture <pegainfer>/pegainfer-k3/tests/fixtures/k3_4l_greedy.json \
 //!       --gpus 0,1,2,3 [--graph] [--iters 50] [--margin-abs 0.125]
 //!       [--world 8 --rank-base 4 --rendezvous tray04:7400] [--seqs 2 [--mixed --seed 1]]
@@ -127,22 +127,6 @@ fn stage_cubins(cubins: &Path, kernels: &Path) {
             std::fs::write(kernels.join(format!("{stem}-{}.cubin", &sha[..12])), &bytes).unwrap();
         }
     }
-}
-
-/// The weight blobs one rank needs: the shared dense files plus its expert
-/// shard, all memory-mapped.
-/// The rank's weight files: the bookends, the dense layers (a `--tp` manifest
-/// loads tools/shard_k3_tp.py's `dense-tp{R}/r{me}` slice), its experts.
-fn weight_files(weights: &Path, layers: usize, ranks: usize, rank: usize, tp: usize, me: usize) -> Vec<PathBuf> {
-    let mut files = vec![weights.join("dense/bookends.safetensors")];
-    let dense = if tp > 1 { format!("dense-tp{tp}/r{me}") } else { "dense".to_string() };
-    for i in 0..layers {
-        files.push(weights.join(format!("{dense}/l{i}.safetensors")));
-    }
-    for i in 1..layers {
-        files.push(weights.join(format!("experts/ep{ranks}-r{rank}-l{i}.safetensors")));
-    }
-    files
 }
 
 struct Outcome {
@@ -599,7 +583,7 @@ fn run_rank(
     kernels: &Path,
     gpu: usize,
     topo: &Topology,
-    files: &[PathBuf],
+    weights: &Path,
     golden: &Golden,
     graph: bool,
     iters: usize,
@@ -634,15 +618,9 @@ fn run_rank(
     let rows = ((seqs.max(1) + 2 * fork.is_some() as usize) * tp) as u64;
     let capacity = kern_runtime::Capacity { tokens: Some(per_row as u64 * rows), seqs: rows };
     let mut rt = Runtime::load(&manifest, kernels, gpu, Some(capacity), Some(topo))?;
-    let maps: Vec<memmap2::Mmap> = files
-        .iter()
-        .map(|f| {
-            let file = std::fs::File::open(f).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
-            Ok(unsafe { memmap2::Mmap::map(&file)? })
-        })
-        .collect::<anyhow::Result<_>>()?;
-    let blobs: Vec<&[u8]> = maps.iter().map(|m| &m[..]).collect();
-    rt.load_weights(&kern_runtime::Safetensors::parse(&blobs)?)?;
+    // Every shard of the checkpoint: the manifest's binds pick this rank's
+    // rows, columns and experts out of them.
+    rt.load_weights(&kern_runtime::Safetensors::open(&[weights])?)?;
     rendezvous(&mut rt)?;
     // A tray manifest's one-time setup after the peers are mapped (the
     // allreduce's Lamport stages are poisoned, not zeroed).
@@ -819,7 +797,7 @@ fn run_rank(
 
 fn main() {
     let mut manifest = PathBuf::from("examples/k3-4l-ep1.json");
-    let mut weights = PathBuf::from("/data/kern-k3/4l");
+    let mut weights = PathBuf::from("weights/kimi-k3-pruned-75pct");
     let mut fixture = PathBuf::from("tests/fixtures/k3_4l_greedy.json");
     let mut cubins = PathBuf::from("target/cubins");
     let mut gpus: Vec<usize> = vec![0];
@@ -922,7 +900,6 @@ fn main() {
             rendezvous_addr.clone(),
         );
         threads.push(std::thread::spawn(move || {
-            let files = weight_files(&weights, golden.num_layers, world, rank, tp, local % tp);
             let rendezvous = |rt: &mut Runtime| -> kern_runtime::Result<()> {
                 let mine = rt.export_handles()?;
                 posted.lock().unwrap()[local] = Some(mine);
@@ -963,7 +940,7 @@ fn main() {
                 &kernels,
                 gpu,
                 &topo,
-                &files,
+                &weights,
                 &golden,
                 graph,
                 iters,
