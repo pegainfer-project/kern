@@ -79,8 +79,13 @@
 #define KV_LORA   512
 #define ROPE      64
 #define KV_A      576
+// -DINNER=<heads * 128> -DMLA_FUSED=<2112 + INNER>: the gate columns of this rank's heads (a tray form).
+#ifndef INNER
 #define INNER     12288
+#endif
+#ifndef MLA_FUSED
 #define MLA_FUSED 14400
+#endif
 #define HEADC     (Q_LORA + KV_LORA + ROPE)   // 2112 head columns
 #define EPSV      1e-5f
 

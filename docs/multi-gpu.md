@@ -270,28 +270,20 @@ prefill chunk 的 collective 是另一个 regime：16k 行 × 7168 f32 = 470 MB 
 regime 的 SOTA 是 NCCL 的 NVLS（multimem 多播归约），TRT-LLM 的 MNNVL allreduce /
 FlashInfer 的 `trtllm_mnnvl_allreduce` 都是小消息的低延迟路径，对它没有优势；通信
 不自己写（用户 2026-09-18 定），所以 runtime 加 `extern:nccl_*`，与 cuBLAS extern
-同级：manifest 一个 launch `[send, recv, count, {"rank": g}]`，runtime 按 topology 组
-建 communicator（`nccl.rs`），driver 装载后 `connect_nccl` / `join_nccl`。
-prefill-only 的 tray 形态四个 collective 全换：`reduce_attn` / `reduce_mlp` 是
-allreduce；`gather_attn` / `gather_moe` 是 allgather，`chunk_plan` 的 deal 本来就是
-`blocks[q] = min(q · ceil(T/R), T)`，NCCL allgather 按 rank 序放 `count` 元素，第 q
-块正好落在 `q · ceil(T/R)` 行，末卡多发的行落在 T 之后没人读，所以 recv 缓冲是
-`R · ceil(T_max/R)` 行、行序天然是 chunk 序，不需要 `-DNATURAL` 那套。decode tray
-批（≤192 行）仍走 Lamport 核。`tp_err` / 自旋超时在 NCCL 路径上没有对应（NCCL
-默认挂死），先不管（用户定）。
+同级：manifest 一个 launch `[send, recv, count, {"rank": g}]`（`nccl_{allreduce,allgather,
+reducescatter}_{f32,bf16}`；allgather 按 rank 序放 `count` 元素，reducescatter 是它的逆），
+runtime 按 topology 组建 communicator（`nccl.rs`），driver 装载后 `connect_nccl` / `join_nccl`。
+prefill-only 形态的两个 collective 走它（下节）；decode tray 批（≤192 行）仍走 Lamport 核。
+`tp_err` / 自旋超时在 NCCL 路径上没有对应（NCCL 默认挂死），先不管（用户定）。
 
-**落地（2026-09-18）**：4 层 TP4 c8/c40/c7 全 exact，93 层 12.9k 单块 2/2；tray07 16k over
-0 / 64k / 128k / 240k = 1174 / 1471 / 1770 / 2296 ms（peer 核 1317 / 1609 / 1904 / 2420），4k over
-240k 709（736）；256k 阶梯累加 27.75 s（29.91），对 SGLang 1.62–1.73×。470 MB f32 allreduce
-2.1 → ~1.4 ms，占空 cache chunk 的 19.7%。runtime 在 `join_nccl` 钉两个 NCCL 变量（调用者
-设了就不动）：`NCCL_RUNTIME_CONNECT=0`——默认的懒连接会落在图捕获里，
-`cudaDeviceEnablePeerAccess` 在捕获中被拒（`kern bench` 第一次就撞上）；`NCCL_PROTO=LL128`——
-**Simple 协议在 kern 的进程里给出错的 sum / gather**（93 层 0/2、logits 退化），二分表在
-demo 的 `results/kern/93l/README.md`：与 NVLS、算法、进程内 direct 指针、分配方式
+runtime 在 `join_nccl` 钉两个 NCCL 变量（调用者设了就不动）：`NCCL_RUNTIME_CONNECT=0`——默认的
+懒连接会落在图捕获里，`cudaDeviceEnablePeerAccess` 在捕获中被拒（`kern bench` 第一次就撞上）；
+`NCCL_PROTO=LL128`——**Simple 协议在 kern 的进程里给出错的 sum / gather**（93 层 0/2、logits
+退化），二分表在 demo 的 `results/kern/93l/README.md`：与 NVLS、算法、进程内 direct 指针、分配方式
 （stream-ordered pool 换 `cuMemAlloc`）、库版本（2.31.2 / 2.30.7）都无关，LL / LL128 全对，而
 NCCL 自带的 `all_reduce_perf -g 4`（同样单进程四卡）在 1 MB–2 GB 与本块的精确尺寸上 Simple 全
-对（512 MB：Simple 419 GB/s，LL128 331）。根因未找到，记在 roadmap P5；钉 LL128 的代价约每
-470 MB allreduce 0.2 ms、每 16k chunk ~30 ms。lessons.md 有这一条。
+对（512 MB：Simple 419 GB/s，LL128 331）。根因未找到，记在 roadmap；钉 LL128 的代价约每
+470 MB 0.2 ms。lessons.md 有这一条。
 
 ### GPU 自提交
 
@@ -457,27 +449,40 @@ CP 只管长 prefill 时谁算哪段新 token，与这张表无关（K4 / K5 另
 已按 chunk 捕图，一次 launch 1–2 µs 对应几十 ms GPU；余数块 eager 630 µs
 host 也远小于 GPU 时间——只要提交前不 sync 就被藏掉。TP 下同样。
 
-### Prefill-only 的 tray 形态（2026-09-18，`gen_k3.py --tp R --chunk N`）
+### Prefill-only 的 tray 形态（`gen_k3.py --tp R --chunk N`，2026-09-18）
 
 TTFT 导向的 prefill 服务（RSI demo，roadmap "K3 prefill" 线）不要 decode tray 批：
 manifest 只有 `prefill` 一条 program，tray 的 R 张卡喂**同一段 chunk、行序不变**。
-"自己的行在前"的旋转是为了让按行归 owner 的 op 不带 rank 偏移；一段 chunk 的
-KDA 时间轴要行序，旋转不能要。于是反过来：主干（norm、残差、按头切的 KDA + allreduce、
-按列切的 shared expert / dense FFN + allreduce、lat_up）在每张卡上算全部 `tokens` 行；
-按行拆的三段——MLA 的 q_b / absorb / attention / vup / o_proj、routed experts 的
-router / lat_down / MegaMoE——各卡先用 `own_rows` 把自己那份行（`chunk_plan` 写的
-`blocks`，`ceil_div(tokens, R)` 定长，末卡不足的行重复 chunk 末行）拷出来算，输出
-all-gather 回 chunk 序（`peer_collective.cu` / `peer_allreduce.cu` 的 `-DNATURAL`
-变体：`local_row` / `row_on` 恒等，`blocks` 只分 two-shot 的段）。MLA 的 wfu / prep
-（kv_a + append + gate）每卡都算全部行，所以每卡都持有序列的整条 latent；q_b 因此
-不复制，gate 拷自己那份。开销：每个 MLA 层多 3 次 `own_rows`（16k 行 ≈ 0.5 GB 拷贝）、
-wfu 的 gate 段算了 4 份；每个 MoE 层多一次 `own_rows(normed)`。
+切法就是 vLLM / SGLang 的 TP + EP，只把 Megatron 的 allreduce 拆成 reduce-scatter +
+all-gather（sequence parallel），让 attention 之外的一切只算自己那份行（`--tp 1` 是同一
+形态去掉 collective：每卡各喂各的序列）：
 
-代价与 decode tray 批相同的地方：KDA state 按头分在四卡，一条序列的 lease 每卡各一份；
-不同的地方：MLA 的 latent 四卡复制（27 KB/token，256k ≈ 7 GB/卡）。attention 本身
-（v1，DSL decode 核逐行展开）按行拆只省了行数：MMA 的 128 行 M tile 装的是头，切头不
-省，所以 v1 下 TP4 的 attention 总量是 EP4/DP 的四倍——留给 v2（物化 + FMHA prefill
-核，M 是 token × 头）。4 层门禁见 k3-kernel-abi.md K12。
+- **attention 按头切、算全部行**：KDA 与 MLA 的每个 per-head 轴（q/k/v/g、q_b、kv_b、
+  gate、o_proj）按 rank 选 HEADS/R 个头（`ml` / `hl`），FlashKDA 与 FMHA 对 chunk 的
+  全部行算自己的头。MLA 的 wfu 里 q_a / kv_a 段每卡都算（q_a norm 要整行，且每卡都
+  要往自己的 latent cache 里 append），gate 段只算自己的头（`k3_mla_prep` 用
+  `-DINNER -DMLA_FUSED` 变体、走通用路径）。kv_b 展开也只是自己的头：`kv_exp` 是
+  `[ctx, 24·320]`，比按行切的形态少 4 倍。
+- **其余按行**：rank q 持有 chunk 行 `[q·ceil(T/R), (q+1)·ceil(T/R))`（`kern_k3_rank_rows`
+  拷自己那块 token id；末卡不足的行重复末行，所以每张卡算的行都是真行），残差流、
+  attnres 快照、norm、router / lat_down / MegaMoE / lat_norm / lat_up、shared expert、
+  dense FFN 全在自己的块上、权重整份（shared expert 从按列切改成整份，每卡多 18 GB）。
+- **每层两次 collective**：层首 `nccl_allgather_bf16(normed)` 把各卡的 normed 块按 rank
+  序拼成全 chunk（末块多出的行在 T 之后，没人读）；o_proj 每卡算全部行、自己那些头的
+  K 切片，`nccl_reducescatter_bf16` 求和后每卡只收自己那块。bf16 landing 与 f32 形态
+  等价：`kern_k3_land_add_attnres_rms` 本来就先把 f32 partial 圆到 bf16 再加
+  （`-DLAND_BF16` 变体直接读 bf16）。`attn_part` 在 T 之后的行由 `kern_k3_zero_rows`
+  每 chunk 清一次，reduce-scatter 求和的是零。head：末卡的 final-normed 块
+  all-gather 一次，每卡取末行算 lm_head + argmax，driver 协议不变。
+
+每层 2 个 collective、每卡每层 352 MB（AG 176 + RS 176）；latent cache 四卡复制
+（27 KB/token，256k ≈ 7 GB/卡），KDA state 按头分；每卡权重 ~148 GB。
+
+**实测（2026-09-18 tray07，93 层 pruned，16k chunk over 0，图回放 12 样本、最慢 rank）：780 ms**，
+SGLang TP4 pruned nightly 同形状 678 ms（1.15×）；此前按行切 + f32 allreduce 的形态 1174 ms。
+kernel 中位数之和 794 ms：MegaMoE 231（29%）、cuBLAS f32-out GEMM 201（25%）、FlashKDA 103（13%）、
+reduce-scatter 52 + all-gather 36（11%）、bf16-out GEMM 41、FMHA 30（3.8%）、残差 elementwise ~50。
+下一刀是 MoE（SGL 用 fp8 grouped GEMM）和 f32 输出的 GEMM。
 
 ### 故障模型
 

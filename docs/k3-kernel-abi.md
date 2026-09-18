@@ -424,39 +424,38 @@ g（K8 的 gate 输入）不需要核：`span_flow · w_f_bᵀ` 用 cuBLAS 的 b
 `span_gather`（B = span，对 K2 参考逐行调用）、`span_state`（逐字节）、`kda_out_gate`，三个都把 span 放在
 batch 行 3 起（`SPAN_AT`），前面的行必须原样。
 
-### K12 prefill chunk 的配套（`kern_k3_mla_chunk_plan` / `kern_own_rows` / `kern_last_row_bf16`）
+### K12 prefill chunk 的配套（`k3_prefill.cu` / `kern_last_row_bf16`）
 
 `gen_k3.py --chunk N` 的 `prefill` program：一条序列的一段 chunk 按行喂（`tokens` 行），
-KDA 层走 K8–K11 的 span 路径（span 在行 0、长度就是 chunk），MLA 层用 K5 的 decode 核把
-每行当一个 batch 项（各行共用页表行 0：页表 batch stride 填 0），MoE 走 MegaMoE，head
-只算末行。`--tp R` 时 manifest 只有 `prefill`：tray 的 R 张卡喂同一段 chunk、行序不变
-（不是 decode tray 批的"自己的行在前"），主干在每张卡上算全部行（KDA 按头切 + allreduce
-照旧），按行拆的那几段——MLA 的 q 路径与 attention、routed experts——各卡只算自己那份，
-算完 all-gather 回 chunk 序（collective 核 `-DNATURAL` 变体：旋转关掉、`blocks` 只分
-two-shot 的段）。MLA 的 kv_a 与 append 每张卡都算全部行：每张卡都持有这条序列的 latent。
+KDA 层走 K8–K11 的 span 路径（span 在行 0、长度就是 chunk），MLA 层走 K13，MoE 走
+MegaMoE，head 只算末行。`--tp R` 时 manifest 只有 `prefill`：tray 的 R 张卡喂同一段
+chunk、行序不变，attention 按头切、算全部行，其余只算自己那块行
+（multi-gpu.md "Prefill-only 的 tray 形态"）。
 
 ```c
-// 一个 chunk 一次：各行的长度、split 数（全 1）、tray 的分块
-extern "C" __global__ void kern_k3_mla_chunk_plan(const int* seq_lens, int* row_seq_lens, int* block_split_kvs,
-                                                  int* blocks, int T, int rank, int nranks);
-// grid (ceil(T/1024),1,1) block 1024。per = ceil(T / nranks)，blocks[q] = min(q·per, T)（nranks = 1 时
-// [0, T]）；本卡第 j 行是 chunk 行 min(blocks[rank] + j, T−1)（超出自己那份的行重复末行，MegaMoE
-// 与 attention 的 batch 是 ceil_div(tokens, R) 定长），row_seq_lens[j] = seq_lens[0] − T + 行 + 1。
+// 自己那块 token id：dst[j] = src[min(rank·own + j, rows − 1)]，行按字节拷（16 B 对齐时按 uint4）
+extern "C" __global__ void kern_k3_rank_rows(void* dst, const void* src, int rank, int own, int row_bytes, int rows);
+// grid (own = ceil_div(tokens, R), 1, 1) block 256。超出 chunk 的行重复末行，所以每张卡算的行都是真行。
 
-// 按行拆之前：把自己那份行拷出来（生成器 op `own_rows`，只在 --tp 形态）
-extern "C" __global__ void kern_own_rows(void* dst, const void* src, const int* blocks, int rank, int row_bytes, int rows);
-// grid (ceil_div(tokens, R),1,1) block 256。dst[j] = src[min(blocks[rank] + j, rows − 1)]，行按 16 B 拷；
-// 基址是 plan 里的运行时值，manifest 表达式够不到，所以核读 plan。用在 q_norm、mla_gate、normed 上。
+// 一个 chunk 一次：chunk 宽缓冲在 T 之后的行清零（reduce-scatter 会把它们求和，没人写它们）
+extern "C" __global__ void kern_k3_zero_rows(void* buf, int row_bytes, int from, int to);
+// grid (1,1,1) block 1024。
 
-// head 只算末行
+// 一个 chunk 一次：FMHA 的长度表
+extern "C" __global__ void kern_k3_fmha_lens(const int* seq_lens, int* lens, int T);
+// grid (1,1,1) block 32。lens = {kv_len, 0, 0, T, 0, kv_len, 0, 0}：seq_lens_kv[1] 在字节 0、cum_seq_lens_q[2]
+// 在 8、cum_seq_lens_kv[2] 在 16；kv_len = seq_lens[0]（含本 chunk）。核的 causal 是末尾对齐的
+//（行 i 看到 token ≤ kv_len − T + i）。
+
+// head 只算末行（copy_rows.cu）
 extern "C" __global__ void kern_last_row_bf16(bf16* dst, const bf16* src, int src_stride, int width, int rows);
 ```
 
 门禁（2026-09-18，4 层，k3_golden `--prefill`，fixture 逐 token）：EP4 chunk 8 五段 5/5 exact、40 一段 1/1；
-TP4 split 形态 chunk 8 / 40 / 7（7 = 不等分：[0,2,4,6,7]，rank 3 一行实 + 一行 pad）四卡各 5/5、1/1、6/6 exact。
+TP4 形态 chunk 8 / 40 / 7（7 = 末卡一行实 + 一行 pad）四卡各 5/5、1/1、6/6 exact。
 prefill 之后的 16 个 free token 与 `decode_span` 的 chunk 逐字节同。
 
-### K13 MLA prefill v2：kv_b 物化展开 + TensorRT-LLM gen 的 context FMHA（`--mla v2`）
+### K13 MLA prefill v2：kv_b 物化展开 + TensorRT-LLM gen 的 context FMHA（`prefill` program 的 MLA）
 
 v1 的 chunk attention 是 K5 的 decode 核逐行展开：每个 (query, token) 对在 absorb 后的 576 维 latent 上
 算，209 kFLOP/对，TP4 下每张卡对全部 96 头算自己那份行，93 层 16k chunk over 240k 的 65% 是它。
@@ -468,7 +467,7 @@ v2 是 SGLang 走的形态：latent 行先经 kv_b 展开成每头 k (192) | v (
 一层的链（`tools/gen_k3.py` 的 v2 分支，只在 `prefill` program）：
 
 ```
-q_b       gemm_bf16   q_norm_own [rows, 1536] × w_q_b → q [rows, 96, 192] bf16（v1 是 f32 partial + absorb）
+q_b       gemm_bf16   q_norm [rows, 1536] × w_q_b → q [rows, heads, 192] bf16（v1 是 f32 partial + absorb）
 gather    kern_k3_latent_gather   这条序列的 latent 行（页表行 0）铺成 [ctx↑128, 576]，前 kv_len 行来自页，其余零
 expand    gemm_bf16   latent [ctx↑128, 576] × w_aug [96·320, 576]ᵀ → kv_exp [ctx↑128, 96, 192 | 128] bf16
 attn      mla_fmha    q, k = kv_exp, v = kv_exp + 384 B, o [rows, 96, 128] bf16；因果按序列末尾对齐
@@ -481,14 +480,7 @@ o_proj    照旧
 所以一次 GEMM 出 k 的 nope+rope 与 v。rope 段无 RoPE（K3 的 MLA 就是裸的 64 维），单位阵在 bf16 里精确。
 
 ```c
-// 一个 chunk 一次，chunk_plan 之后：FMHA 的长度表
-extern "C" __global__ void kern_k3_fmha_plan(const int* seq_lens, const int* blocks, int* lens, int T, int rank);
-// grid (1,1,1) block 32。lens = {kv_len, 0, 0, q_len, 0, kv_len, 0, 0}：seq_lens_kv[1] 在字节 0、cum_seq_lens_q[2]
-// 在 8、cum_seq_lens_kv[2] 在 16。本卡的行是 chunk 行 [blocks[rank], blocks[rank+1])，q_len 是它们的个数，
-// kv_len = seq_lens[0] − T + blocks[rank+1]：末行的 token 号 + 1。核的 causal 是末尾对齐的（行 i 看到
-// token ≤ kv_len − q_len + i），所以自己那份行只看到自己之前的 token，不等分的末卡也对。
-
-// 每个 MLA 层：latent 行铺平
+// 每个 MLA 层：latent 行铺平（长度表见 K12 的 kern_k3_fmha_lens）
 extern "C" __global__ void kern_k3_latent_gather(const bf16* slab, const int* block_table, long long page_stride,
                                                  const int* lens, bf16* out, int n);
 // grid (ceil(n/8),1,1) block 576：一行 72 × 16 B，8 行一个 block。slab 是 state 基址 + 该层偏移；

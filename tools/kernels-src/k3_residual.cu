@@ -286,8 +286,16 @@ extern "C" __global__ void __launch_bounds__(KTHREADS, 1) kern_k3_attnres_rms(
 }
 
 // ---------------------------------------------------------------- K1b
+// -DLAND_BF16: the landing arrives as bf16 (a reduce-scatter's sum of the
+// tray's o_proj partials), which is the value the f32 form rounds to first.
+#ifdef LAND_BF16
+typedef bf16_t land_t;
+#else
+typedef float land_t;
+#endif
+
 extern "C" __global__ void __launch_bounds__(KTHREADS, 1) kern_k3_land_add_attnres_rms(
-    const float*  __restrict__ partial,  // [B, H]  f32 partial of o_proj
+    const land_t* __restrict__ partial,  // [B, H]  partial of o_proj
     const bf16_t* __restrict__ prefix,   // [B, H]
     const bf16_t* __restrict__ blocks,   // [B, NB_MAX, H]
     const float*  __restrict__ sw,       // [H]
@@ -304,9 +312,19 @@ extern "C" __global__ void __launch_bounds__(KTHREADS, 1) kern_k3_land_add_attnr
     V8 pv;
     pv.w[0] = 0u; pv.w[1] = 0u; pv.w[2] = 0u; pv.w[3] = 0u;
     if (act) {
+#ifdef LAND_BF16
+        const V8 lp = ldv(partial + (size_t)b * KH + t * 8);
+        float pf[8];
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const float2 f = bf2f(lp.w[j]);
+            pf[2 * j] = f.x; pf[2 * j + 1] = f.y;
+        }
+#else
         const float4* q = (const float4*)(partial + (size_t)b * KH + t * 8);
         const float4 a = q[0], c = q[1];
         float pf[8] = { a.x, a.y, a.z, a.w, c.x, c.y, c.z, c.w };
+#endif
         if (snapshot) {
 #pragma unroll
             for (int j = 0; j < 4; ++j)

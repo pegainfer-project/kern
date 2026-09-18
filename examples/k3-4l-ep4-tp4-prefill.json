@@ -1,18 +1,18 @@
 {
  "schema_version": 5,
- "model": "kimi-k3-pruned-75pct/4l/ep4-tp4",
+ "model": "kimi-k3-pruned-75pct/4l/ep4-tp4-prefill",
  "vars": {
   "tokens": {
-   "max": 8
+   "max": 256
   },
   "seqs": {
-   "max": 8
+   "max": 1
   },
   "rows": {
-   "max": 32
+   "max": 256
   },
-  "span": {
-   "max": 8
+  "ctx": {
+   "max": 4096
   }
  },
  "topology": {
@@ -56,7 +56,7 @@
    "dtype": "i32",
    "shape": [
     "seqs",
-    2
+    64
    ],
    "kind": "input",
    "domain": {
@@ -90,7 +90,7 @@
   "next_token": {
    "dtype": "i64",
    "shape": [
-    "rows"
+    "seqs"
    ],
    "kind": "output",
    "fill": "tokens",
@@ -121,109 +121,6 @@
     56
    ],
    "kind": "workspace"
-  },
-  "tp_sym": {
-   "dtype": "u8",
-   "shape": [
-    3670016
-   ],
-   "kind": "carry",
-   "export": true
-  },
-  "tp_peers": {
-   "dtype": "u64",
-   "shape": [
-    4
-   ],
-   "kind": "peer",
-   "of": "tp_sym",
-   "group": "tp"
-  },
-  "tp_epochs": {
-   "dtype": "u32",
-   "shape": [
-    256
-   ],
-   "kind": "carry"
-  },
-  "tp_ar_comm": {
-   "dtype": "u8",
-   "shape": [
-    1835008
-   ],
-   "kind": "carry",
-   "export": true
-  },
-  "tp_ar_comm_peers": {
-   "dtype": "u64",
-   "shape": [
-    4
-   ],
-   "kind": "peer",
-   "of": "tp_ar_comm",
-   "group": "tp"
-  },
-  "tp_ar_flags": {
-   "dtype": "i32",
-   "shape": [
-    1024
-   ],
-   "kind": "carry",
-   "export": true
-  },
-  "tp_ar_flag_peers": {
-   "dtype": "u64",
-   "shape": [
-    4
-   ],
-   "kind": "peer",
-   "of": "tp_ar_flags",
-   "group": "tp"
-  },
-  "tp_ar_lamport": {
-   "dtype": "u8",
-   "shape": [
-    11010048
-   ],
-   "kind": "carry",
-   "export": true
-  },
-  "tp_ar_lamport_peers": {
-   "dtype": "u64",
-   "shape": [
-    4
-   ],
-   "kind": "peer",
-   "of": "tp_ar_lamport",
-   "group": "tp"
-  },
-  "tp_ar_state": {
-   "dtype": "i32",
-   "shape": [
-    8
-   ],
-   "kind": "carry"
-  },
-  "tp_err": {
-   "dtype": "i32",
-   "shape": [
-    1
-   ],
-   "kind": "output",
-   "fill": "error"
-  },
-  "tp_blocks": {
-   "dtype": "i32",
-   "shape": [
-    5
-   ],
-   "kind": "input",
-   "fill": "blocks",
-   "domain": {
-    "min": 0,
-    "max": 32,
-    "monotone": true
-   }
   },
   "embed": {
    "dtype": "bf16",
@@ -297,7 +194,7 @@
   "hidden": {
    "dtype": "bf16",
    "shape": [
-    "rows",
+    64,
     7168
    ],
    "kind": "workspace"
@@ -305,7 +202,7 @@
   "prefix2": {
    "dtype": "bf16",
    "shape": [
-    "rows",
+    64,
     7168
    ],
    "kind": "workspace"
@@ -313,7 +210,7 @@
   "normed": {
    "dtype": "bf16",
    "shape": [
-    "rows",
+    64,
     7168
    ],
    "kind": "workspace"
@@ -321,56 +218,47 @@
   "blocks": {
    "dtype": "bf16",
    "shape": [
-    "rows",
+    64,
     8,
     7168
    ],
    "kind": "workspace"
   },
-  "hidden_partial": {
-   "dtype": "f32",
-   "shape": [
-    "tokens",
-    7168
-   ],
-   "kind": "workspace"
-  },
-  "hidden_partial_all": {
-   "dtype": "f32",
-   "shape": [
-    "rows",
-    7168
-   ],
-   "kind": "workspace"
-  },
-  "routed_latent_all": {
+  "attn_part": {
    "dtype": "bf16",
    "shape": [
-    "rows",
-    3584
-   ],
-   "kind": "workspace"
-  },
-  "o_partial": {
-   "dtype": "f32",
-   "shape": [
-    "rows",
+    256,
     7168
    ],
    "kind": "workspace"
   },
-  "gated_kda": {
+  "ids_own": {
+   "dtype": "i64",
+   "shape": [
+    64
+   ],
+   "kind": "workspace"
+  },
+  "normed_all": {
    "dtype": "bf16",
    "shape": [
-    "rows",
-    3072
+    256,
+    7168
+   ],
+   "kind": "workspace"
+  },
+  "attn_own": {
+   "dtype": "bf16",
+   "shape": [
+    64,
+    7168
    ],
    "kind": "workspace"
   },
   "kda_partial": {
    "dtype": "f32",
    "shape": [
-    "rows",
+    "tokens",
     12288
    ],
    "kind": "workspace"
@@ -378,32 +266,8 @@
   "wsm_partial": {
    "dtype": "f32",
    "shape": [
-    "rows",
+    "tokens",
     256
-   ],
-   "kind": "workspace"
-  },
-  "conv_q": {
-   "dtype": "bf16",
-   "shape": [
-    "rows",
-    3072
-   ],
-   "kind": "workspace"
-  },
-  "conv_k": {
-   "dtype": "bf16",
-   "shape": [
-    "rows",
-    3072
-   ],
-   "kind": "workspace"
-  },
-  "conv_v": {
-   "dtype": "bf16",
-   "shape": [
-    "rows",
-    3072
    ],
    "kind": "workspace"
   },
@@ -411,7 +275,7 @@
    "dtype": "bf16",
    "shape": [
     "tokens",
-    12288
+    3072
    ],
    "kind": "workspace"
   },
@@ -419,7 +283,7 @@
    "dtype": "bf16",
    "shape": [
     "tokens",
-    12288
+    3072
    ],
    "kind": "workspace"
   },
@@ -435,14 +299,14 @@
    "dtype": "bf16",
    "shape": [
     24,
-    8
+    256
    ],
    "kind": "workspace"
   },
   "span_q": {
    "dtype": "bf16",
    "shape": [
-    8,
+    256,
     3072
    ],
    "kind": "workspace"
@@ -450,7 +314,7 @@
   "span_k": {
    "dtype": "bf16",
    "shape": [
-    8,
+    256,
     3072
    ],
    "kind": "workspace"
@@ -458,7 +322,7 @@
   "span_v": {
    "dtype": "bf16",
    "shape": [
-    8,
+    256,
     3072
    ],
    "kind": "workspace"
@@ -466,7 +330,7 @@
   "span_out": {
    "dtype": "bf16",
    "shape": [
-    8,
+    256,
     3072
    ],
    "kind": "workspace"
@@ -474,7 +338,7 @@
   "span_flow": {
    "dtype": "bf16",
    "shape": [
-    8,
+    256,
     128
    ],
    "kind": "workspace"
@@ -482,7 +346,7 @@
   "span_g": {
    "dtype": "bf16",
    "shape": [
-    8,
+    256,
     3072
    ],
    "kind": "workspace"
@@ -508,7 +372,7 @@
   "span_ws_kd": {
    "dtype": "bf16",
    "shape": [
-    24,
+    384,
     16,
     128
    ],
@@ -517,7 +381,7 @@
   "span_ws_qd": {
    "dtype": "bf16",
    "shape": [
-    24,
+    384,
     16,
     128
    ],
@@ -526,7 +390,7 @@
   "span_ws_kr": {
    "dtype": "bf16",
    "shape": [
-    24,
+    384,
     16,
     128
    ],
@@ -535,7 +399,7 @@
   "span_ws_gt": {
    "dtype": "f32",
    "shape": [
-    24,
+    384,
     128
    ],
    "kind": "workspace"
@@ -543,7 +407,7 @@
   "span_ws_inv": {
    "dtype": "bf16",
    "shape": [
-    24,
+    384,
     16,
     16
    ],
@@ -552,7 +416,7 @@
   "span_ws_mqk": {
    "dtype": "bf16",
    "shape": [
-    24,
+    384,
     16,
     16
    ],
@@ -562,7 +426,7 @@
    "dtype": "f32",
    "shape": [
     "tokens",
-    14400
+    5184
    ],
    "kind": "workspace"
   },
@@ -574,65 +438,64 @@
    ],
    "kind": "workspace"
   },
-  "q_partial": {
-   "dtype": "f32",
+  "normed_last": {
+   "dtype": "bf16",
    "shape": [
-    "tokens",
-    18432
+    1,
+    7168
    ],
    "kind": "workspace"
   },
-  "q_abs": {
+  "q_bf16": {
    "dtype": "bf16",
    "shape": [
     "tokens",
-    55296
+    4608
    ],
    "kind": "workspace"
   },
-  "o_lat": {
+  "o_bf16": {
    "dtype": "bf16",
    "shape": [
     "tokens",
-    49152
+    3072
    ],
    "kind": "workspace"
   },
-  "mla_lse": {
-   "dtype": "f32",
+  "latent_g": {
+   "dtype": "bf16",
    "shape": [
-    "tokens",
-    96
+    4096,
+    576
    ],
    "kind": "workspace"
   },
-  "mla_acc_o": {
-   "dtype": "f32",
+  "kv_exp": {
+   "dtype": "bf16",
    "shape": [
-    8,
-    2097152
+    4096,
+    7680
    ],
    "kind": "workspace"
   },
-  "mla_acc_lse": {
-   "dtype": "f32",
-   "shape": [
-    8,
-    4096
-   ],
-   "kind": "workspace"
-  },
-  "mla_bsk": {
+  "fmha_lens": {
    "dtype": "i32",
    "shape": [
-    "tokens"
+    8
+   ],
+   "kind": "workspace"
+  },
+  "fmha_scratch": {
+   "dtype": "u8",
+   "shape": [
+    8388608
    ],
    "kind": "workspace"
   },
   "router_partial": {
    "dtype": "f32",
    "shape": [
-    "tokens",
+    64,
     224
    ],
    "kind": "workspace"
@@ -640,7 +503,7 @@
   "topk_idx": {
    "dtype": "i32",
    "shape": [
-    "tokens",
+    64,
     16
    ],
    "kind": "workspace"
@@ -648,7 +511,7 @@
   "topk_weight": {
    "dtype": "f32",
    "shape": [
-    "tokens",
+    64,
     16
    ],
    "kind": "workspace"
@@ -656,7 +519,7 @@
   "latent_partial": {
    "dtype": "f32",
    "shape": [
-    "tokens",
+    64,
     3584
    ],
    "kind": "workspace"
@@ -664,7 +527,7 @@
   "latent": {
    "dtype": "bf16",
    "shape": [
-    "tokens",
+    64,
     3584
    ],
    "kind": "workspace"
@@ -672,7 +535,7 @@
   "routed_latent": {
    "dtype": "bf16",
    "shape": [
-    "tokens",
+    64,
     3584
    ],
    "kind": "workspace"
@@ -680,7 +543,7 @@
   "routed_latent_norm": {
    "dtype": "bf16",
    "shape": [
-    "rows",
+    64,
     3584
    ],
    "kind": "workspace"
@@ -688,7 +551,7 @@
   "routed_partial": {
    "dtype": "f32",
    "shape": [
-    "rows",
+    64,
     7168
    ],
    "kind": "workspace"
@@ -696,23 +559,23 @@
   "shared_partial": {
    "dtype": "f32",
    "shape": [
-    "rows",
-    3072
+    64,
+    12288
    ],
    "kind": "workspace"
   },
   "shared_act": {
    "dtype": "bf16",
    "shape": [
-    "rows",
-    1536
+    64,
+    6144
    ],
    "kind": "workspace"
   },
   "shared_partial2": {
    "dtype": "f32",
    "shape": [
-    "rows",
+    64,
     7168
    ],
    "kind": "workspace"
@@ -720,31 +583,23 @@
   "dense_partial": {
    "dtype": "f32",
    "shape": [
-    "rows",
-    16896
+    64,
+    67584
    ],
    "kind": "workspace"
   },
   "dense_act": {
    "dtype": "bf16",
    "shape": [
-    "rows",
-    8448
-   ],
-   "kind": "workspace"
-  },
-  "mlp_all": {
-   "dtype": "f32",
-   "shape": [
-    "rows",
-    7168
+    64,
+    33792
    ],
    "kind": "workspace"
   },
   "logits": {
    "dtype": "f32",
    "shape": [
-    32,
+    "seqs",
     163840
    ],
    "kind": "workspace"
@@ -1225,58 +1080,16 @@
   "layers.0.wgu": {
    "dtype": "bf16",
    "shape": [
-    16896,
+    67584,
     7168
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.0.mlp.gate_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        8448
-       ],
-       [
-        8448,
-        16896
-       ],
-       [
-        16896,
-        25344
-       ],
-       [
-        25344,
-        33792
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.0.mlp.gate_proj.weight"
     },
     {
-     "tensor": "language_model.model.layers.0.mlp.up_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        8448
-       ],
-       [
-        8448,
-        16896
-       ],
-       [
-        16896,
-        25344
-       ],
-       [
-        25344,
-        33792
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.0.mlp.up_proj.weight"
     }
    ]
   },
@@ -1284,33 +1097,12 @@
    "dtype": "bf16",
    "shape": [
     7168,
-    8448
+    33792
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.0.mlp.down_proj.weight",
-     "cols": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        8448
-       ],
-       [
-        8448,
-        16896
-       ],
-       [
-        16896,
-        25344
-       ],
-       [
-        25344,
-        33792
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.0.mlp.down_proj.weight"
     }
    ]
   },
@@ -1891,58 +1683,16 @@
   "layers.1.wsh": {
    "dtype": "bf16",
    "shape": [
-    3072,
+    12288,
     7168
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.1.block_sparse_moe.shared_experts.gate_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.1.block_sparse_moe.shared_experts.gate_proj.weight"
     },
     {
-     "tensor": "language_model.model.layers.1.block_sparse_moe.shared_experts.up_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.1.block_sparse_moe.shared_experts.up_proj.weight"
     }
    ]
   },
@@ -1950,33 +1700,12 @@
    "dtype": "bf16",
    "shape": [
     7168,
-    1536
+    6144
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.1.block_sparse_moe.shared_experts.down_proj.weight",
-     "cols": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.1.block_sparse_moe.shared_experts.down_proj.weight"
     }
    ]
   },
@@ -6363,58 +6092,16 @@
   "layers.2.wsh": {
    "dtype": "bf16",
    "shape": [
-    3072,
+    12288,
     7168
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.2.block_sparse_moe.shared_experts.gate_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.2.block_sparse_moe.shared_experts.gate_proj.weight"
     },
     {
-     "tensor": "language_model.model.layers.2.block_sparse_moe.shared_experts.up_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.2.block_sparse_moe.shared_experts.up_proj.weight"
     }
    ]
   },
@@ -6422,33 +6109,12 @@
    "dtype": "bf16",
    "shape": [
     7168,
-    1536
+    6144
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.2.block_sparse_moe.shared_experts.down_proj.weight",
-     "cols": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.2.block_sparse_moe.shared_experts.down_proj.weight"
     }
    ]
   },
@@ -10347,7 +10013,7 @@
   "layers.3.wfu": {
    "dtype": "bf16",
    "shape": [
-    14400,
+    5184,
     7168
    ],
    "kind": "weight",
@@ -10359,7 +10025,28 @@
      "tensor": "language_model.model.layers.3.self_attn.kv_a_proj_with_mqa.weight"
     },
     {
-     "tensor": "language_model.model.layers.3.self_attn.g_proj.weight"
+     "tensor": "language_model.model.layers.3.self_attn.g_proj.weight",
+     "rows": {
+      "group": "tp",
+      "ranges": [
+       [
+        0,
+        3072
+       ],
+       [
+        3072,
+        6144
+       ],
+       [
+        6144,
+        9216
+       ],
+       [
+        9216,
+        12288
+       ]
+      ]
+     }
     }
    ]
   },
@@ -10390,39 +10077,110 @@
   "layers.3.w_q_b": {
    "dtype": "bf16",
    "shape": [
-    18432,
+    4608,
     1536
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.3.self_attn.q_b_proj.weight"
+     "tensor": "language_model.model.layers.3.self_attn.q_b_proj.weight",
+     "rows": {
+      "group": "tp",
+      "ranges": [
+       [
+        0,
+        4608
+       ],
+       [
+        4608,
+        9216
+       ],
+       [
+        9216,
+        13824
+       ],
+       [
+        13824,
+        18432
+       ]
+      ]
+     }
     }
    ]
   },
   "layers.3.w_kv_b": {
    "dtype": "bf16",
    "shape": [
-    24576,
+    6144,
     512
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.3.self_attn.kv_b_proj.weight"
+     "tensor": "language_model.model.layers.3.self_attn.kv_b_proj.weight",
+     "rows": {
+      "group": "tp",
+      "ranges": [
+       [
+        0,
+        6144
+       ],
+       [
+        6144,
+        12288
+       ],
+       [
+        12288,
+        18432
+       ],
+       [
+        18432,
+        24576
+       ]
+      ]
+     }
     }
    ]
+  },
+  "layers.3.w_aug": {
+   "dtype": "bf16",
+   "shape": [
+    7680,
+    576
+   ],
+   "kind": "carry"
   },
   "layers.3.w_o": {
    "dtype": "bf16",
    "shape": [
     7168,
-    12288
+    3072
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.3.self_attn.o_proj.weight"
+     "tensor": "language_model.model.layers.3.self_attn.o_proj.weight",
+     "cols": {
+      "group": "tp",
+      "ranges": [
+       [
+        0,
+        3072
+       ],
+       [
+        3072,
+        6144
+       ],
+       [
+        6144,
+        9216
+       ],
+       [
+        9216,
+        12288
+       ]
+      ]
+     }
     }
    ]
   },
@@ -10499,58 +10257,16 @@
   "layers.3.wsh": {
    "dtype": "bf16",
    "shape": [
-    3072,
+    12288,
     7168
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.3.block_sparse_moe.shared_experts.gate_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.3.block_sparse_moe.shared_experts.gate_proj.weight"
     },
     {
-     "tensor": "language_model.model.layers.3.block_sparse_moe.shared_experts.up_proj.weight",
-     "rows": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.3.block_sparse_moe.shared_experts.up_proj.weight"
     }
    ]
   },
@@ -10558,33 +10274,12 @@
    "dtype": "bf16",
    "shape": [
     7168,
-    1536
+    6144
    ],
    "kind": "weight",
    "bind": [
     {
-     "tensor": "language_model.model.layers.3.block_sparse_moe.shared_experts.down_proj.weight",
-     "cols": {
-      "group": "tp",
-      "ranges": [
-       [
-        0,
-        1536
-       ],
-       [
-        1536,
-        3072
-       ],
-       [
-        3072,
-        4608
-       ],
-       [
-        4608,
-        6144
-       ]
-      ]
-     }
+     "tensor": "language_model.model.layers.3.block_sparse_moe.shared_experts.down_proj.weight"
     }
    ]
   },
@@ -14396,6 +14091,10 @@
   }
  },
  "modules": {
+  "copy_rows": {
+   "source": "copy_rows.cubin",
+   "sha256": "f301274a5957faac2f0891ea9d6e80e0dabdb56ee4c14c3795e836f6bf31fb54"
+  },
   "embedding": {
    "source": "embedding.cubin",
    "sha256": "868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7"
@@ -14403,14 +14102,6 @@
   "flash_kda_d128": {
    "source": "flash_kda_d128.cubin",
    "sha256": "34b83d875a418f63d14daf73984c1b8de0d1616250915a7d7e4810f327ce3617"
-  },
-  "k3_conv_silu+HEADS=24": {
-   "source": "k3_conv_silu+HEADS=24.cubin",
-   "sha256": "3c6393af3887f5a9ede85d08b8196484a7346d39b2c748a278097f879abb28bd"
-  },
-  "k3_kda_core+HEADS=24": {
-   "source": "k3_kda_core+HEADS=24.cubin",
-   "sha256": "07bc325714e8118f34d0fe30616f773f255b10f015664932e917318e800f5968"
   },
   "k3_kda_out_gate+HEADS=24": {
    "source": "k3_kda_out_gate+HEADS=24.cubin",
@@ -14428,25 +14119,25 @@
    "source": "k3_mega_stage.cubin",
    "sha256": "36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8"
   },
-  "k3_mla_absorb": {
-   "source": "k3_mla_absorb.cubin",
-   "sha256": "eb7046ca802c9341e9661ee4446d94fb5b58eff5c3d8ba3c6247e653ca10ff14"
+  "k3_mla_prep+INNER=3072+MLA_FUSED=5184": {
+   "source": "k3_mla_prep+INNER=3072+MLA_FUSED=5184.cubin",
+   "sha256": "b127629c8b98ea2f1f242e8dd1fa2fd74868dc3464dcd946a74f1a747e30779d"
   },
-  "k3_mla_prep": {
-   "source": "k3_mla_prep.cubin",
-   "sha256": "2b244a6333a73248b64291e27cd0d5d3198a5ce5e2d275c6c819a2183d468eb5"
+  "k3_mla_v2": {
+   "source": "k3_mla_v2.cubin",
+   "sha256": "436c9ebb766141276fd52d431f238f3f5d92ed1d9359d39372208c2c72503a16"
   },
-  "k3_mla_split_plan": {
-   "source": "k3_mla_split_plan.cubin",
-   "sha256": "f5d3d1e6e0625ff22d9f15b1ea7c7f9358de6e3278f6f7aade9b12ece0c72764"
-  },
-  "k3_mla_vup_gate": {
-   "source": "k3_mla_vup_gate.cubin",
-   "sha256": "df2c0f73251e6d87c8eeb5291efab13c4e8b640e81ae938c27cd37de489ffab0"
+  "k3_prefill": {
+   "source": "k3_prefill.cubin",
+   "sha256": "eac5d5cef8d504f7141281177fb934b5df522a963cc18df0ffa4f7a662d7817c"
   },
   "k3_residual": {
    "source": "k3_residual.cubin",
    "sha256": "d5d5d1fb3dda907822d99520b611fa77cab05bf11f165a1aa0d5e43d07cca8c8"
+  },
+  "k3_residual+LAND_BF16=1": {
+   "source": "k3_residual+LAND_BF16=1.cubin",
+   "sha256": "1bb60d2f33b04d70d6866b50d12a67340e33cf0f1c555c9da92494dd5c98f254"
   },
   "k3_router_argmax": {
    "source": "k3_router_argmax.cubin",
@@ -14464,17 +14155,13 @@
    "source": "k3_weight_prep.cubin",
    "sha256": "a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02"
   },
-  "mla_decode_h96_p64": {
-   "source": "mla_decode_h96_p64.cubin",
-   "sha256": "791c7796dc32caad4688270b1524ea756542d3dec7e13b3bee433f8bdfafcbf4"
+  "sigmoid_mul": {
+   "source": "sigmoid_mul.cubin",
+   "sha256": "2b0745de4fc623437cce41fee177d7980239326796dca33d4faa7046f6f10ffa"
   },
-  "peer_allreduce+NRANKS=4": {
-   "source": "peer_allreduce+NRANKS=4.cubin",
-   "sha256": "15a0baa9bac9a690f2fee5a312b1eeb4d242ee395ed5182d7c342571bff59706"
-  },
-  "peer_collective": {
-   "source": "peer_collective.cubin",
-   "sha256": "979118fcf1c7e48810387172c12b713e54921c8f4704699ca377b0e1330c56d5"
+  "trtllm_fmha_ctx_h192_v128": {
+   "source": "trtllm_fmha_ctx_h192_v128.cubin",
+   "sha256": "240811d976c01e4a9bee00041d98343f6f9254fefae598df46a97ff07c7df508"
   }
  },
  "ops": {
@@ -14503,7 +14190,12 @@
        1
       ],
       "grid": [
-       "rows",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ],
@@ -14576,7 +14268,12 @@
        1
       ],
       "grid": [
-       "rows",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ],
@@ -14640,7 +14337,12 @@
        1
       ],
       "grid": [
-       "rows",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ],
@@ -14674,9 +14376,9 @@
     ]
    }
   },
-  "land_add_attnres_rms": {
+  "land_add_attnres_rms_bf16": {
    "params": [
-    "in buffer<f32>",
+    "in buffer<bf16>",
     "in buffer<bf16>",
     "in buffer<bf16>",
     "in buffer<f32>",
@@ -14689,10 +14391,10 @@
    "impl": {
     "launches": [
      {
-      "module": "k3_residual",
+      "module": "k3_residual+LAND_BF16=1",
       "entry": "kern_k3_land_add_attnres_rms",
       "params": [
-       "in buffer<f32>",
+       "in buffer<bf16>",
        "in buffer<bf16>",
        "in buffer<bf16>",
        "in buffer<f32>",
@@ -14709,7 +14411,12 @@
        1
       ],
       "grid": [
-       "rows",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ],
@@ -14769,1121 +14476,14 @@
        1
       ],
       "grid": [
-       "rows",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
-      ]
-     }
-    ]
-   }
-  },
-  "conv_silu": {
-   "params": [
-    "in buffer<f32>",
-    "in buffer<f32>",
-    "inout state",
-    "in buffer<i32>",
-    "out buffer<bf16>",
-    "out buffer<bf16>",
-    "out buffer<bf16>",
-    "i32",
-    "in buffer<i32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "k3_conv_silu+HEADS=24",
-      "entry": "kern_k3_conv_silu",
-      "params": [
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "inout state",
-       "in buffer<i32>",
-       "i64",
-       "out buffer<bf16>",
-       "out buffer<bf16>",
-       "out buffer<bf16>",
-       "i32",
-       "in buffer<i32>",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       "rows",
-       3,
-       6
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "i64": 1628160
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "param": 8
-       },
-       {
-        "param": 9
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "kda_core": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<f32>",
-    "in buffer<f32>",
-    "in buffer<bf16>",
-    "in buffer<f32>",
-    "in buffer<f32>",
-    "in buffer<f32>",
-    "inout state",
-    "in buffer<i32>",
-    "out buffer<bf16>",
-    "i32",
-    "in buffer<i32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "k3_kda_core+HEADS=24",
-      "entry": "kern_k3_kda_core",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "in buffer<bf16>",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "in buffer<f32>",
-       "inout state",
-       "in buffer<i32>",
-       "i64",
-       "out buffer<bf16>",
-       "i32",
-       "in buffer<i32>",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       "rows",
-       24,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "param": 8
-       },
-       {
-        "param": 9
-       },
-       {
-        "param": 10
-       },
-       {
-        "i64": 1628160
-       },
-       {
-        "param": 11
-       },
-       {
-        "param": 12
-       },
-       {
-        "param": 13
-       },
-       {
-        "param": 14
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "mla_split_plan": {
-   "params": [
-    "in buffer<i32>",
-    "out buffer<i32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "k3_mla_split_plan",
-      "entry": "kern_k3_mla_split_plan",
-      "params": [
-       "in buffer<i32>",
-       "out buffer<i32>",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       1024,
-       1,
-       1
-      ],
-      "grid": [
-       1,
-       1,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "i32": 32
-       },
-       {
-        "param": 2
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "mla_attn": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "in state",
-    "in state",
-    "in buffer<i32>",
-    "in buffer<i32>",
-    "in buffer<i32>",
-    "out buffer<bf16>",
-    "out buffer<f32>",
-    "out buffer<f32>",
-    "out buffer<f32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "mla_decode_h96_p64",
-      "entry": "kernel_cutlass_split_kv_kernel_flashinfercute_dslattentionmonolithicmla_decode_fp16BlackwellMultiHeadLatentAttentionForwardFP16_object_at__TiledMMA_ThrLayoutVMNK21111000_PermutationMNK____0",
-      "params": [
-       "bytes<64>",
-       "bytes<64>",
-       "bytes<128>",
-       "bytes<8>",
-       "bytes<128>",
-       "bytes<8>",
-       "bytes<128>",
-       "bytes<12>",
-       "bytes<128>",
-       "bytes<12>",
-       "bytes<128>",
-       "bytes<12>",
-       "bytes<24>",
-       "bytes<48>",
-       "bytes<24>",
-       "bytes<48>",
-       "bytes<40>",
-       "i32",
-       "bytes<16>",
-       "bytes<16>",
-       "f32",
-       "f32",
-       "i32",
-       "i32",
-       "i32",
-       "bytes<12>",
-       "bytes<12>",
-       "bytes<12>"
-      ],
-      "block": [
-       384,
-       1,
-       1
-      ],
-      "grid": [
-       2,
-       "tokens",
-       32
-      ],
-      "shared_mem": 232448,
-      "cluster": [
-       2,
-       1,
-       1
-      ],
-      "args": [
-       {
-        "pack": {
-         "size": 64,
-         "fields": []
-        }
-       },
-       {
-        "pack": {
-         "size": 64,
-         "fields": []
-        }
-       },
-       {
-        "pack": {
-         "size": 128,
-         "fields": [
-          {
-           "at": 0,
-           "tensormap": {
-            "param": 0,
-            "dtype": "bf16",
-            "dims": [
-             512,
-             96,
-             8
-            ],
-            "strides": [
-             1152,
-             110592
-            ],
-            "box": [
-             64,
-             64,
-             1
-            ],
-            "swizzle": 128,
-            "l2_promotion": 128
-           }
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 8,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 512
-          },
-          {
-           "at": 4,
-           "var": "tokens"
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 128,
-         "fields": [
-          {
-           "at": 0,
-           "tensormap": {
-            "param": 1,
-            "dtype": "bf16",
-            "dims": [
-             64,
-             96,
-             8
-            ],
-            "strides": [
-             1152,
-             110592
-            ],
-            "box": [
-             64,
-             64,
-             1
-            ],
-            "swizzle": 128,
-            "l2_promotion": 128
-           }
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 8,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 64
-          },
-          {
-           "at": 4,
-           "var": "tokens"
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 128,
-         "fields": [
-          {
-           "at": 0,
-           "tensormap": {
-            "param": 2,
-            "dtype": "bf16",
-            "dims": [
-             512,
-             64,
-             0
-            ],
-            "strides": [
-             1152,
-             73728
-            ],
-            "box": [
-             64,
-             64,
-             1
-            ],
-            "swizzle": 128,
-            "l2_promotion": 128
-           }
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 12,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 64
-          },
-          {
-           "at": 4,
-           "i32": 512
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 128,
-         "fields": [
-          {
-           "at": 0,
-           "tensormap": {
-            "param": 3,
-            "dtype": "bf16",
-            "dims": [
-             64,
-             64,
-             0
-            ],
-            "strides": [
-             1152,
-             73728
-            ],
-            "box": [
-             64,
-             64,
-             1
-            ],
-            "swizzle": 128,
-            "l2_promotion": 128
-           }
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 12,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 64
-          },
-          {
-           "at": 4,
-           "i32": 64
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 128,
-         "fields": [
-          {
-           "at": 0,
-           "tensormap": {
-            "param": 2,
-            "dtype": "bf16",
-            "dims": [
-             512,
-             64,
-             0
-            ],
-            "strides": [
-             1152,
-             73728
-            ],
-            "box": [
-             64,
-             32,
-             1
-            ],
-            "swizzle": 128,
-            "l2_promotion": 128
-           }
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 12,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 512
-          },
-          {
-           "at": 4,
-           "i32": 64
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 24,
-         "fields": [
-          {
-           "at": 0,
-           "param": 4
-          },
-          {
-           "at": 8,
-           "i32": 2
-          },
-          {
-           "at": 12,
-           "var": "tokens"
-          },
-          {
-           "at": 16,
-           "width": 8,
-           "i32": 2
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 48,
-         "fields": [
-          {
-           "at": 0,
-           "param": 7
-          },
-          {
-           "at": 8,
-           "i32": 512
-          },
-          {
-           "at": 12,
-           "i32": 1
-          },
-          {
-           "at": 16,
-           "var": "tokens"
-          },
-          {
-           "at": 24,
-           "i64": 512
-          },
-          {
-           "at": 32,
-           "i64": 65536
-          },
-          {
-           "at": 40,
-           "i64": 49152
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 24,
-         "fields": [
-          {
-           "at": 0,
-           "param": 8
-          },
-          {
-           "at": 8,
-           "i32": 1
-          },
-          {
-           "at": 12,
-           "var": "tokens"
-          },
-          {
-           "at": 16,
-           "i64": 96
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 48,
-         "fields": [
-          {
-           "at": 0,
-           "param": 9
-          },
-          {
-           "at": 8,
-           "i32": 128
-          },
-          {
-           "at": 12,
-           "i32": 32
-          },
-          {
-           "at": 16,
-           "i32": 512
-          },
-          {
-           "at": 20,
-           "i32": 1
-          },
-          {
-           "at": 24,
-           "var": "tokens"
-          },
-          {
-           "at": 28,
-           "i32": 16384
-          },
-          {
-           "at": 32,
-           "i32": 512
-          },
-          {
-           "at": 36,
-           "i32": 2097152
-          },
-          {
-           "at": 40,
-           "i32": 2097152
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 40,
-         "fields": [
-          {
-           "at": 0,
-           "param": 10
-          },
-          {
-           "at": 8,
-           "i32": 128
-          },
-          {
-           "at": 12,
-           "i32": 32
-          },
-          {
-           "at": 16,
-           "i32": 1
-          },
-          {
-           "at": 20,
-           "var": "tokens"
-          },
-          {
-           "at": 24,
-           "i32": 32
-          },
-          {
-           "at": 28,
-           "i32": 4096
-          },
-          {
-           "at": 32,
-           "i32": 4096
-          }
-         ]
-        }
-       },
-       {
-        "i32": 32
-       },
-       {
-        "pack": {
-         "size": 16,
-         "fields": [
-          {
-           "at": 0,
-           "param": 5
-          },
-          {
-           "at": 8,
-           "var": "tokens",
-           "width": 8
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 16,
-         "fields": [
-          {
-           "at": 0,
-           "param": 6
-          },
-          {
-           "at": 8,
-           "var": "tokens",
-           "width": 8
-          }
-         ]
-        }
-       },
-       {
-        "f32": 0.1042572588142415
-       },
-       {
-        "f32": 1.0
-       },
-       {
-        "param": 11
-       },
-       {
-        "i32": 1
-       },
-       {
-        "i32": 32
-       },
-       {
-        "pack": {
-         "size": 12,
-         "fields": []
-        }
-       },
-       {
-        "pack": {
-         "size": 12,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 1
-          },
-          {
-           "at": 4,
-           "i32": 1
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 12,
-         "fields": [
-          {
-           "at": 0,
-           "i32": 32
-          },
-          {
-           "at": 4,
-           "i32": 0
-          },
-          {
-           "at": 8,
-           "u8": 1
-          },
-          {
-           "at": 9,
-           "u8": 4
-          }
-         ]
-        }
-       }
-      ]
-     },
-     {
-      "module": "mla_decode_h96_p64",
-      "entry": "kernel_cutlass_reduction_kernel_flashinfercute_dslattentionmonolithicmla_decode_fp16BlackwellMultiHeadLatentAttentionForwardFP16_object_at__tensorptrbf16gmemalign16odiv16i64div161i64div16_1",
-      "params": [
-       "bytes<48>",
-       "bytes<40>",
-       "bytes<48>",
-       "bytes<40>",
-       "i32",
-       "bytes<16>",
-       "bytes<16>"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       96,
-       1,
-       "tokens"
-      ],
-      "shared_mem": 1024,
-      "args": [
-       {
-        "pack": {
-         "size": 48,
-         "fields": [
-          {
-           "at": 0,
-           "param": 7
-          },
-          {
-           "at": 8,
-           "i32": 96
-          },
-          {
-           "at": 12,
-           "i32": 512
-          },
-          {
-           "at": 16,
-           "i32": 1
-          },
-          {
-           "at": 20,
-           "var": "tokens"
-          },
-          {
-           "at": 24,
-           "i64": 512
-          },
-          {
-           "at": 32,
-           "i64": 49152
-          },
-          {
-           "at": 40,
-           "i64": 49152
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 40,
-         "fields": [
-          {
-           "at": 0,
-           "param": 8
-          },
-          {
-           "at": 8,
-           "i32": 96
-          },
-          {
-           "at": 12,
-           "i32": 1
-          },
-          {
-           "at": 16,
-           "var": "tokens"
-          },
-          {
-           "at": 24,
-           "i64": 96
-          },
-          {
-           "at": 32,
-           "i64": 96
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 48,
-         "fields": [
-          {
-           "at": 0,
-           "param": 9
-          },
-          {
-           "at": 8,
-           "i32": 128
-          },
-          {
-           "at": 12,
-           "i32": 32
-          },
-          {
-           "at": 16,
-           "i32": 512
-          },
-          {
-           "at": 20,
-           "i32": 1
-          },
-          {
-           "at": 24,
-           "var": "tokens"
-          },
-          {
-           "at": 28,
-           "i32": 16384
-          },
-          {
-           "at": 32,
-           "i32": 512
-          },
-          {
-           "at": 36,
-           "i32": 2097152
-          },
-          {
-           "at": 40,
-           "i32": 2097152
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 40,
-         "fields": [
-          {
-           "at": 0,
-           "param": 10
-          },
-          {
-           "at": 8,
-           "i32": 128
-          },
-          {
-           "at": 12,
-           "i32": 32
-          },
-          {
-           "at": 16,
-           "i32": 1
-          },
-          {
-           "at": 20,
-           "var": "tokens"
-          },
-          {
-           "at": 24,
-           "i32": 32
-          },
-          {
-           "at": 28,
-           "i32": 4096
-          },
-          {
-           "at": 32,
-           "i32": 4096
-          }
-         ]
-        }
-       },
-       {
-        "i32": 32
-       },
-       {
-        "pack": {
-         "size": 16,
-         "fields": [
-          {
-           "at": 0,
-           "param": 5
-          },
-          {
-           "at": 8,
-           "var": "tokens",
-           "width": 8
-          }
-         ]
-        }
-       },
-       {
-        "pack": {
-         "size": 16,
-         "fields": [
-          {
-           "at": 0,
-           "param": 6
-          },
-          {
-           "at": 8,
-           "var": "tokens",
-           "width": 8
-          }
-         ]
-        }
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "argmax_f32": {
-   "params": [
-    "in buffer<f32>",
-    "out buffer<i64>"
-   ],
-   "impl": {
-    "scratch": {
-     "pmax": {
-      "dtype": "f32",
-      "shape": [
-       "rows",
-       64
-      ]
-     },
-     "pidx": {
-      "dtype": "i32",
-      "shape": [
-       "rows",
-       64
-      ]
-     }
-    },
-    "launches": [
-     {
-      "module": "k3_router_argmax",
-      "entry": "kern_k3_argmax_f32_partial",
-      "params": [
-       "in buffer<f32>",
-       "out buffer<f32>",
-       "out buffer<i32>",
-       "i32"
-      ],
-      "block": [
-       1024,
-       1,
-       1
-      ],
-      "grid": [
-       "rows",
-       64,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "scratch": "pmax"
-       },
-       {
-        "scratch": "pidx"
-       },
-       {
-        "i32": 163840
-       }
-      ]
-     },
-     {
-      "module": "k3_router_argmax",
-      "entry": "kern_k3_argmax_f32_final",
-      "params": [
-       "in buffer<f32>",
-       "in buffer<i32>",
-       "out buffer<i64>",
-       "i32"
-      ],
-      "block": [
-       64,
-       1,
-       1
-      ],
-      "grid": [
-       "rows",
-       1,
-       1
-      ],
-      "args": [
-       {
-        "scratch": "pmax"
-       },
-       {
-        "scratch": "pidx"
-       },
-       {
-        "param": 1
-       },
-       {
-        "i32": 64
-       }
       ]
      }
     ]
@@ -16002,44 +14602,15 @@
     "in buffer<bf16>",
     "in buffer<bf16>",
     "out buffer<bf16>",
+    "i32",
+    "i32",
+    "i32",
     "i32"
    ],
    "impl": {
     "launches": [
      {
-      "entry": "extern:cublaslt_bf16_tn",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 3072
-       },
-       {
-        "i32": 128
-       },
-       {
-        "i32": 3072
-       }
-      ]
+      "entry": "extern:cublaslt_bf16_tn"
      }
     ]
    }
@@ -16089,7 +14660,7 @@
        4,
        {
         "ceil_div": [
-         "span",
+         "tokens",
          8
         ]
        }
@@ -16194,7 +14765,7 @@
       "grid": [
        {
         "ceil_div": [
-         "span",
+         "tokens",
          16
         ]
        },
@@ -16214,7 +14785,7 @@
             "dtype": "bf16",
             "dims": [
              128,
-             8,
+             256,
              24
             ],
             "strides": [
@@ -16248,7 +14819,7 @@
             "dtype": "bf16",
             "dims": [
              128,
-             8,
+             256,
              24
             ],
             "strides": [
@@ -16281,7 +14852,7 @@
             "param": 4,
             "dtype": "bf16",
             "dims": [
-             192
+             6144
             ],
             "strides": [],
             "box": [
@@ -16305,7 +14876,7 @@
             "dtype": "bf16",
             "dims": [
              128,
-             8,
+             256,
              24
             ],
             "strides": [
@@ -16367,7 +14938,7 @@
             "dims": [
              128,
              16,
-             24
+             384
             ],
             "strides": [
              256,
@@ -16397,7 +14968,7 @@
             "dims": [
              128,
              16,
-             24
+             384
             ],
             "strides": [
              256,
@@ -16427,7 +14998,7 @@
             "dims": [
              128,
              16,
-             24
+             384
             ],
             "strides": [
              256,
@@ -16456,7 +15027,7 @@
             "dtype": "f32",
             "dims": [
              128,
-             24
+             384
             ],
             "strides": [
              512
@@ -16484,7 +15055,7 @@
             "dims": [
              16,
              16,
-             24
+             384
             ],
             "strides": [
              32,
@@ -16514,7 +15085,7 @@
             "dims": [
              16,
              16,
-             24
+             384
             ],
             "strides": [
              32,
@@ -16555,7 +15126,7 @@
            "at": 0,
            "expr": {
             "ceil_div": [
-             "span",
+             "tokens",
              16
             ]
            }
@@ -16619,7 +15190,7 @@
             "dtype": "bf16",
             "dims": [
              128,
-             8,
+             256,
              24
             ],
             "strides": [
@@ -16652,7 +15223,7 @@
             "param": 4,
             "dtype": "bf16",
             "dims": [
-             192
+             6144
             ],
             "strides": [],
             "box": [
@@ -16677,7 +15248,7 @@
             "dims": [
              128,
              16,
-             24
+             384
             ],
             "strides": [
              256,
@@ -16707,7 +15278,7 @@
             "dims": [
              128,
              16,
-             24
+             384
             ],
             "strides": [
              256,
@@ -16737,7 +15308,7 @@
             "dims": [
              128,
              16,
-             24
+             384
             ],
             "strides": [
              256,
@@ -16766,7 +15337,7 @@
             "dtype": "f32",
             "dims": [
              128,
-             24
+             384
             ],
             "strides": [
              512
@@ -16794,7 +15365,7 @@
             "dims": [
              16,
              16,
-             24
+             384
             ],
             "strides": [
              32,
@@ -16824,7 +15395,7 @@
             "dims": [
              16,
              16,
-             24
+             384
             ],
             "strides": [
              32,
@@ -16913,7 +15484,7 @@
             "dtype": "bf16",
             "dims": [
              128,
-             8,
+             256,
              24
             ],
             "strides": [
@@ -16959,7 +15530,7 @@
            "at": 0,
            "expr": {
             "ceil_div": [
-             "span",
+             "tokens",
              16
             ]
            }
@@ -16977,7 +15548,7 @@
     "in buffer<bf16>",
     "in buffer<f32>",
     "in buffer<f32>",
-    "inout buffer<bf16>",
+    "out buffer<bf16>",
     "in buffer<i32>",
     "i32"
    ],
@@ -16992,9 +15563,568 @@
        1
       ],
       "grid": [
-       "span",
+       "tokens",
        24,
        1
+      ]
+     }
+    ]
+   }
+  },
+  "fmha_lens": {
+   "params": [
+    "in buffer<i32>",
+    "out buffer<i32>",
+    "i32"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "k3_prefill",
+      "entry": "kern_k3_fmha_lens",
+      "block": [
+       32,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       1,
+       1
+      ]
+     }
+    ]
+   }
+  },
+  "latent_gather": {
+   "params": [
+    "in state",
+    "in buffer<i32>",
+    "in buffer<i32>",
+    "out buffer<bf16>",
+    "i32"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "k3_mla_v2",
+      "entry": "kern_k3_latent_gather",
+      "params": [
+       "in state",
+       "in buffer<i32>",
+       "i64",
+       "in buffer<i32>",
+       "out buffer<bf16>",
+       "i32"
+      ],
+      "block": [
+       576,
+       1,
+       1
+      ],
+      "grid": [
+       {
+        "mul": [
+         {
+          "ceil_div": [
+           "ctx",
+           128
+          ]
+         },
+         16
+        ]
+       },
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "i64": 36864
+       },
+       {
+        "param": 2
+       },
+       {
+        "param": 3
+       },
+       {
+        "param": 4
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "mla_fmha": {
+   "params": [
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>",
+    "out buffer<bf16>",
+    "in buffer<i32>",
+    "in buffer<i32>",
+    "in buffer<i32>",
+    "out buffer<u8>",
+    "out buffer<u8>"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "trtllm_fmha_ctx_h192_v128",
+      "entry": "fmhaSm103aKernel_QkvBfloat16OBfloat16HQk192HV128SeparateQkvCausalVarSeqQ256Kv128PersistentContext",
+      "params": [
+       "bytes<1344>"
+      ],
+      "block": [
+       512,
+       1,
+       1
+      ],
+      "grid": [
+       {
+        "ceil_div": [
+         "tokens",
+         256
+        ]
+       },
+       24,
+       1
+      ],
+      "shared_mem": 199296,
+      "args": [
+       {
+        "pack": {
+         "size": 1344,
+         "fields": [
+          {
+           "at": 0,
+           "tensormap": {
+            "param": 0,
+            "dtype": "bf16",
+            "dims": [
+             192,
+             1,
+             24,
+             256
+            ],
+            "strides": [
+             384,
+             384,
+             9216
+            ],
+            "box": [
+             64,
+             1,
+             1,
+             128
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 128,
+           "tensormap": {
+            "param": 1,
+            "dtype": "bf16",
+            "dims": [
+             192,
+             4096,
+             24,
+             1
+            ],
+            "strides": [
+             15360,
+             640,
+             16
+            ],
+            "box": [
+             64,
+             128,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 384,
+           "tensormap": {
+            "param": 2,
+            "dtype": "bf16",
+            "dims": [
+             128,
+             4096,
+             24,
+             1
+            ],
+            "strides": [
+             15360,
+             640,
+             16
+            ],
+            "box": [
+             64,
+             128,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 512,
+           "tensormap": {
+            "param": 3,
+            "dtype": "bf16",
+            "dims": [
+             128,
+             256,
+             24,
+             1,
+             1
+            ],
+            "strides": [
+             6144,
+             256,
+             6144,
+             16
+            ],
+            "box": [
+             64,
+             128,
+             1,
+             1,
+             1
+            ],
+            "swizzle": 128,
+            "l2_promotion": 128
+           }
+          },
+          {
+           "at": 912,
+           "param": 3
+          },
+          {
+           "at": 936,
+           "param": 5
+          },
+          {
+           "at": 944,
+           "param": 6
+          },
+          {
+           "at": 1024,
+           "param": 8
+          },
+          {
+           "at": 1032,
+           "param": 7
+          },
+          {
+           "at": 1096,
+           "param": 4
+          },
+          {
+           "at": 1128,
+           "i32": 2147483647
+          },
+          {
+           "at": 1132,
+           "i32": 1
+          },
+          {
+           "at": 1172,
+           "var": "tokens"
+          },
+          {
+           "at": 1176,
+           "i32": 4096
+          },
+          {
+           "at": 1180,
+           "expr": {
+            "ceil_div": [
+             "tokens",
+             256
+            ]
+           }
+          },
+          {
+           "at": 1184,
+           "i32": 1
+          },
+          {
+           "at": 1192,
+           "i32": 24
+          },
+          {
+           "at": 1196,
+           "i32": 24
+          },
+          {
+           "at": 1200,
+           "i32": 1
+          },
+          {
+           "at": 1204,
+           "i32": 1
+          },
+          {
+           "at": 1208,
+           "i32": -2147483648
+          },
+          {
+           "at": 1216,
+           "i32": -1
+          },
+          {
+           "at": 1224,
+           "i64": 4608
+          },
+          {
+           "at": 1236,
+           "i32": 256
+          },
+          {
+           "at": 1240,
+           "i32": -1
+          },
+          {
+           "at": 1244,
+           "i32": 1
+          },
+          {
+           "at": 1248,
+           "f32": 1.0
+          },
+          {
+           "at": 1252,
+           "f32": 0.10411754995584488
+          },
+          {
+           "at": 1260,
+           "f32": 1.0
+          },
+          {
+           "at": 1276,
+           "var": "tokens"
+          },
+          {
+           "at": 1280,
+           "i32": 4096
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "mla_gate": {
+   "params": [
+    "out buffer<bf16>",
+    "in buffer<bf16>",
+    "in buffer<bf16>"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "sigmoid_mul",
+      "entry": "kern_sigmoid_mul_bf16",
+      "params": [
+       "out buffer<bf16>",
+       "in buffer<bf16>",
+       "in buffer<bf16>",
+       "i32",
+       "i32",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       256,
+       1,
+       1
+      ],
+      "grid": [
+       "tokens",
+       2,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "param": 2
+       },
+       {
+        "i32": 24
+       },
+       {
+        "i32": 128
+       },
+       {
+        "i32": 3072
+       },
+       {
+        "i32": 128
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "last_row": {
+   "params": [
+    "out buffer<bf16>",
+    "in buffer<bf16>",
+    "i32"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "copy_rows",
+      "entry": "kern_last_row_bf16",
+      "params": [
+       "out buffer<bf16>",
+       "in buffer<bf16>",
+       "i32",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "i32": 7168
+       },
+       {
+        "i32": 7168
+       },
+       {
+        "param": 2
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "argmax_f32_one": {
+   "params": [
+    "in buffer<f32>",
+    "out buffer<i64>"
+   ],
+   "impl": {
+    "scratch": {
+     "pmax": {
+      "dtype": "f32",
+      "shape": [
+       1,
+       64
+      ]
+     },
+     "pidx": {
+      "dtype": "i32",
+      "shape": [
+       1,
+       64
+      ]
+     }
+    },
+    "launches": [
+     {
+      "module": "k3_router_argmax",
+      "entry": "kern_k3_argmax_f32_partial",
+      "params": [
+       "in buffer<f32>",
+       "out buffer<f32>",
+       "out buffer<i32>",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       64,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "scratch": "pmax"
+       },
+       {
+        "scratch": "pidx"
+       },
+       {
+        "i32": 163840
+       }
+      ]
+     },
+     {
+      "module": "k3_router_argmax",
+      "entry": "kern_k3_argmax_f32_final",
+      "params": [
+       "in buffer<f32>",
+       "in buffer<i32>",
+       "out buffer<i64>",
+       "i32"
+      ],
+      "block": [
+       64,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "scratch": "pmax"
+       },
+       {
+        "scratch": "pidx"
+       },
+       {
+        "param": 1
+       },
+       {
+        "i32": 64
+       }
       ]
      }
     ]
@@ -17014,7 +16144,7 @@
    "impl": {
     "launches": [
      {
-      "module": "k3_mla_prep",
+      "module": "k3_mla_prep+INNER=3072+MLA_FUSED=5184",
       "entry": "kern_k3_mla_prep",
       "params": [
        "in buffer<f32>",
@@ -17035,7 +16165,7 @@
       ],
       "grid": [
        "tokens",
-       4,
+       3,
        1
       ],
       "args": [
@@ -17074,69 +16204,6 @@
     ]
    }
   },
-  "mla_absorb": {
-   "params": [
-    "in buffer<f32>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "k3_mla_absorb",
-      "entry": "kern_k3_mla_absorb",
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       {
-        "ceil_div": [
-         "tokens",
-         32
-        ]
-       },
-       96,
-       8
-      ]
-     }
-    ]
-   }
-  },
-  "mla_vup_gate": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "k3_mla_vup_gate",
-      "entry": "kern_k3_mla_vup_gate",
-      "block": [
-       256,
-       1,
-       1
-      ],
-      "grid": [
-       {
-        "ceil_div": [
-         "tokens",
-         32
-        ]
-       },
-       96,
-       4
-      ]
-     }
-    ]
-   }
-  },
   "router_topk": {
    "params": [
     "in buffer<f32>",
@@ -17157,7 +16224,12 @@
        1
       ],
       "grid": [
-       "tokens",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ]
@@ -17190,7 +16262,12 @@
        1
       ],
       "grid": [
-       "rows",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ],
@@ -17215,222 +16292,39 @@
     ]
    }
   },
-  "tp_allgather_f32": {
+  "rank_rows": {
    "params": [
-    "in buffer<f32>",
-    "out buffer<f32>",
-    "inout buffer<u8>",
-    "in buffer<u64>",
-    "inout buffer<u32>",
-    "out buffer<i32>",
-    "in buffer<i32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "peer_collective",
-      "entry": "kern_peer_allgather",
-      "params": [
-       "in buffer<f32>",
-       "out buffer<f32>",
-       "inout buffer<u8>",
-       "in buffer<u64>",
-       "inout buffer<u32>",
-       "out buffer<i32>",
-       "in buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i64"
-      ],
-      "block": [
-       256,
-       1,
-       1
-      ],
-      "grid": [
-       256,
-       1,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "i32": 4
-       },
-       {
-        "i32": 28672
-       },
-       {
-        "i32": 28672
-       },
-       {
-        "i64": 2000000000
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "tp_allgather_bf16": {
-   "params": [
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "inout buffer<u8>",
-    "in buffer<u64>",
-    "inout buffer<u32>",
-    "out buffer<i32>",
-    "in buffer<i32>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "peer_collective",
-      "entry": "kern_peer_allgather",
-      "params": [
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "inout buffer<u8>",
-       "in buffer<u64>",
-       "inout buffer<u32>",
-       "out buffer<i32>",
-       "in buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i64"
-      ],
-      "block": [
-       256,
-       1,
-       1
-      ],
-      "grid": [
-       256,
-       1,
-       1
-      ],
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "i32": 4
-       },
-       {
-        "i32": 7168
-       },
-       {
-        "i32": 28672
-       },
-       {
-        "i64": 2000000000
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "tp_allreduce_f32": {
-   "params": [
-    "in buffer<f32>",
-    "out buffer<f32>",
-    "inout buffer<u8>",
-    "in buffer<u64>",
-    "inout buffer<i32>",
-    "in buffer<u64>",
-    "inout buffer<u8>",
-    "in buffer<u64>",
-    "inout buffer<i32>",
-    "out buffer<i32>",
-    "in buffer<i32>",
+    "out buffer<i64>",
+    "in buffer<i64>",
+    "i32",
     "i32",
     "i32"
    ],
    "impl": {
     "launches": [
      {
-      "module": "peer_allreduce+NRANKS=4",
-      "entry": "kern_peer_allreduce_f32",
+      "module": "k3_prefill",
+      "entry": "kern_k3_rank_rows",
       "params": [
-       "in buffer<f32>",
-       "out buffer<f32>",
-       "inout buffer<u8>",
-       "in buffer<u64>",
-       "inout buffer<i32>",
-       "in buffer<u64>",
-       "inout buffer<u8>",
-       "in buffer<u64>",
-       "inout buffer<i32>",
-       "out buffer<i32>",
-       "in buffer<i32>",
+       "out buffer<i64>",
+       "in buffer<i64>",
        "i32",
        "i32",
        "i32",
-       "i64",
-       "i32",
-       "i64"
+       "i32"
       ],
       "block": [
-       224,
+       256,
        1,
        1
       ],
       "grid": [
-       152,
-       1,
-       1
-      ],
-      "cluster": [
-       8,
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        1,
        1
       ],
@@ -17448,69 +16342,40 @@
         "param": 3
        },
        {
+        "i32": 8
+       },
+       {
         "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "param": 6
-       },
-       {
-        "param": 7
-       },
-       {
-        "param": 8
-       },
-       {
-        "param": 9
-       },
-       {
-        "param": 10
-       },
-       {
-        "param": 11
-       },
-       {
-        "param": 12
-       },
-       {
-        "i32": 7168
-       },
-       {
-        "i64": 3670016
-       },
-       {
-        "i32": 0
-       },
-       {
-        "i64": 2000000000
        }
       ]
      }
     ]
    }
   },
-  "tp_lamport_init": {
+  "zero_rows": {
    "params": [
-    "inout buffer<u8>"
+    "out buffer<bf16>",
+    "i32",
+    "i32"
    ],
    "impl": {
     "launches": [
      {
-      "module": "peer_allreduce+NRANKS=4",
-      "entry": "kern_peer_lamport_init",
+      "module": "k3_prefill",
+      "entry": "kern_k3_zero_rows",
       "params": [
-       "inout buffer<u8>",
-       "i64"
+       "out buffer<bf16>",
+       "i32",
+       "i32",
+       "i32"
       ],
       "block": [
-       256,
+       1024,
        1,
        1
       ],
       "grid": [
-       256,
+       1,
        1,
        1
       ],
@@ -17519,7 +16384,81 @@
         "param": 0
        },
        {
-        "i64": 11010048
+        "i32": 14336
+       },
+       {
+        "param": 1
+       },
+       {
+        "param": 2
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "nccl_allgather_bf16": {
+   "params": [
+    "in buffer<bf16>",
+    "out buffer<bf16>",
+    "i64"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "entry": "extern:nccl_allgather_bf16",
+      "params": [
+       "in buffer<bf16>",
+       "out buffer<bf16>",
+       "i64",
+       "i32"
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "param": 2
+       },
+       {
+        "rank": "tp"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "nccl_reducescatter_bf16": {
+   "params": [
+    "in buffer<bf16>",
+    "out buffer<bf16>",
+    "i64"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "entry": "extern:nccl_reducescatter_bf16",
+      "params": [
+       "in buffer<bf16>",
+       "out buffer<bf16>",
+       "i64",
+       "i32"
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "param": 2
+       },
+       {
+        "rank": "tp"
        }
       ]
      }
@@ -18192,7 +17131,7 @@
     ]
    }
   },
-  "land_situ_n8448": {
+  "land_situ_n33792": {
    "params": [
     "in buffer<f32>",
     "out buffer<bf16>",
@@ -18215,8 +17154,13 @@
        1
       ],
       "grid": [
-       "rows",
-       9,
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
+       33,
        1
       ],
       "args": [
@@ -18227,7 +17171,7 @@
         "param": 1
        },
        {
-        "i32": 8448
+        "i32": 33792
        },
        {
         "param": 2
@@ -18262,7 +17206,12 @@
        1
       ],
       "grid": [
-       "tokens",
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
        4,
        1
       ],
@@ -18290,7 +17239,7 @@
     ]
    }
   },
-  "land_situ_n1536": {
+  "land_situ_n6144": {
    "params": [
     "in buffer<f32>",
     "out buffer<bf16>",
@@ -18313,8 +17262,13 @@
        1
       ],
       "grid": [
-       "rows",
-       2,
+       {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       },
+       6,
        1
       ],
       "args": [
@@ -18325,7 +17279,7 @@
         "param": 1
        },
        {
-        "i32": 1536
+        "i32": 6144
        },
        {
         "param": 2
@@ -18572,22 +17526,113 @@
      }
     ]
    }
+  },
+  "k3_kvb_aug": {
+   "params": [
+    "in buffer<bf16>",
+    "out buffer<bf16>"
+   ],
+   "impl": {
+    "launches": [
+     {
+      "module": "k3_weight_prep",
+      "entry": "kern_k3_kvb_aug",
+      "params": [
+       "in buffer<bf16>",
+       "out buffer<bf16>",
+       "i32"
+      ],
+      "block": [
+       256,
+       1,
+       1
+      ],
+      "grid": [
+       17280,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "param": 1
+       },
+       {
+        "i32": 4423680
+       }
+      ]
+     }
+    ]
+   }
   }
  },
  "programs": {
-  "decode": {
+  "prefill": {
    "batch": {
-    "groups": 8,
-    "rows": 1
+    "groups": 1,
+    "rows": "tokens",
+    "context": "ctx"
    },
-   "graph": true,
    "calls": [
+    {
+     "label": "own_ids",
+     "op": "rank_rows",
+     "args": [
+      {
+       "buf": "ids_own"
+      },
+      {
+       "buf": "token_ids"
+      },
+      {
+       "rank": "tp"
+      },
+      {
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
+      },
+      {
+       "var": "tokens"
+      }
+     ]
+    },
+    {
+     "label": "zero_tail",
+     "op": "zero_rows",
+     "args": [
+      {
+       "buf": "attn_part"
+      },
+      {
+       "var": "tokens"
+      },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         4
+        ]
+       }
+      }
+     ]
+    },
     {
      "label": "embed",
      "op": "embedding",
      "args": [
       {
-       "buf": "token_ids"
+       "buf": "ids_own"
       },
       {
        "buf": "embed"
@@ -18596,19 +17641,24 @@
        "buf": "hidden"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
     {
-     "label": "mla_plan",
-     "op": "mla_split_plan",
+     "label": "fmha_lens",
+     "op": "fmha_lens",
      "args": [
       {
        "buf": "seq_lens"
       },
       {
-       "buf": "mla_bsk"
+       "buf": "fmha_lens"
       },
       {
        "var": "tokens"
@@ -18635,7 +17685,37 @@
        "buf": "normed"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l0.gather_normed",
+     "op": "nccl_allgather_bf16",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "normed_all"
+      },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
@@ -18644,7 +17724,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.0.wbig"
@@ -18653,7 +17733,7 @@
        "buf": "kda_partial"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 12288
@@ -18671,7 +17751,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.0.wsm"
@@ -18680,7 +17760,7 @@
        "buf": "wsm_partial"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 256
@@ -18690,2591 +17770,6 @@
       },
       {
        "i32": 256
-      }
-     ]
-    },
-    {
-     "label": "l0.conv",
-     "op": "conv_silu",
-     "args": [
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.0.cw"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index"
-      },
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "i32": 0
-      }
-     ]
-    },
-    {
-     "label": "l0.kda_core",
-     "op": "kda_core",
-     "args": [
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.0.w_f_b"
-      },
-      {
-       "buf": "layers.0.dt_bias"
-      },
-      {
-       "buf": "layers.0.a_log"
-      },
-      {
-       "buf": "layers.0.gamma_o"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index"
-      },
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "i32": 0
-      }
-     ]
-    },
-    {
-     "label": "l0.o_proj",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "buf": "layers.0.w_o"
-      },
-      {
-       "buf": "o_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3072
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l0.reduce_attn",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "o_partial"
-      },
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l0.res_mlp",
-     "op": "land_add_attnres_rms",
-     "args": [
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.0.sw_mlp"
-      },
-      {
-       "buf": "layers.0.gamma_post"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l0.wgu",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.0.wgu"
-      },
-      {
-       "buf": "dense_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 16896
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 16896
-      }
-     ]
-    },
-    {
-     "label": "l0.situ",
-     "op": "land_situ_n8448",
-     "args": [
-      {
-       "buf": "dense_partial"
-      },
-      {
-       "buf": "dense_act"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l0.w_dn",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "dense_act"
-      },
-      {
-       "buf": "layers.0.w_dn"
-      },
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 8448
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l0.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l0.hidden",
-     "op": "land_add2",
-     "args": [
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "i32": 0
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.res_in",
-     "op": "attnres_rms",
-     "args": [
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.1.sw_attn"
-      },
-      {
-       "buf": "layers.1.gamma_in"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.qkvg",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.1.wbig"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 12288
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 12288
-      }
-     ]
-    },
-    {
-     "label": "l1.wsm",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.1.wsm"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 256
-      }
-     ]
-    },
-    {
-     "label": "l1.conv",
-     "op": "conv_silu",
-     "args": [
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.1.cw"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 128
-      },
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "i32": 0
-      }
-     ]
-    },
-    {
-     "label": "l1.kda_core",
-     "op": "kda_core",
-     "args": [
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.1.w_f_b"
-      },
-      {
-       "buf": "layers.1.dt_bias"
-      },
-      {
-       "buf": "layers.1.a_log"
-      },
-      {
-       "buf": "layers.1.gamma_o"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 128
-      },
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "i32": 0
-      }
-     ]
-    },
-    {
-     "label": "l1.o_proj",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "buf": "layers.1.w_o"
-      },
-      {
-       "buf": "o_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3072
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l1.reduce_attn",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "o_partial"
-      },
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.res_mlp",
-     "op": "land_add_attnres_rms",
-     "args": [
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.1.sw_mlp"
-      },
-      {
-       "buf": "layers.1.gamma_post"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "i32": 0
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.router",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.1.w_router"
-      },
-      {
-       "buf": "router_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 224
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 224
-      }
-     ]
-    },
-    {
-     "label": "l1.topk",
-     "op": "router_topk",
-     "args": [
-      {
-       "buf": "router_partial"
-      },
-      {
-       "buf": "layers.1.bias"
-      },
-      {
-       "buf": "layers.1.rs"
-      },
-      {
-       "buf": "topk_idx"
-      },
-      {
-       "buf": "topk_weight"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l1.lat_down",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.1.w_lat_down"
-      },
-      {
-       "buf": "latent_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 3584
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3584
-      }
-     ]
-    },
-    {
-     "label": "l1.latent",
-     "op": "land_n3584",
-     "args": [
-      {
-       "buf": "latent_partial"
-      },
-      {
-       "buf": "latent"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l1.quant_x",
-     "op": "quant_x",
-     "args": [
-      {
-       "buf": "latent"
-      },
-      {
-       "buf": "slab",
-       "offset": 74587712
-      },
-      {
-       "buf": "slab",
-       "offset": 135142976
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l1.routing",
-     "op": "write_routing",
-     "args": [
-      {
-       "buf": "topk_idx"
-      },
-      {
-       "buf": "topk_weight"
-      },
-      {
-       "buf": "slab",
-       "offset": 137035328
-      },
-      {
-       "buf": "slab",
-       "offset": 139198016
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         16
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l1.mega_moe",
-     "op": "mega_moe",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "stats"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "buf": "slab_peers"
-      },
-      {
-       "rank": "ep"
-      },
-      {
-       "buf": "slab",
-       "offset": 140279360
-      },
-      {
-       "buf": "slab",
-       "offset": 1779400256
-      },
-      {
-       "buf": "layers.1.l1_weights"
-      },
-      {
-       "buf": "layers.1.l1_weights_sf"
-      },
-      {
-       "buf": "slab",
-       "offset": 2600790080
-      },
-      {
-       "buf": "slab",
-       "offset": 4005750848
-      },
-      {
-       "buf": "layers.1.l2_weights"
-      },
-      {
-       "buf": "layers.1.l2_weights_sf"
-      }
-     ]
-    },
-    {
-     "label": "l1.gather_moe",
-     "op": "tp_allgather_bf16",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
-     "label": "l1.lat_norm",
-     "op": "rms",
-     "args": [
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "layers.1.gamma_lat"
-      },
-      {
-       "buf": "routed_latent_norm"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.lat_up",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "routed_latent_norm"
-      },
-      {
-       "buf": "layers.1.w_lat_up"
-      },
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3584
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l1.wsh",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.1.wsh"
-      },
-      {
-       "buf": "shared_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 3072
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3072
-      }
-     ]
-    },
-    {
-     "label": "l1.shared_situ",
-     "op": "land_situ_n1536",
-     "args": [
-      {
-       "buf": "shared_partial"
-      },
-      {
-       "buf": "shared_act"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.sh_down",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "shared_act"
-      },
-      {
-       "buf": "layers.1.sh_down"
-      },
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 1536
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l1.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l1.hidden",
-     "op": "land_add2",
-     "args": [
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.res_in",
-     "op": "attnres_rms",
-     "args": [
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.2.sw_attn"
-      },
-      {
-       "buf": "layers.2.gamma_in"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.qkvg",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.2.wbig"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 12288
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 12288
-      }
-     ]
-    },
-    {
-     "label": "l2.wsm",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.2.wsm"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 256
-      }
-     ]
-    },
-    {
-     "label": "l2.conv",
-     "op": "conv_silu",
-     "args": [
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.2.cw"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 256
-      },
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "i32": 0
-      }
-     ]
-    },
-    {
-     "label": "l2.kda_core",
-     "op": "kda_core",
-     "args": [
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.2.w_f_b"
-      },
-      {
-       "buf": "layers.2.dt_bias"
-      },
-      {
-       "buf": "layers.2.a_log"
-      },
-      {
-       "buf": "layers.2.gamma_o"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 256
-      },
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "i32": 0
-      }
-     ]
-    },
-    {
-     "label": "l2.o_proj",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "buf": "layers.2.w_o"
-      },
-      {
-       "buf": "o_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3072
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l2.reduce_attn",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "o_partial"
-      },
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.res_mlp",
-     "op": "land_add_attnres_rms",
-     "args": [
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.2.sw_mlp"
-      },
-      {
-       "buf": "layers.2.gamma_post"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "i32": 0
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.router",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.2.w_router"
-      },
-      {
-       "buf": "router_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 224
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 224
-      }
-     ]
-    },
-    {
-     "label": "l2.topk",
-     "op": "router_topk",
-     "args": [
-      {
-       "buf": "router_partial"
-      },
-      {
-       "buf": "layers.2.bias"
-      },
-      {
-       "buf": "layers.2.rs"
-      },
-      {
-       "buf": "topk_idx"
-      },
-      {
-       "buf": "topk_weight"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l2.lat_down",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.2.w_lat_down"
-      },
-      {
-       "buf": "latent_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 3584
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3584
-      }
-     ]
-    },
-    {
-     "label": "l2.latent",
-     "op": "land_n3584",
-     "args": [
-      {
-       "buf": "latent_partial"
-      },
-      {
-       "buf": "latent"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l2.quant_x",
-     "op": "quant_x",
-     "args": [
-      {
-       "buf": "latent"
-      },
-      {
-       "buf": "slab",
-       "offset": 74587712
-      },
-      {
-       "buf": "slab",
-       "offset": 135142976
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l2.routing",
-     "op": "write_routing",
-     "args": [
-      {
-       "buf": "topk_idx"
-      },
-      {
-       "buf": "topk_weight"
-      },
-      {
-       "buf": "slab",
-       "offset": 137035328
-      },
-      {
-       "buf": "slab",
-       "offset": 139198016
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         16
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l2.mega_moe",
-     "op": "mega_moe",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "stats"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "buf": "slab_peers"
-      },
-      {
-       "rank": "ep"
-      },
-      {
-       "buf": "slab",
-       "offset": 140279360
-      },
-      {
-       "buf": "slab",
-       "offset": 1779400256
-      },
-      {
-       "buf": "layers.2.l1_weights"
-      },
-      {
-       "buf": "layers.2.l1_weights_sf"
-      },
-      {
-       "buf": "slab",
-       "offset": 2600790080
-      },
-      {
-       "buf": "slab",
-       "offset": 4005750848
-      },
-      {
-       "buf": "layers.2.l2_weights"
-      },
-      {
-       "buf": "layers.2.l2_weights_sf"
-      }
-     ]
-    },
-    {
-     "label": "l2.gather_moe",
-     "op": "tp_allgather_bf16",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
-     "label": "l2.lat_norm",
-     "op": "rms",
-     "args": [
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "layers.2.gamma_lat"
-      },
-      {
-       "buf": "routed_latent_norm"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.lat_up",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "routed_latent_norm"
-      },
-      {
-       "buf": "layers.2.w_lat_up"
-      },
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3584
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l2.wsh",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.2.wsh"
-      },
-      {
-       "buf": "shared_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 3072
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3072
-      }
-     ]
-    },
-    {
-     "label": "l2.shared_situ",
-     "op": "land_situ_n1536",
-     "args": [
-      {
-       "buf": "shared_partial"
-      },
-      {
-       "buf": "shared_act"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.sh_down",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "shared_act"
-      },
-      {
-       "buf": "layers.2.sh_down"
-      },
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 1536
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l2.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l2.hidden",
-     "op": "land_add2",
-     "args": [
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l3.res_in",
-     "op": "attnres_rms",
-     "args": [
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.3.sw_attn"
-      },
-      {
-       "buf": "layers.3.gamma_in"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l3.wfu",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.3.wfu"
-      },
-      {
-       "buf": "mla_fused_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 14400
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 14400
-      }
-     ]
-    },
-    {
-     "label": "l3.mla_prep",
-     "op": "mla_prep",
-     "args": [
-      {
-       "buf": "mla_fused_partial"
-      },
-      {
-       "buf": "layers.3.gamma_q_a"
-      },
-      {
-       "buf": "layers.3.gamma_kv_a"
-      },
-      {
-       "buf": "slot_mapping"
-      },
-      {
-       "state": "kv"
-      },
-      {
-       "buf": "q_norm"
-      },
-      {
-       "buf": "mla_gate"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.q_b",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "q_norm"
-      },
-      {
-       "buf": "layers.3.w_q_b"
-      },
-      {
-       "buf": "q_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 18432
-      },
-      {
-       "i32": 1536
-      },
-      {
-       "i32": 18432
-      }
-     ]
-    },
-    {
-     "label": "l3.absorb",
-     "op": "mla_absorb",
-     "args": [
-      {
-       "buf": "q_partial"
-      },
-      {
-       "buf": "layers.3.w_kv_b"
-      },
-      {
-       "buf": "q_abs"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.attn",
-     "op": "mla_attn",
-     "args": [
-      {
-       "buf": "q_abs"
-      },
-      {
-       "buf": "q_abs",
-       "offset": 1024
-      },
-      {
-       "state": "kv",
-       "offset": 0
-      },
-      {
-       "state": "kv",
-       "offset": 1024
-      },
-      {
-       "buf": "block_table"
-      },
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "mla_bsk"
-      },
-      {
-       "buf": "o_lat"
-      },
-      {
-       "buf": "mla_lse"
-      },
-      {
-       "buf": "mla_acc_o"
-      },
-      {
-       "buf": "mla_acc_lse"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.vup",
-     "op": "mla_vup_gate",
-     "args": [
-      {
-       "buf": "o_lat"
-      },
-      {
-       "buf": "layers.3.w_kv_b"
-      },
-      {
-       "buf": "mla_gate"
-      },
-      {
-       "buf": "gated"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.o_proj",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "gated"
-      },
-      {
-       "buf": "layers.3.w_o"
-      },
-      {
-       "buf": "hidden_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 12288
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l3.gather_attn",
-     "op": "tp_allgather_f32",
-     "args": [
-      {
-       "buf": "hidden_partial"
-      },
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
-     "label": "l3.res_mlp",
-     "op": "land_add_attnres_rms",
-     "args": [
-      {
-       "buf": "hidden_partial_all"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.3.sw_mlp"
-      },
-      {
-       "buf": "layers.3.gamma_post"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "i32": 0
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l3.router",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.3.w_router"
-      },
-      {
-       "buf": "router_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 224
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 224
-      }
-     ]
-    },
-    {
-     "label": "l3.topk",
-     "op": "router_topk",
-     "args": [
-      {
-       "buf": "router_partial"
-      },
-      {
-       "buf": "layers.3.bias"
-      },
-      {
-       "buf": "layers.3.rs"
-      },
-      {
-       "buf": "topk_idx"
-      },
-      {
-       "buf": "topk_weight"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.lat_down",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.3.w_lat_down"
-      },
-      {
-       "buf": "latent_partial"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "i32": 3584
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3584
-      }
-     ]
-    },
-    {
-     "label": "l3.latent",
-     "op": "land_n3584",
-     "args": [
-      {
-       "buf": "latent_partial"
-      },
-      {
-       "buf": "latent"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.quant_x",
-     "op": "quant_x",
-     "args": [
-      {
-       "buf": "latent"
-      },
-      {
-       "buf": "slab",
-       "offset": 74587712
-      },
-      {
-       "buf": "slab",
-       "offset": 135142976
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.routing",
-     "op": "write_routing",
-     "args": [
-      {
-       "buf": "topk_idx"
-      },
-      {
-       "buf": "topk_weight"
-      },
-      {
-       "buf": "slab",
-       "offset": 137035328
-      },
-      {
-       "buf": "slab",
-       "offset": 139198016
-      },
-      {
-       "expr": {
-        "mul": [
-         "tokens",
-         16
-        ]
-       }
-      }
-     ]
-    },
-    {
-     "label": "l3.mega_moe",
-     "op": "mega_moe",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "stats"
-      },
-      {
-       "var": "tokens"
-      },
-      {
-       "buf": "slab_peers"
-      },
-      {
-       "rank": "ep"
-      },
-      {
-       "buf": "slab",
-       "offset": 140279360
-      },
-      {
-       "buf": "slab",
-       "offset": 1779400256
-      },
-      {
-       "buf": "layers.3.l1_weights"
-      },
-      {
-       "buf": "layers.3.l1_weights_sf"
-      },
-      {
-       "buf": "slab",
-       "offset": 2600790080
-      },
-      {
-       "buf": "slab",
-       "offset": 4005750848
-      },
-      {
-       "buf": "layers.3.l2_weights"
-      },
-      {
-       "buf": "layers.3.l2_weights_sf"
-      }
-     ]
-    },
-    {
-     "label": "l3.gather_moe",
-     "op": "tp_allgather_bf16",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
-     "label": "l3.lat_norm",
-     "op": "rms",
-     "args": [
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "layers.3.gamma_lat"
-      },
-      {
-       "buf": "routed_latent_norm"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l3.lat_up",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "routed_latent_norm"
-      },
-      {
-       "buf": "layers.3.w_lat_up"
-      },
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3584
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l3.wsh",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.3.wsh"
-      },
-      {
-       "buf": "shared_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 3072
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 3072
-      }
-     ]
-    },
-    {
-     "label": "l3.shared_situ",
-     "op": "land_situ_n1536",
-     "args": [
-      {
-       "buf": "shared_partial"
-      },
-      {
-       "buf": "shared_act"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l3.sh_down",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "shared_act"
-      },
-      {
-       "buf": "layers.3.sh_down"
-      },
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 1536
-      },
-      {
-       "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l3.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l3.hidden",
-     "op": "land_add2",
-     "args": [
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "prefix2"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "i32": 1
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "out.res",
-     "op": "attnres_rms",
-     "args": [
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "sw_out"
-      },
-      {
-       "buf": "gamma_final"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "out.lm_head",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "w_lm"
-      },
-      {
-       "buf": "logits"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 163840
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 163840
-      }
-     ]
-    },
-    {
-     "label": "out.argmax",
-     "op": "argmax_f32",
-     "args": [
-      {
-       "buf": "logits"
-      },
-      {
-       "buf": "next_token"
-      }
-     ]
-    }
-   ]
-  },
-  "decode_span": {
-   "batch": {
-    "groups": 8,
-    "rows": 1,
-    "span": "span"
-   },
-   "graph": true,
-   "calls": [
-    {
-     "label": "embed",
-     "op": "embedding",
-     "args": [
-      {
-       "buf": "token_ids"
-      },
-      {
-       "buf": "embed"
-      },
-      {
-       "buf": "hidden"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "mla_plan",
-     "op": "mla_split_plan",
-     "args": [
-      {
-       "buf": "seq_lens"
-      },
-      {
-       "buf": "mla_bsk"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l0.res_in",
-     "op": "attnres_rms_first",
-     "args": [
-      {
-       "buf": "hidden"
-      },
-      {
-       "buf": "blocks"
-      },
-      {
-       "buf": "layers.0.sw_mlp"
-      },
-      {
-       "buf": "layers.0.gamma_in"
-      },
-      {
-       "buf": "normed"
-      },
-      {
-       "var": "rows"
-      }
-     ]
-    },
-    {
-     "label": "l0.qkvg",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.0.wbig"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 12288
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 12288
-      }
-     ]
-    },
-    {
-     "label": "l0.wsm",
-     "op": "gemm_f32",
-     "args": [
-      {
-       "buf": "normed"
-      },
-      {
-       "buf": "layers.0.wsm"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "i32": 256
-      },
-      {
-       "i32": 7168
-      },
-      {
-       "i32": 256
-      }
-     ]
-    },
-    {
-     "label": "l0.conv",
-     "op": "conv_silu",
-     "args": [
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.0.cw"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index"
-      },
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "var": "span"
       }
      ]
     },
@@ -21316,7 +17811,7 @@
        "buf": "span_at"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
@@ -21352,7 +17847,16 @@
        "buf": "span_g"
       },
       {
-       "var": "span"
+       "var": "tokens"
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 128
+      },
+      {
+       "i32": 3072
       }
      ]
     },
@@ -21409,7 +17913,7 @@
        "buf": "span_ws_mqk"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
@@ -21432,57 +17936,6 @@
      ]
     },
     {
-     "label": "l0.kda_core",
-     "op": "kda_core",
-     "args": [
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.0.w_f_b"
-      },
-      {
-       "buf": "layers.0.dt_bias"
-      },
-      {
-       "buf": "layers.0.a_log"
-      },
-      {
-       "buf": "layers.0.gamma_o"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index"
-      },
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "var": "span"
-      }
-     ]
-    },
-    {
      "label": "l0.span_out_gate",
      "op": "kda_out_gate",
      "args": [
@@ -21496,31 +17949,31 @@
        "buf": "layers.0.gamma_o"
       },
       {
-       "buf": "gated_kda"
+       "buf": "gated"
       },
       {
        "buf": "span_at"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
     {
      "label": "l0.o_proj",
-     "op": "gemm_f32",
+     "op": "gemm_bf16",
      "args": [
       {
-       "buf": "gated_kda"
+       "buf": "gated"
       },
       {
        "buf": "layers.0.w_o"
       },
       {
-       "buf": "o_partial"
+       "buf": "attn_part"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 7168
@@ -21535,55 +17988,35 @@
     },
     {
      "label": "l0.reduce_attn",
-     "op": "tp_allreduce_f32",
+     "op": "nccl_reducescatter_bf16",
      "args": [
       {
-       "buf": "o_partial"
+       "buf": "attn_part"
       },
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
     {
      "label": "l0.res_mlp",
-     "op": "land_add_attnres_rms",
+     "op": "land_add_attnres_rms_bf16",
      "args": [
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
        "buf": "hidden"
@@ -21607,7 +18040,12 @@
        "i32": 1
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -21625,22 +18063,27 @@
        "buf": "dense_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
-       "i32": 16896
+       "i32": 67584
       },
       {
        "i32": 7168
       },
       {
-       "i32": 16896
+       "i32": 67584
       }
      ]
     },
     {
      "label": "l0.situ",
-     "op": "land_situ_n8448",
+     "op": "land_situ_n33792",
      "args": [
       {
        "buf": "dense_partial"
@@ -21649,7 +18092,12 @@
        "buf": "dense_act"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -21667,61 +18115,21 @@
        "buf": "routed_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
       },
       {
-       "i32": 8448
+       "i32": 33792
       },
       {
        "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l0.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "routed_partial"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
       }
      ]
     },
@@ -21730,10 +18138,10 @@
      "op": "land_add2",
      "args": [
       {
-       "buf": "mlp_all"
+       "buf": "routed_partial"
       },
       {
-       "buf": "mlp_all"
+       "buf": "routed_partial"
       },
       {
        "buf": "prefix2"
@@ -21745,7 +18153,12 @@
        "i32": 0
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -21769,7 +18182,37 @@
        "buf": "normed"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l1.gather_normed",
+     "op": "nccl_allgather_bf16",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "normed_all"
+      },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
@@ -21778,7 +18221,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.1.wbig"
@@ -21787,7 +18230,7 @@
        "buf": "kda_partial"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 12288
@@ -21805,7 +18248,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.1.wsm"
@@ -21814,7 +18257,7 @@
        "buf": "wsm_partial"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 256
@@ -21824,43 +18267,6 @@
       },
       {
        "i32": 256
-      }
-     ]
-    },
-    {
-     "label": "l1.conv",
-     "op": "conv_silu",
-     "args": [
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.1.cw"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 128
-      },
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "var": "span"
       }
      ]
     },
@@ -21879,7 +18285,7 @@
       },
       {
        "buf": "kda.line_index",
-       "offset": 128
+       "offset": 1024
       },
       {
        "buf": "wsm_partial"
@@ -21903,7 +18309,7 @@
        "buf": "span_at"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
@@ -21916,7 +18322,7 @@
       },
       {
        "buf": "kda.line_index",
-       "offset": 128
+       "offset": 1024
       },
       {
        "buf": "span_at"
@@ -21940,7 +18346,16 @@
        "buf": "span_g"
       },
       {
-       "var": "span"
+       "var": "tokens"
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 128
+      },
+      {
+       "i32": 3072
       }
      ]
     },
@@ -21997,7 +18412,7 @@
        "buf": "span_ws_mqk"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
@@ -22010,65 +18425,13 @@
       },
       {
        "buf": "kda.line_index",
-       "offset": 128
+       "offset": 1024
       },
       {
        "buf": "span_at"
       },
       {
        "buf": "span_state_out"
-      }
-     ]
-    },
-    {
-     "label": "l1.kda_core",
-     "op": "kda_core",
-     "args": [
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.1.w_f_b"
-      },
-      {
-       "buf": "layers.1.dt_bias"
-      },
-      {
-       "buf": "layers.1.a_log"
-      },
-      {
-       "buf": "layers.1.gamma_o"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 128
-      },
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "var": "span"
       }
      ]
     },
@@ -22086,31 +18449,31 @@
        "buf": "layers.1.gamma_o"
       },
       {
-       "buf": "gated_kda"
+       "buf": "gated"
       },
       {
        "buf": "span_at"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
     {
      "label": "l1.o_proj",
-     "op": "gemm_f32",
+     "op": "gemm_bf16",
      "args": [
       {
-       "buf": "gated_kda"
+       "buf": "gated"
       },
       {
        "buf": "layers.1.w_o"
       },
       {
-       "buf": "o_partial"
+       "buf": "attn_part"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 7168
@@ -22125,55 +18488,35 @@
     },
     {
      "label": "l1.reduce_attn",
-     "op": "tp_allreduce_f32",
+     "op": "nccl_reducescatter_bf16",
      "args": [
       {
-       "buf": "o_partial"
+       "buf": "attn_part"
       },
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
     {
      "label": "l1.res_mlp",
-     "op": "land_add_attnres_rms",
+     "op": "land_add_attnres_rms_bf16",
      "args": [
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
        "buf": "hidden"
@@ -22197,7 +18540,12 @@
        "i32": 0
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22215,7 +18563,12 @@
        "buf": "router_partial"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 224
@@ -22248,7 +18601,12 @@
        "buf": "topk_weight"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22266,7 +18624,12 @@
        "buf": "latent_partial"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 3584
@@ -22290,7 +18653,12 @@
        "buf": "latent"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22310,7 +18678,12 @@
        "offset": 135142976
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22335,7 +18708,12 @@
       {
        "expr": {
         "mul": [
-         "tokens",
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
          16
         ]
        }
@@ -22353,7 +18731,12 @@
        "buf": "stats"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "buf": "slab_peers"
@@ -22392,41 +18775,11 @@
      ]
     },
     {
-     "label": "l1.gather_moe",
-     "op": "tp_allgather_bf16",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
      "label": "l1.lat_norm",
      "op": "rms",
      "args": [
       {
-       "buf": "routed_latent_all"
+       "buf": "routed_latent"
       },
       {
        "buf": "layers.1.gamma_lat"
@@ -22435,7 +18788,12 @@
        "buf": "routed_latent_norm"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22453,7 +18811,12 @@
        "buf": "routed_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
@@ -22480,22 +18843,27 @@
        "buf": "shared_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
-       "i32": 3072
+       "i32": 12288
       },
       {
        "i32": 7168
       },
       {
-       "i32": 3072
+       "i32": 12288
       }
      ]
     },
     {
      "label": "l1.shared_situ",
-     "op": "land_situ_n1536",
+     "op": "land_situ_n6144",
      "args": [
       {
        "buf": "shared_partial"
@@ -22504,7 +18872,12 @@
        "buf": "shared_act"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22522,61 +18895,21 @@
        "buf": "shared_partial2"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
       },
       {
-       "i32": 1536
+       "i32": 6144
       },
       {
        "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l1.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
       }
      ]
     },
@@ -22588,7 +18921,7 @@
        "buf": "routed_partial"
       },
       {
-       "buf": "mlp_all"
+       "buf": "shared_partial2"
       },
       {
        "buf": "prefix2"
@@ -22600,7 +18933,12 @@
        "i32": 1
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -22624,7 +18962,37 @@
        "buf": "normed"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l2.gather_normed",
+     "op": "nccl_allgather_bf16",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "normed_all"
+      },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
@@ -22633,7 +19001,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.2.wbig"
@@ -22642,7 +19010,7 @@
        "buf": "kda_partial"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 12288
@@ -22660,7 +19028,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.2.wsm"
@@ -22669,7 +19037,7 @@
        "buf": "wsm_partial"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 256
@@ -22679,43 +19047,6 @@
       },
       {
        "i32": 256
-      }
-     ]
-    },
-    {
-     "label": "l2.conv",
-     "op": "conv_silu",
-     "args": [
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.2.cw"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 256
-      },
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "var": "span"
       }
      ]
     },
@@ -22734,7 +19065,7 @@
       },
       {
        "buf": "kda.line_index",
-       "offset": 256
+       "offset": 2048
       },
       {
        "buf": "wsm_partial"
@@ -22758,7 +19089,7 @@
        "buf": "span_at"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
@@ -22771,7 +19102,7 @@
       },
       {
        "buf": "kda.line_index",
-       "offset": 256
+       "offset": 2048
       },
       {
        "buf": "span_at"
@@ -22795,7 +19126,16 @@
        "buf": "span_g"
       },
       {
-       "var": "span"
+       "var": "tokens"
+      },
+      {
+       "i32": 3072
+      },
+      {
+       "i32": 128
+      },
+      {
+       "i32": 3072
       }
      ]
     },
@@ -22852,7 +19192,7 @@
        "buf": "span_ws_mqk"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
@@ -22865,65 +19205,13 @@
       },
       {
        "buf": "kda.line_index",
-       "offset": 256
+       "offset": 2048
       },
       {
        "buf": "span_at"
       },
       {
        "buf": "span_state_out"
-      }
-     ]
-    },
-    {
-     "label": "l2.kda_core",
-     "op": "kda_core",
-     "args": [
-      {
-       "buf": "conv_q"
-      },
-      {
-       "buf": "conv_k"
-      },
-      {
-       "buf": "conv_v"
-      },
-      {
-       "buf": "wsm_partial"
-      },
-      {
-       "buf": "kda_partial"
-      },
-      {
-       "buf": "layers.2.w_f_b"
-      },
-      {
-       "buf": "layers.2.dt_bias"
-      },
-      {
-       "buf": "layers.2.a_log"
-      },
-      {
-       "buf": "layers.2.gamma_o"
-      },
-      {
-       "state": "kda"
-      },
-      {
-       "buf": "kda.line_index",
-       "offset": 256
-      },
-      {
-       "buf": "gated_kda"
-      },
-      {
-       "var": "rows"
-      },
-      {
-       "buf": "span_at"
-      },
-      {
-       "var": "span"
       }
      ]
     },
@@ -22941,31 +19229,31 @@
        "buf": "layers.2.gamma_o"
       },
       {
-       "buf": "gated_kda"
+       "buf": "gated"
       },
       {
        "buf": "span_at"
       },
       {
-       "var": "span"
+       "var": "tokens"
       }
      ]
     },
     {
      "label": "l2.o_proj",
-     "op": "gemm_f32",
+     "op": "gemm_bf16",
      "args": [
       {
-       "buf": "gated_kda"
+       "buf": "gated"
       },
       {
        "buf": "layers.2.w_o"
       },
       {
-       "buf": "o_partial"
+       "buf": "attn_part"
       },
       {
-       "var": "rows"
+       "var": "tokens"
       },
       {
        "i32": 7168
@@ -22980,55 +19268,35 @@
     },
     {
      "label": "l2.reduce_attn",
-     "op": "tp_allreduce_f32",
+     "op": "nccl_reducescatter_bf16",
      "args": [
       {
-       "buf": "o_partial"
+       "buf": "attn_part"
       },
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
     {
      "label": "l2.res_mlp",
-     "op": "land_add_attnres_rms",
+     "op": "land_add_attnres_rms_bf16",
      "args": [
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
        "buf": "hidden"
@@ -23052,7 +19320,12 @@
        "i32": 0
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23070,7 +19343,12 @@
        "buf": "router_partial"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 224
@@ -23103,7 +19381,12 @@
        "buf": "topk_weight"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23121,7 +19404,12 @@
        "buf": "latent_partial"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 3584
@@ -23145,7 +19433,12 @@
        "buf": "latent"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23165,7 +19458,12 @@
        "offset": 135142976
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23190,7 +19488,12 @@
       {
        "expr": {
         "mul": [
-         "tokens",
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
          16
         ]
        }
@@ -23208,7 +19511,12 @@
        "buf": "stats"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "buf": "slab_peers"
@@ -23247,41 +19555,11 @@
      ]
     },
     {
-     "label": "l2.gather_moe",
-     "op": "tp_allgather_bf16",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
      "label": "l2.lat_norm",
      "op": "rms",
      "args": [
       {
-       "buf": "routed_latent_all"
+       "buf": "routed_latent"
       },
       {
        "buf": "layers.2.gamma_lat"
@@ -23290,7 +19568,12 @@
        "buf": "routed_latent_norm"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23308,7 +19591,12 @@
        "buf": "routed_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
@@ -23335,22 +19623,27 @@
        "buf": "shared_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
-       "i32": 3072
+       "i32": 12288
       },
       {
        "i32": 7168
       },
       {
-       "i32": 3072
+       "i32": 12288
       }
      ]
     },
     {
      "label": "l2.shared_situ",
-     "op": "land_situ_n1536",
+     "op": "land_situ_n6144",
      "args": [
       {
        "buf": "shared_partial"
@@ -23359,7 +19652,12 @@
        "buf": "shared_act"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23377,61 +19675,21 @@
        "buf": "shared_partial2"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
       },
       {
-       "i32": 1536
+       "i32": 6144
       },
       {
        "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l2.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
       }
      ]
     },
@@ -23443,7 +19701,7 @@
        "buf": "routed_partial"
       },
       {
-       "buf": "mlp_all"
+       "buf": "shared_partial2"
       },
       {
        "buf": "prefix2"
@@ -23455,7 +19713,12 @@
        "i32": 1
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23479,7 +19742,37 @@
        "buf": "normed"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "l3.gather_normed",
+     "op": "nccl_allgather_bf16",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "normed_all"
+      },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
@@ -23488,7 +19781,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_all"
       },
       {
        "buf": "layers.3.wfu"
@@ -23500,13 +19793,13 @@
        "var": "tokens"
       },
       {
-       "i32": 14400
+       "i32": 5184
       },
       {
        "i32": 7168
       },
       {
-       "i32": 14400
+       "i32": 5184
       }
      ]
     },
@@ -23542,7 +19835,7 @@
     },
     {
      "label": "l3.q_b",
-     "op": "gemm_f32",
+     "op": "gemm_bf16",
      "args": [
       {
        "buf": "q_norm"
@@ -23551,109 +19844,146 @@
        "buf": "layers.3.w_q_b"
       },
       {
-       "buf": "q_partial"
+       "buf": "q_bf16"
       },
       {
        "var": "tokens"
       },
       {
-       "i32": 18432
+       "i32": 4608
       },
       {
        "i32": 1536
       },
       {
-       "i32": 18432
+       "i32": 4608
       }
      ]
     },
     {
-     "label": "l3.absorb",
-     "op": "mla_absorb",
+     "label": "l3.gather",
+     "op": "latent_gather",
      "args": [
-      {
-       "buf": "q_partial"
-      },
-      {
-       "buf": "layers.3.w_kv_b"
-      },
-      {
-       "buf": "q_abs"
-      },
-      {
-       "var": "tokens"
-      }
-     ]
-    },
-    {
-     "label": "l3.attn",
-     "op": "mla_attn",
-     "args": [
-      {
-       "buf": "q_abs"
-      },
-      {
-       "buf": "q_abs",
-       "offset": 1024
-      },
       {
        "state": "kv",
        "offset": 0
       },
       {
-       "state": "kv",
-       "offset": 1024
-      },
-      {
        "buf": "block_table"
       },
       {
-       "buf": "seq_lens"
+       "buf": "fmha_lens"
       },
       {
-       "buf": "mla_bsk"
+       "buf": "latent_g"
       },
       {
-       "buf": "o_lat"
-      },
-      {
-       "buf": "mla_lse"
-      },
-      {
-       "buf": "mla_acc_o"
-      },
-      {
-       "buf": "mla_acc_lse"
-      },
-      {
-       "var": "tokens"
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "ctx",
+           128
+          ]
+         },
+         128
+        ]
+       }
       }
      ]
     },
     {
-     "label": "l3.vup",
-     "op": "mla_vup_gate",
+     "label": "l3.expand",
+     "op": "gemm_bf16",
      "args": [
       {
-       "buf": "o_lat"
+       "buf": "latent_g"
       },
       {
-       "buf": "layers.3.w_kv_b"
+       "buf": "layers.3.w_aug"
       },
       {
-       "buf": "mla_gate"
+       "buf": "kv_exp"
       },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "ctx",
+           128
+          ]
+         },
+         128
+        ]
+       }
+      },
+      {
+       "i32": 7680
+      },
+      {
+       "i32": 576
+      },
+      {
+       "i32": 7680
+      }
+     ]
+    },
+    {
+     "label": "l3.attn",
+     "op": "mla_fmha",
+     "args": [
+      {
+       "buf": "q_bf16"
+      },
+      {
+       "buf": "kv_exp"
+      },
+      {
+       "buf": "kv_exp",
+       "offset": 384
+      },
+      {
+       "buf": "o_bf16"
+      },
+      {
+       "buf": "fmha_lens"
+      },
+      {
+       "buf": "fmha_lens",
+       "offset": 8
+      },
+      {
+       "buf": "fmha_lens",
+       "offset": 16
+      },
+      {
+       "buf": "fmha_scratch"
+      },
+      {
+       "buf": "fmha_scratch",
+       "offset": 311296
+      }
+     ]
+    },
+    {
+     "label": "l3.gate",
+     "op": "mla_gate",
+     "args": [
       {
        "buf": "gated"
       },
       {
-       "var": "tokens"
+       "buf": "o_bf16"
+      },
+      {
+       "buf": "mla_gate"
       }
      ]
     },
     {
      "label": "l3.o_proj",
-     "op": "gemm_f32",
+     "op": "gemm_bf16",
      "args": [
       {
        "buf": "gated"
@@ -23662,7 +19992,7 @@
        "buf": "layers.3.w_o"
       },
       {
-       "buf": "hidden_partial"
+       "buf": "attn_part"
       },
       {
        "var": "tokens"
@@ -23671,7 +20001,7 @@
        "i32": 7168
       },
       {
-       "i32": 12288
+       "i32": 3072
       },
       {
        "i32": 7168
@@ -23679,41 +20009,36 @@
      ]
     },
     {
-     "label": "l3.gather_attn",
-     "op": "tp_allgather_f32",
+     "label": "l3.reduce_attn",
+     "op": "nccl_reducescatter_bf16",
      "args": [
       {
-       "buf": "hidden_partial"
+       "buf": "attn_part"
       },
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
       }
      ]
     },
     {
      "label": "l3.res_mlp",
-     "op": "land_add_attnres_rms",
+     "op": "land_add_attnres_rms_bf16",
      "args": [
       {
-       "buf": "hidden_partial_all"
+       "buf": "attn_own"
       },
       {
        "buf": "hidden"
@@ -23737,7 +20062,12 @@
        "i32": 0
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23755,7 +20085,12 @@
        "buf": "router_partial"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 224
@@ -23788,7 +20123,12 @@
        "buf": "topk_weight"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23806,7 +20146,12 @@
        "buf": "latent_partial"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 3584
@@ -23830,7 +20175,12 @@
        "buf": "latent"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23850,7 +20200,12 @@
        "offset": 135142976
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23875,7 +20230,12 @@
       {
        "expr": {
         "mul": [
-         "tokens",
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
          16
         ]
        }
@@ -23893,7 +20253,12 @@
        "buf": "stats"
       },
       {
-       "var": "tokens"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "buf": "slab_peers"
@@ -23932,41 +20297,11 @@
      ]
     },
     {
-     "label": "l3.gather_moe",
-     "op": "tp_allgather_bf16",
-     "args": [
-      {
-       "buf": "routed_latent"
-      },
-      {
-       "buf": "routed_latent_all"
-      },
-      {
-       "buf": "tp_sym"
-      },
-      {
-       "buf": "tp_peers"
-      },
-      {
-       "buf": "tp_epochs"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      }
-     ]
-    },
-    {
      "label": "l3.lat_norm",
      "op": "rms",
      "args": [
       {
-       "buf": "routed_latent_all"
+       "buf": "routed_latent"
       },
       {
        "buf": "layers.3.gamma_lat"
@@ -23975,7 +20310,12 @@
        "buf": "routed_latent_norm"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -23993,7 +20333,12 @@
        "buf": "routed_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
@@ -24020,22 +20365,27 @@
        "buf": "shared_partial"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
-       "i32": 3072
+       "i32": 12288
       },
       {
        "i32": 7168
       },
       {
-       "i32": 3072
+       "i32": 12288
       }
      ]
     },
     {
      "label": "l3.shared_situ",
-     "op": "land_situ_n1536",
+     "op": "land_situ_n6144",
      "args": [
       {
        "buf": "shared_partial"
@@ -24044,7 +20394,12 @@
        "buf": "shared_act"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -24062,61 +20417,21 @@
        "buf": "shared_partial2"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       },
       {
        "i32": 7168
       },
       {
-       "i32": 1536
+       "i32": 6144
       },
       {
        "i32": 7168
-      }
-     ]
-    },
-    {
-     "label": "l3.reduce_mlp",
-     "op": "tp_allreduce_f32",
-     "args": [
-      {
-       "buf": "shared_partial2"
-      },
-      {
-       "buf": "mlp_all"
-      },
-      {
-       "buf": "tp_ar_comm"
-      },
-      {
-       "buf": "tp_ar_comm_peers"
-      },
-      {
-       "buf": "tp_ar_flags"
-      },
-      {
-       "buf": "tp_ar_flag_peers"
-      },
-      {
-       "buf": "tp_ar_lamport"
-      },
-      {
-       "buf": "tp_ar_lamport_peers"
-      },
-      {
-       "buf": "tp_ar_state"
-      },
-      {
-       "buf": "tp_err"
-      },
-      {
-       "buf": "tp_blocks"
-      },
-      {
-       "rank": "tp"
-      },
-      {
-       "var": "rows"
       }
      ]
     },
@@ -24128,7 +20443,7 @@
        "buf": "routed_partial"
       },
       {
-       "buf": "mlp_all"
+       "buf": "shared_partial2"
       },
       {
        "buf": "prefix2"
@@ -24140,7 +20455,12 @@
        "i32": 1
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
       }
      ]
     },
@@ -24164,7 +20484,52 @@
        "buf": "normed"
       },
       {
-       "var": "rows"
+       "expr": {
+        "ceil_div": [
+         "tokens",
+         4
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "out.gather",
+     "op": "nccl_allgather_bf16",
+     "args": [
+      {
+       "buf": "normed"
+      },
+      {
+       "buf": "normed_all"
+      },
+      {
+       "expr": {
+        "mul": [
+         {
+          "ceil_div": [
+           "tokens",
+           4
+          ]
+         },
+         7168
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "label": "out.last",
+     "op": "last_row",
+     "args": [
+      {
+       "buf": "normed_last"
+      },
+      {
+       "buf": "normed_all"
+      },
+      {
+       "var": "tokens"
       }
      ]
     },
@@ -24173,7 +20538,7 @@
      "op": "gemm_f32",
      "args": [
       {
-       "buf": "normed"
+       "buf": "normed_last"
       },
       {
        "buf": "w_lm"
@@ -24182,7 +20547,7 @@
        "buf": "logits"
       },
       {
-       "var": "rows"
+       "i32": 1
       },
       {
        "i32": 163840
@@ -24197,27 +20562,13 @@
     },
     {
      "label": "out.argmax",
-     "op": "argmax_f32",
+     "op": "argmax_f32_one",
      "args": [
       {
        "buf": "logits"
       },
       {
        "buf": "next_token"
-      }
-     ]
-    }
-   ]
-  },
-  "tp_init": {
-   "once": true,
-   "calls": [
-    {
-     "label": "tp_init",
-     "op": "tp_lamport_init",
-     "args": [
-      {
-       "buf": "tp_ar_lamport"
       }
      ]
     }
@@ -24548,7 +20899,19 @@
      ]
     },
     {
-     "label": "load.fill_bf16.20",
+     "label": "load.k3_kvb_aug.20",
+     "op": "k3_kvb_aug",
+     "args": [
+      {
+       "buf": "layers.3.w_kv_b"
+      },
+      {
+       "buf": "layers.3.w_aug"
+      }
+     ]
+    },
+    {
+     "label": "load.fill_bf16.21",
      "op": "fill_bf16",
      "args": [
       {
@@ -24557,7 +20920,7 @@
      ]
     },
     {
-     "label": "load.k3_mega_sf_pack.21",
+     "label": "load.k3_mega_sf_pack.22",
      "op": "k3_mega_sf_pack",
      "args": [
       {
@@ -24578,7 +20941,7 @@
      ]
     },
     {
-     "label": "load.k3_mega_sf_pack.22",
+     "label": "load.k3_mega_sf_pack.23",
      "op": "k3_mega_sf_pack",
      "args": [
       {
