@@ -424,6 +424,38 @@ g（K8 的 gate 输入）不需要核：`span_flow · w_f_bᵀ` 用 cuBLAS 的 b
 `span_gather`（B = span，对 K2 参考逐行调用）、`span_state`（逐字节）、`kda_out_gate`，三个都把 span 放在
 batch 行 3 起（`SPAN_AT`），前面的行必须原样。
 
+### K12 prefill chunk 的配套（`kern_k3_mla_chunk_plan` / `kern_own_rows` / `kern_last_row_bf16`）
+
+`gen_k3.py --chunk N` 的 `prefill` program：一条序列的一段 chunk 按行喂（`tokens` 行），
+KDA 层走 K8–K11 的 span 路径（span 在行 0、长度就是 chunk），MLA 层用 K5 的 decode 核把
+每行当一个 batch 项（各行共用页表行 0：页表 batch stride 填 0），MoE 走 MegaMoE，head
+只算末行。`--tp R` 时 manifest 只有 `prefill`：tray 的 R 张卡喂同一段 chunk、行序不变
+（不是 decode tray 批的"自己的行在前"），主干在每张卡上算全部行（KDA 按头切 + allreduce
+照旧），按行拆的那几段——MLA 的 q 路径与 attention、routed experts——各卡只算自己那份，
+算完 all-gather 回 chunk 序（collective 核 `-DNATURAL` 变体：旋转关掉、`blocks` 只分
+two-shot 的段）。MLA 的 kv_a 与 append 每张卡都算全部行：每张卡都持有这条序列的 latent。
+
+```c
+// 一个 chunk 一次：各行的长度、split 数（全 1）、tray 的分块
+extern "C" __global__ void kern_k3_mla_chunk_plan(const int* seq_lens, int* row_seq_lens, int* block_split_kvs,
+                                                  int* blocks, int T, int rank, int nranks);
+// grid (ceil(T/1024),1,1) block 1024。per = ceil(T / nranks)，blocks[q] = min(q·per, T)（nranks = 1 时
+// [0, T]）；本卡第 j 行是 chunk 行 min(blocks[rank] + j, T−1)（超出自己那份的行重复末行，MegaMoE
+// 与 attention 的 batch 是 ceil_div(tokens, R) 定长），row_seq_lens[j] = seq_lens[0] − T + 行 + 1。
+
+// 按行拆之前：把自己那份行拷出来（生成器 op `own_rows`，只在 --tp 形态）
+extern "C" __global__ void kern_own_rows(void* dst, const void* src, const int* blocks, int rank, int row_bytes, int rows);
+// grid (ceil_div(tokens, R),1,1) block 256。dst[j] = src[min(blocks[rank] + j, rows − 1)]，行按 16 B 拷；
+// 基址是 plan 里的运行时值，manifest 表达式够不到，所以核读 plan。用在 q_norm、mla_gate、normed 上。
+
+// head 只算末行
+extern "C" __global__ void kern_last_row_bf16(bf16* dst, const bf16* src, int src_stride, int width, int rows);
+```
+
+门禁（2026-09-18，4 层，k3_golden `--prefill`，fixture 逐 token）：EP4 chunk 8 五段 5/5 exact、40 一段 1/1；
+TP4 split 形态 chunk 8 / 40 / 7（7 = 不等分：[0,2,4,6,7]，rank 3 一行实 + 一行 pad）四卡各 5/5、1/1、6/6 exact。
+prefill 之后的 16 个 free token 与 `decode_span` 的 chunk 逐字节同。
+
 ## 2. 验收（每个核）
 
 1. **harness 通过**：`tools/k3-harness/`（见其 README）——对每个核、每个规定形状，随机输入 + CPU 参考，

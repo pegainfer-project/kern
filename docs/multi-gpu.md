@@ -425,6 +425,28 @@ CP 只管长 prefill 时谁算哪段新 token，与这张表无关（K4 / K5 另
 已按 chunk 捕图，一次 launch 1–2 µs 对应几十 ms GPU；余数块 eager 630 µs
 host 也远小于 GPU 时间——只要提交前不 sync 就被藏掉。TP 下同样。
 
+### Prefill-only 的 tray 形态（2026-09-18，`gen_k3.py --tp R --chunk N`）
+
+TTFT 导向的 prefill 服务（RSI demo，roadmap "K3 prefill" 线）不要 decode tray 批：
+manifest 只有 `prefill` 一条 program，tray 的 R 张卡喂**同一段 chunk、行序不变**。
+"自己的行在前"的旋转是为了让按行归 owner 的 op 不带 rank 偏移；一段 chunk 的
+KDA 时间轴要行序，旋转不能要。于是反过来：主干（norm、残差、按头切的 KDA + allreduce、
+按列切的 shared expert / dense FFN + allreduce、lat_up）在每张卡上算全部 `tokens` 行；
+按行拆的三段——MLA 的 q_b / absorb / attention / vup / o_proj、routed experts 的
+router / lat_down / MegaMoE——各卡先用 `own_rows` 把自己那份行（`chunk_plan` 写的
+`blocks`，`ceil_div(tokens, R)` 定长，末卡不足的行重复 chunk 末行）拷出来算，输出
+all-gather 回 chunk 序（`peer_collective.cu` / `peer_allreduce.cu` 的 `-DNATURAL`
+变体：`local_row` / `row_on` 恒等，`blocks` 只分 two-shot 的段）。MLA 的 wfu / prep
+（kv_a + append + gate）每卡都算全部行，所以每卡都持有序列的整条 latent；q_b 因此
+不复制，gate 拷自己那份。开销：每个 MLA 层多 3 次 `own_rows`（16k 行 ≈ 0.5 GB 拷贝）、
+wfu 的 gate 段算了 4 份；每个 MoE 层多一次 `own_rows(normed)`。
+
+代价与 decode tray 批相同的地方：KDA state 按头分在四卡，一条序列的 lease 每卡各一份；
+不同的地方：MLA 的 latent 四卡复制（27 KB/token，256k ≈ 7 GB/卡）。attention 本身
+（v1，DSL decode 核逐行展开）按行拆只省了行数：MMA 的 128 行 M tile 装的是头，切头不
+省，所以 v1 下 TP4 的 attention 总量是 EP4/DP 的四倍——留给 v2（物化 + FMHA prefill
+核，M 是 token × 头）。4 层门禁见 k3-kernel-abi.md K12。
+
 ### 故障模型
 
 rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都带超时**：一次等待

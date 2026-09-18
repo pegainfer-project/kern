@@ -6,8 +6,9 @@ superstep, and with `--chunk N` a rows-as-fed `prefill` program.
     python3 tools/gen_k3.py --ranks 4 > examples/k3-ep4.json
     python3 tools/gen_k3.py --ranks 4 --tp 4 > examples/k3-ep4-tp4.json
     python3 tools/gen_k3.py --ranks 4 --chunk 16384 > examples/k3-ep4-prefill.json
+    python3 tools/gen_k3.py --ranks 4 --tp 4 --chunk 16384 > examples/k3-ep4-tp4-prefill.json
 
-Program `prefill` (`--chunk`, EP only): one sequence's chunk of `tokens` rows
+Program `prefill` (`--chunk`): one sequence's chunk of `tokens` rows
 through the same layers, the KDA layers by FlashKDA over the whole chunk
 (the span path with the span at row 0 and as long as the chunk), the MLA
 layers by the decode attention kernel with every row its own batch entry
@@ -23,6 +24,17 @@ delta rule, state in a `bytes_per_seq` line) or absorbed paged MLA (latent
 cache in `kv`), latent MoE (router → down-proj → MegaMoE → norm → up-proj,
 plus the shared experts) or the dense MLP — then the output mix, final norm,
 lm_head and argmax into `next_token`.
+
+With `--tp R` a `--chunk` manifest is prefill only, the tray's R ranks fed
+the same chunk in its own order: the trunk runs on every rank over all
+`rows` (the KDA layers head-sharded and all-reduced as below), and the ops
+that split by rows — the MLA q path and attention, the routed experts —
+take this rank's share, chunk rows [blocks[r], blocks[r+1]) of the deal
+`chunk_plan` writes (`own_rows` copies the share out; a row past the share
+repeats the chunk's last row), and their outputs are all-gathered back into
+chunk order (the collectives built -DNATURAL). The MLA projections stay
+whole: kv_a and its append run on every row of every rank, so every rank
+holds the sequence's latent cache.
 
 `--tp R` makes the tray one batch (docs/multi-gpu.md "最终形态"): the `tp`
 group's R ranks each own `tokens` rows and run the trunk on all `rows` ==
@@ -109,6 +121,7 @@ SP = "span"
 TP_GRID = 256
 TP_AR_GRID = 152  # the GB300's SM count, a multiple of the cluster of 8 and under the 256-row flag table
 TP_TIMEOUT_NS = 2_000_000_000
+ONESHOT_MAX_ROWS = 192  # peer_allreduce.cu: wider batches go two-shot, the Lamport stages hold this many rows
 
 # Launch geometry per entry, as the kernel headers document it
 # (docs/k3-kernel-abi.md §1). grid.x is always the batch.
@@ -166,14 +179,20 @@ def pack(size, *fields):
     return {"pack": {"size": size, "fields": list(fields)}}
 
 
-def mla_attn_op(seqs_max, page_stride, split_max, shared_table=False):
+def dim(x):
+    """A batch dimension as a scalar arg: a var by name or an expression over one."""
+    return {"var": x} if isinstance(x, str) else {"expr": x}
+
+
+def mla_attn_op(batch_max, page_stride, split_max, shared_table=False, batch=T):
     """The DSL attention as one op: split kernel + reduction, structs packed from the interface.
     Interface: q_abs latent | q_abs rope (+1024 B) | kv latent | kv rope (+1024 B) | block_table |
     seq_lens | mla_bsk | o_lat | lse | acc_o | acc_lse | B | max_pages. `shared_table`: every
-    row reads page-table row 0 (a prefill chunk's rows are one sequence)."""
-    V = {"at": 0, "var": T}
+    row reads page-table row 0 (a prefill chunk's rows are one sequence). `batch` is the rows'
+    dimension, at most `batch_max`."""
+    V = {"at": 0, **dim(batch)}
     tmap = lambda param, d0, page, box1, stride1: pack(128, {"at": 0, "tensormap": {
-        "param": param, "dtype": "bf16", "dims": [d0, page, 0 if page == PAGE else seqs_max],
+        "param": param, "dtype": "bf16", "dims": [d0, page, 0 if page == PAGE else batch_max],
         "strides": [LATENT_ROW * 2, stride1], "box": [64, box1, 1], "swizzle": 128, "l2_promotion": 128}})
     at = lambda off, f: {**f, "at": off}
     q_stride, kv_stride = HEADS * LATENT_ROW * 2, page_stride * 2
@@ -183,8 +202,8 @@ def mla_attn_op(seqs_max, page_stride, split_max, shared_table=False):
     acc_lse = pack(40, {"at": 0, "param": 10}, {"at": 8, "i32": MLA_M_TILE}, {"at": 12, "i32": split_max}, {"at": 16, "i32": 1},
                    at(20, V), {"at": 24, "i32": split_max}, {"at": 28, "i32": MLA_M_TILE * split_max},
                    {"at": 32, "i32": MLA_M_TILE * split_max})
-    seqs = pack(16, {"at": 0, "param": 5}, {"at": 8, "var": T, "width": 8})
-    bsk = pack(16, {"at": 0, "param": 6}, {"at": 8, "var": T, "width": 8})
+    seqs = pack(16, {"at": 0, "param": 5}, {"at": 8, **dim(batch), "width": 8})
+    bsk = pack(16, {"at": 0, "param": 6}, {"at": 8, **dim(batch), "width": 8})
     # the tiled-MMA descriptors and the TMA coordinate shapes are not read by this build; zero
     main_params = ["bytes<64>", "bytes<64>", "bytes<128>", "bytes<8>", "bytes<128>", "bytes<8>", "bytes<128>", "bytes<12>",
                    "bytes<128>", "bytes<12>", "bytes<128>", "bytes<12>", "bytes<24>", "bytes<48>", "bytes<24>", "bytes<48>",
@@ -225,9 +244,9 @@ def mla_attn_op(seqs_max, page_stride, split_max, shared_table=False):
                    "in buffer<i32>", "out buffer<bf16>", "out buffer<f32>", "out buffer<f32>", "out buffer<f32>", "i32", "i32"],
         "impl": {"launches": [
             {**module, "entry": MLA_MAIN, "params": main_params, "args": main_args, "block": [384, 1, 1],
-             "grid": [2, T, split_max], "cluster": [2, 1, 1], "shared_mem": MLA_MAIN_SMEM},
+             "grid": [2, batch, split_max], "cluster": [2, 1, 1], "shared_mem": MLA_MAIN_SMEM},
             {**module, "entry": MLA_REDUCE, "params": reduce_params, "args": reduce_args, "block": [128, 1, 1],
-             "grid": [HEADS, 1, T], "shared_mem": MLA_REDUCE_SMEM},
+             "grid": [HEADS, 1, batch], "shared_mem": MLA_REDUCE_SMEM},
         ]},
     }
 
@@ -235,7 +254,11 @@ def mla_attn_op(seqs_max, page_stride, split_max, shared_table=False):
 def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, chunk_max=0):
     assert 1 <= layers <= LAYERS
     assert tp == 1 or ranks % tp == 0, "the tp group is a subset of the ep world"
-    assert not chunk_max or tp == 1, "the prefill program is EP only"
+    # A tray's chunk is dealt by rows: `split` marks the prefill-only form.
+    split = tp > 1 and chunk_max > 0
+    decode = not split
+    if split:
+        seqs_max = 1
     n_kda = sum(1 for i in range(layers) if not is_mla(i))
     mla_index = {i: k for k, i in enumerate(i for i in range(layers) if is_mla(i))}
     n_mla = len(mla_index)
@@ -246,8 +269,14 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     assert blocks_total <= NB_MAX
     # `tokens` bounds a decode step's sequences and a prefill chunk's rows.
     t_max = max(seqs_max, chunk_max)
-    mp = gen_k3_moe.mega_pieces(ranks, t_max)
     rows_max = max(tp * seqs_max, chunk_max)
+    # The rows the ops that split by rows see: all of `tokens`, or this
+    # rank's share of the chunk (`own_max` rows; OG the grid's dimension for
+    # it, OB the same as a scalar arg).
+    own_max = -(-chunk_max // tp) if split else t_max
+    OG = {"ceil_div": [T, tp]} if split else T
+    OB = dim(OG)
+    mp = gen_k3_moe.mega_pieces(ranks, own_max)
     # This rank's KDA heads: whole, or the tray group's shard (heads, the
     # per-head weights and the state line all HEADS / tp wide; the kernels
     # are built for that width, tools/shard_k3_tp.py cuts the weights).
@@ -305,6 +334,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             "params": ["in buffer<f32>", "in buffer<f32>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32"],
             "impl": {"launches": [launch("k3_residual", "kern_k3_land_add2", var=R)]},
         },
+        **({
         # K2 / K3 KDA
         "conv_silu": {
             "params": ["in buffer<f32>", "in buffer<f32>", "inout state", "in buffer<i32>", "i64",
@@ -319,6 +349,26 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             "impl": {"launches": [launch("k3_kda_core", "kern_k3_kda_core", grid=[T, hl, 1], var=KV,
                                          defines=kda_defs)]},
         },
+        "mla_split_plan": {
+            "params": ["in buffer<i32>", "out buffer<i32>", "i32", "i32"],
+            "impl": {"launches": [launch("k3_mla_split_plan", "kern_k3_mla_split_plan")]},
+        },
+        "mla_attn": mla_attn_op(seqs_max, page_stride, mla_split_max),
+        "argmax_f32": {
+            "params": ["in buffer<f32>", "out buffer<i64>", "i32"],
+            "impl": {
+                "scratch": {"pmax": {"dtype": "f32", "shape": [R, 64]}, "pidx": {"dtype": "i32", "shape": [R, 64]}},
+                "launches": [
+                    launch("k3_router_argmax", "kern_k3_argmax_f32_partial", var=R,
+                           params=["in buffer<f32>", "out buffer<f32>", "out buffer<i32>", "i32"],
+                           args=[{"param": 0}, {"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 2}]),
+                    launch("k3_router_argmax", "kern_k3_argmax_f32_final", var=R,
+                           params=["in buffer<f32>", "in buffer<i32>", "out buffer<i64>", "i32"],
+                           args=[{"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 1}, {"i32": 64}]),
+                ],
+            },
+        },
+        } if decode else {}),
         # K10 and the g GEMM serve both a decode step's span and a prefill chunk.
         **({
             "span_state_load": {
@@ -372,11 +422,12 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                                              block=[128, 1, 1], defines=kda_defs)]},
             },
             "chunk_plan": {
-                "params": ["in buffer<i32>", "out buffer<i32>", "out buffer<i32>", "i32"],
+                "params": ["in buffer<i32>", "out buffer<i32>", "out buffer<i32>", "out buffer<i32>", "i32", "i32",
+                           "i32"],
                 "impl": {"launches": [launch("k3_mla_split_plan", "kern_k3_mla_chunk_plan",
                                              grid=[{"ceil_div": [T, 1024]}, 1, 1], block=[1024, 1, 1])]},
             },
-            "mla_attn_chunk": mla_attn_op(chunk_max, page_stride, 1, shared_table=True),
+            "mla_attn_chunk": mla_attn_op(own_max, page_stride, 1, shared_table=True, batch=OG),
             "last_row": {
                 "params": ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
                 "impl": {"launches": [launch("copy_rows", "kern_last_row_bf16", grid=[1, 1, 1], block=[1024, 1, 1])]},
@@ -404,35 +455,16 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         },
         "mla_absorb": {
             "params": ["in buffer<f32>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
-            "impl": {"launches": [launch("k3_mla_absorb", "kern_k3_mla_absorb")]},
+            "impl": {"launches": [launch("k3_mla_absorb", "kern_k3_mla_absorb", var=OG)]},
         },
-        "mla_split_plan": {
-            "params": ["in buffer<i32>", "out buffer<i32>", "i32", "i32"],
-            "impl": {"launches": [launch("k3_mla_split_plan", "kern_k3_mla_split_plan")]},
-        },
-        "mla_attn": mla_attn_op(seqs_max, page_stride, mla_split_max),
         "mla_vup_gate": {
             "params": ["in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
-            "impl": {"launches": [launch("k3_mla_vup_gate", "kern_k3_mla_vup_gate")]},
+            "impl": {"launches": [launch("k3_mla_vup_gate", "kern_k3_mla_vup_gate", var=OG)]},
         },
         # K6 / K7
         "router_topk": {
             "params": ["in buffer<f32>", "in buffer<f32>", "in buffer<bf16>", "out buffer<i32>", "out buffer<f32>", "i32"],
-            "impl": {"launches": [launch("k3_router_argmax", "kern_k3_router_topk")]},
-        },
-        "argmax_f32": {
-            "params": ["in buffer<f32>", "out buffer<i64>", "i32"],
-            "impl": {
-                "scratch": {"pmax": {"dtype": "f32", "shape": [R, 64]}, "pidx": {"dtype": "i32", "shape": [R, 64]}},
-                "launches": [
-                    launch("k3_router_argmax", "kern_k3_argmax_f32_partial", var=R,
-                           params=["in buffer<f32>", "out buffer<f32>", "out buffer<i32>", "i32"],
-                           args=[{"param": 0}, {"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 2}]),
-                    launch("k3_router_argmax", "kern_k3_argmax_f32_final", var=R,
-                           params=["in buffer<f32>", "in buffer<i32>", "out buffer<i64>", "i32"],
-                           args=[{"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 1}, {"i32": 64}]),
-                ],
-            },
+            "impl": {"launches": [launch("k3_router_argmax", "kern_k3_router_topk", var=OG)]},
         },
         "rms": {
             "params": ["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32"],
@@ -441,15 +473,23 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     }
     if tp > 1:
         # The tray-local all-gather (peer_collective.cu): one op per row dtype,
-        # both over the same symmetric buffer and epoch carry.
+        # both over the same symmetric buffer and epoch carry. A split chunk
+        # gathers in natural order.
+        natural = {"NATURAL": 1} if split else {}
         coll = ["inout buffer<u8>", "in buffer<u64>", "inout buffer<u32>", "out buffer<i32>", "in buffer<i32>",
                 "i32", "i32", "i32", "i32", "i64"]
         for dt in ["f32", "bf16"]:
             ops[f"tp_allgather_{dt}"] = {
                 "params": [f"in buffer<{dt}>", f"out buffer<{dt}>"] + coll,
-                "impl": {"launches": [launch("peer_collective", "kern_peer_allgather",
+                "impl": {"launches": [launch("peer_collective", "kern_peer_allgather", defines=natural or None,
                                              grid=[TP_GRID, 1, 1], block=[256, 1, 1])]},
             }
+    if split:
+        ops["own_rows"] = {
+            "params": ["out buffer<bf16>", "in buffer<bf16>", "in buffer<i32>", "i32", "i32", "i32"],
+            "impl": {"launches": [launch("copy_rows", "kern_own_rows", grid=[OG, 1, 1], block=[256, 1, 1])]},
+        }
+    if tp > 1:
         # The allreduce is TensorRT-LLM's protocol (peer_allreduce.cu): one
         # token per cluster of 8 CTAs, one float4 per thread; the Lamport
         # stages are poisoned once by `tp_init` after the peers are imported.
@@ -458,8 +498,9 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                        "inout buffer<i32>", "in buffer<u64>", "inout buffer<u8>", "in buffer<u64>",
                        "inout buffer<i32>", "out buffer<i32>", "in buffer<i32>", "i32", "i32", "i32", "i64", "i32",
                        "i64"],
-            "impl": {"launches": [launch("peer_allreduce", "kern_peer_allreduce_f32", defines={"NRANKS": tp},
-                                         grid=[TP_AR_GRID, 1, 1], block=[H // 4 // 8, 1, 1], cluster=[8, 1, 1])]},
+            "impl": {"launches": [launch("peer_allreduce", "kern_peer_allreduce_f32",
+                                         defines={"NRANKS": tp, **natural}, grid=[TP_AR_GRID, 1, 1],
+                                         block=[H // 4 // 8, 1, 1], cluster=[8, 1, 1])]},
         }
         ops["tp_lamport_init"] = {
             "params": ["inout buffer<u8>", "i64"],
@@ -474,7 +515,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         if name not in ops:
             ops[name] = {
                 "params": ["in buffer<f32>", "out buffer<bf16>", "i32", "i32", "i32", "i32"],
-                "impl": {"launches": [launch("k3_land", "kern_k3_land", grid=per_row(n), block=[1024, 1, 1])]},
+                "impl": {"launches": [launch("k3_land", "kern_k3_land", grid=per_row(n), block=[1024, 1, 1],
+                                             var=OG)]},
             }
         return name
 
@@ -500,12 +542,13 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input", "fill": "seq_len", "domain": {"min": 1}},
         "kda.line_index": {"dtype": "i32", "shape": [n_kda, R], "kind": "input",
                            "domain": {"index_into": "kda", "stride": line_l}},
-        "next_token": {"dtype": "i64", "shape": [R] if tp > 1 else ["seqs"], "kind": "output", "fill": "tokens",
+        "next_token": {"dtype": "i64", "shape": [R] if tp > 1 and decode else ["seqs"], "kind": "output",
+                       "fill": "tokens",
                        "domain": {"index_into": "embed"}},
         **mp["buffers"],
     }
-    ag_region = seqs_max * H * 4 // 8  # packs: the widest gathered row is the f32 attention landing
-    ar_stage = tp * rows_max * H * 4  # bytes: one Lamport stage, `tp` slots of the tray batch's f32 [rows, H]
+    ag_region = own_max * H * 4 // 8  # packs: the widest gathered row is the f32 attention landing
+    ar_stage = tp * min(rows_max, ONESHOT_MAX_ROWS) * H * 4  # bytes: one Lamport stage, `tp` slots of f32 [rows, H]
     if tp > 1:
         buffers.update({
             "tp_sym": {"dtype": "u8", "shape": [2 * tp * ag_region * 16], "kind": "carry", "export": True},
@@ -521,11 +564,15 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             "tp_ar_lamport_peers": {"dtype": "u64", "shape": [tp], "kind": "peer", "of": "tp_ar_lamport", "group": "tp"},
             "tp_ar_state": {"dtype": "i32", "shape": [8], "kind": "carry"},
             "tp_err": {"dtype": "i32", "shape": [1], "kind": "output", "fill": "error"},
-            # The tray's blocks: rank q's rows are tray rows [tp_blocks[q], tp_blocks[q+1]),
-            # the last entry the tray's `rows` (peer_collective.cu "own rows first").
-            "tp_blocks": {"dtype": "i32", "shape": [tp + 1], "kind": "input", "fill": "blocks",
-                          "domain": {"min": 0, "max": rows_max, "monotone": True}},
         })
+    # The tray's blocks: rank q's rows are tray rows [tp_blocks[q], tp_blocks[q+1]),
+    # the last entry the tray's `rows`: the caller's deal of its batch
+    # (peer_collective.cu "own rows first"), or `chunk_plan`'s of a chunk.
+    if chunk_max:
+        buffers["tp_blocks"] = {"dtype": "i32", "shape": [tp + 1], "kind": "workspace"}
+    elif tp > 1:
+        buffers["tp_blocks"] = {"dtype": "i32", "shape": [tp + 1], "kind": "input", "fill": "blocks",
+                                "domain": {"min": 0, "max": rows_max, "monotone": True}}
     states = {
         "kv": {"bytes_per_token": n_mla * LATENT_ROW * 2},
         "kda": {"bytes_per_seq": n_kda * line_l},
@@ -539,6 +586,9 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     def work(name, width, dtype="bf16", var=T):
         buffers[name] = {"dtype": dtype, "shape": [var, width], "kind": "workspace"}
 
+    # The rows of the ops that split by rows (see `own_max`).
+    OV = own_max if split else T
+
     weight("embed", [V, H])
     weight("gamma_final", [H])
     weight("sw_out", [H], "f32")
@@ -546,7 +596,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     for n in ["hidden", "prefix2", "normed"]:
         work(n, H, var=R)
     buffers["blocks"] = {"dtype": "bf16", "shape": [R, NB_MAX, H], "kind": "workspace"}
-    work("hidden_partial", H, "f32")
+    work("hidden_partial", H, "f32", var=OV)
     if tp > 1:
         work("hidden_partial_all", H, "f32", var=R)
         work("routed_latent_all", LATENT, var=R)
@@ -554,10 +604,11 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         work("gated_kda", inner_l, var=R)
     work("kda_partial", fused_l, "f32", var=KV)
     work("wsm_partial", WSM, "f32", var=KV)
-    for n in ["conv_q", "conv_k", "conv_v"]:
-        work(n, inner_l, var=KV)
-    for n in ["gated", "mla_gate"]:
-        work(n, INNER)
+    if decode:
+        for n in ["conv_q", "conv_k", "conv_v"]:
+            work(n, inner_l, var=KV)
+    work("gated", INNER, var=OV)
+    work("mla_gate", INNER)
     gated_kda = b("gated_kda") if tp > 1 else b("gated")
     # The span's first batch row, an input the KDA kernels skip past even
     # when there is no span (then `span` is 0 and the row is never read).
@@ -573,26 +624,31 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         buffers.update(flash_kda_abi.workspace_buffers(hl, run_max))
     work("mla_fused_partial", MLA_FUSED, "f32")
     work("q_norm", Q_LORA)
-    work("q_partial", Q_B, "f32")
-    work("q_abs", HEADS * LATENT_ROW)
-    work("o_lat", HEADS * KV_LORA)
-    work("mla_lse", HEADS, "f32")
+    work("q_partial", Q_B, "f32", var=OV)
+    work("q_abs", HEADS * LATENT_ROW, var=OV)
+    work("o_lat", HEADS * KV_LORA, var=OV)
+    work("mla_lse", HEADS, "f32", var=OV)
     # The split accumulators of a decode step (its rows are its sequences);
     # a chunk's rows run unsplit into their own.
-    work("mla_acc_o", mla_split_max * MLA_M_TILE * KV_LORA, "f32", var=seqs_max)
-    work("mla_acc_lse", mla_split_max * MLA_M_TILE, "f32", var=seqs_max)
-    buffers["mla_bsk"] = {"dtype": "i32", "shape": [T], "kind": "workspace"}
+    if decode:
+        work("mla_acc_o", mla_split_max * MLA_M_TILE * KV_LORA, "f32", var=seqs_max)
+        work("mla_acc_lse", mla_split_max * MLA_M_TILE, "f32", var=seqs_max)
+    buffers["mla_bsk"] = {"dtype": "i32", "shape": [OV], "kind": "workspace"}
     if chunk_max:
-        buffers["row_seq_lens"] = {"dtype": "i32", "shape": [chunk_max], "kind": "workspace"}
-        work("mla_acc_o_chunk", MLA_M_TILE * KV_LORA, "f32", var=chunk_max)
-        work("mla_acc_lse_chunk", MLA_M_TILE, "f32", var=chunk_max)
+        buffers["row_seq_lens"] = {"dtype": "i32", "shape": [own_max], "kind": "workspace"}
+        work("mla_acc_o_chunk", MLA_M_TILE * KV_LORA, "f32", var=own_max)
+        work("mla_acc_lse_chunk", MLA_M_TILE, "f32", var=own_max)
         work("normed_last", H, var=1)
-    work("router_partial", EXPERTS, "f32")
-    work("topk_idx", TOPK, "i32")
-    work("topk_weight", TOPK, "f32")
-    work("latent_partial", LATENT, "f32")
+    if split:
+        work("normed_own", H, var=OV)
+        work("q_norm_own", Q_LORA, var=OV)
+        work("mla_gate_own", INNER, var=OV)
+    work("router_partial", EXPERTS, "f32", var=OV)
+    work("topk_idx", TOPK, "i32", var=OV)
+    work("topk_weight", TOPK, "f32", var=OV)
+    work("latent_partial", LATENT, "f32", var=OV)
     for n in ["latent", "routed_latent"]:
-        work(n, LATENT)
+        work(n, LATENT, var=OV)
     work("routed_latent_norm", LATENT, var=R)
     work("routed_partial", H, "f32", var=R)
     work("shared_partial", 2 * sh_l, "f32", var=R)
@@ -602,7 +658,9 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     work("dense_act", dn_l, var=R)
     if tp > 1:
         work("mlp_all", H, "f32", var=R)
-    work("logit_partial", V, "f32", var=tp * seqs_max)
+    # A decode step's logits are its sequences' (the tray's, in a tray batch);
+    # a chunk's are its last row's, live for the one sequence.
+    work("logits", V, "f32", var="seqs" if decode and tp == 1 or split else tp * seqs_max)
 
     # ---- program
     prog = []
@@ -619,7 +677,16 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         step(label, "gemm_f32", a, w, c, m, i32(n), i32(k), i32(ldc or n))
 
     def land(label, p, o, n, off, ldc):
-        step(label, land_op(n), p, o, i32(n), i32(off), i32(ldc), B)
+        step(label, land_op(n), p, o, i32(n), i32(off), i32(ldc), OB)
+
+    def own(label, src, dst, row_bytes):
+        """This rank's share of the chunk rows of `src`, copied out to `dst`
+        with tp > 1 (the ops that split by rows start there); `src` itself
+        otherwise."""
+        if not split:
+            return src
+        step(label, "own_rows", dst, src, b("tp_blocks"), {"rank": "tp"}, i32(row_bytes), B)
+        return dst
 
     def land_situ(label, p, act, n):
         step(label, situ_op(n), p, act, i32(n), RB)
@@ -673,7 +740,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         run = "chunk_" if chunk else "span_"
         step("embed", "embedding", b("token_ids"), b("embed"), b("hidden"), RB, i32(H))
         if chunk:
-            step("chunk_plan", "chunk_plan", b("seq_lens"), b("row_seq_lens"), b("mla_bsk"), B)
+            step("chunk_plan", "chunk_plan", b("seq_lens"), b("row_seq_lens"), b("mla_bsk"), b("tp_blocks"), B,
+                 {"rank": "tp"} if tp > 1 else i32(0), i32(tp))
         else:
             step("mla_plan", "mla_split_plan", b("seq_lens"), b("mla_bsk"), i32(mla_split_max), B)
 
@@ -698,18 +766,20 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                 gemm(L + "wfu", b("normed"), w("wfu"), b("mla_fused_partial"), MLA_FUSED, H)
                 step(L + "mla_prep", "mla_prep", b("mla_fused_partial"), w("gamma_q_a"), w("gamma_kv_a"), b("slot_mapping"),
                      {"state": "kv"}, i64(layer_off), i64(page_stride), b("q_norm"), b("mla_gate"), B)
-                gemm(L + "q_b", b("q_norm"), w("w_q_b"), b("q_partial"), Q_B, Q_LORA)
-                step(L + "absorb", "mla_absorb", b("q_partial"), w("w_kv_b"), b("q_abs"), B)
+                q_norm = own(L + "own_q", b("q_norm"), b("q_norm_own"), Q_LORA * 2)
+                gemm(L + "q_b", q_norm, w("w_q_b"), b("q_partial"), Q_B, Q_LORA, m=OB)
+                step(L + "absorb", "mla_absorb", b("q_partial"), w("w_kv_b"), b("q_abs"), OB)
                 if chunk:
                     step(L + "attn", "mla_attn_chunk", b("q_abs"), b("q_abs", KV_LORA * 2),
                          {"state": "kv", "offset": layer_off * 2}, {"state": "kv", "offset": layer_off * 2 + KV_LORA * 2},
                          b("block_table"), b("row_seq_lens"), b("mla_bsk"), b("o_lat"), b("mla_lse"),
-                         b("mla_acc_o_chunk"), b("mla_acc_lse_chunk"), B, i32(max_pages))
+                         b("mla_acc_o_chunk"), b("mla_acc_lse_chunk"), OB, i32(max_pages))
                 else:
                     step(L + "attn", "mla_attn", b("q_abs"), b("q_abs", KV_LORA * 2), {"state": "kv", "offset": layer_off * 2},
                          {"state": "kv", "offset": layer_off * 2 + KV_LORA * 2}, b("block_table"), b("seq_lens"), b("mla_bsk"),
                          b("o_lat"), b("mla_lse"), b("mla_acc_o"), b("mla_acc_lse"), B, i32(max_pages))
-                step(L + "vup", "mla_vup_gate", b("o_lat"), w("w_kv_b"), b("mla_gate"), b("gated"), B)
+                gate = own(L + "own_gate", b("mla_gate"), b("mla_gate_own"), INNER * 2)
+                step(L + "vup", "mla_vup_gate", b("o_lat"), w("w_kv_b"), gate, b("gated"), OB)
             else:
                 line = b("kda.line_index", kda_k * rows_max * 4)
                 kda_k += 1
@@ -730,7 +800,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                     if span:
                         span_out_gate(L, w, S, run)
             if is_mla(i) or tp == 1:
-                gemm(L + "o_proj", b("gated"), w("w_o"), b("hidden_partial"), H, INNER)
+                gemm(L + "o_proj", b("gated"), w("w_o"), b("hidden_partial"), H, INNER, m=OB)
                 attn_out = gathered(L + "gather_attn", b("hidden_partial"), b("hidden_partial_all"), "f32", H * 4)
             else:
                 # Head-sharded o_proj on every row: each rank's slice of the sum.
@@ -752,11 +822,13 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                 mlp = reduced(L + "reduce_mlp", b("routed_partial"), b("mlp_all")) if tp > 1 else b("routed_partial")
                 step(L + "hidden", "land_add2", mlp, mlp, b("prefix2"), b("hidden"), i32(0), RB)
             else:
-                gemm(L + "router", b("normed"), w("w_router"), b("router_partial"), EXPERTS, H)
-                step(L + "topk", "router_topk", b("router_partial"), w("bias"), w("rs"), b("topk_idx"), b("topk_weight"), B)
-                gemm(L + "lat_down", b("normed"), w("w_lat_down"), b("latent_partial"), LATENT, H)
+                normed = own(L + "own_normed", b("normed"), b("normed_own"), H * 2)
+                gemm(L + "router", normed, w("w_router"), b("router_partial"), EXPERTS, H, m=OB)
+                step(L + "topk", "router_topk", b("router_partial"), w("bias"), w("rs"), b("topk_idx"), b("topk_weight"),
+                     OB)
+                gemm(L + "lat_down", normed, w("w_lat_down"), b("latent_partial"), LATENT, H, m=OB)
                 land(L + "latent", b("latent_partial"), b("latent"), LATENT, 0, LATENT)
-                prog.extend(gen_k3_moe.mega_pieces(ranks, seqs_max, wprefix=f"layers.{i}.")["steps"](
+                prog.extend(gen_k3_moe.mega_pieces(ranks, own_max, wprefix=f"layers.{i}.", tokens=OG)["steps"](
                     b("latent"), b("topk_idx"), b("topk_weight"), b("routed_latent"), label=L))
                 routed = gathered(L + "gather_moe", b("routed_latent"), b("routed_latent_all"), "bf16", LATENT * 2)
                 step(L + "lat_norm", "rms", routed, w("gamma_lat"), b("routed_latent_norm"), i32(LATENT), RB)
@@ -808,18 +880,20 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
              i32(blocks_total), i32(0), RB)
         if chunk:
             step("out.last", "last_row", b("normed_last"), b("normed"), i32(H), i32(H), B)
-            gemm("out.lm_head", b("normed_last"), b("w_lm"), b("logit_partial"), V, H, m=i32(1))
-            step("out.argmax", "argmax_f32_one", b("logit_partial"), b("next_token"), i32(V))
+            gemm("out.lm_head", b("normed_last"), b("w_lm"), b("logits"), V, H, m=i32(1))
+            step("out.argmax", "argmax_f32_one", b("logits"), b("next_token"), i32(V))
         else:
-            gemm("out.lm_head", b("normed"), b("w_lm"), b("logit_partial"), V, H, m=RB)
-            step("out.argmax", "argmax_f32", b("logit_partial"), b("next_token"), i32(V))
+            gemm("out.lm_head", b("normed"), b("w_lm"), b("logits"), V, H, m=RB)
+            step("out.argmax", "argmax_f32", b("logits"), b("next_token"), i32(V))
         return prog
 
     groups = {"ep": ranks, **({"tp": tp} if tp > 1 else {})}
     # A decode step over the batch; with a span, the same step in which
     # rows [span_at, span_at + span) are one sequence's prompt chunk.
-    programs = {"decode": kern_manifest.program(emit(False), groups=seqs_max, rows=1, graph=True)}
-    if span_max:
+    programs = {}
+    if decode:
+        programs["decode"] = kern_manifest.program(emit(False), groups=seqs_max, rows=1, graph=True)
+    if span_max and decode:
         programs["decode_span"] = kern_manifest.program(emit(True), groups=seqs_max, rows=1, span=SP, graph=True)
     if chunk_max:
         programs["prefill"] = kern_manifest.program(emit(False, chunk=True), groups=1, rows=T)
@@ -831,7 +905,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             once=True)
     m = {
         "schema_version": kern_manifest.SCHEMA_VERSION,
-        "model": f"kimi-k3-pruned-75pct/{layers}l/ep{ranks}" + (f"-tp{tp}" if tp > 1 else ""),
+        "model": f"kimi-k3-pruned-75pct/{layers}l/ep{ranks}" + (f"-tp{tp}" if tp > 1 else "")
+                 + ("-prefill" if split else ""),
         "vars": {T: {"max": t_max}, "seqs": {"max": seqs_max}, R: {"max": rows_max},
                  **({SP: {"max": span_max}} if span_max else {})},
         "topology": {"groups": groups},

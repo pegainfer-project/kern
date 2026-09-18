@@ -20,7 +20,10 @@
 // (paged attention, the expert dispatch) need no rank-dependent offset.
 // Source q's rows land at local rows (blocks[q] - blocks[r]) mod blocks[R]
 // onwards, in source order around the group, so every rank produces
-// bit-identical results.
+// bit-identical results. Built with -DNATURAL the rotation is off: every
+// rank holds the tray rows in tray order and source q's rows land at
+// local rows blocks[q] onwards (a chunk every rank was fed whole, dealt
+// out for the ops that split it by rows).
 //
 // Symmetric buffer: `sym` holds 2 * nranks regions of `region_packs`
 // 16-byte slots — two sub-buffers by epoch parity (a peer may be one
@@ -129,7 +132,9 @@ extern "C" __global__ void kern_peer_allgather(const uint2* x, uint2* y, uint4* 
     __shared__ int s_fail;
     const unsigned e = epoch_begin(epochs, &s_e, &s_fail);
     const int per = row_bytes >> 3;
+#ifndef NATURAL
     const int total = blocks[nranks];
+#endif
     const int nown = (blocks[rank + 1] - blocks[rank]) * per;
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     const int stride = gridDim.x * blockDim.x;
@@ -142,11 +147,20 @@ extern "C" __global__ void kern_peer_allgather(const uint2* x, uint2* y, uint4* 
             st_ll(reinterpret_cast<uint4*>(peers[q]) + (long long)(sub + rank) * region_packs + p, d.x, d.y, e);
         }
     }
-    for (int p = tid; p < nown; p += stride) y[p] = x[p];
+#ifdef NATURAL
+    const int own_at = blocks[rank] * per;
+#else
+    const int own_at = 0;
+#endif
+    for (int p = tid; p < nown; p += stride) y[own_at + p] = x[p];
     for (int q = 0; q < nranks; ++q) {
         if (q == rank) continue;
         const int n_q = (blocks[q + 1] - blocks[q]) * per;
+#ifdef NATURAL
+        uint2* dst = y + (long long)blocks[q] * per;
+#else
         uint2* dst = y + (long long)((blocks[q] - blocks[rank] + total) % total) * per;
+#endif
         const uint4* region = sym + (long long)(sub + q) * region_packs;
         for (int p = tid; p < n_q; p += stride) {
             const uint4* slot = region + p;

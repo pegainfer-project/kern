@@ -379,8 +379,9 @@ impl Batch {
             all.extend((0..b).map(|j| peer(q, j)));
         }
         rt.write_input_at("token_ids", &le_bytes_i64(&all), &e)?;
-        // The tray's blocks, equal here: rank (me + d)'s rows at block d.
-        if rt.manifest.buffers.contains_key("tp_blocks") {
+        // The tray's blocks, equal here: rank (me + d)'s rows at block d (a
+        // chunk manifest's `tp_blocks` is a workspace its plan writes).
+        if rt.manifest.buffers.get("tp_blocks").is_some_and(|b| b.fill.is_some()) {
             let blocks: Vec<i32> = (0..=tp).map(|d| (d * n) as i32).collect();
             rt.write_input("tp_blocks", &le_bytes_i32(&blocks))?;
         }
@@ -622,8 +623,13 @@ fn run_rank(
     let per_row = per_row as usize;
     // The tray group this rank runs one batch with (`tp` in the manifest's
     // topology); alone, a group of one. Every rank leases the whole tray
-    // batch's rows.
-    let (me, tp) = topo.groups.get("tp").map(|g| (g.index as usize, g.size as usize)).unwrap_or((0, 1));
+    // batch's rows. A prefill-only tray manifest (`--tp --chunk`) deals one
+    // chunk by rows instead: every rank of the group stages the whole
+    // sequence as a batch of its own.
+    let (me, tp) = match topo.groups.get("tp") {
+        Some(g) if manifest.programs.contains_key("decode") => (g.index as usize, g.size as usize),
+        _ => (0, 1),
+    };
     // Every row of the tray batch, forks included, leased on this rank.
     let rows = ((seqs.max(1) + 2 * fork.is_some() as usize) * tp) as u64;
     let capacity = kern_runtime::Capacity { tokens: Some(per_row as u64 * rows), seqs: rows };
@@ -737,7 +743,7 @@ fn run_rank(
     out.span_ms = span_ms;
     out.tokens = tokens[0][..steps].to_vec();
     out.free = tokens[0][steps..].to_vec();
-    if tp > 1 {
+    if manifest.buffers.contains_key("tp_err") {
         let err = i32::from_le_bytes(rt.read_output("tp_err")?[..4].try_into().unwrap());
         if err != 0 {
             out.failures.push(format!("a tray collective never heard from group rank {}", err - 1));

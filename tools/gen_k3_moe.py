@@ -46,11 +46,13 @@ def tmap(param, dtype, dims, strides, box, swizzle=0, l2=256):
     return {"pack": {"size": 128, "fields": [{"at": 0, "tensormap": t}]}}
 
 
-def mega_pieces(ranks, tokens_max, wprefix=""):
+def mega_pieces(ranks, tokens_max, wprefix="", tokens="tokens"):
     """The MegaMoE program pieces for one EP<ranks> world: the symmetric slab
     buffers, the routed-expert weight shapes (`wprefix` + name), the three ops,
     and `steps(x, topk_idx, topk_weight, y, label)` — the program steps that
-    run one layer's routed experts from latent `x` into `y`."""
+    run one layer's routed experts from latent `x` into `y`. `tokens` is the
+    rows' dimension: a var's name or an expression over one (a tray's share
+    of a chunk, `{"ceil_div": ["tokens", 4]}`)."""
     cub = mega_build()
     lay = json.loads(subprocess.check_output([str(cub / "k3_mega_layout_dump"), str(EXPERTS), str(ranks)]))
     mega = {"cubin": "k3_mega_moe.cubin",
@@ -85,14 +87,14 @@ def mega_pieces(ranks, tokens_max, wprefix=""):
         "params": ["in buffer<bf16>", "out buffer<u8>", "out buffer<u8>", "i32", "i32", "i32", "i32"],
         "impl": {"launches": [{
             **stage, "entry": "kern_k3_mega_quant_x", "block": [256, 1, 1],
-            "grid": [{"ceil_div": [{"mul": ["tokens", H // 128]}, 8]}, 1, 1],
+            "grid": [{"ceil_div": [{"mul": [tokens, H // 128]}, 8]}, 1, 1],
         }]},
     }
     routing = {
         "params": ["in buffer<i32>", "in buffer<f32>", "out buffer<u8>", "out buffer<u8>", "i32"],
         "impl": {"launches": [{
             **stage, "entry": "kern_k3_mega_write_routing", "block": [256, 1, 1],
-            "grid": [{"ceil_div": [{"mul": ["tokens", K]}, 256]}, 1, 1],
+            "grid": [{"ceil_div": [{"mul": [tokens, K]}, 256]}, 1, 1],
         }]},
     }
     # Interface: y, stats, tokens, peers, rank, then the seven tensors the
@@ -125,16 +127,18 @@ def mega_pieces(ranks, tokens_max, wprefix=""):
     }
     ops = {"quant_x": quant, "write_routing": routing, "mega_moe": mega_op}
 
+    nt = {"var": tokens} if isinstance(tokens, str) else {"expr": tokens}
+
     def steps(x, topk_idx, topk_weight, y, label=""):
         w = lambda n: {"buf": wprefix + n}
         return [
             {"label": label + "quant_x", "op": "quant_x", "args": [
-                x, slab("x"), slab("x_sf"), {"var": "tokens"}, {"i32": H}, {"i32": H}, {"i32": H // 128}]},
+                x, slab("x"), slab("x_sf"), nt, {"i32": H}, {"i32": H}, {"i32": H // 128}]},
             {"label": label + "routing", "op": "write_routing", "args": [
                 topk_idx, topk_weight, slab("topk_idx"), slab("topk_weights"),
-                {"expr": {"mul": ["tokens", K]}}]},
+                {"expr": {"mul": [tokens, K]}}]},
             {"label": label + "mega_moe", "op": "mega_moe", "args": [
-                y, {"buf": "stats"}, {"var": "tokens"}, {"buf": "slab_peers"}, {"rank": "ep"},
+                y, {"buf": "stats"}, nt, {"buf": "slab_peers"}, {"rank": "ep"},
                 slab("l1_acts"), slab("l1_acts_sf"), w("l1_weights"), w("l1_weights_sf"),
                 slab("l2_acts"), slab("l2_acts_sf"), w("l2_weights"), w("l2_weights_sf")]},
         ]

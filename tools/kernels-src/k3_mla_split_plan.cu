@@ -52,23 +52,33 @@ extern "C" __global__ void __launch_bounds__(1024) kern_k3_mla_split_plan(const 
   }
 }
 
-// A prefill chunk's rows as the attention kernel's batch: row i of a chunk
-// of T rows ending at seq_lens[0] attends to its own prefix,
-// seq_lens[0] - T + i + 1 tokens, in one split (the chunk's rows already
-// fill the GPU).
+// A prefill chunk's rows as the attention kernel's batch, and the tray's
+// blocks of it. A chunk of T rows ending at seq_lens[0] is dealt to the
+// `nranks` ranks of the group in natural order, ceil(T / nranks) rows each
+// (blocks[q] = min(q * ceil(T / nranks), T); the last rank may hold fewer,
+// the whole chunk when nranks is 1). Row j of this rank's share is chunk row
+// blocks[rank] + j (a row past its share repeats the chunk's last row) and
+// attends to its own prefix, seq_lens[0] - T + row + 1 tokens, in one split
+// (a chunk's rows already fill the GPU).
 //
 //   extern "C" __global__ void kern_k3_mla_chunk_plan(
 //       const i32* seq_lens,         // [1]  the chunk's last row's length
-//       i32*       row_seq_lens,     // [T]
-//       i32*       block_split_kvs,  // [T]  all 1
-//       int T);
+//       i32*       row_seq_lens,     // [ceil(T / nranks)]
+//       i32*       block_split_kvs,  // [ceil(T / nranks)]  all 1
+//       i32*       blocks,           // [nranks + 1]
+//       int T, int rank, int nranks);
 //
 //   grid (ceil(T / 1024), 1, 1)   block (1024, 1, 1)
 extern "C" __global__ void __launch_bounds__(1024) kern_k3_mla_chunk_plan(const int* __restrict__ seq_lens,
                                                                          int* __restrict__ row_seq_lens,
-                                                                         int* __restrict__ block_split_kvs, int T) {
+                                                                         int* __restrict__ block_split_kvs,
+                                                                         int* __restrict__ blocks, int T, int rank,
+                                                                         int nranks) {
   const int i = blockIdx.x * 1024 + threadIdx.x;
-  if (i >= T) return;
-  row_seq_lens[i] = seq_lens[0] - T + i + 1;
+  const int per = (T + nranks - 1) / nranks;
+  if (i <= nranks) blocks[i] = min(i * per, T);
+  if (i >= per) return;
+  const int row = min(rank * per + i, T - 1);
+  row_seq_lens[i] = seq_lens[0] - T + row + 1;
   block_split_kvs[i] = 1;
 }

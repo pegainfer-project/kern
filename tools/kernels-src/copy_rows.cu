@@ -8,6 +8,12 @@
 //   kern_last_row_bf16:  dst[0, :width] = src[rows-1, :width], grid 1
 //     (the final-norm / lm_head row of a prefill chunk; `rows-1` is not in
 //     the manifest expression set, so the kernel takes `rows`)
+//   kern_own_rows:       dst[j, :] = src[min(blocks[rank] + j, rows - 1), :],
+//     grid.x = this rank's share of the rows, row_bytes a multiple of 16
+//     (a tray's slice of a chunk in natural order, the blocks from
+//     kern_k3_mla_chunk_plan; the base is a runtime value no manifest
+//     expression reaches, so the kernel reads the plan). One entry for
+//     every dtype: rows are bytes.
 //
 //   nvcc -cubin -arch=sm_103a -o kernels/copy_rows.cubin tools/kernels-src/copy_rows.cu
 #include <cuda_bf16.h>
@@ -26,4 +32,14 @@ extern "C" __global__ void kern_last_row_bf16(
     int src_stride, int width, int rows) {
   const __nv_bfloat16* s = src + (long long)(rows - 1) * src_stride;
   for (int j = threadIdx.x; j < width; j += blockDim.x) dst[j] = s[j];
+}
+
+extern "C" __global__ void kern_own_rows(
+    void* __restrict__ dst, const void* __restrict__ src, const int* __restrict__ blocks,
+    int rank, int row_bytes, int rows) {
+  const int j = blockIdx.x;
+  const int r = min(blocks[rank] + j, rows - 1);
+  const uint4* s = reinterpret_cast<const uint4*>(static_cast<const char*>(src) + (size_t)r * row_bytes);
+  uint4* d = reinterpret_cast<uint4*>(static_cast<char*>(dst) + (size_t)j * row_bytes);
+  for (int p = threadIdx.x; p < row_bytes / 16; p += blockDim.x) d[p] = s[p];
 }

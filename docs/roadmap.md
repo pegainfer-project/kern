@@ -37,6 +37,20 @@ E1–E2 与 K1–K2 并行；E3、K3；然后 **E5**（每步省 12 ms，先于 
 K4 改成按新 token 分段的 extend（待定稿）；E4 最后，其门禁按它实际买到的东西重写
 （agent 负载下成员不变的步很少）。E4 依赖下面的 step 边界 GPU 化。
 
+## K3 prefill 线（RSI demo，2026-09-18 起）
+
+kern 在内部 RSI 里是 kernel agent 的反馈环境（`kern test` 裁判、`kern bench` 归因），产出经 SGLang 上线。
+第一个 e2e：K3 pruned 缩到单 tray 4 卡，**只做 prefill、不捕图、TTFT 导向**；workload 两种形状：长 prefill
+（~256k）、高 hit 增量 prefill（hit ~250k + 4k 新）；chunk 16k。与 K5"不做单独 prefill program"的决定相反：
+`kern bench` / `kern test` 只认 rows-as-fed program，demo 的判据就是它们。
+
+| 级 | 内容 | 门禁 |
+|---|---|---|
+| P1 ✅ | `gen_k3.py --chunk N`：`prefill` program（KDA 走 span 路径、MLA 用 decode 核逐行展开、head 只算末行），EP 形态 | **2026-09-18 tray03**：4 层 EP4 k3_golden `--prefill` chunk 8 五段 5/5、40 一段 1/1 exact；free 16 token 与 `decode_span` 逐字节同；`kern bench` 驱动 7 个场景（k3-kernel-abi.md K12） |
+| P2 ✅ | `--tp R --chunk N`：prefill-only tray 形态，chunk 行序不变、按行拆的段走 `own_rows` + `-DNATURAL` collective（multi-gpu.md"Prefill-only 的 tray 形态"） | **2026-09-18 tray02**：4 层 TP4 chunk 8 / 40 / 7 四卡各 5/5、1/1、6/6 exact |
+| P3 | 93 层 `--tp 4 --chunk 16384 --max-ctx ≥ 256k`，weight 直接 `bind` HF pruned checkpoint（conv 转置、常量、MegaMoE expert 形态由 `load` once program 派生），`kern bench` 跑两种 TTFT 形状 | 93 层 TP4 对 12.9k oracle 与 E5 同口径；bench 出 16384×(0..240k)、4096×250k 的 mix，与 SGL 侧数字并列记进 demo 目录 |
+| P4 | MLA prefill v2：物化 kv_b 展开 + TRT-LLM gen FMHA（FlashInfer artifactory 的 cubin），`kern test` A=v1 B=v2 | KL 判据 PASS；attention 在 bench mix 里的份额从 v1 的四倍回到 EP4/DP 水平 |
+
 ## 协议线
 
 | 级 | 内容 | 门禁 |

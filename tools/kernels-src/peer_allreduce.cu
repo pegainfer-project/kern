@@ -15,7 +15,9 @@
 //              peer's second half; barrier; read the second half. Plain 16 B
 //              loads and stores, no poison, so it works for any row count.
 //
-// Row layout is kern's "own rows first" (peer_collective.cu): rank q's block
+// Row layout is kern's "own rows first" (peer_collective.cu; -DNATURAL turns
+// the rotation off, every rank then holding the tray rows in tray order
+// and the blocks only dealing the two-shot slices): rank q's block
 // is tray rows [blocks[q], blocks[q+1]) and rank r's local row j is tray row
 // (blocks[r] + j) mod rows, so the partials are rotated differently on every
 // rank. Every remote write lands at the *receiver's* local row for the same
@@ -131,13 +133,21 @@ __device__ __forceinline__ float4 add4(float4 a, float4 b) {
 
 // Rank `to`'s local row holding the tray row that is local row `j` on `from`.
 __device__ __forceinline__ int row_on(int j, const int* off, int from, int to) {
+#ifdef NATURAL
+    return j;
+#else
     const int rows = off[NRANKS];
     return ((j + off[from]) % rows - off[to] + rows) % rows;
+#endif
 }
 
 // Rank `q`'s local row holding tray row `t`.
 __device__ __forceinline__ int local_row(int t, const int* off, int q) {
+#ifdef NATURAL
+    return t;
+#else
     return (t - off[q] + off[NRANKS]) % off[NRANKS];
+#endif
 }
 
 // Timed spin: true if `ready` came up before `timeout_ns` passed.
