@@ -331,7 +331,9 @@ impl Batch {
         let span = toks[0].len();
         anyhow::ensure!(toks[1..].iter().all(|t| t.len() <= 1), "only row 0 may carry a span");
         anyhow::ensure!(span == 1 || tp == 1, "a span in a tray batch is not staged here");
-        if prefill && span > 1 {
+        // A one-token chunk is a decode step where there is a decode
+        // program, and a prefill chunk where the manifest has only that.
+        if prefill && (span > 1 || !rt.manifest.programs.contains_key("decode")) {
             anyhow::ensure!(b == 1 && tp == 1, "a prefill chunk is staged for one row of one rank");
             self.stage_tables(rt, &[0])?;
             let n = span as u64;
