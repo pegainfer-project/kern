@@ -17,7 +17,8 @@
 //! rank order, so rank `r`'s block lands at `r * count`: a manifest that
 //! deals a chunk's rows in equal blocks with the last one short reads the
 //! natural row order straight out of the receive buffer, the tail past the
-//! chunk being rows nobody reads.
+//! chunk being rows nobody reads. A reduce-scatter is its inverse: every
+//! rank's `world * count` elements summed, rank `r` receiving block `r`.
 
 use std::collections::BTreeSet;
 
@@ -66,6 +67,7 @@ impl Drop for Comm {
 pub(crate) enum Coll {
     AllReduce,
     AllGather,
+    ReduceScatter,
 }
 
 /// The element type of an `extern:nccl_*` launch.
@@ -97,6 +99,7 @@ pub(crate) fn extern_op(name: &str) -> Option<(Coll, Elem)> {
     let coll = match coll {
         "allreduce" => Coll::AllReduce,
         "allgather" => Coll::AllGather,
+        "reducescatter" => Coll::ReduceScatter,
         _ => return None,
     };
     let elem = match elem {
@@ -167,7 +170,7 @@ impl Runtime {
 
     /// Issue one collective on the compute stream: `args` as the launch
     /// wired them, `[send, recv, count, rank]`, `count` in elements per
-    /// rank.
+    /// rank (the block an all-gather sends and a reduce-scatter receives).
     pub(crate) fn collective(&self, coll: Coll, elem: Elem, group: &str, args: &[RVal]) -> Result<()> {
         let [send, recv, count, _] = args else {
             bail!(Manifest, "nccl collective takes [send, recv, count, rank], got {} args", args.len());
@@ -176,15 +179,17 @@ impl Runtime {
             bail!(Api, "nccl group `{group}` not joined");
         };
         let n = count.val;
-        let out = match coll {
-            Coll::AllReduce => n,
-            Coll::AllGather => n * c.world,
+        let (ins, out) = match coll {
+            Coll::AllReduce => (n, n),
+            Coll::AllGather => (n, n * c.world),
+            Coll::ReduceScatter => (n * c.world, n),
         };
-        if send.bytes < n * elem.bytes() || recv.bytes < out * elem.bytes() {
+        if send.bytes < ins * elem.bytes() || recv.bytes < out * elem.bytes() {
             bail!(
                 Manifest,
-                "nccl {coll:?}: {n} elements per rank, send {} B, recv {} B (needs {} B)",
+                "nccl {coll:?}: {n} elements per rank, send {} B (needs {} B), recv {} B (needs {} B)",
                 send.bytes,
+                ins * elem.bytes(),
                 recv.bytes,
                 out * elem.bytes()
             );
@@ -200,6 +205,9 @@ impl Runtime {
                     result::all_reduce(s, r, n as usize, elem.nccl(), sys::ncclRedOp_t::ncclSum, c.comm, stream)
                 }
                 Coll::AllGather => result::all_gather(s, r, n as usize, elem.nccl(), c.comm, stream),
+                Coll::ReduceScatter => {
+                    result::reduce_scatter(s, r, n as usize, elem.nccl(), sys::ncclRedOp_t::ncclSum, c.comm, stream)
+                }
             }
         }
         .map_err(nccl)?;
@@ -226,6 +234,7 @@ mod tests {
     fn an_extern_name_is_a_collective_and_an_element_type_or_nothing() {
         assert_eq!(extern_op("nccl_allreduce_f32"), Some((Coll::AllReduce, Elem::F32)));
         assert_eq!(extern_op("nccl_allgather_bf16"), Some((Coll::AllGather, Elem::Bf16)));
+        assert_eq!(extern_op("nccl_reducescatter_bf16"), Some((Coll::ReduceScatter, Elem::Bf16)));
         assert_eq!(
             (extern_op("nccl_reduce_f32"), extern_op("nccl_allreduce_f16"), extern_op("cublas_bf16_tn_f32")),
             (None, None, None)
