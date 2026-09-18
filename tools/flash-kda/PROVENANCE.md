@@ -25,7 +25,7 @@ Not vendored: the PyTorch binding (`csrc/flash_kda.cpp`), the Python package,
 tests, benchmarks, the CUTLASS submodule. `kern_flash_kda.cu` is kern's own
 translation unit (it only includes the launch layer so nvcc emits the two
 kernels into one cubin); `build.sh` is the cubin recipe. The workspace-size
-arithmetic (`tools/gen_k3_decode.py`) is reproduced from the upstream binding.
+arithmetic (`tools/gen_k3.py`) is reproduced from the upstream binding.
 
 pegainfer vendors the same sources at commit `1ce47ea` with the same trim
 (`pegainfer-kernels/third_party/flash-kda`); its C shim

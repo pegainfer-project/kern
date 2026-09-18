@@ -451,7 +451,7 @@ batch 行 3 起（`SPAN_AT`），前面的行必须原样。
 
 七族全部交付并入 master（`tools/kernels-src/k3_*.cu`，`tools/build_kernels.sh` 编成 `target/cubins/`）；
 每个核在 harness 上 B ∈ {1, 2, 8, 64} 全过，0 spill，无 `.MULTICAST`；notes/ncu 报告在 `tools/k3-harness/`。
-生成器 `tools/gen_k3_decode.py` 已切到这套核（manifest `examples/k3-*.json`，93 层 1855 launch，其中 742 GEMM）；
+生成器 `tools/gen_k3.py` 已切到这套核（manifest `examples/k3-*.json`，93 层 1855 launch，其中 742 GEMM）；
 pegainfer 的 TileLang 桶核、line shim 和它们的 manifest 已从树里删除（git 历史里有）。
 门禁数字见 roadmap E2 行。
 

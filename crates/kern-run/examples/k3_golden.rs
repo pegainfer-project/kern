@@ -332,12 +332,14 @@ impl Batch {
     /// positions of that row, its tables repeated), then rank (me + d)'s
     /// rows at block d from `peer(q, row)` (docs/multi-gpu.md "own rows
     /// first"). Returns the vars and the program it selects, and moves the
-    /// rows' positions.
+    /// rows' positions. `prefill`: row 0's span goes through the `prefill`
+    /// program instead, one sequence of that many rows as fed.
     fn stage(
         &mut self,
         rt: &mut Runtime,
         toks: &[Vec<i64>],
         peer: &dyn Fn(usize, usize) -> i64,
+        prefill: bool,
     ) -> anyhow::Result<(BTreeMap<String, u64>, &'static str)> {
         let (tp, me) = (self.leases.len(), self.me);
         let b = self.own().len();
@@ -345,6 +347,18 @@ impl Batch {
         let span = toks[0].len();
         anyhow::ensure!(toks[1..].iter().all(|t| t.len() <= 1), "only row 0 may carry a span");
         anyhow::ensure!(span == 1 || tp == 1, "a span in a tray batch is not staged here");
+        if prefill && span > 1 {
+            anyhow::ensure!(b == 1 && tp == 1, "a prefill chunk is staged for one row of one rank");
+            self.stage_tables(rt, &[0])?;
+            let n = span as u64;
+            let e = BTreeMap::from([("tokens".to_string(), n), ("seqs".to_string(), 1), ("rows".to_string(), n)]);
+            rt.write_input_at("token_ids", &le_bytes_i64(&toks[0]), &e)?;
+            let slots: Vec<i64> = (0..span).map(|j| self.own()[0].slot(self.pos[0] + j)).collect();
+            rt.write_input_at("slot_mapping", &le_bytes_i64(&slots), &e)?;
+            rt.write_input_at("seq_lens", &le_bytes_i32(&[(self.pos[0] + span) as i32]), &e)?;
+            self.pos[0] += span;
+            return Ok((e, "prefill"));
+        }
         // The tables follow the batch rows every step: a span row's lease
         // fills `span` rows this step and one the next; a row with nothing
         // to feed (done while others catch up) is not in the batch.
@@ -422,6 +436,7 @@ fn run_batch(
     fork: Option<(usize, &[Vec<i64>])>,
     span: usize,
     span_from: usize,
+    prefill: bool,
 ) -> anyhow::Result<(Vec<Vec<Vec<i64>>>, Option<f64>, Option<f64>)> {
     let tp = feeds.len();
     let rows = feeds[me].len();
@@ -462,7 +477,7 @@ fn run_batch(
         let toks: Vec<Vec<i64>> =
             (0..out[me].len()).map(|r| (0..count(r)).map(|j| token(me, r, out[me][r].len() + j)).collect()).collect();
         let peer = |q: usize, r: usize| token(q, r, out[q][r].len());
-        let (e, program) = batch.stage(rt, &toks, &peer)?;
+        let (e, program) = batch.stage(rt, &toks, &peer, prefill)?;
         if graph {
             if !rt.is_captured(program, &e) {
                 rt.capture(program, &e)?;
@@ -479,6 +494,15 @@ fn run_batch(
         let bytes = rt.read_output("next_token")?;
         let b = out[me].len();
         let n: usize = (0..b).map(count).sum();
+        if program == "prefill" {
+            // One token comes back, for the chunk's last row; the rows
+            // before it are fed but not predicted (-1: unchecked).
+            let last = i64::from_le_bytes(bytes[..8].try_into().unwrap());
+            out[me][0].extend(std::iter::repeat_n(-1, n - 1));
+            out[me][0].push(last);
+            step += 1;
+            continue;
+        }
         for (q, o) in out.iter_mut().enumerate() {
             let block = (q + tp - me) % tp;
             let mut at = block * n;
@@ -586,6 +610,7 @@ fn run_rank(
     fork: Option<usize>,
     span: usize,
     span_from: usize,
+    prefill: bool,
     rendezvous: &dyn Fn(&mut Runtime) -> kern_runtime::Result<()>,
 ) -> anyhow::Result<Outcome> {
     let manifest = kern_manifest::Verified::from_json(json)?;
@@ -672,7 +697,7 @@ fn run_rank(
             let copies: Vec<Vec<Vec<i64>>> = (0..tp).map(|q| vec![feeds[q][r].clone(); seqs]).collect();
             let strays: Vec<Vec<i64>> = (0..tp).map(|q| feeds[q][r].clone()).collect();
             let shape = fork.map(|at| (at, strays.as_slice()));
-            let (t, _, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, shape, 0, 0)?;
+            let (t, _, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, shape, 0, 0, false)?;
             solo[r] = Some(t[me][0].clone());
         }
     }
@@ -688,7 +713,8 @@ fn run_rank(
     let stray_solo = match (&stray, fork) {
         (Some(f), Some(at)) => {
             let copies = vec![vec![f.clone(); seqs]; tp];
-            let (t, _, _) = run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, Some((at, strays.as_slice())), 0, 0)?;
+            let (t, _, _) =
+                run_batch(&mut rt, &copies, me, per_row, graph, 0, 0, Some((at, strays.as_slice())), 0, 0, false)?;
             Some(t[me][0].clone())
         }
         _ => None,
@@ -704,6 +730,7 @@ fn run_rank(
         fork.map(|at| (at, strays.as_slice())),
         span,
         span_from,
+        prefill,
     )?;
     let tokens = &table[me];
     out.step_ms = ms;
@@ -717,8 +744,8 @@ fn run_rank(
         }
     }
     for (step, &got) in tokens[0][..steps].iter().enumerate() {
-        if golden.argmax[step] < 0 {
-            continue; // fed but unchecked (long-prompt fixture, tools/k3_oracle_dump.py --check-last)
+        if golden.argmax[step] < 0 || got < 0 {
+            continue; // fed but unchecked (long-prompt fixture, tools/k3_oracle_dump.py --check-last; a chunk's inner rows)
         }
         out.checked += 1;
         let (exact, excused) = golden.accept(step, got);
@@ -804,6 +831,7 @@ fn main() {
     let mut fork: Option<usize> = None;
     let mut span = 0usize;
     let mut span_from = 0usize;
+    let mut prefill = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut v = || args.next().expect("value");
@@ -827,6 +855,7 @@ fn main() {
             "--fork" => fork = Some(v().parse().unwrap()),
             "--span" => span = v().parse().unwrap(),
             "--span-from" => span_from = v().parse().unwrap(),
+            "--prefill" => prefill = true,
             _ => panic!("unknown arg {a}"),
         }
     }
@@ -940,6 +969,7 @@ fn main() {
                 fork,
                 span,
                 span_from,
+                prefill,
                 &rendezvous,
             );
             results.lock().unwrap()[local] = Some(r.map_err(|e| format!("{e:#}")));

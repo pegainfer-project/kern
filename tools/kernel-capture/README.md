@@ -60,7 +60,7 @@ build.sh    builds libkernelcapture.so (needs CUPTI from a CUDA toolkit)
    `ScaledBasis<int, k>`) are decoded from the demangled type (`cu++filt`);
    the rest of the struct is host stack garbage that upstream never
    initialises and the pack leaves at zero.
-5. **Declare** the op in the generator (`tools/gen_k3_decode.py` and
+5. **Declare** the op in the generator (`tools/gen_k3.py` and
    friends) and record the ABI in `docs/k3-kernel-abi.md`. The runtime
    compares the declared params against `cuFuncGetParamInfo` at load, so a
    wrong width fails before a launch.

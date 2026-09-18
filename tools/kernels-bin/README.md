@@ -23,7 +23,7 @@ Two entries: the split-KV attention (`kernel_cutlass_split_kv_kernel_…_0`,
 384 threads, cluster 2×1×1, 232448 B dynamic smem) and its reduction
 (`kernel_cutlass_reduction_kernel_…_1`, 128 threads, 1024 B smem). The
 parameter ABI the manifest packs is documented in `docs/k3-kernel-abi.md`
-K5; `tools/gen_k3_decode.py` writes it.
+K5; `tools/gen_k3.py` writes it.
 
 Rebuild (inside an image with FlashInfer and the CuTe DSL, a free GPU):
 

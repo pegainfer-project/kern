@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Generate kern's Kimi-K3 (pruned, 224 experts) decode superstep at EP<R>.
+"""Generate kern's Kimi-K3 (pruned, 224 experts) programs at EP<R>: the decode
+superstep, and with `--chunk N` a rows-as-fed `prefill` program.
 
-    python3 tools/gen_k3_decode.py --layers 4 --ranks 1 > examples/k3-4l-ep1.json
-    python3 tools/gen_k3_decode.py --ranks 4 > examples/k3-ep4.json
-    python3 tools/gen_k3_decode.py --ranks 4 --tp 4 > examples/k3-ep4-tp4.json
+    python3 tools/gen_k3.py --layers 4 --ranks 1 > examples/k3-4l-ep1.json
+    python3 tools/gen_k3.py --ranks 4 > examples/k3-ep4.json
+    python3 tools/gen_k3.py --ranks 4 --tp 4 > examples/k3-ep4-tp4.json
+    python3 tools/gen_k3.py --ranks 4 --chunk 16384 > examples/k3-ep4-prefill.json
+
+Program `prefill` (`--chunk`, EP only): one sequence's chunk of `tokens` rows
+through the same layers, the KDA layers by FlashKDA over the whole chunk
+(the span path with the span at row 0 and as long as the chunk), the MLA
+layers by the decode attention kernel with every row its own batch entry
+(row i attends to its prefix; the rows share the sequence's page-table
+row), the routed experts through MegaMoE over the chunk, and the head on
+the last row only: `next_token` is one token.
 
 One SPMD manifest per world: every rank runs the whole dense trunk on its own
 batch of sequences and serves its expert shard to the world through MegaMoE
@@ -156,10 +166,11 @@ def pack(size, *fields):
     return {"pack": {"size": size, "fields": list(fields)}}
 
 
-def mla_attn_op(seqs_max, page_stride, split_max):
+def mla_attn_op(seqs_max, page_stride, split_max, shared_table=False):
     """The DSL attention as one op: split kernel + reduction, structs packed from the interface.
     Interface: q_abs latent | q_abs rope (+1024 B) | kv latent | kv rope (+1024 B) | block_table |
-    seq_lens | mla_bsk | o_lat | lse | acc_o | acc_lse | B | max_pages."""
+    seq_lens | mla_bsk | o_lat | lse | acc_o | acc_lse | B | max_pages. `shared_table`: every
+    row reads page-table row 0 (a prefill chunk's rows are one sequence)."""
     V = {"at": 0, "var": T}
     tmap = lambda param, d0, page, box1, stride1: pack(128, {"at": 0, "tensormap": {
         "param": param, "dtype": "bf16", "dims": [d0, page, 0 if page == PAGE else seqs_max],
@@ -186,8 +197,9 @@ def mla_attn_op(seqs_max, page_stride, split_max):
         tmap(2, KV_LORA, PAGE, 64, kv_stride), pack(12, {"at": 0, "i32": PAGE}, {"at": 4, "i32": KV_LORA}),
         tmap(3, ROPE, PAGE, 64, kv_stride), pack(12, {"at": 0, "i32": PAGE}, {"at": 4, "i32": ROPE}),
         tmap(2, KV_LORA, PAGE, 32, kv_stride), pack(12, {"at": 0, "i32": KV_LORA}, {"at": 4, "i32": PAGE}),
-        # page table [max_pages, B] strides (1, max_pages)
-        pack(24, {"at": 0, "param": 4}, {"at": 8, "param": 12}, at(12, V), {"at": 16, "param": 12, "width": 8}),
+        # page table [max_pages, B] strides (1, max_pages), or (1, 0) when the rows share row 0
+        pack(24, {"at": 0, "param": 4}, {"at": 8, "param": 12}, at(12, V),
+             {"at": 16, "i64": 0} if shared_table else {"at": 16, "param": 12, "width": 8}),
         # o as (128, 512, tiles=1, B); lse as (128, 1, B): the split path never stores through these
         pack(48, {"at": 0, "param": 7}, {"at": 8, "i32": KV_LORA}, {"at": 12, "i32": 1}, at(16, V), {"at": 24, "i64": KV_LORA},
              {"at": 32, "i64": MLA_M_TILE * KV_LORA}, {"at": 40, "i64": HEADS * KV_LORA}),
@@ -220,9 +232,10 @@ def mla_attn_op(seqs_max, page_stride, split_max):
     }
 
 
-def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
+def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, chunk_max=0):
     assert 1 <= layers <= LAYERS
     assert tp == 1 or ranks % tp == 0, "the tp group is a subset of the ep world"
+    assert not chunk_max or tp == 1, "the prefill program is EP only"
     n_kda = sum(1 for i in range(layers) if not is_mla(i))
     mla_index = {i: k for k, i in enumerate(i for i in range(layers) if is_mla(i))}
     n_mla = len(mla_index)
@@ -231,8 +244,10 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     page_stride = n_mla * PAGE * LATENT_ROW  # elements
     blocks_total = -(-layers // ATTN_RES_BLOCK)
     assert blocks_total <= NB_MAX
-    mp = gen_k3_moe.mega_pieces(ranks, seqs_max)
-    rows_max = tp * seqs_max
+    # `tokens` bounds a decode step's sequences and a prefill chunk's rows.
+    t_max = max(seqs_max, chunk_max)
+    mp = gen_k3_moe.mega_pieces(ranks, t_max)
+    rows_max = max(tp * seqs_max, chunk_max)
     # This rank's KDA heads: whole, or the tray group's shard (heads, the
     # per-head weights and the state line all HEADS / tp wide; the kernels
     # are built for that width, tools/shard_k3_tp.py cuts the weights).
@@ -250,6 +265,9 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     # sequence's prefill chunk, run through the KDA layers by FlashKDA
     # instead of the per-row recurrence; the decode rows stay on K2/K3.
     span_max = min(span_max, rows_max)
+    # The span buffers and FlashKDA's descriptors are sized for the longest
+    # run either program feeds: a decode step's span or a prefill chunk.
+    run_max = max(span_max, chunk_max)
 
     def per_row(n):
         return [T, -(-n // 1024), 1]
@@ -301,16 +319,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
             "impl": {"launches": [launch("k3_kda_core", "kern_k3_kda_core", grid=[T, hl, 1], var=KV,
                                          defines=kda_defs)]},
         },
-        # K9 / K10 / K11 + K8: the span's KDA path
+        # K10 and the g GEMM serve both a decode step's span and a prefill chunk.
         **({
-            "span_gather": {
-                "params": ["in buffer<f32>", "in buffer<f32>", "inout state", "in buffer<i32>", "i64", "in buffer<f32>",
-                           "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",
-                           "out buffer<bf16>", "in buffer<i32>", "i32"],
-                "impl": {"launches": [launch("k3_span_gather", "kern_k3_span_gather",
-                                             grid=[inner_l // 512, 4, {"ceil_div": [SP, 8]}], block=[128, 1, 1],
-                                             defines=kda_defs)]},
-            },
             "span_state_load": {
                 "params": ["in state", "in buffer<i32>", "i64", "in buffer<i32>", "out buffer<f32>", "i32"],
                 "impl": {"launches": [launch("k3_span_state", "kern_k3_span_state", grid=[hl, 32, 1],
@@ -325,7 +335,18 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
                 "params": ["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32", "i32"],
                 "impl": {"launches": [{"entry": "extern:cublaslt_bf16_tn"}]},
             },
-            "flash_kda": flash_kda_abi.op(hl, span_max, handwritten.prebuilt(flash_kda_abi.MODULE), span=SP),
+        } if run_max else {}),
+        # K9 / K11 + K8 over the span var, for `decode_span`.
+        **({
+            "span_gather": {
+                "params": ["in buffer<f32>", "in buffer<f32>", "inout state", "in buffer<i32>", "i64", "in buffer<f32>",
+                           "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",
+                           "out buffer<bf16>", "in buffer<i32>", "i32"],
+                "impl": {"launches": [launch("k3_span_gather", "kern_k3_span_gather",
+                                             grid=[inner_l // 512, 4, {"ceil_div": [SP, 8]}], block=[128, 1, 1],
+                                             defines=kda_defs)]},
+            },
+            "flash_kda": flash_kda_abi.op(hl, run_max, handwritten.prebuilt(flash_kda_abi.MODULE), span=SP),
             "kda_out_gate": {
                 "params": ["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>", "inout buffer<bf16>", "in buffer<i32>",
                            "i32"],
@@ -333,6 +354,48 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
                                              block=[128, 1, 1], defines=kda_defs)]},
             },
         } if span_max else {}),
+        **({
+            "chunk_gather": {
+                "params": ["in buffer<f32>", "in buffer<f32>", "inout state", "in buffer<i32>", "i64", "in buffer<f32>",
+                           "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>",
+                           "out buffer<bf16>", "in buffer<i32>", "i32"],
+                "impl": {"launches": [launch("k3_span_gather", "kern_k3_span_gather",
+                                             grid=[inner_l // 512, 4, {"ceil_div": [T, 8]}], block=[128, 1, 1],
+                                             defines=kda_defs)]},
+            },
+            "flash_kda_chunk": flash_kda_abi.op(hl, run_max, handwritten.prebuilt(flash_kda_abi.MODULE), span=T),
+            # Every row is the span, so the gate is the layer output's only writer.
+            "chunk_out_gate": {
+                "params": ["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>", "out buffer<bf16>", "in buffer<i32>",
+                           "i32"],
+                "impl": {"launches": [launch("k3_kda_out_gate", "kern_k3_kda_out_gate", grid=[T, hl, 1],
+                                             block=[128, 1, 1], defines=kda_defs)]},
+            },
+            "chunk_plan": {
+                "params": ["in buffer<i32>", "out buffer<i32>", "out buffer<i32>", "i32"],
+                "impl": {"launches": [launch("k3_mla_split_plan", "kern_k3_mla_chunk_plan",
+                                             grid=[{"ceil_div": [T, 1024]}, 1, 1], block=[1024, 1, 1])]},
+            },
+            "mla_attn_chunk": mla_attn_op(chunk_max, page_stride, 1, shared_table=True),
+            "last_row": {
+                "params": ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
+                "impl": {"launches": [launch("copy_rows", "kern_last_row_bf16", grid=[1, 1, 1], block=[1024, 1, 1])]},
+            },
+            "argmax_f32_one": {
+                "params": ["in buffer<f32>", "out buffer<i64>", "i32"],
+                "impl": {
+                    "scratch": {"pmax": {"dtype": "f32", "shape": [1, 64]}, "pidx": {"dtype": "i32", "shape": [1, 64]}},
+                    "launches": [
+                        launch("k3_router_argmax", "kern_k3_argmax_f32_partial", grid=[1, 64, 1],
+                               params=["in buffer<f32>", "out buffer<f32>", "out buffer<i32>", "i32"],
+                               args=[{"param": 0}, {"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 2}]),
+                        launch("k3_router_argmax", "kern_k3_argmax_f32_final", grid=[1, 1, 1],
+                               params=["in buffer<f32>", "in buffer<i32>", "out buffer<i64>", "i32"],
+                               args=[{"scratch": "pmax"}, {"scratch": "pidx"}, {"param": 1}, {"i32": 64}]),
+                    ],
+                },
+            },
+        } if chunk_max else {}),
         # K4 / K5 MLA
         "mla_prep": {
             "params": ["in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>", "in buffer<i64>", "inout state",
@@ -437,7 +500,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
         "seq_lens": {"dtype": "i32", "shape": ["seqs"], "kind": "input", "fill": "seq_len", "domain": {"min": 1}},
         "kda.line_index": {"dtype": "i32", "shape": [n_kda, R], "kind": "input",
                            "domain": {"index_into": "kda", "stride": line_l}},
-        "next_token": {"dtype": "i64", "shape": [R], "kind": "output", "fill": "tokens",
+        "next_token": {"dtype": "i64", "shape": [R] if tp > 1 else ["seqs"], "kind": "output", "fill": "tokens",
                        "domain": {"index_into": "embed"}},
         **mp["buffers"],
     }
@@ -499,24 +562,31 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     # The span's first batch row, an input the KDA kernels skip past even
     # when there is no span (then `span` is 0 and the row is never read).
     buffers["span_at"] = {"dtype": "i32", "shape": [1], "kind": "input", "fill": "span_at"}
-    if span_max:
-        buffers["span_beta"] = {"dtype": "bf16", "shape": [hl, SP], "kind": "workspace"}
+    if run_max:
+        buffers["span_beta"] = {"dtype": "bf16", "shape": [hl, run_max], "kind": "workspace"}
         for n in ["span_q", "span_k", "span_v", "span_out"]:
-            work(n, inner_l, var=SP)
-        work("span_flow", HEAD_DIM, var=SP)
-        work("span_g", inner_l, var=SP)
+            work(n, inner_l, var=run_max)
+        work("span_flow", HEAD_DIM, var=run_max)
+        work("span_g", inner_l, var=run_max)
         for n in ["span_state_in", "span_state_out"]:
             buffers[n] = {"dtype": "f32", "shape": [hl, HEAD_DIM, HEAD_DIM], "kind": "workspace"}
-        buffers.update(flash_kda_abi.workspace_buffers(hl, span_max))
+        buffers.update(flash_kda_abi.workspace_buffers(hl, run_max))
     work("mla_fused_partial", MLA_FUSED, "f32")
     work("q_norm", Q_LORA)
     work("q_partial", Q_B, "f32")
     work("q_abs", HEADS * LATENT_ROW)
     work("o_lat", HEADS * KV_LORA)
     work("mla_lse", HEADS, "f32")
-    work("mla_acc_o", mla_split_max * MLA_M_TILE * KV_LORA, "f32")
-    work("mla_acc_lse", mla_split_max * MLA_M_TILE, "f32")
+    # The split accumulators of a decode step (its rows are its sequences);
+    # a chunk's rows run unsplit into their own.
+    work("mla_acc_o", mla_split_max * MLA_M_TILE * KV_LORA, "f32", var=seqs_max)
+    work("mla_acc_lse", mla_split_max * MLA_M_TILE, "f32", var=seqs_max)
     buffers["mla_bsk"] = {"dtype": "i32", "shape": [T], "kind": "workspace"}
+    if chunk_max:
+        buffers["row_seq_lens"] = {"dtype": "i32", "shape": [chunk_max], "kind": "workspace"}
+        work("mla_acc_o_chunk", MLA_M_TILE * KV_LORA, "f32", var=chunk_max)
+        work("mla_acc_lse_chunk", MLA_M_TILE, "f32", var=chunk_max)
+        work("normed_last", H, var=1)
     work("router_partial", EXPERTS, "f32")
     work("topk_idx", TOPK, "i32")
     work("topk_weight", TOPK, "f32")
@@ -532,7 +602,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     work("dense_act", dn_l, var=R)
     if tp > 1:
         work("mlp_all", H, "f32", var=R)
-    work("logit_partial", V, "f32", var=R)
+    work("logit_partial", V, "f32", var=tp * seqs_max)
 
     # ---- program
     prog = []
@@ -570,35 +640,42 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
              b("tp_blocks"), {"rank": "tp"}, RB, i32(H), i64(ar_stage), i32(0), i64(TP_TIMEOUT_NS))
         return whole
 
-    def span_kda(L, w, line, KB, S):
+    def span_kda(L, w, line, KB, S, run):
         """The span rows' KDA layer: conv taps + beta/flow gathered (K9), the
         rec state staged (K10), g by one GEMM, FlashKDA over the chunk, the
-        state written back, then the output gate in place (K11)."""
-        step(L + "span_gather", "span_gather", b("kda_partial"), w("cw"), {"state": "kda"}, line, i64(line_l),
+        state written back, then the output gate in place (K11). `run` picks
+        the ops sized by the span var or by the chunk."""
+        step(L + "span_gather", run + "gather", b("kda_partial"), w("cw"), {"state": "kda"}, line, i64(line_l),
              b("wsm_partial"), b("span_q"), b("span_k"), b("span_v"), b("span_beta"), b("span_flow"), b("span_at"), S)
         step(L + "span_state_in", "span_state_load", {"state": "kda"}, line, i64(line_l), b("span_at"),
              b("span_state_in"), i32(0))
         step(L + "span_g", "gemm_bf16", b("span_flow"), w("w_f_b"), b("span_g"), S, i32(inner_l), i32(HEAD_DIM),
              i32(inner_l))
-        step(L + "span_kda", "flash_kda", b("span_q"), b("span_k"), b("span_v"), b("span_g"), b("span_beta"),
+        step(L + "span_kda", "flash_kda" if run == "span_" else "flash_kda_chunk", b("span_q"), b("span_k"),
+             b("span_v"), b("span_g"), b("span_beta"),
              w("dt_bias"), w("a_log"), b("span_state_in"), b("span_state_out"), b("span_out"),
              *(b(n) for n in ["span_ws_kd", "span_ws_qd", "span_ws_kr", "span_ws_gt", "span_ws_inv", "span_ws_mqk"]),
              S)
         step(L + "span_state_out", "span_state_store", {"state": "kda"}, line, i64(line_l), b("span_at"),
              b("span_state_out"), i32(1))
 
-    def span_out_gate(L, w, S):
+    def span_out_gate(L, w, S, run):
         """The span rows of the layer's output, finished after K3 wrote the decode rows."""
-        step(L + "span_out_gate", "kda_out_gate", b("span_out"), b("kda_partial"), w("gamma_o"), gated_kda,
-             b("span_at"), S)
+        step(L + "span_out_gate", run + "out_gate" if run == "chunk_" else "kda_out_gate", b("span_out"),
+             b("kda_partial"), w("gamma_o"), gated_kda, b("span_at"), S)
 
-    def emit(span):
-        """The decode program; with `span`, rows 0..span take the span's KDA path."""
+    def emit(span, chunk=False):
+        """The decode program; with `span`, rows 0..span take the span's KDA path.
+        `chunk`: the prefill program, every row the span, the head on the last row."""
         nonlocal prog
         prog = []
-        S = {"var": SP} if span else i32(0)
+        S = B if chunk else {"var": SP} if span else i32(0)
+        run = "chunk_" if chunk else "span_"
         step("embed", "embedding", b("token_ids"), b("embed"), b("hidden"), RB, i32(H))
-        step("mla_plan", "mla_split_plan", b("seq_lens"), b("mla_bsk"), i32(mla_split_max), B)
+        if chunk:
+            step("chunk_plan", "chunk_plan", b("seq_lens"), b("row_seq_lens"), b("mla_bsk"), B)
+        else:
+            step("mla_plan", "mla_split_plan", b("seq_lens"), b("mla_bsk"), i32(mla_split_max), B)
 
         blocks = 0
         kda_k = 0
@@ -623,9 +700,15 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
                      {"state": "kv"}, i64(layer_off), i64(page_stride), b("q_norm"), b("mla_gate"), B)
                 gemm(L + "q_b", b("q_norm"), w("w_q_b"), b("q_partial"), Q_B, Q_LORA)
                 step(L + "absorb", "mla_absorb", b("q_partial"), w("w_kv_b"), b("q_abs"), B)
-                step(L + "attn", "mla_attn", b("q_abs"), b("q_abs", KV_LORA * 2), {"state": "kv", "offset": layer_off * 2},
-                     {"state": "kv", "offset": layer_off * 2 + KV_LORA * 2}, b("block_table"), b("seq_lens"), b("mla_bsk"),
-                     b("o_lat"), b("mla_lse"), b("mla_acc_o"), b("mla_acc_lse"), B, i32(max_pages))
+                if chunk:
+                    step(L + "attn", "mla_attn_chunk", b("q_abs"), b("q_abs", KV_LORA * 2),
+                         {"state": "kv", "offset": layer_off * 2}, {"state": "kv", "offset": layer_off * 2 + KV_LORA * 2},
+                         b("block_table"), b("row_seq_lens"), b("mla_bsk"), b("o_lat"), b("mla_lse"),
+                         b("mla_acc_o_chunk"), b("mla_acc_lse_chunk"), B, i32(max_pages))
+                else:
+                    step(L + "attn", "mla_attn", b("q_abs"), b("q_abs", KV_LORA * 2), {"state": "kv", "offset": layer_off * 2},
+                         {"state": "kv", "offset": layer_off * 2 + KV_LORA * 2}, b("block_table"), b("seq_lens"), b("mla_bsk"),
+                         b("o_lat"), b("mla_lse"), b("mla_acc_o"), b("mla_acc_lse"), B, i32(max_pages))
                 step(L + "vup", "mla_vup_gate", b("o_lat"), w("w_kv_b"), b("mla_gate"), b("gated"), B)
             else:
                 line = b("kda.line_index", kda_k * rows_max * 4)
@@ -633,15 +716,19 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
                 KB = {"var": KV}
                 gemm(L + "qkvg", b("normed"), w("wbig"), b("kda_partial"), fused_l, H, m=KB)
                 gemm(L + "wsm", b("normed"), w("wsm"), b("wsm_partial"), WSM, H, m=KB)
-                step(L + "conv", "conv_silu", b("kda_partial"), w("cw"), {"state": "kda"}, line, i64(line_l),
-                     b("conv_q"), b("conv_k"), b("conv_v"), KB, b("span_at"), S)
-                if span:
-                    span_kda(L, w, line, KB, S)
-                step(L + "kda_core", "kda_core", b("conv_q"), b("conv_k"), b("conv_v"), b("wsm_partial"), b("kda_partial"),
-                     w("w_f_b"), w("dt_bias"), w("a_log"), w("gamma_o"), {"state": "kda"}, line, i64(line_l),
-                     gated_kda, KB, b("span_at"), S)
-                if span:
-                    span_out_gate(L, w, S)
+                if chunk:
+                    span_kda(L, w, line, KB, S, run)
+                    span_out_gate(L, w, S, run)
+                else:
+                    step(L + "conv", "conv_silu", b("kda_partial"), w("cw"), {"state": "kda"}, line, i64(line_l),
+                         b("conv_q"), b("conv_k"), b("conv_v"), KB, b("span_at"), S)
+                    if span:
+                        span_kda(L, w, line, KB, S, run)
+                    step(L + "kda_core", "kda_core", b("conv_q"), b("conv_k"), b("conv_v"), b("wsm_partial"),
+                         b("kda_partial"), w("w_f_b"), w("dt_bias"), w("a_log"), w("gamma_o"), {"state": "kda"}, line,
+                         i64(line_l), gated_kda, KB, b("span_at"), S)
+                    if span:
+                        span_out_gate(L, w, S, run)
             if is_mla(i) or tp == 1:
                 gemm(L + "o_proj", b("gated"), w("w_o"), b("hidden_partial"), H, INNER)
                 attn_out = gathered(L + "gather_attn", b("hidden_partial"), b("hidden_partial_all"), "f32", H * 4)
@@ -714,13 +801,18 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
                 weight(f"layers.{i}.wsh", [2 * sh_l, H])
                 weight(f"layers.{i}.sh_down", [H, sh_l])
                 for n, d in mp["weights"].items():
-                    buffers[f"layers.{i}.{n}"] = dict(d)
+                    buffers[f"layers.{i}.{n}"] = {**d, "bind": [{"tensor": f"layers.{i}.{n}"}]}
 
         assert blocks == blocks_total
         step("out.res", "attnres_rms", b("hidden"), b("blocks"), b("sw_out"), b("gamma_final"), b("normed"),
              i32(blocks_total), i32(0), RB)
-        gemm("out.lm_head", b("normed"), b("w_lm"), b("logit_partial"), V, H, m=RB)
-        step("out.argmax", "argmax_f32", b("logit_partial"), b("next_token"), i32(V))
+        if chunk:
+            step("out.last", "last_row", b("normed_last"), b("normed"), i32(H), i32(H), B)
+            gemm("out.lm_head", b("normed_last"), b("w_lm"), b("logit_partial"), V, H, m=i32(1))
+            step("out.argmax", "argmax_f32_one", b("logit_partial"), b("next_token"), i32(V))
+        else:
+            gemm("out.lm_head", b("normed"), b("w_lm"), b("logit_partial"), V, H, m=RB)
+            step("out.argmax", "argmax_f32", b("logit_partial"), b("next_token"), i32(V))
         return prog
 
     groups = {"ep": ranks, **({"tp": tp} if tp > 1 else {})}
@@ -729,6 +821,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     programs = {"decode": kern_manifest.program(emit(False), groups=seqs_max, rows=1, graph=True)}
     if span_max:
         programs["decode_span"] = kern_manifest.program(emit(True), groups=seqs_max, rows=1, span=SP, graph=True)
+    if chunk_max:
+        programs["prefill"] = kern_manifest.program(emit(False, chunk=True), groups=1, rows=T)
     # Run once after the peers are imported: the Lamport stages must read
     # -0.0 before the first allreduce, and a carry starts at zero.
     if tp > 1:
@@ -738,7 +832,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0):
     m = {
         "schema_version": kern_manifest.SCHEMA_VERSION,
         "model": f"kimi-k3-pruned-75pct/{layers}l/ep{ranks}" + (f"-tp{tp}" if tp > 1 else ""),
-        "vars": {T: {"max": seqs_max}, "seqs": {"max": seqs_max}, R: {"max": tp * seqs_max},
+        "vars": {T: {"max": t_max}, "seqs": {"max": seqs_max}, R: {"max": rows_max},
                  **({SP: {"max": span_max}} if span_max else {})},
         "topology": {"groups": groups},
         "states": states,
@@ -760,8 +854,10 @@ def main():
                     help="KV splits a row's attention may run as; the workspace is tokens x this x 256 KiB")
     ap.add_argument("--span-max", type=int, default=0,
                     help="rows a `decode_span` program may fill with one sequence's prefill chunk (0: no span program)")
+    ap.add_argument("--chunk", type=int, default=0, help="rows of the `prefill` program's chunk (0: no prefill program)")
     a = ap.parse_args()
-    json.dump(build(a.layers, a.ranks, a.max_ctx, a.seqs, a.tp, a.mla_split_max, a.span_max), sys.stdout, indent=1)
+    json.dump(build(a.layers, a.ranks, a.max_ctx, a.seqs, a.tp, a.mla_split_max, a.span_max, a.chunk), sys.stdout,
+              indent=1)
     print()
 
 

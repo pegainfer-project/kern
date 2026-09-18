@@ -5,7 +5,7 @@
 
 Reads `dense/l{i}.safetensors` (tools/export_k3.py) and writes
 `dense-tp{R}/r{r}/l{i}.safetensors` per rank, the layout the `--tp R`
-manifests of tools/gen_k3_decode.py load in place of `dense/l{i}`:
+manifests of tools/gen_k3.py load in place of `dense/l{i}`:
 
   KDA layers — the head-sliced tensors carry rank r's heads
   [r*HEADS/R, (r+1)*HEADS/R):
@@ -35,7 +35,7 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from gen_k3_decode import HEADS, HEAD_DIM, INNER, WSM, SHARED, DENSE_I, LAYERS, H, is_mla  # noqa: E402
+from gen_k3 import HEADS, HEAD_DIM, INNER, WSM, SHARED, DENSE_I, LAYERS, H, is_mla  # noqa: E402
 
 ITEM = {"BF16": 2, "F32": 4, "I32": 4, "U8": 1}
 
