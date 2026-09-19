@@ -406,12 +406,18 @@ fn load_side(m: &Verified, o: &Opts, host_weights: &HostWeights, resident: Optio
                 s.spawn(move || -> Result<crate::Sent<Runtime>> {
                     let topology = m.topology.is_some().then_some(&topo);
                     let mut rt = match resident {
-                        Some(r) => {
-                            Runtime::load_over(m, &o.inputs.kernels, gpu, Some(capacity), topology, host_weights, r)
-                        }
+                        Some(r) => Runtime::load_over(
+                            m,
+                            o.inputs.kernels.as_deref(),
+                            gpu,
+                            Some(capacity),
+                            topology,
+                            host_weights,
+                            r,
+                        ),
                         None => Runtime::load_with_host_weights(
                             m,
-                            &o.inputs.kernels,
+                            o.inputs.kernels.as_deref(),
                             gpu,
                             Some(capacity),
                             topology,

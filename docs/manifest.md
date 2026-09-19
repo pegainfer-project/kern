@@ -225,11 +225,13 @@ sha 前 12 位），上一个 commit 的 manifest 和这一个都能从同一个
 = 换核**，哈希不同就是另一个工件，manifest 钉的是生成它时在场的那一次
 build，两个 build 数值上是否等价由 `kern test` 说了算，不由名字说了算。
 
-**Registry ref**：`source` 写 `hf:<org>/<repo>/<path>[@revision]`
-（revision 默认 `main`）时 runtime 加载时把它物化进内容寻址缓存
+**Registry ref**：`source` 写 `https://<host>/<path>`，或它的语法糖
+`hf:<org>/<repo>/<path>[@revision]`（revision 默认 `main`，展开成 Hugging
+Face 的 `resolve/` URL）时，runtime 加载时把它物化进内容寻址缓存
 （`$KERN_CACHE_DIR` 或 `~/.cache/kern` 下 `blobs/<sha256>`，命中免网
 络），下载后先验哈希再落盘，**传输通道零信任**：名字只是 URL，身份是
-哈希。工件可以是裸 cubin，也可以是 host 共享库（如 HF kernel hub 的
+哈希。modules 全是 registry ref 的 manifest 不需要 kernels 目录；预填的缓存
+目录就是完整的离线分发（`registry.md`）。工件可以是裸 cubin，也可以是 host 共享库（如 HF kernel hub 的
 torch 扩展 .so）：runtime 剖开 ELF 取 `.nv_fatbin` 里的设备代码逐容器
 装载，torch/python 绑定整个丢弃，entry + ABI 逐位核对照旧。实证：
 `examples/qwen3-4b.json` 的 `silu_mul` impl 指向 module `activation` =

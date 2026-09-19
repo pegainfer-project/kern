@@ -61,7 +61,7 @@ pub struct Config {
 pub struct Target {
     pub manifest: PathBuf,
     pub reference: Option<PathBuf>,
-    pub kernels: PathBuf,
+    pub kernels: Option<PathBuf>,
     #[serde(default)]
     pub(crate) weights: Vec<String>,
     pub(crate) tokenizer: Option<PathBuf>,
@@ -120,7 +120,7 @@ impl Config {
         for t in c.targets.values_mut() {
             t.manifest = abs(&dir, &t.manifest);
             t.reference = t.reference.as_ref().map(|p| abs(&dir, p));
-            t.kernels = abs(&dir, &t.kernels);
+            t.kernels = t.kernels.as_ref().map(|p| abs(&dir, p));
             t.weights = t.weights.iter().map(|w| abs(&dir, Path::new(w)).to_string_lossy().into_owned()).collect();
             t.tokenizer = t.tokenizer.as_ref().map(|p| abs(&dir, p));
         }

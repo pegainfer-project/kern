@@ -91,7 +91,7 @@ fn main() {
                 let topo = Topology::one("ep", rank as u64, n as u64);
                 let mut rt = Runtime::load(
                     &verified,
-                    &kernels,
+                    Some(&kernels),
                     gpu,
                     Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }),
                     Some(&topo),

@@ -47,8 +47,8 @@ fn mapped_weight_rectangle_replay_shared_scope_and_guards() {
     std::fs::create_dir_all(&dir).unwrap();
     let scope = HostWeights::new();
     let capacity = Some(Capacity { tokens: Some(1), seqs: 1 });
-    let mut first = Runtime::load_with_host_weights(&verified, &dir, 0, capacity, None, &scope).unwrap();
-    let mut second = Runtime::load_with_host_weights(&verified, &dir, 0, capacity, None, &scope).unwrap();
+    let mut first = Runtime::load_with_host_weights(&verified, Some(&dir), 0, capacity, None, &scope).unwrap();
+    let mut second = Runtime::load_with_host_weights(&verified, Some(&dir), 0, capacity, None, &scope).unwrap();
     assert_eq!(scope.allocated_bytes().unwrap(), 512);
     let vars = BTreeMap::new();
     assert!(first.run("probe", &vars).is_err());

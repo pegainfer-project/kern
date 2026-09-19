@@ -209,11 +209,14 @@ fn kernels(cfg: Option<&Config>, targets: &[String]) -> Result<()> {
     }
     let dumps: Vec<String> = cfg.kernels.dumps.iter().map(|p| p.display().to_string()).collect();
     for (name, t) in cfg.select(targets)? {
+        let Some(kernels) = &t.kernels else {
+            bail!("target `{name}`: `kern kernels` lands cubins in a `kernels` dir; the target has none")
+        };
         for m in std::iter::once(&t.manifest).chain(t.reference.iter()) {
-            eprintln!("{name}: {} → {}", m.display(), t.kernels.display());
+            eprintln!("{name}: {} → {}", m.display(), kernels.display());
             // the script wants at least one search dir; the kernels dir itself is harmless
-            let d = if dumps.is_empty() { t.kernels.display().to_string() } else { dumps.join(":") };
-            sh(Command::new(tools.join("extract_kernels.sh")).arg(m).arg(&d).arg(&t.kernels))?;
+            let d = if dumps.is_empty() { kernels.display().to_string() } else { dumps.join(":") };
+            sh(Command::new(tools.join("extract_kernels.sh")).arg(m).arg(&d).arg(kernels))?;
         }
     }
     Ok(())

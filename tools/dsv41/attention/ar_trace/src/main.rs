@@ -70,7 +70,7 @@ fn main() -> anyhow::Result<()> {
             let work = || -> anyhow::Result<()> {
                 let protocol = Protocol::check(&m)?;
                 ensure!(protocol.tray.is_none(), "this trace harness expects DP4 EP4 local rows");
-                let mut rt = Runtime::load_with_host_weights(&m, &kernels, rank,
+                let mut rt = Runtime::load_with_host_weights(&m, Some(&kernels), rank,
                     Some(Capacity { tokens: Some(capacity), seqs: 1 }),
                     Some(&Topology::one("ep", rank as u64, 4)), &host)?;
                 let maps = kern_run::map_weights(&paths)?;

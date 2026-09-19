@@ -278,7 +278,7 @@ pub(crate) fn shaped_bytes(
 pub(crate) fn resolve_ops(
     manifest: &Manifest,
     modules: &[LoadedModule],
-    kernels_dir: &Path,
+    kernels_dir: Option<&Path>,
     stream: &Arc<CudaStream>,
     vars_max: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, ResolvedOp>> {
@@ -318,16 +318,15 @@ pub(crate) fn resolve_ops(
             let md = &manifest.modules[&k.module];
             let sha = md.sha256.to_lowercase();
             if !modules.iter().any(|m| m.sha == sha) {
+                let dir = kernels_dir.map(|d| d.display().to_string()).unwrap_or_else(|| "<no kernels dir>".into());
                 bail!(
                     KernelArtifact,
-                    "op `{name}` launch #{li}: module `{}` ({} @{}) is not among the artifacts in {} — \
+                    "op `{name}` launch #{li}: module `{}` ({} @{}) is not among the artifacts in {dir} — \
                      the source is a label, the hash is the identity; put an artifact with that \
-                     sha256 there (`kern kernels`, or tools/extract_kernels.sh <manifest> <dump dirs> {})",
+                     sha256 there (`kern kernels`, or tools/extract_kernels.sh <manifest> <dump dirs> {dir})",
                     k.module,
                     md.source,
                     &sha[..12],
-                    kernels_dir.display(),
-                    kernels_dir.display()
                 );
             }
             let want: Vec<usize> = l.params_of(op).iter().map(|p| p.size_bytes() as usize).collect();

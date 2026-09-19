@@ -164,8 +164,13 @@ fn run_rank(
     sync: &dyn Fn(),
 ) -> kern_runtime::Result<Vec<f64>> {
     let topo = Topology::one("ep", rank as u64, ranks as u64);
-    let mut rt =
-        Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(&topo))?;
+    let mut rt = Runtime::load(
+        manifest,
+        Some(kernels),
+        gpu,
+        Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }),
+        Some(&topo),
+    )?;
     rt.load_weights(&kern_runtime::Safetensors::open(&[weights])?)?;
     rendezvous(&mut rt)?;
     let once: BTreeMap<String, u64> = [("tokens".to_string(), 1)].into();

@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
                 let io: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("io.json"))?)?;
                 let mut rt = Runtime::load(
                     &manifest,
-                    &kernels,
+                    Some(&kernels),
                     rank,
                     io.get("capacity_tokens")
                         .and_then(|v| v.as_u64())

@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let vars: BTreeMap<String, u64> = serde_json::from_value(io["vars"].clone())?;
     let mut rt = Runtime::load(
         &manifest,
-        &kernels,
+        Some(&kernels),
         1,
         Some(Capacity { tokens: Some(32768), seqs: vars.get("seqs").copied().unwrap_or(1) }),
         Some(&Topology::default()),

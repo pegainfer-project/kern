@@ -1214,19 +1214,27 @@ impl fmt::Display for LaunchArg {
     }
 }
 
-/// A `source` of the form `hf:<org>/<repo>/<path>[@<revision>]` (revision defaults to `main`), fetched into a content-addressed cache at load time.
+/// A remote `source`: an `https://` URL fetched as is, or `hf:<org>/<repo>/<path>[@<revision>]`, sugar for Hugging Face's `resolve/` URL (revision defaults to `main`). Either lands in the content-addressed cache at load time; the transport is untrusted, the bytes are checked against the module's sha256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryRef {
-    pub org: String,
-    pub repo: String,
-    pub path: String,
-    pub revision: String,
+    pub url: String,
 }
 
 impl RegistryRef {
-    /// `None` if `s` is a plain local file name (no registry prefix);
+    /// `None` if `s` is a plain local file name (no scheme);
     /// otherwise the parsed ref or why it is malformed.
     pub fn parse(s: &str) -> Option<Result<RegistryRef, String>> {
+        if let Some(rest) = s.strip_prefix("https://") {
+            let ok = matches!(rest.split_once('/'), Some((host, path)) if !host.is_empty() && !path.is_empty())
+                && !rest.chars().any(char::is_whitespace);
+            return Some(match ok {
+                true => Ok(RegistryRef { url: s.to_string() }),
+                false => Err(format!("invalid registry ref `{s}`: expected https://<host>/<path>")),
+            });
+        }
+        if s.contains("://") {
+            return Some(Err(format!("invalid registry ref `{s}`: only https:// and hf: sources are fetched")));
+        }
         let rest = s.strip_prefix("hf:")?;
         let malformed = || format!("invalid registry ref `{s}`: expected hf:<org>/<repo>/<path>[@revision]");
         let (rest, revision) = match rest.rsplit_once('@') {
@@ -1247,12 +1255,7 @@ impl RegistryRef {
         {
             return Some(Err(malformed()));
         }
-        Some(Ok(RegistryRef {
-            org: org.to_string(),
-            repo: repo.to_string(),
-            path: path.to_string(),
-            revision: revision.to_string(),
-        }))
+        Some(Ok(RegistryRef { url: format!("https://huggingface.co/{org}/{repo}/resolve/{revision}/{path}") }))
     }
 }
 

@@ -521,7 +521,7 @@ impl Bench {
                         let topology = m.topology.is_some().then_some(&topo);
                         let mut rt = Runtime::load_with_host_weights(
                             m,
-                            &inputs.kernels,
+                            inputs.kernels.as_deref(),
                             gpu,
                             Some(capacity),
                             topology,
