@@ -35,8 +35,7 @@ const FLOP_PER_PAIR: f64 = 2.0 * (HIDDEN * 2 * INTER + INTER * HIDDEN) as f64;
 fn stage_cubins(cubins: &Path, kernels: &Path) {
     std::fs::create_dir_all(kernels).unwrap();
     for name in ["k3_mega_moe", "k3_mega_stage"] {
-        let bytes = std::fs::read(cubins.join(format!("{name}.cubin")))
-            .expect("cubin (tools/build_k3_mega.sh)");
+        let bytes = std::fs::read(cubins.join(format!("{name}.cubin"))).expect("cubin (tools/build_k3_mega.sh)");
         let sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
         std::fs::write(kernels.join(format!("{name}-{}.cubin", &sha[..12])), &bytes).unwrap();
     }

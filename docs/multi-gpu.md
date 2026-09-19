@@ -271,7 +271,7 @@ regime 的 SOTA 是 NCCL 的 NVLS（multimem 多播归约），TRT-LLM 的 MNNVL
 FlashInfer 的 `trtllm_mnnvl_allreduce` 都是小消息的低延迟路径，对它没有优势；通信
 不自己写（用户 2026-09-18 定），所以 runtime 加 `extern:nccl_*`，与 cuBLAS extern
 同级：manifest 一个 launch `[send, recv, count, {"rank": g}]`（`nccl_{allreduce,allgather,
-reducescatter}_{f32,bf16}`；allgather 按 rank 序放 `count` 元素，reducescatter 是它的逆），
+reducescatter}_{f32,bf16,i32,u8}`；allgather 按 rank 序放 `count` 元素，reducescatter 是它的逆），
 runtime 按 topology 组建 communicator（`nccl.rs`），driver 装载后 `connect_nccl` / `join_nccl`。
 prefill-only 形态的两个 collective 走它（下节）；decode tray 批（≤192 行）仍走 Lamport 核。
 `tp_err` / 自旋超时在 NCCL 路径上没有对应（NCCL 默认挂死），先不管（用户定）。
