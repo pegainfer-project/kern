@@ -50,6 +50,14 @@ kern 在内部 RSI 里是 kernel agent 的反馈环境（`kern test` 裁判、`k
 | P-next | 空 cache 16k chunk 的分解：MegaMoE 29%、cuBLAS f32-out GEMM 25%、KDA 13%、RS+AG 11%、FMHA 4%——下一刀 fp8 grouped MoE、bf16 输出 GEMM；12.9k 末位差异要一个带 logprob 的参考才能判定 | |
 | P-open | NCCL Simple 协议在 kern 进程里 sum / gather 算错（93 层 0/2），LL / LL128 全对，nccl-tests 无恙；runtime 钉 LL128，根因开（multi-gpu.md "大消息 collective 走 NCCL"，lessons.md） | |
 
+## Kernel registry 线（设计 `registry.md`，2026-09-19 定稿）
+
+| 级 | 内容 | 门禁 |
+|---|---|---|
+| R1 | runtime：module `source` 接受裸 `https://` URL，`hf:` 是它的 URL 模板语法糖；modules 全是 registry ref 时 `Runtime::load` 不要求 kernels 目录；缓存目录（`KERN_CACHE_DIR`）即离线分发单元 | kern-manifest verify 测试覆盖 `https://` 与畸形 URL；预填缓存、断网、无 `--kernels` 下 `kern run examples/qwen3-4b.json` 与有网时逐字同 |
+| R2 | blob store `Pegainfer/kern-kernels`（private，`blobs/<sha256>` 平铺）+ `tools/kernels/index/<family>.toml` + `tools/kernels/abi/<family>.py` + `check.py`（CI）；三个预编译核（trtllm fmha ctx、DSL mla decode、flash_kda）与手写核迁入，`handwritten.hw()` / `prebuilt()` 收编为 index 查询，`tools/kernels-bin/` 与生成器里的 nvcc 路径删除 | 重生成的 `examples/k3-*.json` 除 module `source` 外逐字节相同；4 层 TP4 prefill c8/c40/c7 与 EP4 c8/c40+free16 全 exact（同 P 行口径）；`check.py --online` 全部命中 |
+| R3 | 第一个新族 `trtllm_bmm_mxe4m3_mxe2m1_mxe4m3`（flashinfer-cubin 0.6.18 的 trtllm-gen batched GEMM，`siTuGlu` 变体即 K3 的激活）：整族导入、ABI 从 bundle 的 `KernelParams.h` + `flashinferMetaInfo.h` 写、vLLM 容器里 `trtllm_fp4_block_scale_moe` 探针 capture 验证；K3 prefill 的 MoE 换成 allgather(fp8 latent) → CTA 表 → FC1 → FC2 → finalize → reduce-scatter，MegaMoE 留给 decode 形态；`[[pick]]` 由 `kern bench` 对 16k/4 行的 K3 形状扫 tile 变体写入 | 4 层 TP4 prefill 门禁不变；93 层 12.9k 判定点对；16k over 0 < 780 ms（MegaMoE 231 ms 里 GEMM 之外的 86 ms 是靶，新增两次集合通信预算 ~40 ms） |
+
 ## 协议线
 
 | 级 | 内容 | 门禁 |

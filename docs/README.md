@@ -33,6 +33,7 @@ The stable, flat paths below are grouped here by purpose.
 - [Speculative decode](spec-decode.md)
 - [K3 kernel ABI](k3-kernel-abi.md)
 - [Kernel mining](kernel-mining.md)
+- [Kernel registry: blob store and index](registry.md)
 - [Single-GPU Performance Atlas](performance-atlas.md)
 
 ### Architecture and research
