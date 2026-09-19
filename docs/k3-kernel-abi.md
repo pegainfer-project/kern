@@ -509,6 +509,73 @@ grid (ceil(rows/256), 96, 1)，block 512，dyn smem 199296，无 cluster。**门
 256 的倍数）、4096 over 8192 三种形状的 `o` 与 FlashInfer 自己的输出逐位相同；probe 另外验证了 max_kv 传
 262144 与传实际长度输出相同（核只按 seq_lens 走），以及因果确实是末尾对齐（左上对齐的参考差 2.4）。
 
+### K14 tray prefill 的 MoE：TensorRT-LLM gen 的 batched GEMM（索引族 `trtllm_bmm_*`）+ 配套 glue
+
+`prefill` program（`--tp 4 --chunk`，ranks == tp）的 routed MoE 不再走 MegaMoE（它留给 decode 与单卡 prefill）：
+每个 rank 把自己那块行的 latent 量化成 mxfp8，把 fp8 行、scale、top-k id / weight 各 all-gather 一次，对 chunk 的
+全部 token 建自己 56 个专家的 CTA 表，FC1（gate | up，核内 situ，输出 mxfp8）、FC2（bf16）、top-k 合并成
+chunk 宽的 bf16 partial（chunk 之外的行为零），再 reduce-scatter 回自己那块行。GEMM 是 FlashInfer
+`flashinfer-cubin` 0.6.18 里 trtllm-gen 的 batched GEMM 整族导入（`trtllm_bmm_mxe4m3_mxe2m1_mxe4m3` 110 个
+变体做 FC1，`trtllm_bmm_bf16_mxe2m1_mxe4m3` 105 个做 FC2），ABI 是 `tools/kernels/abi/trtllm_bmm.py`：从
+bundle 的 `KernelParamsDecl.h` / `BatchedGemmInterface.h` / `TmaDescriptor.h` 移植 batch-N 动态分支（不是照抄
+capture 的字节），`tools/trtllm-bmm/check_abi.py` 拿 vLLM 容器里 `trtllm_fp4_block_scale_moe` 探针的 capture
+逐字段回放（grid / block / smem / 5 个 tensormap 的 dtype、dims、strides、box、swizzle、基址 / 指针 / 标量 /
+字段之外无杂字节）：2 个 launch 0 差异。生成器按 `index.pick(family, "moe_fc1" | "moe_fc2",
+"k3-prefill-16k-ep4")` 取变体，pick 由 `kern bench` 的扫描写入（`tools/kernels/pick.py`），不手挑。
+
+一层的链（`tools/k3_moe_bmm.py` 的 `pieces`，`tools/gen_k3.py` 只管接线）：
+
+```
+moe_quant        kern_k3_moe_quant         latent [own, 3584] bf16 → latent_q u8 + latent_sf u8（32 元一组 UE8M0，线性）
+gather ×4        nccl_allgather_{u8,u8,i32,f32}   latent_q / latent_sf / topk_idx / topk_weight → *_all [tp·own, …]，rank 序
+route_count      kern_k3_moe_route_count   每 256 token 一块，块内每个本地专家的命中数
+route_tables     kern_k3_moe_route_tables  单 block：扫描 → cta_batch / cta_limit / num_non_exiting / total_padded / 块偏移
+route_scatter    kern_k3_moe_route_scatter route_map[permuted row] = token，exp2perm[16 t + k] = row（非本地 −1）
+moe_fc1          trtllm bmm（siTuGlu）      w13s × latent_q_all[route_map] → fc1_out u8 [padded, 3072] + fc1_sf（R8c4 / R128c4 随变体）
+moe_fc2          trtllm bmm（bf16 out）     w2s × fc1_out → fc2_out bf16 [padded, 3584]
+moe_finalize     kern_k3_moe_finalize      out[t] = Σ_k wts[t][k] · fc2_out[exp2perm[16 t + k]]（f32 累加），t ≥ tokens 为零
+scatter_moe      nccl_reducescatter_bf16   moe_partial [tp·own, 3584] → routed_latent [own, 3584]
+```
+
+权重：checkpoint 的 mxfp4 `weight_packed` / UE8M0 `weight_scale` 按专家原样绑（`w13.raw` 每专家 [w3(up); w1(gate)]，
+`w2.raw`），`load` once program 用 `kern_k3_moe_w_shuffle` / `kern_k3_moe_sf_shuffle` 洗一次成核要的布局
+（trtllm-gen `shuffleMatrixA` 的 32 行 epilogue 置换 `(r/32)·32 + (r%8)·4 + (r%32)/8`，FC1 再做 gated 交错
+`u%2 ? n/2 + u/2 : u/2`，scale 落 R128c4）；raw 与洗过的都常驻。FC1 的行对是 (x0 = up, x1 = gate)，核的
+`β·tanh(x0/β)·α·tanh(x1/α)·σ(x1)` 在 α = 4、β = 25 下就是 K3 的 situ；α / β 是 once 填的 [56] f32 carry。
+
+`KernelParams` pack 17472 B 的字段（`tools/kernels/abi/trtllm_bmm.py` `OFF`），一律由变体 tags + 形状推导：
+
+| 偏移 | 内容 |
+|---|---|
+| 0 / 128 / 256 / 384 / 512 | tensormap A（权重，`u4` 16U4_ALIGN16B，[k/2, m, batches]）、B（激活，routed 时按 route_map 取行，u8 [k, rows]）、C（输出）、SfA（R128c4，u8）、SfB（线性 / R8c4 随变体） |
+| 768 / 784 / 800 | ptrA / ptrB / ptrC（TMA 之外核也读裸指针） |
+| 856 / 864 | ptrGatedActAlpha / Beta（[batches] f32，gated 变体） |
+| 872 / 876 / 880 | k、nm = m、tileStridePerBatch = m / tile_m |
+| 896 / 904 / 944 / 952 | ptrSfA / ptrSfB / ptrSfC / ptrRouteMap |
+| 960 / 964 | numTokens（var 表达式）/ numBatches = 56 |
+| 968 / 976 / 984 / 992 | ptrNumNonExitingCtas / ptrTotalNumPaddedTokens / ptrCtaIdxXyToBatchIdx / ptrCtaIdxXyToMnLimit（route_tables 写的四张表） |
+| 17404 | tpGrpSize 1 |
+
+C 与非 routed 的 B 用 launcher 的越界技巧：dims 2^31、stride 绕 64 位地址空间一圈，越过 tile 行界的坐标读零 /
+丢 store，所以 manifest 的 tensormap 加了 `wrap` 声明（footprint 不检查，后面的 buffer 按 padded 行数配足）。
+grid = (ceil(m / tile_m) 向 cluster 取整, ctas, split_k)，ctas = 56 + ceil(16·tokens / tile_n) 是表达式；
+一次 launch 覆盖任何 token 数，超出 num_non_exiting 的 CTA 立刻退出。
+
+**门禁**（2026-09-19 tray03）：`tools/gen_trtllm_bmm_probe.py 300 8 1` + `program_io` 喂 `tools/trtllm-bmm/probe.py`
+的 dump（rank 1 的 8 个专家，300 token）：洗过的 w13s / w13_sfs / w2s / w2_sfs、x_fp8 / x_sf 与 FlashInfer 自己的
+逐位相同，`out` 逐位相同（max|err| 0）；路由表与 host 模型一致。4 层 TP4 prefill k3_golden：c40 1/1、c7 6/6 exact，
+c8 4/5——step 15 是 4 ulp 的 top-1/top-2 翻转：与 MegaMoE 形态逐层对比，同一专家集合的行差 ~5%（两条路各自的
+fp8 中间量化），差 15–25% 的三行恰是 router 因 2% 扰动换了一个专家的行，不是 bug（`~/bench_results/2026-09-19-registry/`）。
+
+**变体与性能**（同日 tray03，`kern bench`，93 层 `--chunk 16384 --max-ctx 262144`，16k over 0）：两个 GEMM 共用一套
+CTA 表，所以 tile_n 同选；4 层 manifest 扫 18 对（tile 64 / 128 / 192 / 256 × K tile × u2 × ldgsts）后 pick 落在
+tile 128（FC1 `t128x128x256u2 … ldgsts` 0.85 ms/层、FC2 `t128x128x256u2` 0.40，捕获的 tile 64 对是 1.23 / 0.58），
+`[[pick]]` 带 v11 的 bench json 当 report。93 层：12.9k 单块判定 2/2、8-token chunk 16/17（MegaMoE 形态 13/17），
+**16k over 0 = 749.5 ms**（MegaMoE 形态 780.1）。mix：MoE 本体 fc1 84 + fc2 39 + finalize 10 + 四次 all-gather ~18 +
+表 ~5 ≈ 156 ms（MegaMoE 231），但 MoE 后的 reduce-scatter 比 attention 的多 54 ms——那是等最慢 rank 的专家负载
+（每层各 rank 的 token 数不同，最慢的 rank 每次运行都换，四卡都 2070 MHz），MegaMoE 把这份等待付在自己核里。
+下一刀是这份不均衡（专家负载随 chunk 变，静态摆放吃亏）与 gemm_f32 的 198 ms。
+
 ## 2. 验收（每个核）
 
 1. **harness 通过**：`tools/k3-harness/`（见其 README）——对每个核、每个规定形状，随机输入 + CPU 参考，
