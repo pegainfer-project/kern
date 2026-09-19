@@ -1,0 +1,13 @@
+[family]
+name = "gemma_rms_norm"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/gemma_rms_norm.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "gemma_rms_norm"
+sha256 = "92dda85393585c4cf61f05b425e1aa5a6f85204bde3bb2df1b5631d4dde6111f"
+entries = ["kern_gemma_fused_add_rms_norm_bf16", "kern_gemma_rms_norm_bf16"]

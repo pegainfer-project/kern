@@ -1,0 +1,19 @@
+[family]
+name = "peer_allreduce"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/peer_allreduce.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "peer_allreduce"
+sha256 = "15a0baa9bac9a690f2fee5a312b1eeb4d242ee395ed5182d7c342571bff59706"
+entries = ["kern_peer_allreduce_f32", "kern_peer_lamport_init"]
+
+[[variant]]
+name = "peer_allreduce+NRANKS=4"
+sha256 = "15a0baa9bac9a690f2fee5a312b1eeb4d242ee395ed5182d7c342571bff59706"
+entries = ["kern_peer_allreduce_f32", "kern_peer_lamport_init"]
+defines = { NRANKS = 4 }

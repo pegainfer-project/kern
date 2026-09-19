@@ -69,7 +69,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import flash_kda_abi
 import gen_k3_moe
-import handwritten
+from kernels import index
 import trtllm_fmha_abi
 import kern_manifest
 from once import Once, buf, seg
@@ -155,7 +155,7 @@ def launch(cubin, entry, grid=None, block=None, smem=None, var=T, defines=None, 
     `defines` selects a variant build of the source (handwritten.hw)."""
     g, b, s = GEOM.get(entry, (None, None, 0))
     g = [var if d == T else d for d in (grid or g)]
-    l = {**handwritten.hw(cubin, **(defines or {})), "entry": entry, "block": block or b, "grid": g, **extra}
+    l = {**index.variant(cubin, **(defines or {})).module, "entry": entry, "block": block or b, "grid": g, **extra}
     s = s if smem is None else smem
     if s:
         l["shared_mem"] = s
@@ -242,7 +242,7 @@ def mla_attn_op(batch_max, page_stride, split_max, shared_table=False, batch=T):
              {"at": 32, "i64": HEADS}),
         acc_o, acc_lse, {"i32": split_max}, seqs, bsk,
     ]
-    module = handwritten.prebuilt(MLA_MODULE)
+    module = index.variant(MLA_MODULE).module
     return {
         "params": ["in buffer<bf16>", "in buffer<bf16>", "in state", "in state", "in buffer<i32>", "in buffer<i32>",
                    "in buffer<i32>", "out buffer<bf16>", "out buffer<f32>", "out buffer<f32>", "out buffer<f32>", "i32", "i32"],
@@ -424,7 +424,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                                              grid=[inner_l // 512, 4, {"ceil_div": [SV, 8]}], block=[128, 1, 1],
                                              defines=kda_defs)]},
             },
-            "flash_kda": flash_kda_abi.op(hl, run_max, handwritten.prebuilt(flash_kda_abi.MODULE), span=SV),
+            "flash_kda": flash_kda_abi.op(hl, run_max, index.variant(flash_kda_abi.MODULE).module, span=SV),
             # A chunk's every row is the span, so its gate is the layer output's only writer.
             "kda_out_gate": {
                 "params": ["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>",
@@ -443,7 +443,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                 "impl": {"launches": [launch("k3_mla_v2", "kern_k3_latent_gather",
                                              grid=[{"mul": [ctx_tiles, 16]}, 1, 1], block=[576, 1, 1])]},
             },
-            "mla_fmha": trtllm_fmha_abi.op(ml, chunk_max, max_ctx, handwritten.prebuilt(trtllm_fmha_abi.MODULE), T),
+            "mla_fmha": trtllm_fmha_abi.op(ml, chunk_max, max_ctx, index.variant(trtllm_fmha_abi.MODULE).module, T),
             # o * sigmoid(gate), the gate contiguous [rows, heads * 128]
             "mla_gate": {
                 "params": ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32", "i32"],

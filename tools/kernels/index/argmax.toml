@@ -1,0 +1,13 @@
+[family]
+name = "argmax"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/argmax.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "argmax"
+sha256 = "ebe4ba79544ddfac43ee2dcf6a7f5299aba1124e176c201133d4ef9400e3dc25"
+entries = ["kern_argmax_final_i64", "kern_argmax_partial_bf16"]

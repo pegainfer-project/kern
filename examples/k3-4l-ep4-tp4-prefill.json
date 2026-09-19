@@ -14092,75 +14092,75 @@
  },
  "modules": {
   "copy_rows": {
-   "source": "copy_rows.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/f301274a5957faac2f0891ea9d6e80e0dabdb56ee4c14c3795e836f6bf31fb54",
    "sha256": "f301274a5957faac2f0891ea9d6e80e0dabdb56ee4c14c3795e836f6bf31fb54"
   },
   "embedding": {
-   "source": "embedding.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7",
    "sha256": "868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7"
   },
   "flash_kda_d128": {
-   "source": "flash_kda_d128.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/34b83d875a418f63d14daf73984c1b8de0d1616250915a7d7e4810f327ce3617",
    "sha256": "34b83d875a418f63d14daf73984c1b8de0d1616250915a7d7e4810f327ce3617"
   },
   "k3_kda_out_gate+HEADS=24": {
-   "source": "k3_kda_out_gate+HEADS=24.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/125539befe70ecdc46c1bc73f9f2ce3f37dbc90ec798c9f4e1166d7cc1ca746c",
    "sha256": "125539befe70ecdc46c1bc73f9f2ce3f37dbc90ec798c9f4e1166d7cc1ca746c"
   },
   "k3_land": {
-   "source": "k3_land.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/2cd68c79bf3243f37d2f1406880060f610b4028f9e843bb356ea8ef0a0352fcc",
    "sha256": "2cd68c79bf3243f37d2f1406880060f610b4028f9e843bb356ea8ef0a0352fcc"
   },
   "k3_mega_moe": {
-   "source": "k3_mega_moe.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7",
    "sha256": "5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7"
   },
   "k3_mega_stage": {
-   "source": "k3_mega_stage.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8",
    "sha256": "36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8"
   },
   "k3_mla_prep+INNER=3072+MLA_FUSED=5184": {
-   "source": "k3_mla_prep+INNER=3072+MLA_FUSED=5184.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/b127629c8b98ea2f1f242e8dd1fa2fd74868dc3464dcd946a74f1a747e30779d",
    "sha256": "b127629c8b98ea2f1f242e8dd1fa2fd74868dc3464dcd946a74f1a747e30779d"
   },
   "k3_mla_v2": {
-   "source": "k3_mla_v2.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/436c9ebb766141276fd52d431f238f3f5d92ed1d9359d39372208c2c72503a16",
    "sha256": "436c9ebb766141276fd52d431f238f3f5d92ed1d9359d39372208c2c72503a16"
   },
   "k3_prefill": {
-   "source": "k3_prefill.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/eac5d5cef8d504f7141281177fb934b5df522a963cc18df0ffa4f7a662d7817c",
    "sha256": "eac5d5cef8d504f7141281177fb934b5df522a963cc18df0ffa4f7a662d7817c"
   },
   "k3_residual": {
-   "source": "k3_residual.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/d5d5d1fb3dda907822d99520b611fa77cab05bf11f165a1aa0d5e43d07cca8c8",
    "sha256": "d5d5d1fb3dda907822d99520b611fa77cab05bf11f165a1aa0d5e43d07cca8c8"
   },
   "k3_residual+LAND_BF16=1": {
-   "source": "k3_residual+LAND_BF16=1.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/1bb60d2f33b04d70d6866b50d12a67340e33cf0f1c555c9da92494dd5c98f254",
    "sha256": "1bb60d2f33b04d70d6866b50d12a67340e33cf0f1c555c9da92494dd5c98f254"
   },
   "k3_router_argmax": {
-   "source": "k3_router_argmax.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/e3b8395c90e502b7afd4e844a57d060c682c7ab060a361befb9cbf4e61034b5a",
    "sha256": "e3b8395c90e502b7afd4e844a57d060c682c7ab060a361befb9cbf4e61034b5a"
   },
   "k3_span_gather+HEADS=24": {
-   "source": "k3_span_gather+HEADS=24.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/e8a0235ee32b82454a4843b6d7f02bbe58b53e7b6f0d724403f50055cb21295b",
    "sha256": "e8a0235ee32b82454a4843b6d7f02bbe58b53e7b6f0d724403f50055cb21295b"
   },
   "k3_span_state+HEADS=24": {
-   "source": "k3_span_state+HEADS=24.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/a1b9e40e420f4bcd4cd542006dd171dbcde299d6912b3a1b9ff5b04d8c171ffd",
    "sha256": "a1b9e40e420f4bcd4cd542006dd171dbcde299d6912b3a1b9ff5b04d8c171ffd"
   },
   "k3_weight_prep": {
-   "source": "k3_weight_prep.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02",
    "sha256": "a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02"
   },
   "sigmoid_mul": {
-   "source": "sigmoid_mul.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/2b0745de4fc623437cce41fee177d7980239326796dca33d4faa7046f6f10ffa",
    "sha256": "2b0745de4fc623437cce41fee177d7980239326796dca33d4faa7046f6f10ffa"
   },
   "trtllm_fmha_ctx_h192_v128": {
-   "source": "trtllm_fmha_ctx_h192_v128.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/240811d976c01e4a9bee00041d98343f6f9254fefae598df46a97ff07c7df508",
    "sha256": "240811d976c01e4a9bee00041d98343f6f9254fefae598df46a97ff07c7df508"
   }
  },

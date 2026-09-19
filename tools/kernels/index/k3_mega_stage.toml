@@ -1,0 +1,13 @@
+[family]
+name = "k3_mega_stage"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_mega_stage.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_mega_stage"
+sha256 = "36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8"
+entries = ["kern_k3_mega_quant_x", "kern_k3_mega_write_routing"]

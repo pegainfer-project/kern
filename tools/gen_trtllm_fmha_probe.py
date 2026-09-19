@@ -8,7 +8,7 @@ output o [T, 96*128] bf16): the K13 gate is `program_io` running it on the probe
 import json
 import sys
 
-import handwritten
+from kernels import index
 import kern_manifest
 import trtllm_fmha_abi as fmha
 
@@ -31,7 +31,7 @@ def build(T, n):
         "model": f"trtllm-fmha-probe/t{T}-n{n}",
         "vars": {"tokens": {"max": T}},
         "buffers": buffers,
-        "ops": {"fmha": fmha.op(HEADS, T, n, handwritten.prebuilt(fmha.MODULE), "tokens")},
+        "ops": {"fmha": fmha.op(HEADS, T, n, index.variant(fmha.MODULE).module, "tokens")},
         "programs": {"attn": kern_manifest.program([{"label": "attn", "op": "fmha", "args": args}])},
     }
     return kern_manifest.normalize(m)

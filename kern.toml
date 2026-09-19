@@ -16,7 +16,6 @@ weights   = ["weights/Qwen3-4B"]
 
 [kernels]
 dumps   = ["dumped-kernels"]
-sources = "tools/kernels-src"
 
 [test]
 seed = 0x5eed

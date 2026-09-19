@@ -14,7 +14,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from handwritten import hw  # noqa: E402
+from kernels.index import variant  # noqa: E402
 from kern_manifest import program  # noqa: E402
 
 BLOCK = 256
@@ -128,7 +128,7 @@ class Once:
             assert op not in self.m["ops"], op
             self.m["ops"][op] = {"params": params, "impl": {"launches": [
                 {"entry": entry, "params": params, "block": block, "grid": grid,
-                 "args": [{"param": i} for i in range(len(params))], **hw(cubin)}]}}
+                 "args": [{"param": i} for i in range(len(params))], **variant(cubin).module}]}}
         assert "load" not in self.m["programs"]
         self.m["programs"]["load"] = program(self.calls, once=True)
         return self.m

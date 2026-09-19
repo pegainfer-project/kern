@@ -1,0 +1,13 @@
+[family]
+name = "dflash_conv"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/dflash_conv.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "dflash_conv"
+sha256 = "60b9459c66e8ff50c680c57790f6d658d4415c0d3c0af5308929f224e635833e"
+entries = ["kern_dflash_conv_bf16"]

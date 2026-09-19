@@ -12,7 +12,7 @@ manifest 只认 **入口名 + 参数表 + grid/block/smem 公式**，语言无�
 
 - 入口 `extern "C" __global__ void kern_k3_<name>(...)`，文件 `tools/kernels-src/k3_<name>.cu`，
   单文件，只 include CUDA 自带头（`cuda_bf16.h`、`cuda_fp16.h`、`mma.h`），
-  `tools/build_kernels.sh` 会编成 `target/cubins/k3_<name>.cubin`。
+  `tools/kernels/import_handwritten.py` 在 kernel-lab 里编、放进 registry 缓存并把 sha 写进索引（`registry.md`）。
 - 类型：`bf16 = __nv_bfloat16`，`f32 = float`，`i32 = int`，`i64 = long long`。
   标量按值传；指针一律 `__restrict__`。**所有 buffer 行主序，行距 = 宽度**，除非参数表里给了 stride。
 - **B 是运行时参数** `int B`（decode 里 tokens == seqs）。约定 `grid.x = B`（一行一个 block.x），
@@ -216,7 +216,7 @@ extern "C" __global__ void kern_k3_mla_prep(
 比 E5 剩下的所有东西都大。2026-09-03 换成 NVIDIA 用 CuTe DSL 写、随 FlashInfer 发行的
 Blackwell MLA decode 核（`flashinfer/cute_dsl/attention/monolithic/mla_decode_fp16.py`，BSD-3，
 tcgen05 2-CTA MMA + TMA 分页加载 + split-KV 归约），**预编译成 cubin 收进仓库**
-（`tools/kernels-bin/mla_decode_h96_p64.cubin`，构建配方 `tools/build_mla_dsl.py`，README 在同目录），
+（索引族 `mla_decode_h96_p64`，构建配方 `tools/build_mla_dsl.py`，来源与工具链记在 `tools/kernels/index/mla_decode_h96_p64.toml`），
 runtime 不加任何模型代码：它的 struct 参数 ABI 由 manifest 的 `bytes<n>` + `pack` 铺平，
 五个 TMA 描述符是 `bytes<128>` 里的 `tensormap` 字段（`docs/manifest.md`）。
 
@@ -332,7 +332,7 @@ extern "C" __global__ void kern_k3_land_situ(const f32* p, bf16* act, int n, int
 ### K8 `flash_kda_d128`：span 的 KDA 时间轴（vendored FlashKDA，两个核）
 
 来源 `tools/flash-kda/`（MoonshotAI FlashKDA `7afb9f4`，MIT，`PROVENANCE.md`），cubin
-`tools/kernels-bin/flash_kda_d128.cubin`。ABI 不是读模板推的，是 `tools/kernel-capture` 从 vendored 源码编的
+索引族 `flash_kda_d128`。ABI 不是读模板推的，是 `tools/kernel-capture` 从 vendored 源码编的
 probe（`tools/flash-kda/probe.cu`）跑一次直接提出来的（`lift.py`，见 `tools/kernel-capture/README.md`）；与
 pegainfer shim 的捕获逐字段一致。数学（q/k L2 norm、β sigmoid、gate = `gate_scale·σ(g + dt_bias)`、
 `a_log`）都在核内，输入是 conv+SiLU 之后的裸 q/k/v 和 `w_f_b` 投影后的 g，输出是 o_norm 之前的 attn；
@@ -461,7 +461,7 @@ v1 的 chunk attention 是 K5 的 decode 核逐行展开：每个 (query, token)
 算，209 kFLOP/对，TP4 下每张卡对全部 96 头算自己那份行，93 层 16k chunk over 240k 的 65% 是它。
 v2 是 SGLang 走的形态：latent 行先经 kv_b 展开成每头 k (192) | v (128)，attention 在 192/128 维上算
 （61 kFLOP/对），核是 TensorRT-LLM gen 的 ragged context FMHA——FlashInfer `flashinfer-cubin` 0.6.18 里
-`trtllm_ragged_attention_deepseek` 在 GB300 上选的那个 cubin 原样收进 `tools/kernels-bin/trtllm_fmha_ctx_h192_v128.cubin`
+`trtllm_ragged_attention_deepseek` 在 GB300 上选的那个 cubin 原样收进索引族 `trtllm_fmha_ctx_h192_v128`
 （README 有来源与 sha）。
 
 一层的链（`tools/gen_k3.py` 的 v2 分支，只在 `prefill` program）：
@@ -534,7 +534,7 @@ grid (ceil(rows/256), 96, 1)，block 512，dyn smem 199296，无 cluster。**门
 
 ## 4. 交付状态与遗留（2026-09-02）
 
-七族全部交付并入 master（`tools/kernels-src/k3_*.cu`，`tools/build_kernels.sh` 编成 `target/cubins/`）；
+七族全部交付并入 master（`tools/kernels-src/k3_*.cu`，当时由 `tools/build_kernels.sh` 编成 `target/cubins/`，2026-09-19 起走 `tools/kernels/import_handwritten.py`）；
 每个核在 harness 上 B ∈ {1, 2, 8, 64} 全过，0 spill，无 `.MULTICAST`；notes/ncu 报告在 `tools/k3-harness/`。
 生成器 `tools/gen_k3.py` 已切到这套核（manifest `examples/k3-*.json`，93 层 1855 launch，其中 742 GEMM）；
 pegainfer 的 TileLang 桶核、line shim 和它们的 manifest 已从树里删除（git 历史里有）。

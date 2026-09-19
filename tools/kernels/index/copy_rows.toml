@@ -1,0 +1,13 @@
+[family]
+name = "copy_rows"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/copy_rows.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "copy_rows"
+sha256 = "f301274a5957faac2f0891ea9d6e80e0dabdb56ee4c14c3795e836f6bf31fb54"
+entries = ["kern_copy_rows_bf16", "kern_last_row_bf16", "kern_own_rows"]

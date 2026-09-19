@@ -1,0 +1,13 @@
+[family]
+name = "k3_mla_paged_attn"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_mla_paged_attn.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_mla_paged_attn"
+sha256 = "e71bac80b55d67d4a2dc5ee94de81381e0ef3840da6e3cf5ddb639af9a1f545d"
+entries = ["kern_k3_mla_paged_attn"]

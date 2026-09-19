@@ -9,7 +9,7 @@ import json
 import sys
 
 import flash_kda_abi
-import handwritten
+from kernels import index
 import kern_manifest
 
 
@@ -34,7 +34,7 @@ def build(T, H):
         "vars": {"span": {"max": T}},
         "buffers": buffers,
         # probe.cu passes scale = 1/128
-        "ops": {"flash_kda": flash_kda_abi.op(H, T, handwritten.prebuilt(flash_kda_abi.MODULE), scale=1.0 / 128)},
+        "ops": {"flash_kda": flash_kda_abi.op(H, T, index.variant(flash_kda_abi.MODULE).module, scale=1.0 / 128)},
         "programs": {"span": [{"label": "kda", "op": "flash_kda", "args": args + [{"var": "span"}]}]},
     }
     return kern_manifest.normalize(m)

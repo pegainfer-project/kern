@@ -61,9 +61,8 @@ enum Cmd {
         #[command(flatten)]
         opts: TestOpts,
     },
-    /// Build the handwritten cubins (`[kernels].sources`) and land every
-    /// cubin pinned by each target's manifest and reference into its
-    /// kernels dir, from `[kernels].dumps` and the builds
+    /// Land every module a target's manifest pins in its kernels dir,
+    /// from `[kernels].dumps` and the registry cache
     Kernels { targets: Vec<String> },
     /// Verify a manifest and print its serving protocol: the axes, every
     /// fill, the tables, and the call shape each program accepts. No GPU.
@@ -204,9 +203,6 @@ fn verify(path: &Path) -> bool {
 fn kernels(cfg: Option<&Config>, targets: &[String]) -> Result<()> {
     let Some(cfg) = cfg else { bail!("kern kernels needs a kern.toml ([targets], [kernels])") };
     let tools = tools_dir(cfg)?;
-    if let Some(src) = &cfg.kernels.sources {
-        sh(Command::new(tools.join("build_kernels.sh")).env("KERN_SRC", src))?;
-    }
     let dumps: Vec<String> = cfg.kernels.dumps.iter().map(|p| p.display().to_string()).collect();
     for (name, t) in cfg.select(targets)? {
         let Some(kernels) = &t.kernels else {

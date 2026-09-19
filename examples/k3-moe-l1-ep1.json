@@ -4385,15 +4385,15 @@
  },
  "modules": {
   "k3_mega_moe": {
-   "source": "k3_mega_moe.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7",
    "sha256": "5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7"
   },
   "k3_mega_stage": {
-   "source": "k3_mega_stage.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8",
    "sha256": "36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8"
   },
   "k3_weight_prep": {
-   "source": "k3_weight_prep.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02",
    "sha256": "a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02"
   }
  },

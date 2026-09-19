@@ -1,0 +1,13 @@
+[family]
+name = "embedding"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/embedding.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "embedding"
+sha256 = "868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7"
+entries = ["kern_embedding_i64_bf16"]

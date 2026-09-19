@@ -21,7 +21,6 @@
 //!
 //! [kernels]                            # kern kernels
 //! dumps   = ["~/dumps/x"]              # capture dumps to extract from
-//! sources = "tools/kernels-src"        # handwritten .cu, built by nvcc
 //!
 //! [test]
 //! seed = 0x5eed
@@ -72,7 +71,6 @@ pub struct Target {
 pub struct Kernels {
     #[serde(default)]
     pub dumps: Vec<PathBuf>,
-    pub sources: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -125,7 +123,6 @@ impl Config {
             t.tokenizer = t.tokenizer.as_ref().map(|p| abs(&dir, p));
         }
         c.kernels.dumps = c.kernels.dumps.iter().map(|p| abs(&dir, p)).collect();
-        c.kernels.sources = c.kernels.sources.as_ref().map(|p| abs(&dir, p));
         Ok(c)
     }
 

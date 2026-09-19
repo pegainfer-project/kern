@@ -1,0 +1,19 @@
+[family]
+name = "k3_conv_silu"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_conv_silu.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_conv_silu"
+sha256 = "d1345a52d5dc6fdf55895ef2231fae8dd658b08c3a401337c7ee0ee756c99636"
+entries = ["kern_k3_conv_silu"]
+
+[[variant]]
+name = "k3_conv_silu+HEADS=24"
+sha256 = "3c6393af3887f5a9ede85d08b8196484a7346d39b2c748a278097f879abb28bd"
+entries = ["kern_k3_conv_silu"]
+defines = { HEADS = 24 }

@@ -1,0 +1,18 @@
+[family]
+name = "trtllm_fmha_ctx_h192_v128"
+kind = "cubin"
+sm = "sm103a"
+abi = "trtllm_fmha"
+upstream = "flashinfer-cubin 0.6.18, bundle 2d6a5a029eefcc388ec0ceb87efb55d8bcce5c3c, fmha/trtllm-gen/fmhaSm103aKernel_QkvBfloat16OBfloat16HQk192HV128SeparateQkvCausalVarSeqQ256Kv128PersistentContext.cubin (the wheel's checksums.txt sha), the kernel flashinfer.prefill.trtllm_ragged_attention_deepseek selects on GB300 for one sequence"
+license = "Apache-2.0"
+license_blob = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+toolchain = "trtllm-gen (NVIDIA), prebuilt"
+rebuild = "none: a different FlashInfer release is a different bundle"
+abi_source = "flashinfer/trtllm/fmha/kernelParams.h (KernelParams, 1344 B) lifted with tools/kernel-capture from tools/trtllm-fmha/probe.py; docs/k3-kernel-abi.md K13"
+imported = "2026-09-19"
+
+[[variant]]
+name = "trtllm_fmha_ctx_h192_v128"
+sha256 = "240811d976c01e4a9bee00041d98343f6f9254fefae598df46a97ff07c7df508"
+entries = ["fmhaSm103aKernel_QkvBfloat16OBfloat16HQk192HV128SeparateQkvCausalVarSeqQ256Kv128PersistentContext", "fmhaSm103aKernel_QkvBfloat16OBfloat16HQk192HV128SeparateQkvCausalVarSeqQ256Kv128PersistentContextGetSmemSize"]
+launch = { block = 512, shared_mem = 199296 }

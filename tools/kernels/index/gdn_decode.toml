@@ -1,0 +1,13 @@
+[family]
+name = "gdn_decode"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/gdn_decode.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "gdn_decode"
+sha256 = "1b6df2741965395d1e120c0af12e6c29fddfb26079fa2bd783c20f4b332c54ae"
+entries = ["kern_gdn_conv_bf16", "kern_gdn_step_bf16"]

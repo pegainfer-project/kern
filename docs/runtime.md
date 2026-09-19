@@ -319,7 +319,7 @@ CUDA_VISIBLE_DEVICES=0 tools/capture_qwen3.sh        # -> dumped-kernels/pid<N>/
                                                      # -> examples/qwen3-4b.json
 
 # 4) 抽核：按 manifest 钉的 sha256 从 dump 里拷 module、从 target/cubins 拷
-#    手写核（tools/build_kernels.sh 编的），落地 <module>-<sha12>.cubin；目录只增不减
+#    手写核（registry 缓存 ~/.cache/kern/blobs，tools/kernels/import_handwritten.py 放的），落地 <module>-<sha12>.cubin；目录只增不减
 tools/extract_kernels.sh examples/qwen3-4b.json dumped-kernels/pid<N>   # -> kernels/
 # 或 `kern kernels`：按 kern.toml 的 [kernels].dumps/.sources 给每个 target 的 manifest 与 reference 落 cubin
 

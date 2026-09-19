@@ -41,7 +41,7 @@ GDN_EPS = 9.999999974752427e-07
 
 
 def gdn_ops():
-    cubin = handwritten.hw("gdn_decode")
+    cubin = index.variant("gdn_decode").module
     conv = dict(
         params=["inout buffer<bf16>", "in buffer<bf16>", "inout state", "in buffer<i32>"],
         impl=dict(launches=[dict(
@@ -106,7 +106,7 @@ ELEM_BLOCK = 256
 
 
 def attn_ops():
-    cubin = handwritten.hw("attn_prep")
+    cubin = index.variant("attn_prep").module
     prep = dict(
         params=["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>", "in buffer<bf16>", "in buffer<bf16>",
                 "out buffer<bf16>", "out buffer<bf16>", "inout state", "inout state", "in buffer<i64>", "i32"],
@@ -165,7 +165,7 @@ def elementwise(m):
     thread."""
     silu = m["ops"]["silu_mul"]["impl"]["launches"][0]
     silu.pop("module")
-    silu.update(handwritten.hw("silu_mul"), entry="kern_silu_mul_bf16",
+    silu.update(index.variant("silu_mul").module, entry="kern_silu_mul_bf16",
                 params=["out buffer<bf16>", "in buffer<bf16>", "i32"],
                 args=[{"param": 0}, {"param": 1}, {"i32": MLP_WIDTH}],
                 block=[ELEM_BLOCK, 1, 1], grid=["tokens", -(-MLP_WIDTH // (8 * ELEM_BLOCK)), 1])
@@ -183,7 +183,7 @@ def repin_handwritten(m):
             mod = m["modules"].get(launch.get("module"))
             if mod and mod["source"].removesuffix(".cubin") in REWRITTEN:
                 launch.pop("module")
-                launch.update(handwritten.hw(mod["source"].removesuffix(".cubin")))
+                launch.update(index.variant(mod["source"].removesuffix(".cubin")).module)
     for name in ("gemma_norm_qhead", "gemma_norm_khead"):
         if name in m["ops"]:
             m["ops"][name]["impl"]["launches"][0]["block"] = [64, 1, 1]
@@ -225,7 +225,7 @@ GEMM16 = {   # label suffix: (op name, N, K, splits at M <= 8, splits at M > 8, 
 
 def gemm16(m):
     """decode_batch GEMMs named in GEMM16 run the handwritten kernel."""
-    cubin = handwritten.hw("gemm16")
+    cubin = index.variant("gemm16").module
     for suffix, (name, n, k, lo, hi, stages, chunks) in GEMM16.items():
         smax = max(lo, hi) if chunks == "one" else 1
         m["ops"][name] = dict(
@@ -276,7 +276,7 @@ def gemm16_in_proj(m):
     the dual kernel: the 96-row ba weight rides along as two more CTAs of
     32-row blocks that run its 5 chunks in place (cuBLASLt picks 5 for ba at
     M = 1 and M = 16)."""
-    cubin = handwritten.hw("gemm16")
+    cubin = index.variant("gemm16").module
     n1, n2, k = QKVZ_WIDTH, BA_WIDTH, 5120
     m["ops"]["gemm16_in_proj"] = dict(
         params=["in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>", "i32"],
@@ -311,7 +311,7 @@ def gemm16_silu(m):
     """decode_batch's gate_up + silu_mul pairs become one launch of the fused
     kernel (gemm16.cu, `gemm16_silu`): the up half is rounded to bf16 in
     shared memory and the gate warps apply silu_mul's exact ops."""
-    cubin = handwritten.hw("gemm16")
+    cubin = index.variant("gemm16").module
     n, k = 2 * MLP_WIDTH, 5120
     m["ops"]["gemm16_gate_up_silu"] = dict(
         params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],

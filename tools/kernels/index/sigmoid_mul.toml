@@ -1,0 +1,13 @@
+[family]
+name = "sigmoid_mul"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/sigmoid_mul.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "sigmoid_mul"
+sha256 = "2b0745de4fc623437cce41fee177d7980239326796dca33d4faa7046f6f10ffa"
+entries = ["kern_sigmoid_mul_bf16"]

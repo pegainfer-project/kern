@@ -1,0 +1,13 @@
+[family]
+name = "k3_mla_v2"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_mla_v2.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_mla_v2"
+sha256 = "436c9ebb766141276fd52d431f238f3f5d92ed1d9359d39372208c2c72503a16"
+entries = ["kern_k3_latent_gather"]

@@ -1,0 +1,13 @@
+[family]
+name = "k3_router_argmax"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_router_argmax.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_router_argmax"
+sha256 = "e3b8395c90e502b7afd4e844a57d060c682c7ab060a361befb9cbf4e61034b5a"
+entries = ["kern_k3_argmax_f32_final", "kern_k3_argmax_f32_partial", "kern_k3_router_topk"]
