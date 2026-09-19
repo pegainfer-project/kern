@@ -601,9 +601,42 @@
             "mul"
           ],
           "type": "object"
+        },
+        {
+          "description": "`e + c`, e.g. `{\"add\": [{\"ceil_div\": [\"tokens\", 64]}, 56]}`.",
+          "properties": {
+            "add": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Expr"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "description": "Name of a numeric constant declared in constants.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "add"
+          ],
+          "type": "object"
         }
       ],
-      "description": "A scalar expression: a constant, a var name, `{\"ceil_div\": [e, c]}` or `{\"mul\": [e, c]}`, e.g. `{\"ceil_div\": [\"tokens\", 128]}`."
+      "description": "A scalar expression: a constant, a var name, `{\"ceil_div\": [e, c]}`, `{\"mul\": [e, c]}` or `{\"add\": [e, c]}`, e.g. `{\"ceil_div\": [\"tokens\", 128]}`."
     },
     "ExternLaunch": {
       "additionalProperties": false,
@@ -1674,6 +1707,10 @@
             }
           ],
           "description": "Shared-memory swizzle span in bytes: 0 (none), 32, 64 or 128."
+        },
+        "wrap": {
+          "description": "The strides wrap the 64-bit address space on purpose (trtllm-gen's\nout-of-bounds trick: dims of 2^31 whose stride sums overflow, so a\ncoordinate past a tile's row limit reads zero or drops the store).\nIts footprint is unbounded and not checked against the buffer; the\nkernel is trusted as it is for the raw pointer it also receives.",
+          "type": "boolean"
         }
       },
       "required": [

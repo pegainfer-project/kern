@@ -1095,6 +1095,13 @@ pub struct TensorMap {
     /// Fill out-of-bounds elements with NaN instead of zero.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub oob_nan: bool,
+    /// The strides wrap the 64-bit address space on purpose (trtllm-gen's
+    /// out-of-bounds trick: dims of 2^31 whose stride sums overflow, so a
+    /// coordinate past a tile's row limit reads zero or drops the store).
+    /// Its footprint is unbounded and not checked against the buffer; the
+    /// kernel is trusted as it is for the raw pointer it also receives.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap: bool,
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -1186,13 +1193,20 @@ impl TensorMap {
     }
 
     /// Bytes the descriptor can address from its base: the last element's
-    /// end. `None` if the shape is malformed (see [`Self::check`]).
+    /// end, or one slice's when the outermost dim spans the buffer (0).
+    /// `None` if the shape is malformed (see [`Self::check`]) or the strides
+    /// overflow the address space (see `wrap`).
     pub fn footprint(&self) -> Option<u64> {
         if self.dims.is_empty() || self.strides.len() + 1 != self.dims.len() {
             return None;
         }
+        let n = if self.dims.len() > 1 && self.dims[self.dims.len() - 1] == 0 {
+            self.dims.len() - 1
+        } else {
+            self.dims.len()
+        };
         let mut bytes = self.dims[0].checked_mul(self.dtype.bits())?.div_ceil(8);
-        for (d, s) in self.dims[1..].iter().zip(&self.strides) {
+        for (d, s) in self.dims[1..n].iter().zip(&self.strides) {
             bytes = bytes.checked_add(d.checked_sub(1)?.checked_mul(*s)?)?;
         }
         Some(bytes)
@@ -1259,7 +1273,7 @@ impl RegistryRef {
     }
 }
 
-/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}` or `{"mul": [e, c]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
+/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}`, `{"mul": [e, c]}` or `{"add": [e, c]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Expr {
@@ -1271,6 +1285,8 @@ pub enum Expr {
     CeilDiv { ceil_div: (Box<Expr>, u64) },
     /// `e * c`, e.g. `{"mul": ["tokens", 32]}`.
     Mul { mul: (Box<Expr>, u64) },
+    /// `e + c`, e.g. `{"add": [{"ceil_div": ["tokens", 64]}, 56]}`.
+    Add { add: (Box<Expr>, u64) },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1296,6 +1312,7 @@ impl Expr {
                 Ok(x.checked_add(c - 1).ok_or(EvalError::Overflow)? / c)
             }
             Expr::Mul { mul: (inner, c) } => inner.eval(vars)?.checked_mul(*c).ok_or(EvalError::Overflow),
+            Expr::Add { add: (inner, c) } => inner.eval(vars)?.checked_add(*c).ok_or(EvalError::Overflow),
         }
     }
 }

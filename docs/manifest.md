@@ -108,13 +108,16 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     `{"at": 0, "tensormap": {"param": i, "dtype":
     "u8"|"u4"|"i32"|"bf16"|..., "dims": [内层在前, 元素数], "strides":
     [第 2 维起的字节步长], "box": [smem tile 元素数], "swizzle": 0|32|64|128,
-    "l2_promotion": 0|64|128|256, "oob_nan": bool}}`——对接口第 i 个 buffer
+    "l2_promotion": 0|64|128|256, "oob_nan": bool, "wrap": bool}}`——对接口第 i 个 buffer
     / state 参（call 的 offset 照算）在装载时 `cuTensorMapEncodeTiled`；
     dtype 是 TMA 眼里的元素类型，与 buffer 的 dtype 无关（一个 `u8` slab
     上可以同时挂 fp8 activation 和 i32 scale 的描述符）；`dims` 最外层可以
     写 0，意思是"铺满这个 buffer / state"——装载时按 call 的 offset 之后
     剩下的字节数算出该维（分页 cache 的页数是 runtime 定的，manifest 不
-    知道）。核收裸描述符（CuTe DSL）就是 `bytes<128>` 里一个 at 0 的字段；
+    知道）。描述符能寻址的字节数必须落在 buffer 内（verify 与装载都查）；
+    `"wrap": true` 声明 stride 故意绕 64 位地址空间（trtllm-gen 的 OOB
+    技巧：2^31 的维配溢出的 stride，越过 tile 行界的坐标读零、写丢），
+    这种描述符没有上界、不查，核像拿裸指针一样被信任。核收裸描述符（CuTe DSL）就是 `bytes<128>` 里一个 at 0 的字段；
     核收 cute `TiledCopy`（CUTLASS）就是 `bytes<256>`：描述符在 0，动态
     stride 的 int 在 128（`k3-kernel-abi.md` K8）。DeepGEMM 这类 TMA kernel
     的 18 个描述符就这样从 manifest 里长出来，host 侧不再有 launch 代码。
@@ -133,8 +136,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
   里。
 
 **表达式**是封闭集合：常量、var 名（裸字符串，和 shape 一个写法）、
-`{"ceil_div": [e, c]}`、`{"mul": [e, c]}`——这不是语言，是填空模板，永远
-不会加控制流。grid、`shared_mem`、domain 的界都用它；call 的标量实参
+`{"ceil_div": [e, c]}`、`{"mul": [e, c]}`、`{"add": [e, c]}`——这不是语言，
+是填空模板，永远不会加控制流。grid、`shared_mem`、domain 的界都用它；call 的标量实参
 除 `{"var": "tokens"}` 和字面量外还可以是 `{"expr": {"mul": ["tokens", 32]}}`
 （prefill 逼出来的：head-norm 的"总 head 数"参数 = tokens×heads）或
 `{"rank": "ep"}`。call 实参里 var 要带 `var` 标签，因为它和 buffer 名混在
