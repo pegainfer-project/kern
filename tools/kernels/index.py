@@ -159,17 +159,25 @@ def save(doc):
     INDEX.mkdir(parents=True, exist_ok=True)
     p = path(doc["family"]["name"])
     p.write_text(dumps(doc))
-    assert tomllib.loads(p.read_text()) == _strip_none(doc), "the document does not round-trip"
+    assert tomllib.loads(p.read_text()) == _normal(doc), "the document does not round-trip"
     return p
+
+
+def _normal(doc):
+    """The document as `dumps` lays it out: no None values, variants and picks in their sorted order."""
+    d = _strip_none(doc)
+    if "variant" in d:
+        d["variant"] = sorted(d["variant"], key=lambda v: v["name"])
+    if "pick" in d:
+        d["pick"] = sorted(d["pick"], key=lambda p: (p["op"], p["shape"]))
+    return d
 
 
 def _strip_none(x):
     if isinstance(x, dict):
         return {k: _strip_none(v) for k, v in x.items() if v is not None}
-    if isinstance(x, list):
+    if isinstance(x, (list, tuple)):
         return [_strip_none(v) for v in x]
-    if isinstance(x, tuple):
-        return list(x)
     return x
 
 
