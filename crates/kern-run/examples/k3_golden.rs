@@ -616,7 +616,7 @@ fn run_rank(
     // Every row of the tray batch, forks included, leased on this rank.
     let rows = ((seqs.max(1) + 2 * fork.is_some() as usize) * tp) as u64;
     let capacity = kern_runtime::Capacity { tokens: Some(per_row as u64 * rows), seqs: rows };
-    let mut rt = Runtime::load(&manifest, kernels, gpu, Some(capacity), Some(topo))?;
+    let mut rt = Runtime::load(&manifest, Some(kernels), gpu, Some(capacity), Some(topo))?;
     // Every shard of the checkpoint: the manifest's binds pick this rank's
     // rows, columns and experts out of them.
     rt.load_weights(&kern_runtime::Safetensors::open(&[weights])?)?;

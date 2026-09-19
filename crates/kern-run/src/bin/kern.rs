@@ -61,9 +61,8 @@ enum Cmd {
         #[command(flatten)]
         opts: TestOpts,
     },
-    /// Build the handwritten cubins (`[kernels].sources`) and land every
-    /// cubin pinned by each target's manifest and reference into its
-    /// kernels dir, from `[kernels].dumps` and the builds
+    /// Land every module a target's manifest pins in its kernels dir,
+    /// from `[kernels].dumps` and the registry cache
     Kernels { targets: Vec<String> },
     /// Verify a manifest and print its serving protocol: the axes, every
     /// fill, the tables, and the call shape each program accepts. No GPU.
@@ -204,16 +203,16 @@ fn verify(path: &Path) -> bool {
 fn kernels(cfg: Option<&Config>, targets: &[String]) -> Result<()> {
     let Some(cfg) = cfg else { bail!("kern kernels needs a kern.toml ([targets], [kernels])") };
     let tools = tools_dir(cfg)?;
-    if let Some(src) = &cfg.kernels.sources {
-        sh(Command::new(tools.join("build_kernels.sh")).env("KERN_SRC", src))?;
-    }
     let dumps: Vec<String> = cfg.kernels.dumps.iter().map(|p| p.display().to_string()).collect();
     for (name, t) in cfg.select(targets)? {
+        let Some(kernels) = &t.kernels else {
+            bail!("target `{name}`: `kern kernels` lands cubins in a `kernels` dir; the target has none")
+        };
         for m in std::iter::once(&t.manifest).chain(t.reference.iter()) {
-            eprintln!("{name}: {} → {}", m.display(), t.kernels.display());
+            eprintln!("{name}: {} → {}", m.display(), kernels.display());
             // the script wants at least one search dir; the kernels dir itself is harmless
-            let d = if dumps.is_empty() { t.kernels.display().to_string() } else { dumps.join(":") };
-            sh(Command::new(tools.join("extract_kernels.sh")).arg(m).arg(&d).arg(&t.kernels))?;
+            let d = if dumps.is_empty() { kernels.display().to_string() } else { dumps.join(":") };
+            sh(Command::new(tools.join("extract_kernels.sh")).arg(m).arg(&d).arg(kernels))?;
         }
     }
     Ok(())

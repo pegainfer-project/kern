@@ -13257,75 +13257,75 @@
  },
  "modules": {
   "embedding": {
-   "source": "embedding.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7",
    "sha256": "868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7"
   },
   "flash_kda_d128": {
-   "source": "flash_kda_d128.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/34b83d875a418f63d14daf73984c1b8de0d1616250915a7d7e4810f327ce3617",
    "sha256": "34b83d875a418f63d14daf73984c1b8de0d1616250915a7d7e4810f327ce3617"
   },
   "k3_conv_silu": {
-   "source": "k3_conv_silu.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/d1345a52d5dc6fdf55895ef2231fae8dd658b08c3a401337c7ee0ee756c99636",
    "sha256": "d1345a52d5dc6fdf55895ef2231fae8dd658b08c3a401337c7ee0ee756c99636"
   },
   "k3_kda_core": {
-   "source": "k3_kda_core.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/1427037b4fb0aeba6d9a310e9bd04d6dd0a81822f779f5b7bf196821e68808ea",
    "sha256": "1427037b4fb0aeba6d9a310e9bd04d6dd0a81822f779f5b7bf196821e68808ea"
   },
   "k3_kda_out_gate": {
-   "source": "k3_kda_out_gate.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/740b4ceb2d8de833c2c56d4e09ce565dcddcd54d921e34440e104716865ca9c4",
    "sha256": "740b4ceb2d8de833c2c56d4e09ce565dcddcd54d921e34440e104716865ca9c4"
   },
   "k3_land": {
-   "source": "k3_land.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/2cd68c79bf3243f37d2f1406880060f610b4028f9e843bb356ea8ef0a0352fcc",
    "sha256": "2cd68c79bf3243f37d2f1406880060f610b4028f9e843bb356ea8ef0a0352fcc"
   },
   "k3_mega_moe": {
-   "source": "k3_mega_moe.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7",
    "sha256": "5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7"
   },
   "k3_mega_stage": {
-   "source": "k3_mega_stage.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8",
    "sha256": "36acac69160d545efc0970ce9086588d8f7e48e7df17a7436c085ddc347b46c8"
   },
   "k3_mla_absorb": {
-   "source": "k3_mla_absorb.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/eb7046ca802c9341e9661ee4446d94fb5b58eff5c3d8ba3c6247e653ca10ff14",
    "sha256": "eb7046ca802c9341e9661ee4446d94fb5b58eff5c3d8ba3c6247e653ca10ff14"
   },
   "k3_mla_prep": {
-   "source": "k3_mla_prep.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/2b244a6333a73248b64291e27cd0d5d3198a5ce5e2d275c6c819a2183d468eb5",
    "sha256": "2b244a6333a73248b64291e27cd0d5d3198a5ce5e2d275c6c819a2183d468eb5"
   },
   "k3_mla_split_plan": {
-   "source": "k3_mla_split_plan.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/f5d3d1e6e0625ff22d9f15b1ea7c7f9358de6e3278f6f7aade9b12ece0c72764",
    "sha256": "f5d3d1e6e0625ff22d9f15b1ea7c7f9358de6e3278f6f7aade9b12ece0c72764"
   },
   "k3_mla_vup_gate": {
-   "source": "k3_mla_vup_gate.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/df2c0f73251e6d87c8eeb5291efab13c4e8b640e81ae938c27cd37de489ffab0",
    "sha256": "df2c0f73251e6d87c8eeb5291efab13c4e8b640e81ae938c27cd37de489ffab0"
   },
   "k3_residual": {
-   "source": "k3_residual.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/d5d5d1fb3dda907822d99520b611fa77cab05bf11f165a1aa0d5e43d07cca8c8",
    "sha256": "d5d5d1fb3dda907822d99520b611fa77cab05bf11f165a1aa0d5e43d07cca8c8"
   },
   "k3_router_argmax": {
-   "source": "k3_router_argmax.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/e3b8395c90e502b7afd4e844a57d060c682c7ab060a361befb9cbf4e61034b5a",
    "sha256": "e3b8395c90e502b7afd4e844a57d060c682c7ab060a361befb9cbf4e61034b5a"
   },
   "k3_span_gather": {
-   "source": "k3_span_gather.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/ad6dd834a1778b1d48674f587df9f3728b4bcb3544dee9389df8d401bfa5a3fa",
    "sha256": "ad6dd834a1778b1d48674f587df9f3728b4bcb3544dee9389df8d401bfa5a3fa"
   },
   "k3_span_state": {
-   "source": "k3_span_state.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/a1b9e40e420f4bcd4cd542006dd171dbcde299d6912b3a1b9ff5b04d8c171ffd",
    "sha256": "a1b9e40e420f4bcd4cd542006dd171dbcde299d6912b3a1b9ff5b04d8c171ffd"
   },
   "k3_weight_prep": {
-   "source": "k3_weight_prep.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02",
    "sha256": "a874bd671bfeb90103a3a5330876e062b5583c752b88e1eadb4e84050c18bf02"
   },
   "mla_decode_h96_p64": {
-   "source": "mla_decode_h96_p64.cubin",
+   "source": "hf:Pegainfer/kern-kernels/blobs/791c7796dc32caad4688270b1524ea756542d3dec7e13b3bee433f8bdfafcbf4",
    "sha256": "791c7796dc32caad4688270b1524ea756542d3dec7e13b3bee433f8bdfafcbf4"
   }
  },

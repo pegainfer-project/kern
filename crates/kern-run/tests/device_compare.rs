@@ -43,8 +43,15 @@ fn runtime() -> Runtime {
     std::fs::create_dir_all(&dir).unwrap();
     let scope = HostWeights::new();
     let gpu = std::env::var("KERN_TEST_GPU").ok().and_then(|g| g.parse().ok()).unwrap_or(0);
-    Runtime::load_with_host_weights(&verified, &dir, gpu, Some(Capacity { tokens: Some(1), seqs: 1 }), None, &scope)
-        .unwrap()
+    Runtime::load_with_host_weights(
+        &verified,
+        Some(&dir),
+        gpu,
+        Some(Capacity { tokens: Some(1), seqs: 1 }),
+        None,
+        &scope,
+    )
+    .unwrap()
 }
 
 /// `a` random; `b` mostly `a`, with bytes flipped, elements replaced and

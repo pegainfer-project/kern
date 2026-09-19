@@ -682,8 +682,16 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                                     if matches!(dir, Dir::Out | Dir::InOut) {
                                         iface_written[i] = true;
                                     }
-                                    if let Some(fp) = t.footprint() {
+                                    if t.wrap {
+                                        if t.footprint().is_some() {
+                                            errs.push(format!(
+                                                "{fctx}: `wrap` on a tensormap whose strides do not overflow"
+                                            ));
+                                        }
+                                    } else if let Some(fp) = t.footprint() {
                                         op_tensormaps.entry(oname.as_str()).or_default().push((i, fp, fctx.clone()));
+                                    } else {
+                                        errs.push(format!("{fctx}: the tensormap's strides overflow (declare `wrap` if that is the kernel's trick)"));
                                     }
                                 }
                                 FieldSrc::I32 { .. }
@@ -1043,5 +1051,6 @@ fn check_expr(e: &Expr, m: &Manifest, used_vars: &mut BTreeSet<String>, errs: &m
             }
             check_expr(inner, m, used_vars, errs, ctx);
         }
+        Expr::Add { add: (inner, _) } => check_expr(inner, m, used_vars, errs, ctx),
     }
 }

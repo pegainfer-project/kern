@@ -14,7 +14,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from handwritten import hw  # noqa: E402
+from kernels.index import variant  # noqa: E402
 from kern_manifest import program  # noqa: E402
 
 BLOCK = 256
@@ -39,6 +39,10 @@ KERNELS = {
     "k3_mega_sf_pack": ("k3_weight_prep", "kern_k3_mega_sf_pack",
                         ["in buffer<u8>", "out buffer<i32>", "i32", "i32", "i32", "i32"]),
     "k3_kvb_aug": ("k3_weight_prep", "kern_k3_kvb_aug", ["in buffer<bf16>", "out buffer<bf16>", "i32"]),
+    "k3_moe_w_shuffle": ("k3_moe_prefill", "kern_k3_moe_w_shuffle",
+                         ["in buffer<u8>", "out buffer<u8>", "i32", "i32", "i32", "i32"]),
+    "k3_moe_sf_shuffle": ("k3_moe_prefill", "kern_k3_moe_sf_shuffle",
+                          ["in buffer<u8>", "out buffer<u8>", "i32", "i32", "i32", "i32"]),
 }
 FILL = {"f32": ("fill_f32", "f32"), "bf16": ("fill_bf16", "f32"), "i32": ("fill_i32", "i32"),
         "i64": ("fill_i64", "i64"), "u8": ("fill_u8", "i32")}
@@ -128,7 +132,7 @@ class Once:
             assert op not in self.m["ops"], op
             self.m["ops"][op] = {"params": params, "impl": {"launches": [
                 {"entry": entry, "params": params, "block": block, "grid": grid,
-                 "args": [{"param": i} for i in range(len(params))], **hw(cubin)}]}}
+                 "args": [{"param": i} for i in range(len(params))], **variant(cubin).module}]}}
         assert "load" not in self.m["programs"]
         self.m["programs"]["load"] = program(self.calls, once=True)
         return self.m

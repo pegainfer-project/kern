@@ -9,7 +9,7 @@ expert shard, its slab exported to the `ep` group, and the peers' slab bases
 in `slab_peers`. Program `moe`: quantise x into the slab, widen the routing,
 then the fused DeepGEMM MegaMoE kernel (dispatch → L1 → situ → L2 → combine)
 writes `y`. Geometry and slab offsets come from tools/k3-mega/layout_dump;
-the cubins are pinned by sha256 (tools/build_k3_mega.sh, build_kernels.sh).
+the cubins come from the kernel index (tools/kernels/, families `k3_mega_moe` and `k3_mega_stage`).
 
 The experts bind straight from the HF checkpoint (mxfp4 `weight_packed`
 u8 [n, k/2], `weight_scale` UE8M0 u8 [n, k/32]) in MegaMoE's layout
@@ -20,7 +20,6 @@ kern_k3_mega_sf_pack (rows UTCCP-permuted, then L1's interleave; 4 bytes
 per i32 word LSB-first; laid out [k/128, n] per expert).
 """
 import argparse
-import hashlib
 import json
 import os
 import pathlib
@@ -28,7 +27,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import handwritten
+from kernels import index
 import kern_manifest
 from once import Once, buf
 
@@ -36,11 +35,12 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 EXPERTS = 224
 
 
-def mega_build():
+def layout_dump():
+    """The host program that prints MegaMoE's geometry for a world (tools/k3-mega/layout_dump.cu), built on first use."""
     out = pathlib.Path(os.environ.get("K3_MEGA_CUBINS", REPO / "target" / "cubins"))
-    if not (out / "k3_mega_moe.cubin").exists() or not (out / "k3_mega_layout_dump").exists():
+    if not (out / "k3_mega_layout_dump").exists():
         subprocess.run([str(REPO / "tools" / "build_k3_mega.sh"), str(out)], check=True)
-    return out
+    return out / "k3_mega_layout_dump"
 
 
 def alignup(a, b):
@@ -64,11 +64,9 @@ def mega_pieces(ranks, tokens_max, wprefix="", tokens="tokens"):
     experts from latent `x` into `y`. `tokens` is the rows' dimension: a
     var's name or an expression over one (a tray's share of a chunk,
     `{"ceil_div": ["tokens", 4]}`)."""
-    cub = mega_build()
-    lay = json.loads(subprocess.check_output([str(cub / "k3_mega_layout_dump"), str(EXPERTS), str(ranks)]))
-    mega = {"cubin": "k3_mega_moe.cubin",
-            "sha256": hashlib.sha256((cub / "k3_mega_moe.cubin").read_bytes()).hexdigest()}
-    stage = handwritten.hw("k3_mega_stage")
+    lay = json.loads(subprocess.check_output([str(layout_dump()), str(EXPERTS), str(ranks)]))
+    mega = index.variant("k3_mega_moe").module
+    stage = index.variant("k3_mega_stage").module
     H, I, K = lay["hidden"], lay["intermediate"], lay["topk"]
     epr = lay["experts_per_rank"]
     ring, sf_ring = lay["ring_tokens"], lay["sf_ring_tokens"]

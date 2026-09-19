@@ -75,6 +75,8 @@ pub(crate) enum Coll {
 pub(crate) enum Elem {
     F32,
     Bf16,
+    I32,
+    U8,
 }
 
 impl Elem {
@@ -82,6 +84,8 @@ impl Elem {
         match self {
             Elem::F32 => 4,
             Elem::Bf16 => 2,
+            Elem::I32 => 4,
+            Elem::U8 => 1,
         }
     }
 
@@ -89,6 +93,8 @@ impl Elem {
         match self {
             Elem::F32 => sys::ncclDataType_t::ncclFloat32,
             Elem::Bf16 => sys::ncclDataType_t::ncclBfloat16,
+            Elem::I32 => sys::ncclDataType_t::ncclInt32,
+            Elem::U8 => sys::ncclDataType_t::ncclUint8,
         }
     }
 }
@@ -105,6 +111,8 @@ pub(crate) fn extern_op(name: &str) -> Option<(Coll, Elem)> {
     let elem = match elem {
         "f32" => Elem::F32,
         "bf16" => Elem::Bf16,
+        "i32" => Elem::I32,
+        "u8" => Elem::U8,
         _ => return None,
     };
     Some((coll, elem))
@@ -235,6 +243,8 @@ mod tests {
         assert_eq!(extern_op("nccl_allreduce_f32"), Some((Coll::AllReduce, Elem::F32)));
         assert_eq!(extern_op("nccl_allgather_bf16"), Some((Coll::AllGather, Elem::Bf16)));
         assert_eq!(extern_op("nccl_reducescatter_bf16"), Some((Coll::ReduceScatter, Elem::Bf16)));
+        assert_eq!(extern_op("nccl_allgather_u8"), Some((Coll::AllGather, Elem::U8)));
+        assert_eq!(extern_op("nccl_allgather_i32"), Some((Coll::AllGather, Elem::I32)));
         assert_eq!(
             (extern_op("nccl_reduce_f32"), extern_op("nccl_allreduce_f16"), extern_op("cublas_bf16_tn_f32")),
             (None, None, None)

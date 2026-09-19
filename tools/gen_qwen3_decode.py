@@ -670,7 +670,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
             "kern_embedding_i64_bf16",
             ["in buffer<i64>", "in buffer<bf16>", "out buffer<bf16>",
              "i32", "i32"],
-            [256, 1, 1], [T, 1, 1], **hw("embedding")),
+            [256, 1, 1], [T, 1, 1], **variant("embedding").module),
         # c[m,n] = a[m,k] @ w[n,k]^T；runtime 按 extern: 前缀特判走 cublasLt
         "gemm": single(
             "extern:cublaslt_bf16_tn",
@@ -694,13 +694,13 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
                           "out buffer<i32>", "i32"],
                          [1024, 1, 1], [T, 64, 1],
                          [a(0), scr("pmax"), scr("pidx"), a(2)],
-                         **hw("argmax")),
+                         **variant("argmax").module),
                     step("kern_argmax_final_i64",
                          ["in buffer<f32>", "in buffer<i32>",
                           "out buffer<i64>", "i32"],
                          [64, 1, 1], [T, 1, 1],
                          [scr("pmax"), scr("pidx"), a(1), i32(64)],
-                         **hw("argmax")),
+                         **variant("argmax").module),
                 ],
             },
         },
@@ -724,19 +724,19 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         # count of verify rows taken (the matched prefix + 1)
         kernels["splice_draft"] = single(
             "kern_splice_draft", ["in buffer<i64>", "out buffer<i64>", "i32", "i64"],
-            [32, 1, 1], [S, 1, 1], **hw("spec_round"))
+            [32, 1, 1], [S, 1, 1], **variant("spec_round").module)
         kernels["splice_verify"] = single(
             "kern_splice_verify", ["in buffer<i64>", "in buffer<i64>", "out buffer<i64>", "i32", "i32"],
-            [32, 1, 1], [S, 1, 1], **hw("spec_round"))
+            [32, 1, 1], [S, 1, 1], **variant("spec_round").module)
         kernels["spec_count"] = single(
             "kern_spec_count", ["in buffer<i64>", "in buffer<i64>", "out buffer<i32>", "i32", "i32"],
-            [32, 1, 1], [S, 1, 1], **hw("spec_round"))
+            [32, 1, 1], [S, 1, 1], **variant("spec_round").module)
         # prefill's head over its last row (tools/kernels-src/copy_rows.cu;
         # `rows-1` is not in the expression set, so the kernel takes `rows`)
         # and the one-row argmax it feeds
         kernels["last_row"] = single(
             "kern_last_row_bf16", ["out buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32"],
-            [256, 1, 1], [1, 1, 1], **hw("copy_rows"))
+            [256, 1, 1], [1, 1, 1], **variant("copy_rows").module)
         kernels["argmax_row"] = {
             "params": ["in buffer<bf16>", "out buffer<i64>", "i32"],
             "impl": {
@@ -750,13 +750,13 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
                           "out buffer<i32>", "i32"],
                          [1024, 1, 1], [1, 64, 1],
                          [a(0), scr("pmax"), scr("pidx"), a(2)],
-                         **hw("argmax")),
+                         **variant("argmax").module),
                     step("kern_argmax_final_i64",
                          ["in buffer<f32>", "in buffer<i32>",
                           "out buffer<i64>", "i32"],
                          [64, 1, 1], [1, 1, 1],
                          [scr("pmax"), scr("pidx"), a(1), i32(64)],
-                         **hw("argmax")),
+                         **variant("argmax").module),
                 ],
             },
         }
@@ -776,13 +776,13 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
                           "out buffer<i32>", "i32"],
                          [1024, 1, 1], [S, 64, 1],
                          [a(0), a(1), scr("pmax"), scr("pidx"), a(4)],
-                         **hw("markov_rows")),
+                         **variant("markov_rows").module),
                     step("kern_argmax_rows_final_i64",
                          ["in buffer<f32>", "in buffer<i32>",
                           "out buffer<i64>", "i32", "i32"],
                          [64, 1, 1], [S, 1, 1],
                          [scr("pmax"), scr("pidx"), a(2), a(3), i32(64)],
-                         **hw("markov_rows")),
+                         **variant("markov_rows").module),
                 ],
             },
         }
@@ -790,7 +790,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
             "kern_embedding_rows_i64_bf16",
             ["in buffer<i64>", "i32", "in buffer<bf16>", "out buffer<bf16>",
              "i32"],
-            [256, 1, 1], [S, 1, 1], **hw("markov_rows"))
+            [256, 1, 1], [S, 1, 1], **variant("markov_rows").module)
         # c[m,n] += a[m,k] @ w[n,k]^T：β=1 累加版，喂 fc 分块和 markov 偏置
         kernels["gemm_acc"] = single(
             "extern:cublaslt_bf16_tn_acc",

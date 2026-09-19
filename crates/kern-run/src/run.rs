@@ -185,7 +185,7 @@ fn ellipsize(s: &str, n: usize) -> String {
 /// for and the module every op resolved to. A run that is wrong in a
 /// boring way (the wrong kernels dir, a state far bigger than expected)
 /// is visible here rather than in the output.
-fn banner(rt: &Runtime, manifest: &Path, kernels: &Path, load: Duration) {
+fn banner(rt: &Runtime, manifest: &Path, kernels: Option<&Path>, load: Duration) {
     let m = &rt.manifest;
     info!("manifest `{}` (schema v{}, {}): verified", m.model, m.schema_version, manifest.display());
     for (name, v) in &m.vars {
@@ -235,7 +235,7 @@ fn banner(rt: &Runtime, manifest: &Path, kernels: &Path, load: Duration) {
          cuFuncGetParamInfo layout vs declared params ({load:?}):",
         rt.module_count(),
         m.modules.len(),
-        kernels.display(),
+        kernels.map(|k| k.display().to_string()).unwrap_or_else(|| "the registry cache".into()),
     );
     let ones = BTreeMap::from_iter(m.vars.keys().map(|v| (v.clone(), 1)));
     for (name, modules) in rt.op_resolution() {
@@ -267,9 +267,9 @@ fn execute(o: Opts) -> Result<()> {
         .capacity
         .or_else(|| kern_runtime::seq_capacity(&verified))
         .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
-    let mut rt = Runtime::load(&verified, &o.inputs.kernels, o.inputs.gpu, capacity, None)?;
+    let mut rt = Runtime::load(&verified, o.inputs.kernels.as_deref(), o.inputs.gpu, capacity, None)?;
     rt.set_eager(o.eager);
-    banner(&rt, &o.inputs.manifest, &o.inputs.kernels, t0.elapsed());
+    banner(&rt, &o.inputs.manifest, o.inputs.kernels.as_deref(), t0.elapsed());
 
     let t0 = Instant::now();
     o.inputs.weights.bind(&mut rt)?;

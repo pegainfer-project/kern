@@ -60,24 +60,32 @@ pub(crate) struct LoadedModule {
 }
 
 /// Load the modules the manifest pins, keyed by sha256 of the file. Every
-/// `.cubin` in the directory is hashed; only artifacts whose hash the
-/// manifest's `modules` table names are loaded — the manifest is the
-/// complete dependency list, the directory may hold every version ever
-/// built (`gemm8-3f9a1c2d4e5b.cubin`, `gemm8-9b0c…`) and each manifest
-/// resolves to the one it pins. Two files with the same bytes load once.
+/// `.cubin` in the directory (if one is given) is hashed; only artifacts
+/// whose hash the manifest's `modules` table names are loaded — the
+/// manifest is the complete dependency list, the directory may hold every
+/// version ever built (`gemm8-3f9a1c2d4e5b.cubin`, `gemm8-9b0c…`) and each
+/// manifest resolves to the one it pins. Two files with the same bytes
+/// load once. A manifest whose modules are all registry refs needs no
+/// directory.
 pub(crate) fn load_pinned_modules(
-    kernels_dir: &Path,
+    kernels_dir: Option<&Path>,
     remote: &BTreeMap<String, PathBuf>,
     wanted: &BTreeSet<String>,
 ) -> Result<Vec<LoadedModule>> {
-    let mut cubins: Vec<_> = std::fs::read_dir(kernels_dir)
-        .map_err(|e| Error::KernelArtifact(format!("kernel dir {}: {e}", kernels_dir.display())))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "cubin"))
-        .collect();
+    let mut cubins = match kernels_dir {
+        Some(dir) => std::fs::read_dir(dir)
+            .map_err(|e| Error::KernelArtifact(format!("kernel dir {}: {e}", dir.display())))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "cubin"))
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
     cubins.sort();
     if cubins.is_empty() && remote.is_empty() && !wanted.is_empty() {
-        bail!(KernelArtifact, "no .cubin files in {}", kernels_dir.display());
+        match kernels_dir {
+            Some(dir) => bail!(KernelArtifact, "no .cubin files in {}", dir.display()),
+            None => bail!(KernelArtifact, "the manifest pins local artifacts but no kernels dir was given"),
+        }
     }
     let mut modules: Vec<LoadedModule> = Vec::new();
     let local = cubins.iter().map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), p.clone()));
@@ -104,7 +112,8 @@ pub(crate) fn load_pinned_modules(
 /// (`$KERN_CACHE_DIR` or `~/.cache/kern`, `blobs/<sha256>`) and return its
 /// local path. A cache hit is re-hashed (corruption re-fetches); a download
 /// is hash-checked before it lands in the cache, so the transport — the
-/// Hugging Face `resolve/` endpoint or whatever fronts it — is untrusted.
+/// Hugging Face `resolve/` endpoint or whatever host the URL names — is
+/// untrusted. A pre-filled cache is a complete offline distribution.
 fn fetch_registry_cubin(reg: &RegistryRef, sha256: &str) -> Result<PathBuf> {
     let sha = sha256.to_lowercase();
     let cache_root = std::env::var_os("KERN_CACHE_DIR")
@@ -121,10 +130,10 @@ fn fetch_registry_cubin(reg: &RegistryRef, sha256: &str) -> Result<PathBuf> {
         }
     }
 
-    let url = format!("https://huggingface.co/{}/{}/resolve/{}/{}", reg.org, reg.repo, reg.revision, reg.path);
+    let url = reg.url.as_str();
     tracing::info!("fetching {url}");
-    let mut req = ureq::get(&url);
-    if let Ok(tok) = std::env::var("HF_TOKEN") {
+    let mut req = ureq::get(url);
+    if let (true, Ok(tok)) = (url.starts_with("https://huggingface.co/"), std::env::var("HF_TOKEN")) {
         req = req.header("Authorization", format!("Bearer {tok}"));
     }
     let resp = req.call().map_err(|e| Error::KernelArtifact(format!("fetching {url}: {e}")))?;
@@ -135,12 +144,7 @@ fn fetch_registry_cubin(reg: &RegistryRef, sha256: &str) -> Result<PathBuf> {
     if got != sha {
         bail!(
             KernelArtifact,
-            "registry cubin hf:{}/{}/{}@{}: sha256 mismatch: manifest declares {sha}, \
-             fetched bytes are {got}",
-            reg.org,
-            reg.repo,
-            reg.path,
-            reg.revision
+            "registry cubin {url}: sha256 mismatch: manifest declares {sha}, fetched bytes are {got}"
         );
     }
     std::fs::create_dir_all(&blobs)?;

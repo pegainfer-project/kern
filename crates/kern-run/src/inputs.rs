@@ -32,7 +32,8 @@ pub struct Inputs {
     pub manifest: PathBuf,
     /// The manifest to compare against; only `kern test` needs one.
     pub reference: Option<PathBuf>,
-    pub kernels: PathBuf,
+    /// The local artifacts directory; a manifest of registry refs needs none.
+    pub kernels: Option<PathBuf>,
     pub weights: Weights,
     /// The flag, the target's, else the first checkpoint's own.
     pub tokenizer: Option<PathBuf>,
@@ -52,7 +53,7 @@ impl Inputs {
         Ok(Inputs {
             manifest: g.manifest.or_else(|| t.map(|t| t.manifest.clone())).ok_or_else(|| need(cfg, "manifest"))?,
             reference: g.reference.or_else(|| t.and_then(|t| t.reference.clone())),
-            kernels: g.kernels.or_else(|| t.map(|t| t.kernels.clone())).ok_or_else(|| need(cfg, "kernels"))?,
+            kernels: g.kernels.or_else(|| t.and_then(|t| t.kernels.clone())),
             tokenizer: g.tokenizer.or_else(|| t.and_then(|t| t.tokenizer.clone())).or(ck.tokenizer),
             stop_tokens: once_each(ck.stop_tokens.into_iter().chain(g.stop_tokens)),
             gpu: g.gpu.or_else(|| cfg.and_then(|c| c.gpu)).unwrap_or(0),

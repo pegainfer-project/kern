@@ -21,7 +21,6 @@
 //!
 //! [kernels]                            # kern kernels
 //! dumps   = ["~/dumps/x"]              # capture dumps to extract from
-//! sources = "tools/kernels-src"        # handwritten .cu, built by nvcc
 //!
 //! [test]
 //! seed = 0x5eed
@@ -61,7 +60,7 @@ pub struct Config {
 pub struct Target {
     pub manifest: PathBuf,
     pub reference: Option<PathBuf>,
-    pub kernels: PathBuf,
+    pub kernels: Option<PathBuf>,
     #[serde(default)]
     pub(crate) weights: Vec<String>,
     pub(crate) tokenizer: Option<PathBuf>,
@@ -72,7 +71,6 @@ pub struct Target {
 pub struct Kernels {
     #[serde(default)]
     pub dumps: Vec<PathBuf>,
-    pub sources: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -120,12 +118,11 @@ impl Config {
         for t in c.targets.values_mut() {
             t.manifest = abs(&dir, &t.manifest);
             t.reference = t.reference.as_ref().map(|p| abs(&dir, p));
-            t.kernels = abs(&dir, &t.kernels);
+            t.kernels = t.kernels.as_ref().map(|p| abs(&dir, p));
             t.weights = t.weights.iter().map(|w| abs(&dir, Path::new(w)).to_string_lossy().into_owned()).collect();
             t.tokenizer = t.tokenizer.as_ref().map(|p| abs(&dir, p));
         }
         c.kernels.dumps = c.kernels.dumps.iter().map(|p| abs(&dir, p)).collect();
-        c.kernels.sources = c.kernels.sources.as_ref().map(|p| abs(&dir, p));
         Ok(c)
     }
 

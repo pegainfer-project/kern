@@ -33,8 +33,9 @@ use crate::{compile, cubin, weights, Capacity, Error, Result, Runtime, Topology,
 use kern_pool::{chunks_for, page_unit, Kind, Pool};
 
 impl Runtime {
-    /// Load every `*.cubin` under `kernels_dir`, resolve
-    /// ops, allocate all buffers and states, and lower every program.
+    /// Load every `*.cubin` under `kernels_dir` and every registry ref the
+    /// manifest names (a manifest of registry refs needs no directory),
+    /// resolve ops, allocate all buffers and states, and lower every program.
     /// `capacity` sizes the pooled states ([`Capacity`]; a fixed-`bytes`
     /// state is allocated as declared); `None` fits them to the device:
     /// whatever memory is free once everything else is allocated, less
@@ -46,7 +47,7 @@ impl Runtime {
     /// is ignored.
     pub fn load(
         manifest: &Verified,
-        kernels_dir: &std::path::Path,
+        kernels_dir: Option<&std::path::Path>,
         gpu: usize,
         capacity: Option<Capacity>,
         topology: Option<&Topology>,
@@ -58,7 +59,7 @@ impl Runtime {
     /// All participating ranks must bind their weights before serving begins.
     pub fn load_with_host_weights(
         manifest: &Verified,
-        kernels_dir: &std::path::Path,
+        kernels_dir: Option<&std::path::Path>,
         gpu: usize,
         capacity: Option<Capacity>,
         topology: Option<&Topology>,
@@ -74,7 +75,7 @@ impl Runtime {
     /// checkpoint to both runtimes, as the same rank.
     pub fn load_over(
         manifest: &Verified,
-        kernels_dir: &std::path::Path,
+        kernels_dir: Option<&std::path::Path>,
         gpu: usize,
         capacity: Option<Capacity>,
         topology: Option<&Topology>,
@@ -86,7 +87,7 @@ impl Runtime {
 
     fn load_from(
         manifest: &Verified,
-        kernels_dir: &std::path::Path,
+        kernels_dir: Option<&std::path::Path>,
         gpu: usize,
         capacity: Option<Capacity>,
         topology: Option<&Topology>,

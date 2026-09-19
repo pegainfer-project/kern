@@ -1,4 +1,4 @@
-"""TRT-LLM gen's ragged context FMHA (tools/kernels-bin/trtllm_fmha_ctx_h192_v128.cubin,
+"""TRT-LLM gen's ragged context FMHA (kernel index family `trtllm_fmha_ctx_h192_v128`,
 docs/k3-kernel-abi.md K13) as one manifest op: this rank's rows of a chunk against
 the expanded K/V of their sequence, causal aligned to the end of the sequence.
 

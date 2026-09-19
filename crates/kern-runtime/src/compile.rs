@@ -29,6 +29,7 @@ pub(crate) enum CExpr {
     Const(u64),
     Var(usize),
     CeilDiv(Box<CExpr>, u64),
+    Add(Box<CExpr>, u64),
     Mul(Box<CExpr>, u64),
 }
 
@@ -76,6 +77,7 @@ impl CExpr {
             CExpr::Var(i) => Ok(vars.0[*i]),
             CExpr::CeilDiv(e, c) => Ok(e.eval(vars)?.checked_add(c - 1).ok_or_else(overflow)? / c),
             CExpr::Mul(e, c) => e.eval(vars)?.checked_mul(*c).ok_or_else(overflow),
+            CExpr::Add(e, c) => e.eval(vars)?.checked_add(*c).ok_or_else(overflow),
         }
     }
 
@@ -84,7 +86,7 @@ impl CExpr {
         match self {
             CExpr::Const(_) => {}
             CExpr::Var(i) => used[*i] = true,
-            CExpr::CeilDiv(e, _) | CExpr::Mul(e, _) => e.mark(used),
+            CExpr::CeilDiv(e, _) | CExpr::Mul(e, _) | CExpr::Add(e, _) => e.mark(used),
         }
     }
 }
@@ -278,7 +280,7 @@ pub(crate) fn shaped_bytes(
 pub(crate) fn resolve_ops(
     manifest: &Manifest,
     modules: &[LoadedModule],
-    kernels_dir: &Path,
+    kernels_dir: Option<&Path>,
     stream: &Arc<CudaStream>,
     vars_max: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, ResolvedOp>> {
@@ -318,16 +320,15 @@ pub(crate) fn resolve_ops(
             let md = &manifest.modules[&k.module];
             let sha = md.sha256.to_lowercase();
             if !modules.iter().any(|m| m.sha == sha) {
+                let dir = kernels_dir.map(|d| d.display().to_string()).unwrap_or_else(|| "<no kernels dir>".into());
                 bail!(
                     KernelArtifact,
-                    "op `{name}` launch #{li}: module `{}` ({} @{}) is not among the artifacts in {} — \
+                    "op `{name}` launch #{li}: module `{}` ({} @{}) is not among the artifacts in {dir} — \
                      the source is a label, the hash is the identity; put an artifact with that \
-                     sha256 there (`kern kernels`, or tools/extract_kernels.sh <manifest> <dump dirs> {})",
+                     sha256 there (`kern kernels`, or tools/extract_kernels.sh <manifest> <dump dirs> {dir})",
                     k.module,
                     md.source,
                     &sha[..12],
-                    kernels_dir.display(),
-                    kernels_dir.display()
                 );
             }
             let want: Vec<usize> = l.params_of(op).iter().map(|p| p.size_bytes() as usize).collect();
@@ -640,35 +641,21 @@ fn tensor_map_blob(t: &TensorMap, vals: &[Slot], c: &Call, li: usize) -> Result<
     let Some(buf) = c.args.get(t.param) else {
         bail!(Manifest, "launch #{li}: malformed tensormap over interface param #{}", t.param);
     };
-    let fp = span_footprint(t).ok_or_else(|| {
-        Error::Manifest(format!("launch #{li}: malformed tensormap over interface param #{}", t.param))
-    })?;
-    if fp > rv.bytes {
-        bail!(
-            Manifest,
-            "launch #{li}: tensormap over interface param #{} addresses {fp} bytes but {buf} has {} bytes left",
-            t.param,
-            rv.bytes
-        );
+    if !t.wrap {
+        let fp = t.footprint().ok_or_else(|| {
+            Error::Manifest(format!("launch #{li}: malformed tensormap over interface param #{}", t.param))
+        })?;
+        if fp > rv.bytes {
+            bail!(
+                Manifest,
+                "launch #{li}: tensormap over interface param #{} addresses {fp} bytes but {buf} has {} bytes left",
+                t.param,
+                rv.bytes
+            );
+        }
     }
     encode_tensor_map(t, *rv)
         .map_err(|e| Error::Cuda(format!("launch #{li}: tensormap over interface param #{}: {e}", t.param)))
-}
-
-/// Bytes a tensormap addresses from its base; a spanning outermost dim
-/// counts once (the runtime extends it to the buffer at encode time).
-fn span_footprint(t: &TensorMap) -> Option<u64> {
-    match t.dims.last() {
-        Some(0) => {
-            let inner = TensorMap {
-                dims: t.dims[..t.dims.len() - 1].to_vec(),
-                strides: t.strides[..t.strides.len() - 1].to_vec(),
-                ..t.clone()
-            };
-            inner.footprint()
-        }
-        _ => t.footprint(),
-    }
 }
 
 /// Lower a buffer/state arg to its finished pointer value.
@@ -731,6 +718,7 @@ fn compile_expr(e: &Expr, vars: &BTreeMap<&str, usize>) -> Result<CExpr> {
             CExpr::CeilDiv(Box::new(compile_expr(inner, vars)?), *c)
         }
         Expr::Mul { mul: (inner, c) } => CExpr::Mul(Box::new(compile_expr(inner, vars)?), *c),
+        Expr::Add { add: (inner, c) } => CExpr::Add(Box::new(compile_expr(inner, vars)?), *c),
     })
 }
 
@@ -788,7 +776,7 @@ fn encode_tensor_map(t: &TensorMap, rv: RVal) -> Result<TmaBlob> {
     let mut dims: Vec<u64> = t.dims.clone();
     if dims.last() == Some(&0) {
         // Span: as many outermost slices as the buffer holds past the base.
-        let inner = span_footprint(t).unwrap_or(0);
+        let inner = t.footprint().unwrap_or(0);
         let stride = *t.strides.last().unwrap_or(&1);
         dims[rank as usize - 1] = (rv.bytes.saturating_sub(inner)) / stride + 1;
     }
@@ -840,20 +828,5 @@ mod tests {
         assert_eq!((&img[8..12], &img[12..16]), (&512u32.to_le_bytes()[..], &3u32.to_le_bytes()[..]));
         assert_eq!(&img[16..24], &1536u64.to_le_bytes());
         assert_eq!(plan.image(&Dense(vec![7])).unwrap()[12], 7);
-    }
-
-    #[test]
-    fn span_footprint_counts_the_inner_slice_once() {
-        let t = TensorMap {
-            param: 0,
-            dtype: TmaDType::Bf16,
-            dims: vec![512, 64, 0],
-            strides: vec![1152, 73728],
-            box_: vec![64, 64, 1],
-            swizzle: 128,
-            l2_promotion: 0,
-            oob_nan: false,
-        };
-        assert_eq!((span_footprint(&t), t.footprint()), (Some(1024 + 63 * 1152), None));
     }
 }

@@ -156,13 +156,29 @@ fn registry_ref_parsing() {
     use kern_manifest::types::RegistryRef;
     assert!(RegistryRef::parse("embed.cubin").is_none());
     let r = RegistryRef::parse("hf:org/repo/a/b.cubin").unwrap().unwrap();
-    assert_eq!((r.org.as_str(), r.repo.as_str()), ("org", "repo"));
-    assert_eq!((r.path.as_str(), r.revision.as_str()), ("a/b.cubin", "main"));
+    assert_eq!(r.url, "https://huggingface.co/org/repo/resolve/main/a/b.cubin");
     let r = RegistryRef::parse("hf:org/repo/a.cubin@abc123").unwrap().unwrap();
-    assert_eq!(r.revision, "abc123");
+    assert_eq!(r.url, "https://huggingface.co/org/repo/resolve/abc123/a.cubin");
+    let url = "https://blobs.example.com/blobs/240811d976c01e4a9bee00041d98343f6f9254fefae598df46a97ff07c7df508";
+    assert_eq!(RegistryRef::parse(url).unwrap().unwrap().url, url);
     for bad in ["hf:org", "hf:org/repo", "hf:org/repo/", "hf:org//x", "hf:o/r/x@", "hf:o/r/../x", "hf:o/r/a//b"] {
         assert!(RegistryRef::parse(bad).unwrap().is_err(), "{bad}");
     }
+    for bad in
+        ["https://", "https:///x", "https://host", "https://host/", "https://host/a b", "http://host/x", "s3://b/k"]
+    {
+        assert!(RegistryRef::parse(bad).unwrap().is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn registry_module_https_verifies() {
+    let mut v = base();
+    v["modules"]["toy"]["source"] = "https://blobs.example.com/blobs/abc".into();
+    check(v).unwrap();
+    let mut v = base();
+    v["modules"]["toy"]["source"] = "http://blobs.example.com/blobs/abc".into();
+    assert_err(v, "only https:// and hf: sources are fetched");
 }
 
 #[test]

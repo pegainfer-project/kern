@@ -69,7 +69,8 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import flash_kda_abi
 import gen_k3_moe
-import handwritten
+import k3_moe_bmm
+from kernels import index
 import trtllm_fmha_abi
 import kern_manifest
 from once import Once, buf, seg
@@ -155,7 +156,7 @@ def launch(cubin, entry, grid=None, block=None, smem=None, var=T, defines=None, 
     `defines` selects a variant build of the source (handwritten.hw)."""
     g, b, s = GEOM.get(entry, (None, None, 0))
     g = [var if d == T else d for d in (grid or g)]
-    l = {**handwritten.hw(cubin, **(defines or {})), "entry": entry, "block": block or b, "grid": g, **extra}
+    l = {**index.variant(cubin, **(defines or {})).module, "entry": entry, "block": block or b, "grid": g, **extra}
     s = s if smem is None else smem
     if s:
         l["shared_mem"] = s
@@ -242,7 +243,7 @@ def mla_attn_op(batch_max, page_stride, split_max, shared_table=False, batch=T):
              {"at": 32, "i64": HEADS}),
         acc_o, acc_lse, {"i32": split_max}, seqs, bsk,
     ]
-    module = handwritten.prebuilt(MLA_MODULE)
+    module = index.variant(MLA_MODULE).module
     return {
         "params": ["in buffer<bf16>", "in buffer<bf16>", "in state", "in state", "in buffer<i32>", "in buffer<i32>",
                    "in buffer<i32>", "out buffer<bf16>", "out buffer<f32>", "out buffer<f32>", "out buffer<f32>", "i32", "i32"],
@@ -255,7 +256,7 @@ def mla_attn_op(batch_max, page_stride, split_max, shared_table=False, batch=T):
     }
 
 
-def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, chunk_max=0):
+def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, chunk_max=0, moe_variants=None):
     assert 1 <= layers <= LAYERS
     assert tp == 1 or ranks % tp == 0, "the tp group is a subset of the ep world"
     # A prefill-only manifest (`chunk_max` rows of one sequence as the
@@ -293,7 +294,16 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     OG = {"ceil_div": [T, tp]} if coll else T
     OB = dim(OG)
     RV, RW = (OG, own_max) if chunk else (R, R)
-    mp = gen_k3_moe.mega_pieces(ranks, own_max)
+    # The MoE: a tray's prefill routes every token of the chunk through this
+    # rank's experts with TRT-LLM gen's batched GEMMs (k3_moe_bmm: the fp8
+    # latent, its scales and the routing gathered, the combine reduce-
+    # scattered); the decode forms and a lone prefill run MegaMoE.
+    if coll:
+        assert ranks == tp, "the tray's prefill gathers every token: the tray is the whole expert world"
+    epr = EXPERTS // ranks
+    mp = None if coll else gen_k3_moe.mega_pieces(ranks, own_max)
+    bp = (k3_moe_bmm.pieces(epr, T, chunk_max, tp * own_max, OG, {"mul": [OG, tp]}, prefix="moe.", names=moe_variants)
+          if coll else None)
     # This rank's KDA heads: whole, or the tray group's shard (heads, the
     # per-head weights and the state line all HEADS / tp wide; the kernels
     # are built for that width, the binds cut the checkpoint's tensors).
@@ -424,7 +434,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                                              grid=[inner_l // 512, 4, {"ceil_div": [SV, 8]}], block=[128, 1, 1],
                                              defines=kda_defs)]},
             },
-            "flash_kda": flash_kda_abi.op(hl, run_max, handwritten.prebuilt(flash_kda_abi.MODULE), span=SV),
+            "flash_kda": flash_kda_abi.op(hl, run_max, index.variant(flash_kda_abi.MODULE).module, span=SV),
             # A chunk's every row is the span, so its gate is the layer output's only writer.
             "kda_out_gate": {
                 "params": ["in buffer<bf16>", "in buffer<f32>", "in buffer<f32>",
@@ -443,7 +453,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                 "impl": {"launches": [launch("k3_mla_v2", "kern_k3_latent_gather",
                                              grid=[{"mul": [ctx_tiles, 16]}, 1, 1], block=[576, 1, 1])]},
             },
-            "mla_fmha": trtllm_fmha_abi.op(ml, chunk_max, max_ctx, handwritten.prebuilt(trtllm_fmha_abi.MODULE), T),
+            "mla_fmha": trtllm_fmha_abi.op(ml, chunk_max, max_ctx, index.variant(trtllm_fmha_abi.MODULE).module, T),
             # o * sigmoid(gate), the gate contiguous [rows, heads * 128]
             "mla_gate": {
                 "params": ["out buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "i32", "i32", "i32", "i32"],
@@ -528,7 +538,8 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             return {"params": io,
                     "impl": {"launches": [{"entry": f"extern:nccl_{kind}_{dt}", "params": io + ["i32"],
                                            "args": [{"param": 0}, {"param": 1}, {"param": 2}, {"rank": "tp"}]}]}}
-        ops["nccl_allgather_bf16"] = nccl("allgather", "bf16")
+        for dt in ["bf16", "u8", "i32", "f32"]:
+            ops[f"nccl_allgather_{dt}"] = nccl("allgather", dt)
         ops["nccl_reducescatter_bf16"] = nccl("reducescatter", "bf16")
     if tray:
         # The allreduce is TensorRT-LLM's protocol (peer_allreduce.cu): one
@@ -570,7 +581,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             }
         return name
 
-    ops.update(mp["ops"])
+    ops.update((bp or mp)["ops"])
 
     # ---- buffers
     buffers = {
@@ -586,7 +597,7 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         "next_token": {"dtype": "i64", "shape": [R] if tray else ["seqs"], "kind": "output",
                        "fill": "tokens",
                        "domain": {"index_into": "embed"}},
-        **mp["buffers"],
+        **(bp or mp)["buffers"],
     }
     ag_region = own_max * H * 4 // 8  # packs: the widest gathered row is the f32 attention landing
     ar_stage = tp * min(rows_max, ONESHOT_MAX_ROWS) * H * 4  # bytes: one Lamport stage, `tp` slots of f32 [rows, H]
@@ -643,6 +654,24 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         weight(name + ".proj", [H], [seg(tensor + "proj.weight")])
         carry(name, [H], "f32")
         once.call("k3_scoring", [buf(name + ".norm"), buf(name + ".proj"), buf(name), i32(H)], H)
+
+    def moe_weights(once, layer, prefix):
+        """This rank's experts for the batched GEMMs: the checkpoint's mxfp4 tensors and UE8M0 scales bound raw
+        per expert (FC1 as [up; gate]), shuffled once after load into the GEMMs' layout; the gate's alpha and beta."""
+        hf = lambda e, t: f"{HF}model.layers.{layer}.block_sparse_moe.experts.{e}.{t}"
+        src = lambda t, j: {"group": "ep", "tensors": [hf(r * epr + j, t) for r in range(ranks)]}
+        raw = {"w13": [seg(src(f"{t}.weight_packed", j)) for j in range(epr) for t in ("w3", "w1")],
+               "w13_sf": [seg(src(f"{t}.weight_scale", j)) for j in range(epr) for t in ("w3", "w1")],
+               "w2": [seg(src("w2.weight_packed", j)) for j in range(epr)],
+               "w2_sf": [seg(src("w2.weight_scale", j)) for j in range(epr)]}
+        for op, name, scalars, threads in k3_moe_bmm.shuffles(epr):
+            _, n, kg, _ = scalars
+            weight(prefix + name + ".raw", [epr * n * kg], raw[name], "u8")
+            carry(prefix + name + "s", [epr * n * kg], "u8")
+            once.call(op, [buf(prefix + name + ".raw"), buf(prefix + name + "s"), *map(i32, scalars)], threads)
+        for name, value in (("alpha", k3_moe_bmm.ALPHA), ("beta", k3_moe_bmm.BETA)):
+            carry(prefix + name, [epr], "f32")
+            once.call("fill_f32", [buf(prefix + name), i32(epr), {"f32": value}], epr)
 
     def gate_up(name, gate, up, per):
         """[gate; up], this rank's rows of each."""
@@ -724,6 +753,14 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
     work("latent_partial", LATENT, "f32", var=OV)
     for n in ["latent", "routed_latent"]:
         work(n, LATENT, var=OV)
+    if coll:
+        work("latent_q", LATENT, "u8", var=OV)
+        work("latent_sf", LATENT // 32, "u8", var=OV)
+        work("latent_q_all", LATENT, "u8", var=tp * own_max)
+        work("latent_sf_all", LATENT // 32, "u8", var=tp * own_max)
+        work("topk_idx_all", TOPK, "i32", var=tp * own_max)
+        work("topk_weight_all", TOPK, "f32", var=tp * own_max)
+        work("moe_partial", LATENT, var=tp * own_max)
     work("routed_latent_norm", LATENT, var=RW)
     work("routed_partial", H, "f32", var=RW)
     work("shared_partial", 2 * sh_l, "f32", var=RW)
@@ -762,12 +799,12 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
         step(label, "nccl_allgather_bf16", own, whole, {"expr": {"mul": [OG, H]}})
         return whole
 
-    def own_rows(label, whole, own):
-        """This rank's block of the tray's sum of a head-sharded bf16 [rows, H]
+    def own_rows(label, whole, own, width=H):
+        """This rank's block of the tray's sum of a sharded bf16 [rows, width]
         partial, by reduce-scatter; `whole` itself alone."""
         if not coll:
             return whole
-        step(label, "nccl_reducescatter_bf16", whole, own, {"expr": {"mul": [OG, H]}})
+        step(label, "nccl_reducescatter_bf16", whole, own, {"expr": {"mul": [OG, width]}})
         return own
 
     def gathered(label, own, whole, dt, row_bytes):
@@ -926,8 +963,19 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
                      OB)
                 gemm(L + "lat_down", b("normed"), w("w_lat_down"), b("latent_partial"), LATENT, H, m=OB)
                 land(L + "latent", b("latent_partial"), b("latent"), LATENT, 0, LATENT)
-                prog.extend(gen_k3_moe.mega_pieces(ranks, own_max, wprefix=f"layers.{i}.", tokens=OG)["steps"](
-                    b("latent"), b("topk_idx"), b("topk_weight"), b("routed_latent"), label=L))
+                if coll:
+                    # every rank's rows of the fp8 latent and the routing, in rank order
+                    step(L + "moe_quant", "moe_quant", b("latent"), b("latent_q"), b("latent_sf"), OB, i32(LATENT))
+                    for n, dt, width in (("latent_q", "u8", LATENT), ("latent_sf", "u8", LATENT // 32),
+                                         ("topk_idx", "i32", TOPK), ("topk_weight", "f32", TOPK)):
+                        step(L + "gather_" + n, f"nccl_allgather_{dt}", b(n), b(n + "_all"), {"expr": {"mul": [OG, width]}})
+                    prog.extend(bp["steps"](b("latent_q_all"), b("latent_sf_all"), b("topk_idx_all"), b("topk_weight_all"),
+                                            w("moe.w13s"), w("moe.w13_sfs"), w("moe.w2s"), w("moe.w2_sfs"),
+                                            w("moe.alpha"), w("moe.beta"), b("moe_partial"), {"rank": "ep"}, label=L))
+                    own_rows(L + "scatter_moe", b("moe_partial"), b("routed_latent"), LATENT)
+                else:
+                    prog.extend(gen_k3_moe.mega_pieces(ranks, own_max, wprefix=f"layers.{i}.", tokens=OG)["steps"](
+                        b("latent"), b("topk_idx"), b("topk_weight"), b("routed_latent"), label=L))
                 routed = (gathered(L + "gather_moe", b("routed_latent"), b("routed_latent_all"), "bf16", LATENT * 2)
                           if tray else b("routed_latent"))
                 step(L + "lat_norm", "rms", routed, w("gamma_lat"), b("routed_latent_norm"), i32(LATENT), RB)
@@ -1005,7 +1053,10 @@ def build(layers, ranks, max_ctx, seqs_max, tp=1, mla_split_max=32, span_max=0, 
             weight(n + "gamma_lat", [LATENT], [seg(e + "routed_expert_norm.weight")])
             gate_up(n + "wsh", e + "shared_experts.gate_proj.weight", e + "shared_experts.up_proj.weight", sh_l)
             weight(n + "sh_down", [H, sh_l], [seg(e + "shared_experts.down_proj.weight", cols=mlp_shard(sh_l))])
-            mp["weights"](once, buffers, i, n)
+            if coll:
+                moe_weights(once, i, n + "moe.")
+            else:
+                mp["weights"](once, buffers, i, n)
 
     groups = {"ep": ranks, **({"tp": tp} if tp > 1 else {})}
     # A decode step over the batch; with a span, the same step in which
@@ -1051,8 +1102,12 @@ def main():
                     help="rows a `decode_span` program may fill with one sequence's prefill chunk (0: no span program)")
     ap.add_argument("--chunk", type=int, default=0,
                     help="rows of a prefill-only manifest's chunk (0: a decode manifest)")
+    ap.add_argument("--moe-variants", metavar="FC1,FC2",
+                    help="the batched-GEMM variants of a tray prefill's MoE by name (default: the index's picks)")
     a = ap.parse_args()
-    json.dump(build(a.layers, a.ranks, a.max_ctx, a.seqs, a.tp, a.mla_split_max, a.span_max, a.chunk), sys.stdout, indent=1)
+    names = tuple(a.moe_variants.split(",")) if a.moe_variants else None
+    json.dump(build(a.layers, a.ranks, a.max_ctx, a.seqs, a.tp, a.mla_split_max, a.span_max, a.chunk, names), sys.stdout,
+              indent=1)
     print()
 
 

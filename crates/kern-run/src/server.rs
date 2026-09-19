@@ -53,7 +53,8 @@ fn arguments(target: &Target, args: &[OsString]) -> Vec<OsString> {
             .any(|arg| arg == flag || arg.to_str().is_some_and(|a| a.starts_with(&format!("{flag}="))))
     };
     let mut out = Vec::new();
-    for (flag, path) in [("--manifest", &target.manifest), ("--kernels", &target.kernels)] {
+    for (flag, path) in [("--manifest", Some(&target.manifest)), ("--kernels", target.kernels.as_ref())] {
+        let Some(path) = path else { continue };
         if !supplied(flag) {
             out.push(flag.into());
             out.push(path.as_os_str().into());

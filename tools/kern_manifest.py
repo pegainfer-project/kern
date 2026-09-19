@@ -3,7 +3,8 @@ manifest into the normalized wire form (schema_version 4).
 
 A generator writes everything out longhand — every launch with its full
 ABI and wiring, every call with every ABI scalar the mined kernel takes,
-each launch naming its artifact inline as ``{"cubin": ..., "sha256": ...}``.
+each launch naming its artifact inline as ``{"cubin": ..., "sha256": ...}``
+(plus ``"label"``, the module name, when the source is a registry blob).
 `normalize` is the linker pass that makes the manifest minimal without
 changing what runs:
 
@@ -82,13 +83,13 @@ def hoist_modules(m):
     by_sha = {v["sha256"]: k for k, v in modules.items()}
     for op in m["ops"].values():
         for launch in op["impl"]["launches"]:
-            cubin, sha = launch.pop("cubin", None), launch.pop("sha256", None)
+            cubin, sha, label = launch.pop("cubin", None), launch.pop("sha256", None), launch.pop("label", None)
             if cubin is None:
                 assert sha is None, f"{launch['entry']}: sha256 without cubin"
                 continue
             assert sha, f"{launch['entry']}: cubin `{cubin}` without sha256"
             if sha not in by_sha:
-                name = module_name(cubin)
+                name = label or module_name(cubin)
                 if name in modules:
                     name = f"{name}-{sha[:8]}"
                 assert name not in modules

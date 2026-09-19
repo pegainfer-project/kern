@@ -435,7 +435,7 @@ impl Tray {
     /// memory per rank and lease the pad.
     pub fn load(
         m: &Verified,
-        kernels: &Path,
+        kernels: Option<&Path>,
         gpus: &[usize],
         capacity: Capacity,
         bind: &(dyn Fn(&mut Runtime, &Topology) -> Result<()> + Sync),

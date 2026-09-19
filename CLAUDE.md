@@ -10,7 +10,7 @@ the design is wrong, not the model.
 
 `docs/` is the design record (mostly Chinese); code, comments and commit
 messages are English. `docs/manifest.md`, `runtime.md`, `serve.md`,
-`spec-decode.md`, `test.md` are the contracts; `docs/roadmap.md` is what is
+`spec-decode.md`, `test.md`, `registry.md` are the contracts; `docs/roadmap.md` is what is
 being built and the gate that closes each item; `docs/lessons.md` is what went
 wrong before and the rule each incident left behind — read it before a gate.
 

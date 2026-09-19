@@ -1095,6 +1095,13 @@ pub struct TensorMap {
     /// Fill out-of-bounds elements with NaN instead of zero.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub oob_nan: bool,
+    /// The strides wrap the 64-bit address space on purpose (trtllm-gen's
+    /// out-of-bounds trick: dims of 2^31 whose stride sums overflow, so a
+    /// coordinate past a tile's row limit reads zero or drops the store).
+    /// Its footprint is unbounded and not checked against the buffer; the
+    /// kernel is trusted as it is for the raw pointer it also receives.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap: bool,
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -1186,13 +1193,20 @@ impl TensorMap {
     }
 
     /// Bytes the descriptor can address from its base: the last element's
-    /// end. `None` if the shape is malformed (see [`Self::check`]).
+    /// end, or one slice's when the outermost dim spans the buffer (0).
+    /// `None` if the shape is malformed (see [`Self::check`]) or the strides
+    /// overflow the address space (see `wrap`).
     pub fn footprint(&self) -> Option<u64> {
         if self.dims.is_empty() || self.strides.len() + 1 != self.dims.len() {
             return None;
         }
+        let n = if self.dims.len() > 1 && self.dims[self.dims.len() - 1] == 0 {
+            self.dims.len() - 1
+        } else {
+            self.dims.len()
+        };
         let mut bytes = self.dims[0].checked_mul(self.dtype.bits())?.div_ceil(8);
-        for (d, s) in self.dims[1..].iter().zip(&self.strides) {
+        for (d, s) in self.dims[1..n].iter().zip(&self.strides) {
             bytes = bytes.checked_add(d.checked_sub(1)?.checked_mul(*s)?)?;
         }
         Some(bytes)
@@ -1214,19 +1228,27 @@ impl fmt::Display for LaunchArg {
     }
 }
 
-/// A `source` of the form `hf:<org>/<repo>/<path>[@<revision>]` (revision defaults to `main`), fetched into a content-addressed cache at load time.
+/// A remote `source`: an `https://` URL fetched as is, or `hf:<org>/<repo>/<path>[@<revision>]`, sugar for Hugging Face's `resolve/` URL (revision defaults to `main`). Either lands in the content-addressed cache at load time; the transport is untrusted, the bytes are checked against the module's sha256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryRef {
-    pub org: String,
-    pub repo: String,
-    pub path: String,
-    pub revision: String,
+    pub url: String,
 }
 
 impl RegistryRef {
-    /// `None` if `s` is a plain local file name (no registry prefix);
+    /// `None` if `s` is a plain local file name (no scheme);
     /// otherwise the parsed ref or why it is malformed.
     pub fn parse(s: &str) -> Option<Result<RegistryRef, String>> {
+        if let Some(rest) = s.strip_prefix("https://") {
+            let ok = matches!(rest.split_once('/'), Some((host, path)) if !host.is_empty() && !path.is_empty())
+                && !rest.chars().any(char::is_whitespace);
+            return Some(match ok {
+                true => Ok(RegistryRef { url: s.to_string() }),
+                false => Err(format!("invalid registry ref `{s}`: expected https://<host>/<path>")),
+            });
+        }
+        if s.contains("://") {
+            return Some(Err(format!("invalid registry ref `{s}`: only https:// and hf: sources are fetched")));
+        }
         let rest = s.strip_prefix("hf:")?;
         let malformed = || format!("invalid registry ref `{s}`: expected hf:<org>/<repo>/<path>[@revision]");
         let (rest, revision) = match rest.rsplit_once('@') {
@@ -1247,16 +1269,11 @@ impl RegistryRef {
         {
             return Some(Err(malformed()));
         }
-        Some(Ok(RegistryRef {
-            org: org.to_string(),
-            repo: repo.to_string(),
-            path: path.to_string(),
-            revision: revision.to_string(),
-        }))
+        Some(Ok(RegistryRef { url: format!("https://huggingface.co/{org}/{repo}/resolve/{revision}/{path}") }))
     }
 }
 
-/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}` or `{"mul": [e, c]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
+/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}`, `{"mul": [e, c]}` or `{"add": [e, c]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Expr {
@@ -1268,6 +1285,8 @@ pub enum Expr {
     CeilDiv { ceil_div: (Box<Expr>, u64) },
     /// `e * c`, e.g. `{"mul": ["tokens", 32]}`.
     Mul { mul: (Box<Expr>, u64) },
+    /// `e + c`, e.g. `{"add": [{"ceil_div": ["tokens", 64]}, 56]}`.
+    Add { add: (Box<Expr>, u64) },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1293,6 +1312,7 @@ impl Expr {
                 Ok(x.checked_add(c - 1).ok_or(EvalError::Overflow)? / c)
             }
             Expr::Mul { mul: (inner, c) } => inner.eval(vars)?.checked_mul(*c).ok_or(EvalError::Overflow),
+            Expr::Add { add: (inner, c) } => inner.eval(vars)?.checked_add(*c).ok_or(EvalError::Overflow),
         }
     }
 }

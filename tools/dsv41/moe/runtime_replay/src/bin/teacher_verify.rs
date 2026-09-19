@@ -216,7 +216,7 @@ fn main() -> Result<()> {
         let teacher:Vec<Vec<i64>>=serde_json::from_value(cfg["teacher_ids"][rank].clone())?;
         let b=histories.len();ensure!(b>0 && teacher.len()==b && teacher.iter().all(|t|t.len()==6));
         ensure!(histories.iter().all(|h|!h.is_empty()));
-        let mut rt=Runtime::load_with_host_weights(&manifest,&PathBuf::from(cfg["kernels"].as_str().context("kernels")?),rank,
+        let mut rt=Runtime::load_with_host_weights(&manifest,Some(&PathBuf::from(cfg["kernels"].as_str().context("kernels")?)),rank,
             Some(Capacity{tokens:Some(cfg["capacity_tokens"].as_u64().unwrap_or(32768)),seqs:(2*b+1) as u64}),Some(&Topology::one("ep",rank as u64,4)),&host)?;
         let paths:Vec<PathBuf>=serde_json::from_value(cfg["weights"][rank].clone())?;
         let maps=kern_run::map_weights(&paths)?;rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|m|&m[..]).collect::<Vec<_>>())?)?;drop(maps);

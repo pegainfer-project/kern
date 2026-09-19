@@ -19,9 +19,10 @@ struct Cli {
     /// Manifest JSON (must pass verification)
     #[arg(long)]
     manifest: PathBuf,
-    /// Directory of cubins, resolved by their pinned sha256
+    /// Directory of cubins, resolved by their pinned sha256; a manifest of
+    /// registry refs needs none
     #[arg(long)]
-    kernels: PathBuf,
+    kernels: Option<PathBuf>,
     /// Checkpoint directories or .safetensors files, one flag each (a
     /// manifest with a topology may write `{ep}` / `{tp}` and `*` for the
     /// rank's shard)

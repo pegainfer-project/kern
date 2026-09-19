@@ -35,8 +35,7 @@ const FLOP_PER_PAIR: f64 = 2.0 * (HIDDEN * 2 * INTER + INTER * HIDDEN) as f64;
 fn stage_cubins(cubins: &Path, kernels: &Path) {
     std::fs::create_dir_all(kernels).unwrap();
     for name in ["k3_mega_moe", "k3_mega_stage"] {
-        let bytes = std::fs::read(cubins.join(format!("{name}.cubin")))
-            .expect("cubin (tools/build_k3_mega.sh, build_kernels.sh)");
+        let bytes = std::fs::read(cubins.join(format!("{name}.cubin"))).expect("cubin (tools/build_k3_mega.sh)");
         let sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
         std::fs::write(kernels.join(format!("{name}-{}.cubin", &sha[..12])), &bytes).unwrap();
     }
@@ -164,8 +163,13 @@ fn run_rank(
     sync: &dyn Fn(),
 ) -> kern_runtime::Result<Vec<f64>> {
     let topo = Topology::one("ep", rank as u64, ranks as u64);
-    let mut rt =
-        Runtime::load(manifest, kernels, gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(&topo))?;
+    let mut rt = Runtime::load(
+        manifest,
+        Some(kernels),
+        gpu,
+        Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }),
+        Some(&topo),
+    )?;
     rt.load_weights(&kern_runtime::Safetensors::open(&[weights])?)?;
     rendezvous(&mut rt)?;
     let once: BTreeMap<String, u64> = [("tokens".to_string(), 1)].into();

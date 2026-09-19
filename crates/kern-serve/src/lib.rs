@@ -33,7 +33,7 @@ use tray::Tray;
 /// The manifest and its artifacts, as named on the command line.
 pub struct Artifacts {
     pub manifest: PathBuf,
-    pub kernels: PathBuf,
+    pub kernels: Option<PathBuf>,
     /// Weight entries, files or a weight cache; see [`kern_run::Weights`].
     pub weights: Vec<String>,
 }
@@ -96,7 +96,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let weights = kern_run::Weights::parse(&art.weights)?;
     info!(
         manifest = %art.manifest.display(),
-        kernels = %art.kernels.display(),
+        kernels = ?art.kernels,
         %weights,
         kern = %*kern_run::VERSION,
         "loading"
@@ -137,7 +137,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             let load = || -> Result<KernScheduler> {
                 let t0 = Instant::now();
                 let bind = |rt: &mut Runtime, _: &Topology| weights.bind(rt);
-                let tray = Tray::load(&manifest, &art.kernels, &gpus, capacity, &bind, host_bytes, o.eager)?;
+                let tray = Tray::load(&manifest, art.kernels.as_deref(), &gpus, capacity, &bind, host_bytes, o.eager)?;
                 info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
                 KernScheduler::new(tray, policy)
             };

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compile FlashInfer's CuTe-DSL MLA decode kernel for K3 and land the cubin
-in tools/kernels-bin (see the README there).
+for the kernel index (then tools/kernels/import_cubin.py --family mla_decode_h96_p64).
 
     python3 tools/build_mla_dsl.py <out_dir>
 

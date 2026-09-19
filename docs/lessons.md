@@ -95,7 +95,7 @@ PASS——A、B 两份 manifest 读的是同一张错表，逐位一致。`kern 
 
 **钉住的 sha 只有一台机器能复现。** master 的手写核 sha 是 kernel-lab 容器的
 nvcc 13.0 编的，host 的 13.1 / 13.4 出来的 cubin 字节不同，改一个核就要把全套
-手写核重钉。规则：手写核在 kernel-lab 里编（`tools/build_kernels.sh`），换 nvcc
+手写核重钉。规则：手写核在 kernel-lab 里编（`tools/kernels/import_handwritten.py`，sha 进索引），换 nvcc
 就是换核，换核就是一次门禁。
 
 ## 2026-09-03，K5 span（FlashKDA 接入、k3_golden 多行 span、runtime 容量）
