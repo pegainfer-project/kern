@@ -25,7 +25,9 @@ import re
 import tomllib
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-INDEX = pathlib.Path(os.environ.get("KERN_INDEX_DIR", "~/.local/share/kern/index")).expanduser().resolve()
+# the private registry checkout's index/ directory; nothing here guesses where it is
+INDEX = pathlib.Path(os.environ["KERN_INDEX_DIR"]).expanduser().resolve() if os.environ.get("KERN_INDEX_DIR") else None
+MISSING = "kernel index missing; set KERN_INDEX_DIR to the private checkout's index directory"
 BLOB_REPO = "Pegainfer/kern-kernels"
 FAMILY_KEYS = ["name", "kind", "sm", "abi", "upstream", "license", "license_blob", "toolchain", "rebuild",
                "abi_source", "abi_capture", "imported"]
@@ -48,14 +50,20 @@ def blob_path(sha256):
     return cache_dir() / "blobs" / sha256
 
 
+def root():
+    if INDEX is None:
+        raise FileNotFoundError(MISSING)
+    return INDEX
+
+
 def path(family):
-    return INDEX / f"{family}.toml"
+    return root() / f"{family}.toml"
 
 
 def families():
-    if not INDEX.is_dir():
-        raise FileNotFoundError("kernel index missing; set KERN_INDEX_DIR to the private checkout’s index directory")
-    return sorted(p.stem for p in INDEX.glob("*.toml"))
+    if not root().is_dir():
+        raise FileNotFoundError(MISSING)
+    return sorted(p.stem for p in root().glob("*.toml"))
 
 
 def load(family):
@@ -158,7 +166,7 @@ def dumps(doc):
 
 
 def save(doc):
-    INDEX.mkdir(parents=True, exist_ok=True)
+    root().mkdir(parents=True, exist_ok=True)
     p = path(doc["family"]["name"])
     p.write_text(dumps(doc))
     assert tomllib.loads(p.read_text()) == _normal(doc), "the document does not round-trip"

@@ -216,7 +216,7 @@ extern "C" __global__ void kern_k3_mla_prep(
 比 E5 剩下的所有东西都大。2026-09-03 换成 NVIDIA 用 CuTe DSL 写、随 FlashInfer 发行的
 Blackwell MLA decode 核（`flashinfer/cute_dsl/attention/monolithic/mla_decode_fp16.py`，BSD-3，
 tcgen05 2-CTA MMA + TMA 分页加载 + split-KV 归约），**预编译成 cubin 收进仓库**
-（索引族 `mla_decode_h96_p64`，构建配方 `tools/build_mla_dsl.py`，来源与工具链记在 `tools/kernels/index/mla_decode_h96_p64.toml`），
+（索引族 `mla_decode_h96_p64`，构建配方 `tools/build_mla_dsl.py`，来源与工具链记在 `$KERN_INDEX_DIR/mla_decode_h96_p64.toml`），
 runtime 不加任何模型代码：它的 struct 参数 ABI 由 manifest 的 `bytes<n>` + `pack` 铺平，
 五个 TMA 描述符是 `bytes<128>` 里的 `tensormap` 字段（`docs/manifest.md`）。
 
