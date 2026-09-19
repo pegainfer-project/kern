@@ -59,10 +59,8 @@ jobs:
       - name: Qwen constant migration regression tests
         run: python3 -m unittest discover -s tools -p test_qwen_constants.py
 
-      - name: Kernel index
-        # docs/registry.md: every family parses and is normalized, every
-        # pick is a measurement, every blob an example pins is indexed
-        run: python3 tools/kernels/check.py
+      - name: Kernel index tooling
+        run: python3 -m unittest discover -s tools/kernels -p test_index.py
 
       - name: TRTLLM manifest conversion regression tests
         run: python3 -m unittest discover -s tools -p test_trtllm_manifest.py

@@ -18,7 +18,7 @@ vendored 的 CUTLASS 核、自己的手写核），每挖一个都要花一次 A
 | 事项 | 决定 |
 |---|---|
 | 字节放哪 | HF private 仓库 `Pegainfer/kern-kernels`，`blobs/<sha256>` 平铺、无扩展名，与本地缓存 `~/.cache/kern/blobs/` 同构 |
-| 事实记哪 | kern 仓库 `tools/kernels/index/<family>.toml`，一族一文件，由导入工具生成、CI 检查、人 review |
+| 事实记哪 | 独立 private Git 仓库的 `index/<family>.toml`（`KERN_INDEX_DIR` 指向该目录），一族一文件，由导入工具生成、CI 检查、人 review |
 | ABI 在哪 | `tools/kernels/abi/<family>.py`，一族一个 Python 模块，输入 index 里的 variant 与形状、输出 manifest op 的 `impl`（今天的 `trtllm_fmha_abi.py` 就是这个形状） |
 | runtime 改什么 | `source` 除 `hf:` 外接受裸 `https://` URL（`hf:` 退化为 URL 模板的语法糖）；modules 全是 registry ref 时不再要求 `--kernels` 目录 |
 | 换主机怎么办 | 改 `source` 标签、重生成 manifest；sha 不变，index 不变。on-prem 交付 = 拷 `blobs/` 目录，不需要任何 registry |
@@ -65,7 +65,19 @@ runtime 校验的是第三个，前两个换了都不影响运行。同一个 bl
 
 ## 3. Index
 
-`tools/kernels/index/<family>.toml`，一族一文件。**族**是一批共享同一个参数
+索引单独 clone 到 kern checkout 外。将 `KERN_INDEX_DIR` 设为私有仓库内的
+`index/` 目录；未设置时默认 `~/.local/share/kern/index`。例如：
+
+```sh
+export KERN_INDEX_DIR=/path/to/private-checkout/index
+python3 tools/kernels/check.py
+```
+
+导入、选型和生成器共用这个目录。更新 TOML 后在私有仓库提交；HF
+`Pegainfer/kern-kernels` 继续存放 `blobs/<sha256>`。运行已有 manifest
+不需要索引仓库。不要把私有 checkout 放回公开仓库的 `tools/kernels/index/`。
+
+`$KERN_INDEX_DIR/<family>.toml`，一族一文件。**族**是一批共享同一个参数
 ABI 的核：trtllm-gen 的一个 dtype 组合是一族（`Bmm_MxE4m3_MxE2m1MxE4m3` 的
 1460 个 tile 变体共一个 `KernelParams`），FlashKDA 的一个模板实例是一族，
 我们的手写核每个 `.cu` 是一族。族名也是 ABI 模块名。
@@ -120,7 +132,7 @@ launch 几何、上传 blob、写 TOML（variant 按 name 排序）。`import_ha
 kernel-lab 的 nvcc 13.0 能复现；改成"CI 编一次、index 钉 sha"之后这个坑消失）。
 `[[pick]]` 由 `kern bench` 的结果写入，是唯一由人触发的条目，也要带 report。
 
-**CI 检查（无网络、无 GPU）：** `tools/kernels/check.py`——TOML 可解析；sha 是
+**索引检查（无 GPU）：** 私有仓库 CI checkout 指定版本的 kern，设置 `KERN_INDEX_DIR` 后运行下述检查；公开仓库 CI 用合成数据测试索引工具，无需私有仓库权限。 `tools/kernels/check.py`——TOML 可解析；sha 是
 64 位 hex 且全局唯一；每个 pick 引用存在的 variant 与 64 位 hex 的 report；
 被 pick 的 variant 有 launch 几何；variant 按 name 排序（重新生成零 diff）。
 `check.py --online` 对每个 sha HEAD 一次 blob store，上传前与 release 前手动跑。
@@ -155,9 +167,8 @@ launch = abi.trtllm_bmm.op(v, n=6144, k=3584, ...)   # v.module 给 {"cubin": "h
 
 index 是资产，blob 不是：第三方 cubin 谁都能从 wheel 里拿，我们卖的是"这个
 形状用哪个变体、ABI 怎么摆、测过多少"。index 进 git 意味着它有 review 和历史；
-要私有化时把 `tools/kernels/` 移到私有仓库当 submodule，格式不变。blob store
-换主机是标签改写，离线交付是一个目录。这三条都不需要现在做任何事，只需要
-现在不违反：不把事实写进 blob 的文件名，不让 runtime 依赖 HF 的任何特性。
+TOML 已移到独立 private Git 仓库，格式不变；公开仓库保留索引工具与 ABI 代码。blob store
+换主机是标签改写，离线交付是一个目录。继续遵守：不把事实写进 blob 的文件名，不让 runtime 依赖 HF 的任何特性。
 
 ## 6. 门禁
 

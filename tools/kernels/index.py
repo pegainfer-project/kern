@@ -1,5 +1,5 @@
 """The kernel index (docs/registry.md): one TOML per family under
-tools/kernels/index/, read here by the generators.
+$KERN_INDEX_DIR, read here by the generators.
 
 A family is one parameter ABI: a handwritten `.cu`, one vendored template
 instance, or one dtype combination of a code generator's kernels (every tile
@@ -25,7 +25,7 @@ import re
 import tomllib
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-INDEX = REPO / "tools" / "kernels" / "index"
+INDEX = pathlib.Path(os.environ.get("KERN_INDEX_DIR", "~/.local/share/kern/index")).expanduser().resolve()
 BLOB_REPO = "Pegainfer/kern-kernels"
 FAMILY_KEYS = ["name", "kind", "sm", "abi", "upstream", "license", "license_blob", "toolchain", "rebuild",
                "abi_source", "abi_capture", "imported"]
@@ -53,13 +53,15 @@ def path(family):
 
 
 def families():
+    if not INDEX.is_dir():
+        raise FileNotFoundError("kernel index missing; set KERN_INDEX_DIR to the private checkout’s index directory")
     return sorted(p.stem for p in INDEX.glob("*.toml"))
 
 
 def load(family):
     p = path(family)
     if not p.exists():
-        raise KeyError(f"kernel family `{family}`: no {p.relative_to(REPO)}; import it (tools/kernels/import_*.py)")
+        raise KeyError(f"kernel family `{family}`: no {p.name}; set KERN_INDEX_DIR to the private checkout’s index directory or import it (tools/kernels/import_*.py)")
     return tomllib.loads(p.read_text())
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the kernel index (docs/registry.md), offline, in CI:
 
-- every tools/kernels/index/*.toml parses, its file name is its family's;
+- every $KERN_INDEX_DIR/*.toml parses, its file name is its family's;
 - a sha256 is 64 hex chars and names one variant across all families;
 - a pick names a variant that exists, has launch geometry, and carries a report;
 - the document is normalized (regenerating it from its own facts is a no-op);
@@ -27,7 +27,13 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 def check(online=False):
     errs, seen = [], {}
-    for fam in index.families():
+    try:
+        families = index.families()
+    except FileNotFoundError as e:
+        return [str(e)], 0
+    if not families:
+        errs.append("kernel index is empty; set KERN_INDEX_DIR to a populated private index")
+    for fam in families:
         p = index.path(fam)
         try:
             doc = tomllib.loads(p.read_text())
@@ -89,7 +95,7 @@ def main():
     errs, n = check(a.online)
     for e in errs:
         print(e, file=sys.stderr)
-    print(f"{len(index.families())} families, {n} variants, {len(errs)} problems", file=sys.stderr)
+    print(f"{n} variants, {len(errs)} problems", file=sys.stderr)
     sys.exit(1 if errs else 0)
 
 

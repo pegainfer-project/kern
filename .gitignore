@@ -17,3 +17,5 @@ tools/kernel-capture/libkernelcapture.so
 /tools/k3-harness/run_all.log
 /tools/k3-harness/**/*.cubin
 /tools/k3-scratch
+
+/tools/kernels/index/

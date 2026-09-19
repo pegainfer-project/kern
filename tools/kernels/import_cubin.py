@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Put one artifact into the registry: the bytes into the cache (and, with
---upload, the blob store), the facts into tools/kernels/index/<family>.toml.
+--upload, the blob store), the facts into $KERN_INDEX_DIR/<family>.toml.
 
     tools/kernels/import_cubin.py --family trtllm_fmha_ctx_h192_v128 --cubin path/to.cubin \\
         --upstream "flashinfer-cubin 0.6.18, bundle 2d6a5a02…, fmha/trtllm-gen/…" --license Apache-2.0 \\
@@ -77,7 +77,7 @@ def import_cubin(family, cubin, name=None, defines=None, launch=None, tags=None,
     index.upsert_variant(doc, v)
     p = index.save(doc)
     state = "unchanged" if old == sha else ("new" if old is None else f"was {old[:12]}")
-    print(f"{p.relative_to(index.REPO)}: {v['name']} @{sha[:12]} ({state})", file=sys.stderr)
+    print(f"{p.name}: {v['name']} @{sha[:12]} ({state})", file=sys.stderr)
     return sha, old
 
 
