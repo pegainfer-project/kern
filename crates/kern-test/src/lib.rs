@@ -175,6 +175,10 @@ pub struct Options {
     /// any logits row, and still PASS with logit evidence; an argmax flip
     /// within it is a tie, one beyond it a FAIL.
     pub logit_kl: f64,
+    /// The recorded-reference judge's limits on the KL distribution over
+    /// every position, median and 99th percentile; `logit_kl` when unset.
+    pub logit_kl_p50: f64,
+    pub logit_kl_p99: f64,
     /// Prefill chunk; 0 = drawn from the seed.
     pub chunk: u64,
     /// Replays for span timing (the minimum is reported).

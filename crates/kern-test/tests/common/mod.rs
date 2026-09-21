@@ -597,6 +597,8 @@ pub fn options() -> Options {
         prefill: 5,
         decode_steps: 4,
         logit_kl: 0.01,
+        logit_kl_p50: 0.01,
+        logit_kl_p99: 0.01,
         chunk: 3,
         iters: 1,
         graph_step: false,

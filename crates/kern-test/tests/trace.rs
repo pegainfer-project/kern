@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Fake, Fixture};
-use kern_test::trace::{self, against, between, score, Phase, Trace};
+use kern_test::trace::{self, against, between, score, KlLimits, Phase, Trace};
 
 fn corpus() -> Trace {
     Trace::corpus(vec![vec![1, 5, 3, 9, 2, 7, 4, 11], vec![6, 6, 2, 13, 8], vec![3, 14]], 3).unwrap()
@@ -19,8 +19,12 @@ fn recorded(f: &Fixture, t: &mut Trace, name: &str) {
 }
 
 fn judged(f: &Fixture, t: &Trace) -> (i32, String, Vec<String>) {
+    judged_within(f, t, KlLimits::flat(0.01))
+}
+
+fn judged_within(f: &Fixture, t: &Trace, limits: KlLimits) -> (i32, String, Vec<String>) {
     let mut lines = Vec::new();
-    let r = trace::judge(&mut Fake::new(f.manifest()), t, "ref.parquet", "B", 0.01, &mut |ls: &[String]| {
+    let r = trace::judge(&mut Fake::new(f.manifest()), t, "ref.parquet", "B", limits, &mut |ls: &[String]| {
         lines.extend_from_slice(ls)
     })
     .unwrap();
@@ -103,6 +107,24 @@ fn a_drift_that_moves_mass_but_no_argmax_is_inconclusive() {
     let (code, summary, _) = judged(&Fixture::default().scale("scale_drift"), &t);
     assert!(code != 0, "{summary}");
     assert!(code == 1 || summary.starts_with("KL up to"), "{summary}");
+}
+
+#[test]
+fn a_wide_max_limit_forgives_a_flip_but_the_distribution_limits_catch_a_drift() {
+    let mut t = corpus();
+    recorded(&Fixture::default(), &mut t, "a");
+    // max alone, wide open: the drift moves every position and no longer fails
+    let wide = KlLimits { max: 10.0, p50: 10.0, p99: 10.0 };
+    let (code, _, lines) = judged_within(&Fixture::default().scale("scale_drift"), &t, wide);
+    assert_eq!(code, 0, "{lines:#?}");
+    // the same width on max, with the distribution held: the drift fails on p50
+    let held = KlLimits { max: 10.0, p50: 1e-3, p99: 2e-2 };
+    let (code, summary, _) = judged_within(&Fixture::default().scale("scale_drift"), &t, held);
+    assert_eq!(code, 1, "{summary}");
+    assert!(summary.starts_with("the distribution moved against `a`: KL p50"), "{summary}");
+    // and a rounding change stays within them
+    let (code, summary, _) = judged_within(&Fixture::default().scale("scale_round"), &t, held);
+    assert_eq!((code, summary.starts_with("within KL")), (0, true), "{summary}");
 }
 
 #[test]

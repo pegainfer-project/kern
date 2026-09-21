@@ -26,6 +26,8 @@
 //! seed = 0x5eed
 //! decode_steps = 32
 //! logit_kl = 0.01
+//! logit_kl_p50 = 0.001                 # recorded reference, one producer: the KL
+//! logit_kl_p99 = 0.02                  # distribution over all positions (default logit_kl)
 //!
 //! [run]
 //! steps = 32
@@ -79,6 +81,8 @@ pub struct Test {
     pub(crate) seed: Option<u64>,
     pub(crate) decode_steps: Option<u64>,
     pub(crate) logit_kl: Option<f64>,
+    pub(crate) logit_kl_p50: Option<f64>,
+    pub(crate) logit_kl_p99: Option<f64>,
     pub(crate) prompt: Option<String>,
 }
 

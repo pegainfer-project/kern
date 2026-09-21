@@ -517,6 +517,27 @@ pub struct Band {
 
 pub const KL_FLOOR: f64 = 1e-6;
 
+/// What a single producer holds a candidate to, KL(reference‖candidate)
+/// in nats. `max` is read at an argmax flip: a flip beyond it is a
+/// confident token that moved. `p50` and `p99` are read over every
+/// position judged: a candidate that moves the whole distribution a
+/// little, or a hundredth of it a lot, fails there even if no token
+/// flips, which is what `max` alone cannot see once it is set wide
+/// enough to forgive the odd position a recurrent model amplifies.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct KlLimits {
+    pub max: f64,
+    pub p50: f64,
+    pub p99: f64,
+}
+
+impl KlLimits {
+    /// One number for all three: the distribution limits never bind.
+    pub fn flat(kl: f64) -> Self {
+        Self { max: kl, p50: kl, p99: kl }
+    }
+}
+
 fn quantile(v: &mut [f64], q: f64) -> f64 {
     if v.is_empty() {
         return 0.0;
@@ -620,7 +641,7 @@ pub struct Summary {
     pub prompts: usize,
     pub positions: usize,
     pub band: Option<Band>,
-    pub limit_kl: f64,
+    pub limits: KlLimits,
     pub phases: Vec<PhaseStats>,
     pub flips: Vec<Judged>,
     pub elapsed_s: f32,
@@ -647,7 +668,7 @@ pub fn judge<S: Side>(
     t: &Trace,
     reference: &str,
     candidate: &str,
-    limit_kl: f64,
+    limits: KlLimits,
     out: &mut dyn FnMut(&[String]),
 ) -> Result<Report> {
     let t0 = Instant::now();
@@ -677,7 +698,10 @@ pub fn judge<S: Side>(
                 b.kl_p50,
                 b.kl_p99
             ),
-            None => format!("single producer · KL limit {limit_kl:.0e} (--logit-kl): a flip beyond it fails"),
+            None => format!(
+                "single producer · KL limits max {:.0e} (--logit-kl) · p50 {:.0e} · p99 {:.0e}: a flip beyond max fails, so does a distribution beyond p50 or p99",
+                limits.max, limits.p50, limits.p99
+            ),
         },
         None,
     )]);
@@ -685,7 +709,7 @@ pub fn judge<S: Side>(
         t.producers.iter().flat_map(|(p, ss)| ss.iter().map(move |s| ((p.clone(), s.prompt, s.pos), s))).collect();
     let confident = |j: &Judged| match &band {
         Some(b) => j.cmp.margin_a > b.margin,
-        None => j.cmp.kl > limit_kl,
+        None => j.cmp.kl > limits.max,
     };
     let mut rows: Vec<Judged> = Vec::new();
     let mut failed: Option<Judged> = None;
@@ -787,19 +811,35 @@ pub fn judge<S: Side>(
         }
         (None, None) => {
             let flips = flips.len();
-            match kl_max <= limit_kl {
-                true => (
-                    0,
+            let mut kl: Vec<f64> = rows.iter().map(|j| j.cmp.kl).collect();
+            let (p50, p99) = (quantile(&mut kl, 0.5), quantile(&mut kl, 0.99));
+            if p50 > limits.p50 || p99 > limits.p99 {
+                (
+                    1,
                     format!(
-                        "within KL {limit_kl:.0e} of `{}` on all {n} positions{}",
-                        producers[0],
-                        if flips > 0 { format!(", {flips} flip(s) all ties") } else { String::new() }
+                        "the distribution moved against `{}`: KL p50 {p50:.1e} (limit {:.0e}) · p99 {p99:.1e} (limit {:.0e}) on {n} positions",
+                        producers[0], limits.p50, limits.p99
                     ),
-                ),
-                false => (
-                    2,
-                    format!("KL up to {kl_max:.1e} (limit {limit_kl:.0e}) against `{}` with no confident flip on {n} positions", producers[0]),
-                ),
+                )
+            } else {
+                match kl_max <= limits.max {
+                    true => (
+                        0,
+                        format!(
+                            "within KL {:.0e} of `{}` on all {n} positions{}",
+                            limits.max,
+                            producers[0],
+                            if flips > 0 { format!(", {flips} flip(s) all ties") } else { String::new() }
+                        ),
+                    ),
+                    false => (
+                        2,
+                        format!(
+                            "KL up to {kl_max:.1e} (limit {:.0e}) against `{}` with no confident flip on {n} positions",
+                            limits.max, producers[0]
+                        ),
+                    ),
+                }
             }
         }
     };
@@ -811,7 +851,7 @@ pub fn judge<S: Side>(
         prompts: t.prompts.len(),
         positions: t.positions(),
         band,
-        limit_kl,
+        limits,
         phases,
         flips,
         elapsed_s: elapsed,
