@@ -389,17 +389,17 @@ kern test b.json --reference ref.parquet --kernels … --weights …            
 kern test b.json --reference ref.parquet --prompts 16                       # 快判：前 16 段
 ```
 
-- **语料**是 `{"decode": N, "prompts": [text, …]}`，`--record` 到一个不存在的文件时
+- **语料**是 `{"tail": N, "prompts": [text, …]}`，`--record` 到一个不存在的文件时
   用目标的 tokenizer 切成 token 存进去；文件存在就用它的语料、追加（或覆盖）
   这个 manifest 作为一个 producer（名字是 manifest 文件名）。多个 producer 在
   同一个文件里。
-- **打分位置**：每段 prompt 末尾 `decode + 1` 个位置。前面的 token 一次
-  走 chunk program（prefill 路径，打分一次），后 `decode` 个逐个喂（decode 路径，
-  在 prefill 建的状态上打分 `decode` 次；prefill-only 的 manifest 走一行的
+- **打分位置**：每段 prompt 末尾 `tail + 1` 个位置。前面的 token 一次
+  走 chunk program（prefill 路径，打分一次），后 `tail` 个逐个喂（decode 路径，
+  在 prefill 建的状态上打分 `tail` 次；prefill-only 的 manifest 走一行的
   chunk）。chunk 大小是实现自己的事，不进文件。原文固定，所以位置逐个对得上。
-- **表**：一行一个 token 位置（`prompt` / `pos` / `token`，`producer` 为 null），
+- **表**：一行一个 token 位置（`prompt` / `pos` / `id`，`producer` 为 null），
   打过分的位置每个 producer 再加一行（`producer` / `ref_logprob` / `top_ids` /
-  `top_logprob`）；`decode` 在文件 metadata 里。pandas / duckdb 直接读。
+  `top_logprob`）；`tail` 在文件 metadata 里。pandas / duckdb 直接读。
 - **判定**：每个位置算 B 对每个 producer 的 argmax 翻转、参考的 margin
   （top-1 − top-2 logprob）、KL(参考‖B)（参考的 top-20 上逐项，其余并成一桶）、
   参考 argmax 在 B 里的名次。producer ≥ 2 时先算它们两两的分歧作为 **band**

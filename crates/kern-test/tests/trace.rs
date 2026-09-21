@@ -52,7 +52,7 @@ fn a_recording_survives_the_file() {
     assert!(Trace::is_parquet(&path));
     let back = Trace::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
-    assert_eq!((back.prompts.clone(), back.decode), (t.prompts.clone(), t.decode));
+    assert_eq!((back.prompts.clone(), back.tail), (t.prompts.clone(), t.tail));
     let r = &back.producers["a"];
     assert_eq!(
         r.iter().map(|s| (s.prompt, s.pos, s.ids.clone())).collect::<Vec<_>>(),

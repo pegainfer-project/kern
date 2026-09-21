@@ -2,20 +2,20 @@
 //! kept as one parquet table, so a candidate is judged against a file
 //! and nothing else has to be loaded.
 //!
-//! The corpus is prompts of token ids and one number, `decode`: of each
-//! prompt all but its last `decode + 1` tokens go through the chunk
-//! program at once, then the next `decode` tokens are fed one at a time,
+//! The corpus is prompts of token ids and one number, `tail`: of each
+//! prompt all but its last `tail + 1` tokens go through the chunk
+//! program at once, then the next `tail` tokens are fed one at a time,
 //! and the distribution over the next token is kept at every one of those
-//! `decode + 1` positions: the top-[`TOP`] ids with their log
+//! `tail + 1` positions: the top-[`TOP`] ids with their log
 //! probabilities and the log probability of the token the corpus
 //! actually has there. So the prefill path is scored once per prompt and
 //! the decode path `decode` times, on state the prefill built; a
 //! prefill-only manifest takes its steps as chunks of one row.
 //!
-//! The table has a row per token position: `prompt`, `pos`, `token`, and
+//! The table has a row per token position: `prompt`, `pos`, `id`, and
 //! `producer` null on that row. A producer that scored the position adds
 //! a row with its name and `ref_logprob`, `top_ids`, `top_logprob`; a
-//! corpus is a table nobody has scored yet. `decode` is file metadata.
+//! corpus is a table nobody has scored yet. `tail` is file metadata.
 //! Several producers in one file are the band any candidate is read
 //! against: no farther from any of them than they are from each other.
 //! One producer alone falls back to a fixed KL limit.
@@ -61,7 +61,8 @@ pub struct Score {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Trace {
     pub prompts: Vec<Vec<i64>>,
-    pub decode: usize,
+    /// Positions per prompt fed one token at a time.
+    pub tail: usize,
     pub producers: BTreeMap<String, Vec<Score>>,
 }
 
@@ -90,19 +91,19 @@ impl Schedule {
 }
 
 impl Trace {
-    pub fn corpus(prompts: Vec<Vec<i64>>, decode: usize) -> Result<Trace> {
+    pub fn corpus(prompts: Vec<Vec<i64>>, tail: usize) -> Result<Trace> {
         ensure!(!prompts.is_empty(), "the corpus has no prompts");
         for (i, p) in prompts.iter().enumerate() {
             ensure!(p.len() >= 2, "prompt {i} has {} token(s); a scored position needs two", p.len());
         }
-        Ok(Trace { prompts, decode, producers: BTreeMap::new() })
+        Ok(Trace { prompts, tail, producers: BTreeMap::new() })
     }
 
     /// A prompt keeps at least one token for the prefill and one to
-    /// predict; the decode tail shrinks to fit a short prompt.
+    /// predict; the tail shrinks to fit a short prompt.
     pub fn schedule(&self, prompt: usize) -> Schedule {
         let n = self.prompts[prompt].len();
-        let steps = self.decode.min(n - 2);
+        let steps = self.tail.min(n - 2);
         Schedule { ctx: n - 1 - steps, steps }
     }
 
@@ -116,7 +117,7 @@ impl Trace {
         let n = n.min(self.prompts.len());
         Trace {
             prompts: self.prompts[..n].to_vec(),
-            decode: self.decode,
+            tail: self.tail,
             producers: self
                 .producers
                 .iter()
@@ -135,15 +136,15 @@ impl Trace {
         let b =
             ParquetRecordBatchReaderBuilder::try_new(f).with_context(|| format!("{} as parquet", path.display()))?;
         let meta = b.schema().metadata().clone();
-        let decode: usize = meta
-            .get("decode")
-            .ok_or_else(|| anyhow::anyhow!("{}: no `decode` in the file metadata", path.display()))?
+        let tail: usize = meta
+            .get(TAIL)
+            .ok_or_else(|| anyhow::anyhow!("{}: no `{TAIL}` in the file metadata", path.display()))?
             .parse()
-            .with_context(|| format!("{}: `decode` metadata", path.display()))?;
+            .with_context(|| format!("{}: `{TAIL}` metadata", path.display()))?;
         let expect: Vec<(&str, DataType)> = vec![
             ("prompt", DataType::Int32),
             ("pos", DataType::Int32),
-            ("token", DataType::Int32),
+            (ID, DataType::Int32),
             ("producer", DataType::Utf8),
             ("ref_logprob", DataType::Float32),
             ("top_ids", list_of(DataType::Int32)),
@@ -163,7 +164,7 @@ impl Trace {
             let col = |n: &str| batch.column_by_name(n).expect("checked above");
             let prompt = col("prompt").as_any().downcast_ref::<Int32Array>().expect("i32");
             let pos = col("pos").as_any().downcast_ref::<Int32Array>().expect("i32");
-            let token = col("token").as_any().downcast_ref::<Int32Array>().expect("i32");
+            let token = col(ID).as_any().downcast_ref::<Int32Array>().expect("i32");
             let producer = col("producer").as_any().downcast_ref::<StringArray>().expect("utf8");
             let lp = col("ref_logprob").as_any().downcast_ref::<Float32Array>().expect("f32");
             let ids = col("top_ids").as_any().downcast_ref::<ListArray>().expect("list");
@@ -215,7 +216,7 @@ impl Trace {
         for s in producers.values_mut() {
             s.sort_by_key(|s| (s.prompt, s.pos));
         }
-        let t = Trace::corpus(prompts, decode)?;
+        let t = Trace::corpus(prompts, tail)?;
         Ok(Trace { producers, ..t })
     }
 
@@ -259,13 +260,13 @@ impl Trace {
             Schema::new(vec![
                 Field::new("prompt", DataType::Int32, false),
                 Field::new("pos", DataType::Int32, false),
-                Field::new("token", DataType::Int32, false),
+                Field::new(ID, DataType::Int32, false),
                 Field::new("producer", DataType::Utf8, true),
                 Field::new("ref_logprob", DataType::Float32, true),
                 Field::new("top_ids", list_of(DataType::Int32), true),
                 Field::new("top_logprob", list_of(DataType::Float32), true),
             ])
-            .with_metadata(BTreeMap::from([("decode".to_string(), self.decode.to_string())])),
+            .with_metadata(BTreeMap::from([(TAIL.to_string(), self.tail.to_string())])),
         );
         let cols: Vec<ArrayRef> = vec![
             Arc::new(prompt.finish()),
@@ -284,6 +285,10 @@ impl Trace {
         Ok(())
     }
 }
+
+/// The token id column and the tail metadata key.
+const ID: &str = "id";
+const TAIL: &str = "tail";
 
 fn list_of(dt: DataType) -> DataType {
     DataType::List(Arc::new(Field::new("item", dt, true)))
@@ -584,10 +589,7 @@ impl PhaseStats {
         }
     }
     pub fn line(&self) -> String {
-        let key = match self.phase {
-            Phase::Prefill => "prefill",
-            Phase::Decode => "decode",
-        };
+        let key = format!("{:?}", self.phase).to_lowercase();
         let mut s =
             format!("{}: {} rows · {}/{} argmax agree", self.producer, self.rows, self.rows - self.flips, self.rows);
         if self.flips > 0 {
@@ -597,7 +599,7 @@ impl PhaseStats {
             " · KL p50 {:.1e} · p99 {:.1e} · max {:.1e} at {}",
             self.kl_p50, self.kl_p99, self.kl_max, self.kl_at
         );
-        row(key, s, None)
+        row(&key, s, None)
     }
 }
 

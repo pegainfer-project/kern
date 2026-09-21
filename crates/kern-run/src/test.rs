@@ -45,8 +45,9 @@ pub struct TestOpts {
     /// file supplies the corpus and keeps its other producers
     #[arg(long)]
     record: Option<PathBuf>,
-    /// The corpus for a new `--record` file: JSON `{"decode": N,
-    /// "prompts": [text, ...]}`, tokenized with the target's tokenizer
+    /// The corpus for a new `--record` file: JSON `{"tail": N, "prompts":
+    /// [text, ...]}` (N positions per prompt fed one token at a time),
+    /// tokenized with the target's tokenizer
     #[arg(long)]
     corpus: Option<PathBuf>,
     /// Only the first N prompts of the recorded reference
@@ -596,16 +597,16 @@ fn execute(mut o: Opts) -> Result<i32> {
 fn corpus_of(o: &Opts, path: &std::path::Path) -> Result<Trace> {
     #[derive(serde::Deserialize)]
     struct Corpus {
-        decode: usize,
+        tail: usize,
         prompts: Vec<String>,
     }
     let c: Corpus =
         serde_json::from_str(&std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?)
-            .with_context(|| format!("{}: expected {{\"decode\": N, \"prompts\": [text, ...]}}", path.display()))?;
+            .with_context(|| format!("{}: expected {{\"tail\": N, \"prompts\": [text, ...]}}", path.display()))?;
     let tk = o.inputs.tokenizer().context("a corpus of text needs a tokenizer")?;
     let tokenizer = tokenizers::Tokenizer::from_file(tk).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
     let prompts = c.prompts.iter().map(|s| tokens_of(&tokenizer, s)).collect::<Result<_>>()?;
-    Trace::corpus(prompts, c.decode)
+    Trace::corpus(prompts, c.tail)
 }
 
 /// B alone, against or into a recorded reference.
