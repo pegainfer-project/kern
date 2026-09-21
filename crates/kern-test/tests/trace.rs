@@ -135,7 +135,11 @@ fn two_producers_make_a_band_and_the_verdict_reads_against_it() {
     let band = trace::band(&t).unwrap();
     assert!(band.kl_p99 > 0.0 && band.kl_p99 < 0.01, "{band:?}");
     let (code, summary, lines) = judged(&Fixture::default(), &t);
-    assert_eq!((code, summary.as_str()), (0, "within the band of 2 producers on all 18 positions"), "{lines:#?}");
+    assert_eq!(
+        (code, summary.as_str()),
+        (0, "within the band of 2 producers on all 18 positions, nearest `a`"),
+        "{lines:#?}"
+    );
     assert!(lines.iter().any(|l| l.starts_with("band") && l.contains("between producers")), "{lines:#?}");
     let (code, summary, _) = judged(&Fixture::default().scale("scale_wrong"), &t);
     assert_eq!(code, 1, "{summary}");

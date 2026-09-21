@@ -404,7 +404,10 @@ kern test b.json --reference ref.parquet --prompts 16                       # �
   （top-1 − top-2 logprob）、KL(参考‖B)（参考的 top-20 上逐项，其余并成一桶）、
   参考 argmax 在 B 里的名次。producer ≥ 2 时先算它们两两的分歧作为 **band**
   （翻转处的最大 margin、翻转率、KL p50 / p99，KL 有 1e-6 的地板：文件里的
-  logprob 是 f32），B 对任一 producer 不得超过 band：margin 高于 band 的翻转是有信心的翻转，当场 FAIL 并停止；只有一个
+  logprob 是 f32）。margin 高于 band 的翻转是有信心的翻转，对任一 producer 出现就当场
+  FAIL 并停止；否则 B 只要对**最近的一个** producer 在带内（翻转率、KL p50 / p99 不超过
+  band 的 2 倍：band 是两个实现距离的一次采样，B 是同类实现的另一次采样）就 PASS，
+  对每一个都超出才 FAIL；只有一个
   producer 时退回 `--logit-kl`：翻转且 KL 超限 FAIL，全部 KL 在限内 PASS，
   KL 超限但没翻 INCONCLUSIVE；另有 `--logit-kl-p50` / `--logit-kl-p99`
   （默认等于 `--logit-kl`，即不起作用）管全体位置的 KL 分布：中位数或 p99

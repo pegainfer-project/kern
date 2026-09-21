@@ -517,6 +517,11 @@ pub struct Band {
 
 pub const KL_FLOOR: f64 = 1e-6;
 
+/// The band is one sample of how far two implementations sit apart; a
+/// candidate that is the same kind of implementation is another sample
+/// and may land this factor beyond it on flip rate, KL p50 and p99.
+pub const BAND_SLACK: f64 = 2.0;
+
 /// What a single producer holds a candidate to, KL(reference‖candidate)
 /// in nats. `max` is read at an argmax flip: a flip beyond it is a
 /// confident token that moved. `p50` and `p99` are read over every
@@ -782,31 +787,40 @@ pub fn judge<S: Side>(
                 j.prompt, j.pos, j.producer, j.cmp.argmax_a, j.cmp.argmax_b, j.cmp.margin_a, j.cmp.kl
             ),
         ),
-        // the band is over every position a pair shares, so the candidate is
-        // read over every position too; the phase lines are where to look
+        // the band says how far apart two implementations of the same model
+        // sit, so a candidate is in when it is that close to one of them: the
+        // band is read over every position a pair shares and the candidate
+        // over every position too, and a second sample of the same noise
+        // lands within a factor of the first (BAND_SLACK), not below it
         (None, Some(b)) => {
-            let over: Vec<String> = producers
+            let over: Vec<(String, Vec<String>)> = producers
                 .iter()
-                .filter_map(|p| {
+                .map(|p| {
                     let rs: Vec<&Judged> = rows.iter().filter(|j| &j.producer == p).collect();
                     let mut kl: Vec<f64> = rs.iter().map(|j| j.cmp.kl).collect();
                     let rate = rs.iter().filter(|j| j.cmp.flip()).count() as f64 / rs.len().max(1) as f64;
                     let (p50, p99) = (quantile(&mut kl, 0.5), quantile(&mut kl, 0.99));
                     let what = [
-                        (rate > b.flip_rate, format!("flip rate {:.2}%", rate * 100.0)),
-                        (p50 > b.kl_p50, format!("KL p50 {p50:.1e}")),
-                        (p99 > b.kl_p99, format!("KL p99 {p99:.1e}")),
+                        (rate > BAND_SLACK * b.flip_rate, format!("flip rate {:.2}%", rate * 100.0)),
+                        (p50 > BAND_SLACK * b.kl_p50, format!("KL p50 {p50:.1e}")),
+                        (p99 > BAND_SLACK * b.kl_p99, format!("KL p99 {p99:.1e}")),
                     ]
                     .into_iter()
                     .filter(|(o, _)| *o)
                     .map(|(_, w)| w)
                     .collect::<Vec<_>>();
-                    (!what.is_empty()).then(|| format!("against {p}: {}", what.join(", ")))
+                    (p.clone(), what)
                 })
                 .collect();
-            match over.is_empty() {
-                true => (0, format!("within the band of {} producers on all {n} positions", producers.len())),
-                false => (1, format!("beyond the band: {}", over.join("; "))),
+            match over.iter().find(|(_, what)| what.is_empty()) {
+                Some((p, _)) => (0, format!("within the band of {} producers on all {n} positions, nearest `{p}`", producers.len())),
+                None => (
+                    1,
+                    format!(
+                        "beyond the band of every producer: {}",
+                        over.iter().map(|(p, what)| format!("against {p}: {}", what.join(", "))).collect::<Vec<_>>().join("; ")
+                    ),
+                ),
             }
         }
         (None, None) => {
