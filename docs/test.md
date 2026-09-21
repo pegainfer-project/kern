@@ -375,11 +375,51 @@ Engram 表在 HBM）对 B300 的 148-SM 实例**：整块快照时，换 `dsv41_
 `input_ids` / `anchor_token` 加 `index_into embed.weight`。存档
 `~/bench_results/2026-09-15-dsv41-e2e-swap/`。
 
+## 录好的参考：`--record` 一份 parquet，`--reference` 指向它
+
+A/B 的判据是"上一版 kern"，换核不换数值时它最强（位一致就是位一致）；
+改精度（f32 → bf16、fp8）时它说不了话，因为 A 自己也只是一种舍入。第二种
+参考是**录好的分布**：固定一批真实文本，记下参考实现在每个打分位置上的
+下一词分布（top-20 的 id 与 logprob，加原文那个词的 logprob），落成一个
+parquet 文件；之后判候选只装 B，不再需要 A 在场，也不再录 span。
+
+```bash
+kern test a.json --record ref.parquet --corpus corpus.json --kernels … --weights … --tokenizer …
+kern test b.json --reference ref.parquet --kernels … --weights …            # loop 里用的
+kern test b.json --reference ref.parquet --prompts 16                       # 快判：前 16 段
+```
+
+- **语料**是 `{"decode": N, "prompts": [text, …]}`，`--record` 到一个不存在的文件时
+  用目标的 tokenizer 切成 token 存进去；文件存在就用它的语料、追加（或覆盖）
+  这个 manifest 作为一个 producer（名字是 manifest 文件名）。多个 producer 在
+  同一个文件里。
+- **打分位置**：每段 prompt 末尾 `decode + 1` 个位置。前面的 token 一次
+  走 chunk program（prefill 路径，打分一次），后 `decode` 个逐个喂（decode 路径，
+  在 prefill 建的状态上打分 `decode` 次；prefill-only 的 manifest 走一行的
+  chunk）。chunk 大小是实现自己的事，不进文件。原文固定，所以位置逐个对得上。
+- **表**：一行一个 token 位置（`prompt` / `pos` / `token`，`producer` 为 null），
+  打过分的位置每个 producer 再加一行（`producer` / `ref_logprob` / `top_ids` /
+  `top_logprob`）；`decode` 在文件 metadata 里。pandas / duckdb 直接读。
+- **判定**：每个位置算 B 对每个 producer 的 argmax 翻转、参考的 margin
+  （top-1 − top-2 logprob）、KL(参考‖B)（参考的 top-20 上逐项，其余并成一桶）、
+  参考 argmax 在 B 里的名次。producer ≥ 2 时先算它们两两的分歧作为 **band**
+  （翻转处的最大 margin、翻转率、KL p50 / p99，KL 有 1e-6 的地板：文件里的
+  logprob 是 f32），B 对任一 producer 不得超过 band：margin 高于 band 的翻转是有信心的翻转，当场 FAIL 并停止；只有一个
+  producer 时退回 `--logit-kl`：翻转且 KL 超限 FAIL，全部 KL 在限内 PASS，
+  KL 超限但没翻 INCONCLUSIVE。报告按 `prefill` / `decode` 各一行给 rows、
+  翻转数、KL p50 / p99 / max；`flip` 行逐个列翻转（prompt、pos、两边 token、
+  margin、KL、原文词的 logprob 两边各多少），`--out` 存每个位置每个 producer
+  的一行，`--json` 同前。
+- 与 A/B 的关系：`--reference` 按文件内容认 parquet（`PAR1` 魔数），给
+  manifest 就是 A/B。A/B 回答"这一刀换了什么、噪声地板、快了多少"，录好的
+  参考回答"整体分布还在不在线上实现的分歧范围内"；两者都要时各跑一次。
+
 ## 位置
 
 - 静态 diff、frontier、录制、重放、比较、报告全在 `crates/kern-test`
   （`diff.rs` / `compare.rs` / `workload.rs` / `report.rs` / `harness.rs`
-  录 A、`replay.rs` 放 B 并判定，`lib.rs` 的 `Side` trait 是与设备之间唯
+  录 A、`replay.rs` 放 B 并判定，`trace.rs` 录好的参考：parquet 读写、
+  喂语料、打分、band 与判定，`lib.rs` 的 `Side` trait 是与设备之间唯
   一的边界）；`kern test` 子命令、`Side` 的真实现（`Ranks`：每 rank 一个
   `Caller`，`Buf = Scratch`）和 kern.toml 解析在
   `crates/kern-run/src/test.rs`（caller 契约在 `crates/kern-run/src/lib.rs`，

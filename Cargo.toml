@@ -35,6 +35,11 @@ pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", r
 vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "89dbb2644552d6e473a7e97da0ce8f0aa8e32c9d" }
 
 anyhow = "1"
+# Recorded references are ragged tables (a row per token position, list
+# columns for the top-k), which parquet holds and pandas / duckdb read as is.
+arrow-array = "=60.0.0"
+arrow-schema = "=60.0.0"
+parquet = { version = "=60.0.0", default-features = false, features = ["arrow", "snap"] }
 clap = { version = "4", features = ["derive"] }
 # The CUDA API kern binds is a fact about the binary, not about the build
 # machine: `cuda-13000` pins it, and no toolkit is needed to build.

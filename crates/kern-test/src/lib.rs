@@ -52,6 +52,7 @@ pub mod diff;
 mod harness;
 mod replay;
 pub mod report;
+pub mod trace;
 pub mod workload;
 
 use std::collections::BTreeMap;

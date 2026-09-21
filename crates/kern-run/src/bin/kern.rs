@@ -96,8 +96,16 @@ fn main() -> Result<()> {
             let (_, target) = cfg.one(Some(&target))?;
             kern_run::server::run(target, &args)
         }
-        Cmd::Test { target, opts } => {
-            let code = kern_run::test::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?)?;
+        Cmd::Test { target, mut opts } => {
+            // `kern test b.json ...`: the positional is the candidate itself
+            let target = match target {
+                Some(t) if Path::new(&t).is_file() => {
+                    opts.manifest = Some(PathBuf::from(t));
+                    target_of(cfg.as_ref(), None).ok().flatten()
+                }
+                t => target_of(cfg.as_ref(), t)?,
+            };
+            let code = kern_run::test::run(opts, cfg.as_ref(), target)?;
             if code != 0 {
                 std::process::exit(code);
             }
