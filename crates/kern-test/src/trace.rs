@@ -155,7 +155,7 @@ impl Trace {
                 .schema()
                 .field_with_name(name)
                 .map_err(|_| anyhow::anyhow!("{}: no column `{name}`", path.display()))?;
-            ensure!(f.data_type() == dt, "{}: column `{name}` is {} , expected {dt}", path.display(), f.data_type());
+            ensure!(same(f.data_type(), dt), "{}: column `{name}` is {}, expected {dt}", path.display(), f.data_type());
         }
         let mut prompts: BTreeMap<usize, BTreeMap<usize, i64>> = BTreeMap::new();
         let mut producers: BTreeMap<String, Vec<Score>> = BTreeMap::new();
@@ -289,6 +289,14 @@ impl Trace {
 /// The token id column and the tail metadata key.
 const ID: &str = "id";
 const TAIL: &str = "tail";
+
+/// A list column's child may be called `item` or `element`, by writer.
+fn same(a: &DataType, b: &DataType) -> bool {
+    match (a, b) {
+        (DataType::List(x), DataType::List(y)) => x.data_type() == y.data_type(),
+        _ => a == b,
+    }
+}
 
 fn list_of(dt: DataType) -> DataType {
     DataType::List(Arc::new(Field::new("item", dt, true)))
