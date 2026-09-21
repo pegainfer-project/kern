@@ -81,11 +81,12 @@ pub struct TestOpts {
     /// flip within it is a tie, one beyond it a FAIL (default 0.01)
     #[arg(long)]
     logit_kl: Option<f64>,
-    /// Against a recorded reference with one producer: the median and the
-    /// 99th percentile of KL over every position judged may not exceed
-    /// these, flip or no flip (default: --logit-kl, so they never bind)
+    /// Against a recorded reference with one producer: the median of KL
+    /// over every position judged may not exceed this, flip or no flip
+    /// (default: --logit-kl, so it never binds)
     #[arg(long)]
     logit_kl_p50: Option<f64>,
+    /// Same for the 99th percentile (default: --logit-kl)
     #[arg(long)]
     logit_kl_p99: Option<f64>,
     /// CUDA device ordinals, one per rank of the manifest's topology (a

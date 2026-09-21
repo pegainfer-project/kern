@@ -19,7 +19,7 @@ fn recorded(f: &Fixture, t: &mut Trace, name: &str) {
 }
 
 fn judged(f: &Fixture, t: &Trace) -> (i32, String, Vec<String>) {
-    judged_within(f, t, KlLimits::flat(0.01))
+    judged_within(f, t, KlLimits { max: 0.01, p50: 0.01, p99: 0.01 })
 }
 
 fn judged_within(f: &Fixture, t: &Trace, limits: KlLimits) -> (i32, String, Vec<String>) {

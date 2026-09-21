@@ -536,13 +536,6 @@ pub struct KlLimits {
     pub p99: f64,
 }
 
-impl KlLimits {
-    /// One number for all three: the distribution limits never bind.
-    pub fn flat(kl: f64) -> Self {
-        Self { max: kl, p50: kl, p99: kl }
-    }
-}
-
 fn quantile(v: &mut [f64], q: f64) -> f64 {
     if v.is_empty() {
         return 0.0;
@@ -713,7 +706,9 @@ pub fn judge<S: Side>(
     let index: BTreeMap<(String, usize, usize), &Score> =
         t.producers.iter().flat_map(|(p, ss)| ss.iter().map(move |s| ((p.clone(), s.prompt, s.pos), s))).collect();
     let confident = |j: &Judged| match &band {
-        Some(b) => j.cmp.margin_a > b.margin,
+        // the band's margin is one pair's largest flip, an extreme value, so
+        // it gets the same slack as the rates
+        Some(b) => j.cmp.margin_a > BAND_SLACK * b.margin,
         None => j.cmp.kl > limits.max,
     };
     let mut rows: Vec<Judged> = Vec::new();
@@ -787,11 +782,9 @@ pub fn judge<S: Side>(
                 j.prompt, j.pos, j.producer, j.cmp.argmax_a, j.cmp.argmax_b, j.cmp.margin_a, j.cmp.kl
             ),
         ),
-        // the band says how far apart two implementations of the same model
-        // sit, so a candidate is in when it is that close to one of them: the
-        // band is read over every position a pair shares and the candidate
-        // over every position too, and a second sample of the same noise
-        // lands within a factor of the first (BAND_SLACK), not below it
+        // in when within BAND_SLACK of the band against one producer; the band
+        // is read over every position a pair shares, the candidate over every
+        // position too
         (None, Some(b)) => {
             let over: Vec<(String, Vec<String>)> = producers
                 .iter()
@@ -827,33 +820,27 @@ pub fn judge<S: Side>(
             let flips = flips.len();
             let mut kl: Vec<f64> = rows.iter().map(|j| j.cmp.kl).collect();
             let (p50, p99) = (quantile(&mut kl, 0.5), quantile(&mut kl, 0.99));
-            if p50 > limits.p50 || p99 > limits.p99 {
-                (
+            let p = producers[0].as_str();
+            match (p50 > limits.p50 || p99 > limits.p99, kl_max <= limits.max) {
+                (true, _) => (
                     1,
                     format!(
-                        "the distribution moved against `{}`: KL p50 {p50:.1e} (limit {:.0e}) · p99 {p99:.1e} (limit {:.0e}) on {n} positions",
-                        producers[0], limits.p50, limits.p99
+                        "the distribution moved against `{p}`: KL p50 {p50:.1e} (limit {:.0e}) · p99 {p99:.1e} (limit {:.0e}) on {n} positions",
+                        limits.p50, limits.p99
                     ),
-                )
-            } else {
-                match kl_max <= limits.max {
-                    true => (
-                        0,
-                        format!(
-                            "within KL {:.0e} of `{}` on all {n} positions{}",
-                            limits.max,
-                            producers[0],
-                            if flips > 0 { format!(", {flips} flip(s) all ties") } else { String::new() }
-                        ),
+                ),
+                (false, true) => (
+                    0,
+                    format!(
+                        "within KL {:.0e} of `{p}` on all {n} positions{}",
+                        limits.max,
+                        if flips > 0 { format!(", {flips} flip(s) all ties") } else { String::new() }
                     ),
-                    false => (
-                        2,
-                        format!(
-                            "KL up to {kl_max:.1e} (limit {:.0e}) against `{}` with no confident flip on {n} positions",
-                            limits.max, producers[0]
-                        ),
-                    ),
-                }
+                ),
+                (false, false) => (
+                    2,
+                    format!("KL up to {kl_max:.1e} (limit {:.0e}) against `{p}` with no confident flip on {n} positions", limits.max),
+                ),
             }
         }
     };
