@@ -6,7 +6,7 @@ use std::os::raw::c_void;
 use std::sync::Arc;
 
 use cudarc::cublas;
-use cudarc::cublaslt::{CudaBlasLT, Matmul, MatmulConfig};
+use cudarc::cublaslt::{self, CudaBlasLT, Matmul, MatmulConfig, MatmulShared};
 use cudarc::driver::{sys, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice, SyncOnDrop};
 use half::bf16;
 
@@ -103,6 +103,9 @@ pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[R
 pub(crate) struct Blas {
     handle: cublas::sys::cublasHandle_t,
     _workspace: CudaSlice<u8>,
+    /// The workspace's address, taken once: reading it through cudarc's
+    /// `device_ptr` records a cross-stream wait that invalidates a capture.
+    ws: sys::CUdeviceptr,
 }
 
 // The handle is only ever used from the runtime's own thread, on its stream.
@@ -115,10 +118,10 @@ impl Blas {
     pub(crate) fn new(stream: &Arc<CudaStream>) -> Result<Blas> {
         let handle = cublas::result::create_handle().map_err(|e| Error::Cuda(format!("cublasCreate: {e:?}")))?;
         let workspace: CudaSlice<u8> = stream.alloc_zeros(Self::WORKSPACE)?;
+        let ws = workspace.device_ptr(stream).0;
         unsafe {
             cublas::result::set_stream(handle, stream.cu_stream() as *mut _)
                 .map_err(|e| Error::Cuda(format!("cublasSetStream: {e:?}")))?;
-            let (ws, _g) = workspace.device_ptr(stream);
             cublas::sys::cublasSetWorkspace_v2(handle, ws as *mut c_void, Self::WORKSPACE)
                 .result()
                 .map_err(|e| Error::Cuda(format!("cublasSetWorkspace: {e:?}")))?;
@@ -126,7 +129,7 @@ impl Blas {
                 .result()
                 .map_err(|e| Error::Cuda(format!("cublasSetMathMode: {e:?}")))?;
         }
-        Ok(Blas { handle, _workspace: workspace })
+        Ok(Blas { handle, _workspace: workspace, ws })
     }
 }
 
@@ -192,4 +195,107 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
         .map_err(|e| Error::Cuda(format!("cublasGemmEx f32 (m={m} n={n} k={k}): {e:?}")))?;
     }
     Ok(())
+}
+
+/// `extern:cublaslt_fp8_tn` / `extern:cublaslt_fp8_tn_f32`: row-major
+/// `C[m,n] = (a_scale * w_scale) * A[m,k] @ W[n,k]^T` with e4m3 operands,
+/// f32 accumulation and a bf16 or f32 result; args
+/// `[a, w, c, a_scale, w_scale, m, n, k]`, optionally a 9th C row stride.
+/// The scales are one f32 each on the device (cublasLt's per-tensor
+/// `A_SCALE_POINTER` / `B_SCALE_POINTER`), so a manifest can quantize the
+/// activation in-graph and the GEMM never sees a host value. Same
+/// column-major mapping as the bf16 path; cublasLt's fp8 rule that A is
+/// transposed and B is not is exactly it. The workspace is `Blas`'s: both
+/// GEMMs run on the one stream, so the buffer is never shared in flight.
+pub(crate) fn gemm_fp8_tn(
+    blt: &CudaBlasLT,
+    blas: &Blas,
+    stream: &Arc<CudaStream>,
+    args: &[RVal],
+    f32_out: bool,
+) -> Result<()> {
+    let (a, w, c, a_scale, w_scale, m, n, k, ldc) = match args {
+        [a, w, c, sa, sw, m, n, k] => (a, w, c, sa, sw, m.val, n.val, k.val, n.val),
+        [a, w, c, sa, sw, m, n, k, ldc] => (a, w, c, sa, sw, m.val, n.val, k.val, ldc.val),
+        _ => bail!(Manifest, "fp8 gemm expects 8 or 9 args, got {}", args.len()),
+    };
+    if ldc < n {
+        bail!(Manifest, "fp8 gemm: ldc {ldc} < n {n}");
+    }
+    if k % 16 != 0 {
+        bail!(Manifest, "fp8 gemm: k {k} is not a multiple of 16 (cublasLt fp8 operand rows are 16-byte aligned)");
+    }
+    if m == 0 || n == 0 || k == 0 {
+        return Ok(());
+    }
+    let out = if f32_out { 4 } else { 2 };
+    if a.bytes < m * k
+        || w.bytes < n * k
+        || c.bytes < ((m - 1) * ldc + n) * out
+        || a_scale.bytes < 4
+        || w_scale.bytes < 4
+    {
+        bail!(Manifest, "fp8 gemm: operands too small for m={m} n={n} k={k} ldc={ldc}");
+    }
+    use cublaslt::result;
+    use cublaslt::sys::{cublasComputeType_t, cublasLtMatmulDescAttributes_t as Attr, cudaDataType};
+    let e4m3 = cudaDataType::CUDA_R_8F_E4M3;
+    let cd = if f32_out { cudaDataType::CUDA_R_32F } else { cudaDataType::CUDA_R_16BF };
+    let lt = |e: cublaslt::result::CublasError, what: &str| {
+        Error::Cuda(format!("cublasLt fp8 {what} (m={m} n={n} k={k}): {e:?}"))
+    };
+    unsafe {
+        let a_layout = result::create_matrix_layout(e4m3, k, n, k as i64).map_err(|e| lt(e, "layout"))?;
+        let b_layout = result::create_matrix_layout(e4m3, k, m, k as i64).map_err(|e| lt(e, "layout"))?;
+        let c_layout = result::create_matrix_layout(cd, n, m, ldc as i64).map_err(|e| lt(e, "layout"))?;
+        let desc = result::create_matmul_desc(cublasComputeType_t::CUBLAS_COMPUTE_32F, cudaDataType::CUDA_R_32F)
+            .map_err(|e| lt(e, "desc"))?;
+        let set = |attr: Attr, v: *const c_void, size: usize| {
+            result::set_matmul_desc_attribute(desc, attr, v, size).map_err(|e| lt(e, "attribute"))
+        };
+        let (t, nt) = (cublas::sys::cublasOperation_t::CUBLAS_OP_T, cublas::sys::cublasOperation_t::CUBLAS_OP_N);
+        set(Attr::CUBLASLT_MATMUL_DESC_TRANSA, &t as *const _ as *const c_void, 4)?;
+        set(Attr::CUBLASLT_MATMUL_DESC_TRANSB, &nt as *const _ as *const c_void, 4)?;
+        let (sa, sw) = (a_scale.val as *const c_void, w_scale.val as *const c_void);
+        set(Attr::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &sw as *const _ as *const c_void, 8)?;
+        set(Attr::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &sa as *const _ as *const c_void, 8)?;
+        let pref = result::create_matmul_pref().map_err(|e| lt(e, "preference"))?;
+        let ws_size = Blas::WORKSPACE;
+        result::set_matmul_pref_attribute(
+            pref,
+            cublaslt::sys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+            &ws_size as *const _ as *const c_void,
+            std::mem::size_of::<usize>(),
+        )
+        .map_err(|e| lt(e, "preference"))?;
+        let heuristic =
+            result::get_matmul_algo_heuristic(*blt.handle(), desc, a_layout, b_layout, c_layout, c_layout, pref)
+                .map_err(|e| lt(e, "heuristic"))?;
+        let (alpha, beta) = (1.0f32, 0.0f32);
+        let r = result::matmul(
+            *blt.handle(),
+            desc,
+            &alpha as *const _ as *const c_void,
+            &beta as *const _ as *const c_void,
+            w.val as *const c_void,
+            a_layout,
+            a.val as *const c_void,
+            b_layout,
+            c.val as *const c_void,
+            c_layout,
+            c.val as *mut c_void,
+            c_layout,
+            &heuristic.algo,
+            blas.ws as *mut c_void,
+            ws_size,
+            stream.cu_stream() as *mut _,
+        )
+        .map_err(|e| lt(e, "matmul"));
+        let _ = result::destroy_matmul_pref(pref);
+        let _ = result::destroy_matmul_desc(desc);
+        for l in [a_layout, b_layout, c_layout] {
+            let _ = result::destroy_matrix_layout(l);
+        }
+        r
+    }
 }

@@ -26,7 +26,7 @@ use std::os::raw::c_void;
 use cudarc::driver::sys;
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
-use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32};
+use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_fp8_tn};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
@@ -217,6 +217,7 @@ impl Runtime {
         match &l.kind {
             LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
+            LaunchKind::GemmFp8 { f32_out } => gemm_fp8_tn(&self.blt, &self.blas, &self.stream, &vals, *f32_out),
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];
