@@ -404,9 +404,16 @@ kern test b.json --reference ref.parquet --prompts 16                       # �
   （top-1 − top-2 logprob）、KL(参考‖B)（参考的 top-20 上逐项，其余并成一桶）、
   参考 argmax 在 B 里的名次。producer ≥ 2 时先算它们两两的分歧作为 **band**
   （翻转处的最大 margin、翻转率、KL p50 / p99，KL 有 1e-6 的地板：文件里的
-  logprob 是 f32），B 对任一 producer 不得超过 band：margin 高于 band 的翻转是有信心的翻转，当场 FAIL 并停止；只有一个
+  logprob 是 f32）。margin 高于 band 两倍的翻转是有信心的翻转，对任一 producer 出现就
+  当场 FAIL 并停止；否则 B 只要对**最近的一个** producer 在带内（翻转率、KL p50 / p99
+  不超过 band 的 2 倍）就 PASS，对每一个都超出才 FAIL。2 倍的道理：band 是两个实现距离
+  的一次采样，B 是同类实现的另一次采样，同一分布的第二个样本落在第一个之外是常态，
+  margin 取的又是极值；只有一个
   producer 时退回 `--logit-kl`：翻转且 KL 超限 FAIL，全部 KL 在限内 PASS，
-  KL 超限但没翻 INCONCLUSIVE。报告按 `prefill` / `decode` 各一行给 rows、
+  KL 超限但没翻 INCONCLUSIVE；另有 `--logit-kl-p50` / `--logit-kl-p99`
+  （默认等于 `--logit-kl`，即不起作用）管全体位置的 KL 分布：中位数或 p99
+  超限直接 FAIL，不看有没有翻转。把 `--logit-kl` 放宽去原谅递归模型放大出的
+  个别位置时，靠这两个把"处处慢性变差"挡住。报告按 `prefill` / `decode` 各一行给 rows、
   翻转数、KL p50 / p99 / max；`flip` 行逐个列翻转（prompt、pos、两边 token、
   margin、KL、原文词的 logprob 两边各多少），`--out` 存每个位置每个 producer
   的一行，`--json` 同前。

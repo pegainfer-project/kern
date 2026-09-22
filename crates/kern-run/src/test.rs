@@ -81,6 +81,14 @@ pub struct TestOpts {
     /// flip within it is a tie, one beyond it a FAIL (default 0.01)
     #[arg(long)]
     logit_kl: Option<f64>,
+    /// Against a recorded reference with one producer: the median of KL
+    /// over every position judged may not exceed this, flip or no flip
+    /// (default: --logit-kl, so it never binds)
+    #[arg(long)]
+    logit_kl_p50: Option<f64>,
+    /// Same for the 99th percentile (default: --logit-kl)
+    #[arg(long)]
+    logit_kl_p99: Option<f64>,
     /// CUDA device ordinals, one per rank of the manifest's topology (a
     /// single ordinal starts the ranks there, consecutively); default 0
     #[arg(long, value_delimiter = ',')]
@@ -171,6 +179,7 @@ impl TestOpts {
             ),
         };
         let test = cfg.map(|c| &c.test);
+        let logit_kl = self.logit_kl.or_else(|| test.and_then(|x| x.logit_kl)).unwrap_or(0.01);
         let harness = Options {
             a: match &mode {
                 Mode::Ab(a) => a.display().to_string(),
@@ -180,7 +189,9 @@ impl TestOpts {
             prompt: None,
             prefill: self.prefill,
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),
-            logit_kl: self.logit_kl.or_else(|| test.and_then(|x| x.logit_kl)).unwrap_or(0.01),
+            logit_kl,
+            logit_kl_p50: self.logit_kl_p50.or_else(|| test.and_then(|x| x.logit_kl_p50)).unwrap_or(logit_kl),
+            logit_kl_p99: self.logit_kl_p99.or_else(|| test.and_then(|x| x.logit_kl_p99)).unwrap_or(logit_kl),
             chunk: self.chunk,
             iters: self.iters,
             graph_step: !self.no_graph_step,
@@ -665,7 +676,11 @@ fn on_trace(o: Opts, mb: Verified, t_start: Instant) -> Result<i32> {
         &trace,
         &file.display().to_string(),
         &b,
-        o.harness.logit_kl,
+        kern_test::trace::KlLimits {
+            max: o.harness.logit_kl,
+            p50: o.harness.logit_kl_p50,
+            p99: o.harness.logit_kl_p99,
+        },
         &mut |lines: &[String]| out.show(lines),
     )?;
     if let Some(p) = &o.out {
