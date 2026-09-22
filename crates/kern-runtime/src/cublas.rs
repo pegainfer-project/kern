@@ -198,15 +198,13 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
 }
 
 /// `extern:cublaslt_fp8_tn` / `extern:cublaslt_fp8_tn_f32`: row-major
-/// `C[m,n] = (a_scale * w_scale) * A[m,k] @ W[n,k]^T` with e4m3 operands,
-/// f32 accumulation and a bf16 or f32 result; args
-/// `[a, w, c, a_scale, w_scale, m, n, k]`, optionally a 9th C row stride.
-/// The scales are one f32 each on the device (cublasLt's per-tensor
-/// `A_SCALE_POINTER` / `B_SCALE_POINTER`), so a manifest can quantize the
-/// activation in-graph and the GEMM never sees a host value. Same
-/// column-major mapping as the bf16 path; cublasLt's fp8 rule that A is
-/// transposed and B is not is exactly it. The workspace is `Blas`'s: both
-/// GEMMs run on the one stream, so the buffer is never shared in flight.
+/// `C[m,n] = (a_scale * w_scale) * A[m,k] @ W[n,k]^T`, e4m3 operands, f32
+/// accumulation, bf16 or f32 result; args `[a, w, c, a_scale, w_scale, m,
+/// n, k]` plus an optional C row stride. Each scale is one f32 on the
+/// device (cublasLt's per-tensor scale pointers), so a manifest quantizes
+/// the activation in-graph. Same column-major mapping as the bf16 path,
+/// which is exactly cublasLt's fp8 rule (A transposed, B not). The
+/// workspace is `Blas`'s: every GEMM runs on the one stream.
 pub(crate) fn gemm_fp8_tn(
     blt: &CudaBlasLT,
     blas: &Blas,

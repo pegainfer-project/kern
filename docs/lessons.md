@@ -3,6 +3,23 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-09-22，cuBLASLt fp8 在图捕获里报 "green context"
+
+**capture 里的错误往往出在报错的前一条。** `extern:cublaslt_fp8_tn` eager 全对，`capture` 一进
+cublasLtMatmul 就是 `EXECUTION_FAILED` / "Could not obtain green context information"；换算法、
+RELAXED 捕获模式都一样，独立的 C 程序同参数却能捕获。cuda-gdb 在 `cuStreamGetGreenCtx` 上 finish
+看返回值：901 = 捕获序列已失效——失效的是它前面那条 `cuStreamWaitEvent`，来自 cudarc
+`CudaSlice::device_ptr(stream)` 给 workspace 记的跨 stream 等待。bf16 路径的 `RawBf16` shim 正是
+为了绕开这个而写的，新路径没沿用。规则：**cudarc 的 `device_ptr` 不进 launch 路径**，裸指针在构造时
+取一次存起来（`Blas.ws`）；每个新 extern 的 GPU 测试都要走一遍 `capture` + `run_captured`，eager
+过了不算。nsys 的 API trace 看不到轻量调用，判断"谁失败"要用 cuda-gdb 在驱动符号上 finish。
+
+**judge 的语料要覆盖评测 workload 的长度。** K3 campaign 的参考语料 prompt 最长约 3k token，打分
+workload 是 16384：trtllm-gen 的 dynB MoE GEMM 不循环取 work item，grid 砍到 384 在 3k 上全对、在
+16k 上丢掉一半工作，judge PASS 加 −41 ms 的假收益。规则：token 相关的几何改动（grid、work item
+上限、按行分块）judge 不是判据，要在评测长度上逐 span 比特对照；录参考语料时至少放一条评测长度的
+prompt；探针数字先比特对照再计时——算错、漏算的核一定更快。
+
 ## 2026-09-18，NCCL 的 Simple 协议在 kern 进程里算错
 
 **换库不等于换掉了验证。** collective 从自写的 Lamport 核换成 NCCL extern，4 层 c8/c40/c7 全 exact
