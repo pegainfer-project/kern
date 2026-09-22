@@ -653,7 +653,7 @@
           ]
         },
         "entry": {
-          "description": "`extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ) or `cublaslt_bf16_tn_acc` (C += A·Wᵀ).",
+          "description": "`extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ), `cublaslt_bf16_tn_acc` (C += A·Wᵀ),\n`cublas_bf16_tn_f32`, `cublaslt_fp8_tn[_f32]` (e4m3 operands, device scales) or an `nccl_*` collective.",
           "type": "string"
         },
         "params": {

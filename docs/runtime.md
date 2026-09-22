@@ -142,6 +142,11 @@ park 31 ms、wake 28 ms，发起 0.9 / 0.5 ms（2500 页折成 ~50 次拷贝）�
 workspace，可捕获）：K3 的每条稠密投影都是 f32 partial 再由认证的 `k3_land`
 核落成 bf16，所以 landing 的舍入链与 pegainfer 一致；权重行带 / 输出列带
 用 arg 的字节 `offset` 加第 7 参 `ldc` 表达。
+`extern:cublaslt_fp8_tn` / `extern:cublaslt_fp8_tn_f32`：e4m3 操作数、f32 累加、
+bf16 / f32 结果，参数 `[a, w, c, a_scale, w_scale, m, n, k]`，可追加第 9 参 C 行步长；
+两个 scale 是 device 上的单个 f32（cublasLt 的 per-tensor `A/B_SCALE_POINTER`），
+所以激活的 amax+量化可以在图内做，GEMM 不看任何 host 值。列主序映射与 bf16 路径
+相同，正好就是 cublasLt 对 fp8 的要求（A 转置、B 不转置）；k 必须是 16 的倍数。
 `extern:nccl_allreduce_{f32,bf16}` / `extern:nccl_allgather_{f32,bf16}` /
 `extern:nccl_reducescatter_{f32,bf16}`：tray collective 走 NCCL（`nccl.rs`），
 launch 连线 `[send, recv, count, {"rank": g}]`，rank 参点名 topology 组，count 是

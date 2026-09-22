@@ -163,6 +163,9 @@ pub(crate) enum LaunchKind {
     Gemm { beta: f32 },
     /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
     GemmF32,
+    /// `extern:cublaslt_fp8_tn` / `..._f32`: e4m3 operands with per-tensor
+    /// device scales, `[a, w, c, a_scale, w_scale, m, n, k]` (+ C row stride).
+    GemmFp8 { f32_out: bool },
     /// `extern:nccl_*`: a collective over `group`, `[send, recv, count, rank]`.
     Nccl { coll: Coll, elem: Elem, group: String },
 }
@@ -221,6 +224,10 @@ enum LaunchImpl {
     },
     /// cublasGemmEx with an f32 result (`extern:cublas_bf16_tn_f32`).
     GemmBf16TnF32,
+    /// cublasLt fp8 with a bf16 or f32 result (`extern:cublaslt_fp8_tn[_f32]`).
+    GemmFp8Tn {
+        f32_out: bool,
+    },
     /// `extern:nccl_<coll>_<elem>` over the group the launch's rank arg names.
     Nccl {
         coll: Coll,
@@ -246,6 +253,7 @@ impl ResolvedOp {
                 LaunchImpl::Cubin { module, .. } => module.clone(),
                 LaunchImpl::GemmBf16Tn { .. } => "runtime built-in (cublasLt)".into(),
                 LaunchImpl::GemmBf16TnF32 => "runtime built-in (cublasGemmEx, f32 out)".into(),
+                LaunchImpl::GemmFp8Tn { .. } => "runtime built-in (cublasLt fp8)".into(),
                 LaunchImpl::Nccl { coll, elem, group } => {
                     format!("runtime built-in (nccl {coll:?} {elem:?} over `{group}`)")
                 }
@@ -295,6 +303,8 @@ pub(crate) fn resolve_ops(
                         "cublaslt_bf16_tn" => launches.push(LaunchImpl::GemmBf16Tn { beta: 0.0 }),
                         "cublaslt_bf16_tn_acc" => launches.push(LaunchImpl::GemmBf16Tn { beta: 1.0 }),
                         "cublas_bf16_tn_f32" => launches.push(LaunchImpl::GemmBf16TnF32),
+                        "cublaslt_fp8_tn" => launches.push(LaunchImpl::GemmFp8Tn { f32_out: false }),
+                        "cublaslt_fp8_tn_f32" => launches.push(LaunchImpl::GemmFp8Tn { f32_out: true }),
                         _ => match crate::nccl::extern_op(ext) {
                             Some((coll, elem)) => {
                                 let group = l.args_of(op).iter().find_map(|a| match a {
@@ -525,6 +535,19 @@ fn compile_call(
                     LaunchImpl::GemmBf16Tn { beta } => LaunchKind::Gemm { beta: *beta },
                     _ => LaunchKind::GemmF32,
                 }
+            }
+            LaunchImpl::GemmFp8Tn { f32_out } => {
+                if touches_peer {
+                    bail!(Manifest, "launch #{li}: a peer buffer reaches the extern gemm; runtime built-ins never receive peer memory");
+                }
+                if !(8..=9).contains(&slots.len()) {
+                    bail!(
+                        Manifest,
+                        "launch #{li}: extern fp8 gemm takes 8..=9 args (a, w, c, a_scale, w_scale, m, n, k, optional C row stride), got {}",
+                        slots.len()
+                    );
+                }
+                LaunchKind::GemmFp8 { f32_out: *f32_out }
             }
             LaunchImpl::Nccl { coll, elem, group } => {
                 if touches_peer {
