@@ -19,3 +19,4 @@ tools/kernel-capture/libkernelcapture.so
 /tools/k3-scratch
 
 /tools/kernels/index/
+*.egg-info/

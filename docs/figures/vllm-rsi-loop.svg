@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 660" width="960" height="660" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect width="960" height="660" fill="#ffffff"/>
+<circle cx="480" cy="330" r="190" fill="none" stroke="#f1f5f9" stroke-width="14"/>
+<path d="M517.7,143.8 A190,190 0 0 1 619.7,201.2" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+<path d="M617.3,191.2 L619.7,201.2 L609.9,198.0" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M660.1,269.6 A190,190 0 0 1 661.4,386.6" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+<path d="M668.8,379.5 L661.4,386.6 L659.3,376.5" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M622.4,455.8 A190,190 0 0 1 521.7,515.4" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+<path d="M531.5,518.3 L521.7,515.4 L529.3,508.5" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M442.3,516.2 A190,190 0 0 1 340.3,458.8" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+<path d="M342.7,468.8 L340.3,458.8 L350.1,462.0" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M299.9,390.4 A190,190 0 0 1 298.6,273.4" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+<path d="M291.2,280.5 L298.6,273.4 L300.7,283.5" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M337.6,204.2 A190,190 0 0 1 438.3,144.6" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"/>
+<path d="M428.5,141.7 L438.3,144.6 L430.7,151.5" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="480.0" cy="140.0" r="30" fill="#ea580c" stroke="#ea580c" stroke-width="2"/>
+<text x="480.0" y="146.0" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">1</text>
+<text x="480.0" y="52.0" text-anchor="middle" font-size="16" font-weight="600" fill="#9a3412">Serve in vLLM</text>
+<text x="480.0" y="72.0" text-anchor="middle" font-size="13" fill="#475569">kern_vllm plugin; canary replica,</text>
+<text x="480.0" y="90.0" text-anchor="middle" font-size="13" fill="#475569">then rolling restart</text>
+<circle cx="644.5" cy="235.0" r="30" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="644.5" y="241.0" text-anchor="middle" font-size="18" font-weight="600" fill="#475569">2</text>
+<text x="690.5" y="221.0" text-anchor="start" font-size="16" font-weight="600" fill="#0f172a">Sample shapes</text>
+<text x="690.5" y="241.0" text-anchor="start" font-size="13" fill="#475569">plugin logs program, tokens, seqs,</text>
+<text x="690.5" y="259.0" text-anchor="start" font-size="13" fill="#475569">context lengths per step</text>
+<circle cx="644.5" cy="425.0" r="30" fill="#1e293b" stroke="#1e293b" stroke-width="2"/>
+<text x="644.5" y="431.0" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">3</text>
+<text x="690.5" y="411.0" text-anchor="start" font-size="16" font-weight="600" fill="#0f172a">Locate time</text>
+<text x="690.5" y="431.0" text-anchor="start" font-size="13" fill="#475569">step counts × kern bench per shape</text>
+<text x="690.5" y="449.0" text-anchor="start" font-size="13" fill="#475569">= GPU time by op and shape</text>
+<circle cx="480.0" cy="520.0" r="30" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="480.0" y="526.0" text-anchor="middle" font-size="18" font-weight="600" fill="#475569">4</text>
+<text x="480.0" y="576.0" text-anchor="middle" font-size="16" font-weight="600" fill="#0f172a">Optimize</text>
+<text x="480.0" y="596.0" text-anchor="middle" font-size="13" fill="#475569">main agent splits the call graph;</text>
+<text x="480.0" y="614.0" text-anchor="middle" font-size="13" fill="#475569">sub-agents fuse, rewrite, tune</text>
+<circle cx="315.5" cy="425.0" r="30" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="315.5" y="431.0" text-anchor="middle" font-size="18" font-weight="600" fill="#475569">5</text>
+<text x="269.5" y="411.0" text-anchor="end" font-size="16" font-weight="600" fill="#0f172a">Merge</text>
+<text x="269.5" y="431.0" text-anchor="end" font-size="13" fill="#475569">new base manifest, hosted one</text>
+<text x="269.5" y="449.0" text-anchor="end" font-size="13" fill="#475569">regenerated; whole-program bench</text>
+<circle cx="315.5" cy="235.0" r="30" fill="#1e293b" stroke="#1e293b" stroke-width="2"/>
+<text x="315.5" y="241.0" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">6</text>
+<text x="269.5" y="221.0" text-anchor="end" font-size="16" font-weight="600" fill="#0f172a">Gate</text>
+<text x="269.5" y="241.0" text-anchor="end" font-size="13" fill="#475569">kern test on every declared shape;</text>
+<text x="269.5" y="259.0" text-anchor="end" font-size="13" fill="#475569">no perf regression in the tail</text>
+<text x="480" y="324" text-anchor="middle" font-size="26" font-weight="700" fill="#0f172a">RSI loop</text>
+<text x="480" y="350" text-anchor="middle" font-size="13" fill="#64748b">each turn ships a new manifest</text>
+<text x="480" y="368" text-anchor="middle" font-size="13" fill="#64748b">and measures it on live traffic</text>
+<circle cx="44" cy="584" r="8" fill="#ea580c" stroke="#ea580c" stroke-width="2"/>
+<text x="60" y="589" font-size="13" fill="#475569">this change</text>
+<circle cx="44" cy="608" r="8" fill="#1e293b" stroke="#1e293b" stroke-width="2"/>
+<text x="60" y="613" font-size="13" fill="#475569">exists in kern</text>
+<circle cx="44" cy="632" r="8" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="60" y="637" font-size="13" fill="#475569">to build</text>
+</svg>

@@ -223,7 +223,9 @@ impl Runtime {
             }
             None => None,
         };
+        // Nothing pooled (fixed and host states only): no budget to fit.
         let chunks = match tokens {
+            _ if paged_bytes == 0 && slot_bytes == 0 => 0,
             Some(t) => chunks_for(&manifest, t, first_slots, chunk),
             None => fit_budget(&ctx, fixed_bytes, paged_bytes, slot_bytes * first_slots)? / chunk,
         };
@@ -232,7 +234,7 @@ impl Runtime {
 
         let mut states = BTreeMap::new();
         for (name, s) in &manifest.states {
-            if s.bytes_per_token == 0 && s.bytes_per_seq == 0 {
+            if s.is_owned() && s.bytes_per_token == 0 && s.bytes_per_seq == 0 {
                 let buf = alloc_vmm(&stream, dev, s.bytes, &format!("state `{name}`"))?;
                 states.insert(name.clone(), buf);
             }
@@ -266,10 +268,14 @@ impl Runtime {
             t1.elapsed(),
         );
         let resolution = resolved.iter().map(|(n, rk)| (n.clone(), rk.launch_modules())).collect();
-        let peer_names: BTreeSet<String> = peers.keys().cloned().collect();
-        let place = compile::Ranks { ranks: &ranks, peer_buffers: &peer_names };
-        let programs = compile::compile_programs(&manifest, &resolved, &buffers, &states, &place)?;
-        let scratch = resolved.into_values().flat_map(|rk| rk.scratch.into_values()).collect();
+        // A host state has no address until the host binds it, and every
+        // program bakes addresses in: compiling waits for `bind_host`.
+        let hosted = manifest.states.values().any(|s| !s.is_owned());
+        let programs = if hosted {
+            BTreeMap::new()
+        } else {
+            compile::compile(&manifest, &resolved, &buffers, &states, &ranks, &peers)?
+        };
 
         let provision = Provision { tokens: pool.pages_max() as u64 * page, seq_slots: pool.slots_max() as u64 };
         let remaps = Remaps::spawn(Arc::clone(&ctx), mapper)?;
@@ -293,7 +299,7 @@ impl Runtime {
             states,
             staging,
             programs,
-            scratch,
+            ops: resolved,
             resolution,
             n_modules: modules.len(),
             graphs: BTreeMap::new(),
@@ -304,6 +310,7 @@ impl Runtime {
             peers,
             imports: Vec::new(),
             compare: Default::default(),
+            joins: [join_event()?, join_event()?],
         };
         rt.zero_fresh(&initial)?;
         rt.stream.synchronize()?;
@@ -596,6 +603,17 @@ fn copy_rows(dst: &mut [u8], c: &weights::Copy) -> Result<()> {
         let at = dest + r * pitch;
         gather(c, (r * width) as u64, ((r + 1) * width) as u64, &mut dst[at..at + width])
     })
+}
+
+/// An event that only orders two streams: no timing, so recording it is a
+/// dependency edge and nothing more (also under stream capture).
+fn join_event() -> Result<sys::CUevent> {
+    let mut ev = std::ptr::null_mut();
+    cuda_check(
+        unsafe { sys::cuEventCreate(&mut ev, sys::CUevent_flags::CU_EVENT_DISABLE_TIMING as u32) },
+        "cuEventCreate",
+    )?;
+    Ok(ev)
 }
 
 fn fmt_groups(t: &kern_manifest::types::Topology) -> String {

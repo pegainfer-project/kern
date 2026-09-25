@@ -516,7 +516,7 @@ fn state_bytes_forms() {
     assert_err(v, "are exclusive");
     let mut v = base();
     v["states"]["kv"] = serde_json::json!({});
-    assert_err(v, "must be > 0");
+    assert_err(v, "/ host must be set");
     let mut v = base();
     v["states"]["kv"] = serde_json::json!({ "bytes": 4096, "align": 256 });
     let errs = check(v).expect_err("align is gone");
@@ -984,4 +984,67 @@ fn host_placement_is_immutable_and_rank_independent() {
     let mut v = base();
     v["buffers"]["x"]["placement"] = serde_json::json!("host");
     assert!(check(v).unwrap_err().to_string().contains("immutable weight"));
+}
+
+/// The base fixture with `kv` handed to the host: a paged KV view the host
+/// allocates, `[blocks, 64 tokens, 4 heads, 512]` in bf16.
+fn hosted() -> serde_json::Value {
+    let mut v = base();
+    v["states"]["kv"] = serde_json::json!({
+        "host": { "dtype": "bf16", "shape": [0, 64, 4, 512], "strides": [131072, 2048, 512, 1] }
+    });
+    v
+}
+
+#[test]
+fn host_state_verifies() {
+    let m = check(hosted()).unwrap();
+    assert_eq!((m.states["kv"].is_owned(), m.states["kv"].is_per_seq()), (false, false));
+}
+
+#[test]
+fn host_state_takes_no_sizes() {
+    let mut v = hosted();
+    v["states"]["kv"]["bytes_per_token"] = 4096.into();
+    assert_err(v, "a host state is sized by the host");
+}
+
+#[test]
+fn host_state_layout_is_well_formed() {
+    let mut v = hosted();
+    v["states"]["kv"]["host"]["strides"] = serde_json::json!([131072, 2048, 512]);
+    assert_err(v.clone(), "4 extents and 3 strides");
+    v["states"]["kv"]["host"] = serde_json::json!({ "dtype": "bf16", "shape": [0, 0, 4], "strides": [8, 4, 1] });
+    assert_err(v.clone(), "only the outermost extent may be 0");
+    v["states"]["kv"]["host"] = serde_json::json!({ "dtype": "bf16", "shape": [0, 4], "strides": [4, 0] });
+    assert_err(v, "a zero stride aliases elements");
+}
+
+#[test]
+fn host_state_is_not_indexed_by_a_domain() {
+    let mut v = hosted();
+    v["buffers"]["x"]["domain"] = serde_json::json!({ "index_into": "kv" });
+    assert_err(v, "`index_into` host state `kv`");
+}
+
+#[test]
+fn host_layout_admits_exactly_the_declared_layout() {
+    let h = HostTensor { dtype: DType::Bf16, shape: vec![0, 64, 4, 512], strides: vec![131072, 2048, 512, 1] };
+    let strides = [131072, 2048, 512, 1];
+    // Every block count spans `blocks` whole blocks of 64 * 4 * 512 bf16.
+    for blocks in [1u64, 2, 13, 4096] {
+        assert_eq!(h.admit(DType::Bf16, &[blocks, 64, 4, 512], &strides), Ok(blocks * 131072 * 2));
+    }
+    assert!(h.admit(DType::Bf16, &[0, 64, 4, 512], &strides).is_err());
+    assert!(h.admit(DType::F32, &[8, 64, 4, 512], &strides).is_err());
+    assert!(h.admit(DType::Bf16, &[8, 16, 4, 512], &strides).is_err());
+    assert!(h.admit(DType::Bf16, &[8, 64, 4, 512], &[131072, 512, 2048, 1]).is_err());
+    assert!(h.admit(DType::Bf16, &[8, 64, 4], &strides[..3]).is_err());
+}
+
+#[test]
+fn host_span_ends_at_the_last_element() {
+    // A padded page: 3 rows of 10 elements in rows 16 apart spans 2 * 16 + 10.
+    let h = HostTensor { dtype: DType::U8, shape: vec![0, 10], strides: vec![16, 1] };
+    assert_eq!((h.span(1), h.span(3)), (Some(10), Some(42)));
 }

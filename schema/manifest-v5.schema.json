@@ -951,6 +951,58 @@
         }
       ]
     },
+    "HostTensor": {
+      "additionalProperties": false,
+      "description": "The layout of a host-allocated state: a strided tensor over the host's memory. Only the outermost extent may be 0, the host's to choose (how many blocks it allocated); every other extent and every stride is fixed.",
+      "properties": {
+        "dtype": {
+          "$ref": "#/$defs/DType",
+          "description": "Element type, e.g. `\"bf16\"`."
+        },
+        "shape": {
+          "description": "Extents, outermost first; the first may be 0 (any count the host allocated), e.g. `[0, 64, 4, 512]`.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "strides": {
+          "description": "Element stride of each dimension, outermost first, e.g. `[131072, 2048, 512, 1]`.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "dtype",
+        "shape",
+        "strides"
+      ],
+      "type": "object"
+    },
     "Impl": {
       "additionalProperties": false,
       "description": "An op implementation: private scratch buffers and one or more launches in order.",
@@ -1590,6 +1642,17 @@
             }
           ],
           "description": "Bytes per token slot, scaled by the capacity — a paged KV cache, e.g. `147456`."
+        },
+        "host": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostTensor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{\"dtype\": \"bf16\", \"shape\": [0, 64, 4, 512], \"strides\": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set."
         }
       },
       "type": "object"

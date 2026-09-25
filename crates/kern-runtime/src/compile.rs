@@ -241,7 +241,7 @@ enum LaunchImpl {
 /// every call — contents are dead outside a single call).
 pub(crate) struct ResolvedOp {
     launches: Vec<LaunchImpl>,
-    pub(crate) scratch: BTreeMap<String, DeviceBuf>,
+    scratch: BTreeMap<String, DeviceBuf>,
 }
 
 impl ResolvedOp {
@@ -402,14 +402,14 @@ pub(crate) fn resolve_ops(
 
 /// What a call binds that a plain single-GPU manifest has none of: this
 /// rank's index per group, and which buffers hold peer addresses.
-pub(crate) struct Ranks<'a> {
-    pub(crate) ranks: &'a BTreeMap<String, u64>,
-    pub(crate) peer_buffers: &'a BTreeSet<String>,
+struct Ranks<'a> {
+    ranks: &'a BTreeMap<String, u64>,
+    peer_buffers: &'a BTreeSet<String>,
 }
 
 /// Lower every program's call list into a flat launch list. Every launch
 /// that receives a peer buffer is SASS-scanned for multicast TMA first.
-pub(crate) fn compile_programs(
+fn compile_programs(
     manifest: &Manifest,
     ops: &BTreeMap<String, ResolvedOp>,
     buffers: &BTreeMap<String, DeviceBuf>,
@@ -440,6 +440,22 @@ pub(crate) fn compile_programs(
     Ok(programs)
 }
 
+/// [`compile_programs`] with the placement read off the runtime's ranks and
+/// its peer buffers.
+pub(crate) fn compile(
+    manifest: &Manifest,
+    ops: &BTreeMap<String, ResolvedOp>,
+    buffers: &BTreeMap<String, DeviceBuf>,
+    states: &BTreeMap<String, DeviceBuf>,
+    ranks: &BTreeMap<String, u64>,
+    peers: &BTreeMap<String, crate::peers::PeerSlot>,
+) -> Result<BTreeMap<String, CompiledProgram>> {
+    let peer_buffers: BTreeSet<String> = peers.keys().cloned().collect();
+    compile_programs(manifest, ops, buffers, states, &Ranks { ranks, peer_buffers: &peer_buffers })
+}
+
+/// The impl-private scratch of every resolved op, whose addresses the
+/// compiled programs bake in: kept alive as long as they are.
 /// Error context locating one entry of a program's call list.
 fn call_ctx(i: usize, c: &Call) -> String {
     match &c.label {
