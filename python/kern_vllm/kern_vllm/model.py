@@ -20,6 +20,12 @@ A pure decode step is one `decode_batch` over vLLM's padded batch, so vLLM
 can capture it; padded rows have no slot and the null state page, which
 the kernels skip. A sequence's first chunk finds its state pages zeroed
 here: vLLM hands out pages without clearing them.
+
+Prefix caching runs in vLLM's `align` mode: a sequence holds a state page
+per block, and the page a step runs on is its last token's block. vLLM
+copies the state there from the previous block before the step (a whole
+page, `linear_attention_state_copy_func`), so the programs see one page per
+sequence, as without caching.
 """
 import functools
 import json
@@ -35,6 +41,7 @@ from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.abstract import MambaBase
+from vllm.model_executor.layers.mamba.mamba_utils import MambaStateCopyFuncCalculator
 from vllm.model_executor.models.interfaces import IsHybrid, SupportsMRoPE
 from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
 from vllm.v1.kv_cache_interface import FullAttentionSpec
@@ -76,6 +83,10 @@ class KernKV(nn.Module, AttentionLayerBase):
     def get_attn_backend(self):
         return KernAttentionBackend
 
+    @property
+    def view(self) -> torch.Tensor:
+        return self.kv_cache
+
     def get_kv_cache_spec(self, vllm_config: VllmConfig):
         return FullAttentionSpec(block_size=vllm_config.cache_config.block_size, num_kv_heads=self.num_kv_heads,
                                  head_size=self.head_size, dtype=self.dtype)
@@ -85,11 +96,12 @@ class KernState(nn.Module, MambaBase):
     def __init__(self, prefix: str, host: dict):
         super().__init__()
         self.bytes = host["shape"][1]
-        self.kv_cache = torch.tensor([])
+        self.kv_cache = (torch.tensor([]),)
         register(prefix, self)
 
-    def bind_kv_cache(self, kv_cache: torch.Tensor) -> None:
-        self.kv_cache = kv_cache
+    @property
+    def view(self) -> torch.Tensor:
+        return self.kv_cache[0]
 
     def get_state_shape(self):
         return ((self.bytes,),)
@@ -127,11 +139,6 @@ class Bytes:
 
 
 def host_region(t: torch.Tensor) -> tuple:
-    """A vLLM layer view as kern takes a host tensor: bytes views keep their
-    innermost byte axis, the singleton head / token axes of a state page go."""
-    if t.dtype == torch.int8:
-        t = t.flatten(1, -1) if t.dim() > 2 and t.shape[1] * t.shape[2] == 1 else t
-        return t.data_ptr(), "u8", list(t.shape), list(t.stride())
     name = {v: k for k, v in DTYPES.items()}[t.dtype]
     return t.data_ptr(), name, list(t.shape), list(t.stride())
 
@@ -154,6 +161,7 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         self.out = torch.zeros(tokens, width, dtype=torch.bfloat16, device="cuda")
         self.vocab = self.b["logits"].shape[1]
         self.decode_rows = resolve(m, m["programs"]["decode_batch"]["batch"]["groups"])
+        self.cache_config = vllm_config.cache_config
         self.bound = None
         self.rope_dims = vllm_config.model_config.mrope_num_dims if vllm_config.model_config.uses_mrope else 1
 
@@ -167,7 +175,7 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
 
     @classmethod
     def get_mamba_state_copy_func(cls):
-        raise NotImplementedError("kern state pages are not copied: prefix caching is off")
+        return MambaStateCopyFuncCalculator.linear_attention_state_copy_func()
 
     def get_mrope_input_positions(self, input_tokens, mm_features):
         """Text only: every M-RoPE channel is the token's position."""
@@ -183,19 +191,21 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         """Bind (again, when vLLM reallocated) the layers' caches."""
         assert not torch.cuda.is_current_stream_capturing(), "kern binds on an eager step, before capture"
         first = self.bound is None
-        self.rt.bind_host({f"{n}": host_region(self.layers[f"l{i}"].kv_cache) for n, i, _ in host_states(self.m)})
+        # vLLM settles the state block size after the model is built.
+        self.state_block = self.cache_config.mamba_block_size
+        self.rt.bind_host({n: host_region(self.layers[f"l{i}"].view) for n, i, _ in host_states(self.m)})
         for name, p in sorted(self.m["programs"].items()):
             if first and p.get("once"):
                 self.rt.run(name, {v: 1 for v in self.m["vars"]})
         self.state_names = [f"model.layers.{i}.linear_attn" for _, i, _ in state_pages(self.m)]
         self.state_layers = [self.layers[f"l{i}"] for _, i, _ in state_pages(self.m)]
-        self.bound = self.layers[next(iter(self.layers))].kv_cache
+        self.bound = self.layers[next(iter(self.layers))].view
 
     def forward(self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None, **_):
         n = input_ids.shape[0]
         positions = positions[0] if positions.dim() == 2 else positions
         meta = get_forward_context().attn_metadata
-        cache = self.layers[next(iter(self.layers))].kv_cache
+        cache = self.layers[next(iter(self.layers))].view
         if not meta or cache.numel() == 0:
             return self.out[:n]
         if self.bound is not cache:
@@ -217,18 +227,22 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
             self.run(stream, program, input_ids, positions, attn, lines, r0, r1, int(qsl[r0]), int(qsl[r1]))
         return self.out[:n]
 
+    def pages(self, s, r: int) -> torch.Tensor:
+        """The state page each row runs on: its last token's block."""
+        block = ((s.seq_lens[:r] - 1) // self.state_block).clamp(min=0)
+        return s.block_table_tensor[:r].gather(1, block[:, None].long())[:, 0]
+
     def lines(self, states, attn) -> torch.Tensor:
         """Each state layer's page per row; padded rows (no sequence) get the null page."""
         r = attn.num_reqs
         live = attn.seq_lens[:r] > 0
-        return torch.stack([torch.where(live, s.block_table_tensor[:r, 0], 0) for s in states])
+        return torch.stack([torch.where(live, self.pages(s, r), 0) for s in states])
 
     def zero_fresh(self, attn, states) -> None:
         r = attn.num_reqs
         fresh = attn.seq_lens[:r] == attn.query_start_loc[1 : r + 1] - attn.query_start_loc[:r]
         for layer, s in zip(self.state_layers, states):
-            pages = layer.kv_cache.flatten(1, -1)
-            pages.index_fill_(0, torch.where(fresh, s.block_table_tensor[:r, 0], 0).long(), 0)
+            layer.view.index_fill_(0, torch.where(fresh, self.pages(s, r), 0).long(), 0)
 
     def run(self, stream, program, input_ids, positions, attn, lines, r0, r1, t0, t1) -> None:
         rows, k = r1 - r0, t1 - t0
