@@ -253,8 +253,9 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         b["seq_lens"][:rows].copy_(attn.seq_lens[r0:r1])
         b["cu_seqlens_q"][: rows + 1].copy_(attn.query_start_loc[r0 : r1 + 1] - attn.query_start_loc[r0])
         b["cu_seqlens_q"][rows + 1 :].copy_(b["cu_seqlens_q"][rows].expand(b["cu_seqlens_q"].shape[0] - rows - 1))
-        table = attn.block_table_tensor[r0:r1]
-        b["block_table"][:rows, : table.shape[1]].copy_(table)
+        # vLLM pads its table past max_model_len; columns beyond the manifest's are never reached.
+        width = min(attn.block_table_tensor.shape[1], b["block_table"].shape[1])
+        b["block_table"][:rows, :width].copy_(attn.block_table_tensor[r0:r1, :width])
         b["gdn.line_index"][:, :rows].copy_(lines[:, r0:r1])
         self.rt.enqueue_after(program, {"tokens": k, "seqs": rows}, stream)
         self.out[t0:t1].copy_(b["hidden"][:k])
