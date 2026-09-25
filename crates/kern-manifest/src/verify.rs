@@ -5,7 +5,9 @@
 //! Checks:
 //!   1. schema_version
 //!   2. vars: max > 0
-//!   3. states: exactly one of bytes_per_token / bytes / bytes_per_seq is non-zero
+//!   3. states: exactly one of bytes_per_token / bytes / bytes_per_seq is non-zero,
+//!      or none of them and a well-formed `host` layout; a host state is never
+//!      exported (`of`) nor indexed by a domain (the host owns its indices)
 //!   4. buffers: shapes resolve, byte sizes don't overflow at var upper
 //!      bounds; a declared domain is well-formed (bound kinds vs dtype,
 //!      `index_into` resolves, min <= max at the var corners)
@@ -212,10 +214,16 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
     // 3. states
     for (name, st) in &m.states {
         let set = [st.bytes_per_token, st.bytes, st.bytes_per_seq].iter().filter(|&&b| b > 0).count();
-        match set {
-            0 => errs.push(format!("state `{name}`: one of bytes_per_token / bytes / bytes_per_seq must be > 0")),
-            1 => {}
-            _ => errs.push(format!("state `{name}`: bytes_per_token, bytes and bytes_per_seq are exclusive")),
+        match (&st.host, set) {
+            (Some(h), 0) => check_host_tensor(name, h, &mut errs),
+            (Some(_), _) => errs.push(format!(
+                "state `{name}`: a host state is sized by the host; bytes_per_token / bytes / bytes_per_seq must be absent"
+            )),
+            (None, 0) => {
+                errs.push(format!("state `{name}`: one of bytes_per_token / bytes / bytes_per_seq / host must be set"))
+            }
+            (None, 1) => {}
+            (None, _) => errs.push(format!("state `{name}`: bytes_per_token, bytes and bytes_per_seq are exclusive")),
         }
     }
 
@@ -363,8 +371,13 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             errs.push(format!("{ctx}: `of` buffer `{of}` is not exported"));
                         }
                     }
-                    (None, Some(_)) => {
+                    (None, Some(st)) => {
                         used_states.insert(of.clone());
+                        if !st.is_owned() {
+                            errs.push(format!(
+                                "{ctx}: `of` state `{of}` is the host's; only runtime memory is exported"
+                            ));
+                        }
                     }
                     (None, None) => errs.push(format!("{ctx}: `of` unknown buffer/state `{of}`")),
                 },
@@ -948,6 +961,30 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
     errs
 }
 
+/// A host tensor's layout is well-formed: as many strides as extents, at
+/// least one of each, only the outermost extent open, no zero stride and a
+/// span that fits in 64 bits for a single outermost row.
+fn check_host_tensor(name: &str, h: &HostTensor, errs: &mut Vec<String>) {
+    let ctx = format!("state `{name}`: host");
+    if h.shape.is_empty() || h.shape.len() != h.strides.len() {
+        errs.push(format!(
+            "{ctx}: {} extents and {} strides; want as many of each, at least one",
+            h.shape.len(),
+            h.strides.len()
+        ));
+        return;
+    }
+    if h.shape.iter().skip(1).any(|&n| n == 0) {
+        errs.push(format!("{ctx}: shape {:?}: only the outermost extent may be 0 (the host's count)", h.shape));
+    }
+    if h.strides.contains(&0) {
+        errs.push(format!("{ctx}: strides {:?}: a zero stride aliases elements", h.strides));
+    }
+    if h.span(1).is_none() {
+        errs.push(format!("{ctx}: shape {:?} with strides {:?} overflows 64 bits", h.shape, h.strides));
+    }
+}
+
 fn scalar_fits(st: ScalarType, v: u64) -> bool {
     match st {
         ScalarType::I32 => v <= i32::MAX as u64,
@@ -992,6 +1029,9 @@ fn check_domain(
         match (m.buffers.contains_key(t), m.states.contains_key(t)) {
             (false, false) => errs.push(format!("{ctx}: `index_into` unknown buffer/state `{t}`")),
             (true, true) => errs.push(format!("{ctx}: `index_into` `{t}` is both a buffer and a state")),
+            (false, true) if !m.states[t].is_owned() => errs.push(format!(
+                "{ctx}: `index_into` host state `{t}`: the host allocates it and owns its indices, the runtime has no bound for them"
+            )),
             (false, true) if m.states[t].is_per_seq() && !m.states[t].bytes_per_seq.is_multiple_of(d.stride.max(1)) => {
                 errs.push(format!(
                     "{ctx}: `index_into` per-sequence state `{t}` in lines of {} bytes, which do not divide its {} bytes per sequence",

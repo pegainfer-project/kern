@@ -32,6 +32,7 @@ mod device;
 mod error;
 mod exec;
 mod harness;
+mod host;
 mod host_weights;
 mod lease;
 mod load;
@@ -57,6 +58,7 @@ pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use harness::Scratch;
+pub use host::HostRegion;
 pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
 use lease::Remaps;
@@ -142,12 +144,13 @@ pub struct Runtime {
     /// call); through page-locked staging it is a true async DMA. The pinned
     /// slice's event guards reuse across steps.
     staging: BTreeMap<String, PinnedHostSlice<u8>>,
-    /// Programs lowered to flat launch lists at load.
+    /// Programs lowered to flat launch lists at load, or at
+    /// [`Runtime::bind_host`] for a manifest with host states.
     programs: BTreeMap<String, CompiledProgram>,
-    /// Owners of the impl-private scratch allocations whose pointers are
-    /// baked into `programs`.
-    #[allow(dead_code)]
-    scratch: Vec<DeviceBuf>,
+    /// The resolved ops `programs` were lowered from: they own the
+    /// impl-private scratch whose pointers are baked in, and a manifest with
+    /// host states lowers them again at every [`Runtime::bind_host`].
+    ops: BTreeMap<String, compile::ResolvedOp>,
     /// Per kernel: the module each impl step resolved to (introspection).
     resolution: Vec<(String, Vec<String>)>,
     n_modules: usize,
@@ -172,6 +175,10 @@ pub struct Runtime {
     imports: Vec<DeviceBuf>,
     /// The harness's comparison kernels, loaded on first use.
     compare: compare::CompareCell,
+    /// The two edges between a host's stream and this one
+    /// ([`Runtime::enqueue_after`]): host work before the program, the
+    /// program before host work after it.
+    joins: [sys::CUevent; 2],
 }
 
 impl Drop for Runtime {
@@ -184,7 +191,7 @@ impl Drop for Runtime {
         // touch them when it unmaps.
         let _ = self.stream.synchronize();
         let _ = self.xfer.synchronize();
-        for (_, ev) in self.parking.drain(..) {
+        for ev in self.parking.drain(..).map(|(_, ev)| ev).chain(self.joins) {
             unsafe { sys::cuEventDestroy_v2(ev) };
         }
         self.remaps.stop();

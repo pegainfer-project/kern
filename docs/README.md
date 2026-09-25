@@ -28,6 +28,7 @@ The stable, flat paths below are grouped here by purpose.
 - [Manifest format and verifier](manifest.md)
 - [Runtime](runtime.md)
 - [Serving](serve.md)
+- [kern inside vLLM: a manifest as vLLM's model](vllm.md)
 - [`kern test`](test.md)
 - [`kern bench`](bench.md)
 - [Speculative decode](spec-decode.md)
@@ -51,6 +52,7 @@ The stable, flat paths below are grouped here by purpose.
 - [Roadmap](roadmap.md)
 - [Lessons](lessons.md)
 - [Qwen3.8 bring-up](qwen38-bringup.md)
+- [Qwen3.8 hosted manifest for vLLM](qwen38-vllm.md)
 - [Qwen3.8 bring-up task](qwen38-bringup-prompt.md)
 - [`qwen38/`](qwen38/) contains the raw inputs and results referenced by the
   bring-up record.

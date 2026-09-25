@@ -31,7 +31,10 @@ use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
 impl Runtime {
-    fn require_host_weights(&self) -> Result<()> {
+    fn require_ready(&self) -> Result<()> {
+        if self.awaits_host() {
+            bail!(Api, "the manifest's host states are not bound; bind_host before executing programs");
+        }
         if !self.host_weights_ready {
             bail!(Api, "host weights must be bound with load_weights before executing programs");
         }
@@ -57,6 +60,7 @@ impl Runtime {
     /// values on first use; any other launch by launch (see
     /// [`Runtime::enqueue`] for the ordering ranks need).
     pub fn issue(&mut self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+        self.require_ready()?;
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
@@ -82,8 +86,8 @@ impl Runtime {
     /// waiting. Ranks whose kernels wait on each other (an EP dispatch, a
     /// tray collective) must all be issued before any is waited for:
     /// `enqueue` each, then [`Runtime::synchronize`] each.
-    fn enqueue(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
-        self.require_host_weights()?;
+    pub(crate) fn enqueue(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
+        self.require_ready()?;
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
@@ -100,7 +104,7 @@ impl Runtime {
     /// outside the graph and `run_captured` replays the whole call list
     /// with one launch.
     pub fn capture(&mut self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
-        self.require_host_weights()?;
+        self.require_ready()?;
         let Some(prog) = self.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
@@ -185,7 +189,7 @@ impl Runtime {
     /// Launch a previously captured program's graph without waiting (see
     /// [`Runtime::enqueue`]).
     fn enqueue_captured(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
-        self.require_host_weights()?;
+        self.require_ready()?;
         let exec = self.graph(program, vars)?;
         self.ctx.bind_to_thread()?;
         cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")

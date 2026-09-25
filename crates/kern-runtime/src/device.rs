@@ -95,6 +95,8 @@ enum Backing {
     Vmm(Vmm),
     /// A pooled state's arena, owned by the remap thread's [`Mapper`].
     Reserved,
+    /// A host state: the host allocated it and frees it, after this runtime.
+    Borrowed,
 }
 
 /// A physical allocation mapped at a reserved address; unmapped, freed and
@@ -334,6 +336,11 @@ impl DeviceBuf {
     /// bytes reserved there; the arena behind it is the [`Mapper`]'s.
     pub(crate) fn reserved(stream: &Arc<CudaStream>, ptr: u64, bytes: u64, span: u64) -> DeviceBuf {
         DeviceBuf { ptr, bytes, span, stream: stream.clone(), backing: Backing::Reserved }
+    }
+
+    /// A host state's memory at `ptr`, `bytes` long.
+    pub(crate) fn borrowed(stream: &Arc<CudaStream>, ptr: u64, bytes: u64) -> DeviceBuf {
+        DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Borrowed }
     }
 
     /// What a peer maps to reach this allocation: a fabric handle when it

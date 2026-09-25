@@ -1,0 +1,19 @@
+[package]
+name = "kern-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "kern"
+crate-type = ["cdylib"]
+
+[dependencies]
+kern-manifest.workspace = true
+kern-runtime.workspace = true
+
+pyo3 = { version = "=0.29.2", features = ["extension-module", "abi3-py310"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

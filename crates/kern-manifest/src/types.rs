@@ -252,12 +252,72 @@ pub struct State {
     /// Bytes per sequence slot, one slot per live sequence — a recurrent conv/SSM state, e.g. `154140672`. The runtime starts with `seqs.max + 2` slots — slot 0 (never leased; kernels may read line index 0 as null), one per sequence, one for a batched caller's padding — and grows them out of the state budget as checkpoints keep the states of sleeping sequences.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub bytes_per_seq: u64,
+    /// Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{"dtype": "bf16", "shape": [0, 64, 4, 512], "strides": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostTensor>,
 }
 
 impl State {
     /// Whether this state is one slot per sequence.
     pub fn is_per_seq(&self) -> bool {
         self.bytes_per_seq > 0
+    }
+
+    /// Whether the runtime allocates this state (every state but a host one).
+    pub fn is_owned(&self) -> bool {
+        self.host.is_none()
+    }
+}
+
+/// The layout of a host-allocated state: a strided tensor over the host's memory. Only the outermost extent may be 0, the host's to choose (how many blocks it allocated); every other extent and every stride is fixed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HostTensor {
+    /// Element type, e.g. `"bf16"`.
+    pub dtype: DType,
+    /// Extents, outermost first; the first may be 0 (any count the host allocated), e.g. `[0, 64, 4, 512]`.
+    pub shape: Vec<u64>,
+    /// Element stride of each dimension, outermost first, e.g. `[131072, 2048, 512, 1]`.
+    pub strides: Vec<u64>,
+}
+
+impl HostTensor {
+    /// Bytes spanned by a tensor of this layout whose outermost extent is
+    /// `outer`: the last element's offset plus one element.
+    pub fn span(&self, outer: u64) -> Option<u64> {
+        self.shape
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| if i == 0 && n == 0 { outer } else { n })
+            .zip(&self.strides)
+            .try_fold(0u64, |acc, (n, &s)| n.checked_sub(1)?.checked_mul(s)?.checked_add(acc))?
+            .checked_add(1)?
+            .checked_mul(self.dtype.bytes())
+    }
+
+    /// The bytes a host tensor of `dtype`, `shape` and element `strides`
+    /// spans, if it is this layout: same dtype, same rank, same strides,
+    /// every fixed extent equal and the open outermost one at least 1.
+    pub fn admit(&self, dtype: DType, shape: &[u64], strides: &[u64]) -> Result<u64, String> {
+        let want = |got: String| format!("host tensor {got} is not the declared {}", self.describe());
+        if dtype != self.dtype {
+            return Err(want(format!("of {dtype}")));
+        }
+        if shape.len() != self.shape.len() || strides.len() != self.strides.len() {
+            return Err(want(format!("of rank {}/{}", shape.len(), strides.len())));
+        }
+        let fits = shape.iter().zip(&self.shape).enumerate().all(|(i, (&got, &decl))| match (i, decl) {
+            (0, 0) => got >= 1,
+            _ => got == decl,
+        });
+        if !fits || strides != self.strides.as_slice() {
+            return Err(want(format!("shape {shape:?} strides {strides:?}")));
+        }
+        self.span(shape[0]).ok_or_else(|| want(format!("shape {shape:?}: span overflows 64 bits")))
+    }
+
+    fn describe(&self) -> String {
+        format!("{} shape {:?} strides {:?}", self.dtype, self.shape, self.strides)
     }
 }
 

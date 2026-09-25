@@ -7,12 +7,14 @@ members = [
     "crates/kern-test",
     "crates/kern-run",
     "crates/kern-serve",
+    "crates/kern-py",
     "tools/dsv41/attention/ar_trace",
     "tools/dsv41/moe/runtime_replay",
 ]
 # A bare `cargo build` / `test` / `clippy` is the runtime: kern-serve pulls the
 # pegainfer/vLLM serving stack (protoc, libssl, ~500 crates) and the dsv41
-# harnesses need a GPU, so both are built by name.
+# harnesses need a GPU, so both are built by name. kern-py is a Python
+# extension, built by maturin where a Python is.
 default-members = ["crates/kern-manifest", "crates/kern-pool", "crates/kern-runtime", "crates/kern-test", "crates/kern-run"]
 
 [workspace.package]
