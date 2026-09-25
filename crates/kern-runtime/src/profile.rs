@@ -413,8 +413,13 @@ impl Probe {
         // a large manifest would not fit beside them. An exported carry is
         // not this rank's to restore either: peers write into it on their
         // own clock, and the barrier epochs inside it must only advance.
+        // A paged state is only appended to: a run writes the rows it adds,
+        // as a function of what is restored, so a replay rewrites them with
+        // the same bytes. Snapshotting it would double the largest
+        // allocation, a long context's KV.
         let n_calls = rt.manifest.programs[program].calls.len();
         let (written, states) = declared_writes(rt, program, 0..n_calls);
+        let states = states.into_iter().filter(|s| rt.manifest.states[s].bytes_per_token == 0).collect();
         let carries = written
             .into_iter()
             .filter(|b| {
