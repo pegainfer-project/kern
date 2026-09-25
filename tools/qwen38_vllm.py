@@ -19,7 +19,10 @@ prefill conv, which baked the line stride in and is replaced by
 `gdn_conv_fwd`, pinned by sha; its source and cubin are published with
 the manifest in `Pegainfer/kern-qwen38-sm103` (`sources/`, `cubins/`).
 
-    python tools/qwen38_vllm.py [--input examples/qwen3.8-27b.json] --output qwen3.8-27b-vllm.json
+    python tools/qwen38_vllm.py [--input examples/qwen3.8-27b.json] --output qwen3.8-27b-vllm.json [--sampled]
+
+`--sampled` keeps the base's head and sampling after the final norm: vLLM
+never runs it, `kern test` gates on it.
 """
 import argparse
 import json
@@ -221,6 +224,20 @@ def hosted(m):
     return m
 
 
+def sampled(m, base):
+    """Hands back the base's head after the final norm, reading `hidden`, so
+    `kern test` gates the hosted programs against the base manifest."""
+    def tail(p):
+        calls = base["programs"][p]["calls"]
+        end = next(i for i, c in enumerate(calls) if c["label"].endswith(".final_norm"))
+        return [{**c, "args": [{"buf": "hidden"} if a == {"buf": "x"} else a for a in c["args"]]}
+                for c in calls[end + 1:]]
+    programs = {p: {**m["programs"][p], "calls": m["programs"][p]["calls"] + tail(p)}
+                for p in ("prefill", "decode_batch")}
+    return {**m, "programs": {**m["programs"], **programs},
+            "buffers": m["buffers"] | {k: base["buffers"][k] for k in ("next_token", "final_x")}}
+
+
 def prune(m):
     """Drop what no program refers to any more: ops, modules, buffers, and
     the `load` calls filling only those buffers."""
@@ -242,8 +259,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--input", type=pathlib.Path, default=pathlib.Path("examples/qwen3.8-27b.json"))
     p.add_argument("--output", type=pathlib.Path, required=True)
+    p.add_argument("--sampled", action="store_true", help="keep the base's head and sampling, for `kern test`")
     args = p.parse_args()
-    m = prune(fused_in_proj(hosted(resolve_constants(json.loads(args.input.read_text())))))
+    base = resolve_constants(json.loads(args.input.read_text()))
+    m = fused_in_proj(hosted(base))
+    m = prune(sampled(m, base) if args.sampled else m)
     args.output.write_text(json.dumps(name_constants(normalize(m)), indent=1) + "\n")
 
 
