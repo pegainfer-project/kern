@@ -37,6 +37,7 @@ KV_HEADS, HEAD_DIM, BLOCK = 4, 256, 64
 KV_TOKEN_BYTES = KV_HEADS * 2 * HEAD_DIM * 2
 KV_BLOCK_BYTES = BLOCK * KV_TOKEN_BYTES
 GDN_DIM, GDN_WIDTH, QKVZ_WIDTH = 10240, 4, 16384
+QKVZBA_WIDTH = QKVZ_WIDTH + 96
 HIDDEN, MLP_WIDTH = 5120, 17408
 GDN_LINE_BYTES = (GDN_WIDTH - 1) * GDN_DIM * 2 + 48 * 128 * 128 * 4
 PAGE_BYTES = -(-GDN_LINE_BYTES // KV_BLOCK_BYTES) * KV_BLOCK_BYTES
@@ -129,8 +130,8 @@ def wide(call):
     layer = call["label"].rsplit(".", 1)[0]
     match call["op"]:
         case "gemm16_in_proj":
-            return [gemm(f"{layer}.in_proj_qkvz", a[0], a[1], a[3], QKVZ_WIDTH, HIDDEN),
-                    gemm(f"{layer}.in_proj_ba", a[0], a[2], a[4], 96, HIDDEN)]
+            return [gemm(f"{layer}.in_proj_qkvzba", a[0], {"buf": in_proj(layer_of(call))}, {"buf": "qkvzba"},
+                         QKVZBA_WIDTH, HIDDEN)]
         case "gemm16_gate_up_silu":
             return [gemm(f"{layer}.gate_up", a[0], a[1], {"buf": "gate_up"}, 2 * MLP_WIDTH, HIDDEN),
                     {"label": f"{layer}.silu_mul", "op": "silu_mul", "args": [a[2], {"buf": "gate_up"}]}]
@@ -140,6 +141,44 @@ def wide(call):
             return [gemm(call["label"], a[0], a[1], a[2], HIDDEN, 6144)]
         case _:
             return [call]
+
+
+def in_proj(layer):
+    return f"model.layers.{layer}.linear_attn.in_proj_qkvzba.weight"
+
+
+def fused_in_proj(m):
+    """One weight per GDN layer for qkvz and ba, the four checkpoint tensors
+    stacked. Decode reads it in one gemm into `qkvzba` rows (`wide`), and
+    the conv and step kernels take that row stride, `ba` at its column
+    16384; a small separate ba gemm is a launch and a tail for 1 MB. Prefill
+    keeps its two gemms, over the two row ranges of the same weight."""
+    qkvz = lambda l: f"model.layers.{l}.linear_attn.in_proj_qkvz.weight"
+    ba = lambda l: f"model.layers.{l}.linear_attn.in_proj_ba.weight"
+    moved = {qkvz(l): {"buf": in_proj(l)} for l in GDN_LAYERS} | \
+            {ba(l): {"buf": in_proj(l), "offset": QKVZ_WIDTH * HIDDEN * 2} for l in GDN_LAYERS}
+    arg = lambda x: moved.get(x.get("buf"), x)
+    step = {"gdn_conv": {0: {"buf": "qkvzba"}},
+            "gdn_step": {0: {"buf": "qkvzba"}, 1: {"buf": "qkvzba", "offset": QKVZ_WIDTH * 2}}}
+    call = lambda c: {**c, "args": [step.get(c["op"], {}).get(i, arg(x)) for i, x in enumerate(c["args"])]}
+    strides = {"gdn_conv": {5: QKVZ_WIDTH}, "gdn_step": {10: QKVZ_WIDTH, 11: 96}}
+
+    def restrided(name, op):
+        at = strides.get(name)
+        if not at:
+            return op
+        (launch,) = op["impl"]["launches"]
+        assert all(launch["args"][i] == {"i32": old} for i, old in at.items()), f"{name}: row strides moved"
+        args = [{"i32": QKVZBA_WIDTH} if i in at else x for i, x in enumerate(launch["args"])]
+        return {**op, "impl": {**op["impl"], "launches": [{**launch, "args": args}]}}
+
+    b = m["buffers"]
+    return {**m,
+            "ops": {k: restrided(k, v) for k, v in m["ops"].items()},
+            "programs": {k: {**p, "calls": [call(c) for c in p["calls"]]} for k, p in m["programs"].items()},
+            "buffers": b | {"qkvzba": {"dtype": "bf16", "shape": ["tokens", QKVZBA_WIDTH], "kind": "workspace"}} | {
+                in_proj(l): {**b[qkvz(l)], "shape": [QKVZBA_WIDTH, HIDDEN], "bind": b[qkvz(l)]["bind"] + b[ba(l)]["bind"]}
+                for l in GDN_LAYERS}}
 
 
 def headless(calls):
@@ -204,7 +243,7 @@ def main():
     p.add_argument("--input", type=pathlib.Path, default=pathlib.Path("examples/qwen3.8-27b.json"))
     p.add_argument("--output", type=pathlib.Path, required=True)
     args = p.parse_args()
-    m = prune(hosted(resolve_constants(json.loads(args.input.read_text()))))
+    m = prune(fused_in_proj(hosted(resolve_constants(json.loads(args.input.read_text())))))
     args.output.write_text(json.dumps(name_constants(normalize(m)), indent=1) + "\n")
 
 
