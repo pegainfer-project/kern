@@ -3,7 +3,10 @@
 Rewrites `examples/qwen3.8-27b.json` into a manifest a vLLM model runner
 drives (`python/kern_vllm`): the KV cache and the GDN states become host
 states, one per layer, laid out the way vLLM's hybrid allocator lays them
-out, and the programs stop at the hidden states, since vLLM samples.
+out, and the programs stop at the hidden states, since vLLM samples. The
+tables index them as vLLM's ids do: 64-token blocks of every attention
+layer, one page per sequence of every GDN layer, so a tool that is its own
+host (`kern bench`) can provision them.
 
 vLLM gives every layer of a hybrid model one page per block, the same size
 for the attention and the GDN groups: a GDN line (conv [3][10240] bf16,
@@ -166,9 +169,12 @@ def hosted(m):
             {"var": "seqs"}, {"i32": 248320}, {"i32": 5120}]}]},
     }
     b = m["buffers"]
-    unindexed = {k: {kk: vv for kk, vv in b[k].items() if kk != "domain"}
-                 for k in ("slot_mapping", "block_table", "gdn.line_index")}
-    m["buffers"] = {k: v for k, v in b.items() if k != "next_token"} | unindexed | {
+    kv, gdn = f"kv.l{ATTN_LAYERS[0]}", f"gdn.l{GDN_LAYERS[0]}"
+    ids = {"slot_mapping": {"index_into": kv},
+           "block_table": {"index_into": kv, "stride": BLOCK},
+           "gdn.line_index": {"index_into": gdn, "stride": PAGE_BYTES}}
+    indexed = {k: {**b[k], "domain": d} for k, d in ids.items()}
+    m["buffers"] = {k: v for k, v in b.items() if k != "next_token"} | indexed | {
         "hidden": {"dtype": "bf16", "shape": ["tokens", 5120], "kind": "output"},
         "head_in": {"dtype": "bf16", "shape": ["seqs", 5120], "kind": "input"},
         "logits": {**b["logits"], "kind": "output"},

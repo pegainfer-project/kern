@@ -51,10 +51,16 @@ live traffic:
 6. **Gate.** `kern test` covers every shape the manifest declares, not only
    the frequent ones: agents tuned on a histogram tend to regress the tail.
 
-Serving (1) is what this change adds. Locate and gate reuse `kern bench` and
-`kern test`; sampling, the agents and merging are not built yet. The shape
-distribution is also not fixed: a faster prefill changes how vLLM batches, so
-each turn samples again, not reusing the last histogram.
+Serve, sample, locate and gate exist; the agents and merging are not built
+yet. With `KERN_TRACE=<dir>` the plugin writes one JSON line per step
+(`kern_vllm/trace.py`, about 0.2% of a step's CPU time).
+`python -m kern_vllm.workload <trace>` buckets the steps into a weighted
+`kern bench` workload, and `kern bench` runs the served manifest itself
+(`Verified::self_hosted`) and prices the traffic in GPU seconds. On a
+5-minute Poisson run (2026-09-26, one GB300) the bench accounts for 294 of
+the 308 s the GPU was busy. The shape distribution is also not fixed: a
+faster prefill changes how vLLM batches, so each turn samples again, not
+reusing the last histogram.
 
 State as of 2026-09-25, Qwen3.8-27B on one GB300, vLLM `e97573215`:
 

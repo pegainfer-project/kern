@@ -1652,7 +1652,7 @@
               "type": "null"
             }
           ],
-          "description": "Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{\"dtype\": \"bf16\", \"shape\": [0, 64, 4, 512], \"strides\": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set."
+          "description": "Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{\"dtype\": \"bf16\", \"shape\": [0, 64, 4, 512], \"strides\": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set. Inputs whose domain `index_into`s it declare the host's ids: a page table (`stride` tokens per block) or a line table (`stride` bytes per line, one line per block), shared by every host state of the same layout."
         }
       },
       "type": "object"

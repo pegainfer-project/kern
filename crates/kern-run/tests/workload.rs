@@ -33,15 +33,28 @@ fn a_sweep_is_the_cross_product_of_its_axes() {
 }
 
 #[test]
-fn a_shape_asked_for_twice_is_one_shape() {
+fn a_shape_asked_for_twice_is_one_shape_with_both_weights() {
     let w = Workload::parse(
         "samples = 12\nseed = 1\n\
          [[sweep]]\nrows = [1]\ncontext = [8, 16]\n\
          [[sweep]]\nrows = [1]\ncontext = [16, 32]\n",
     )
     .unwrap();
-    let labels: Vec<String> = w.shapes().iter().map(|s| s.label()).collect();
-    assert_eq!(labels, ["g1-r1-kv8", "g1-r1-kv16", "g1-r1-kv32"]);
+    let shapes: Vec<(String, u64)> = w.shapes().iter().map(|s| (s.label(), s.weight)).collect();
+    assert_eq!(shapes, [("g1-r1-kv8".into(), 1), ("g1-r1-kv16".into(), 2), ("g1-r1-kv32".into(), 1)]);
+}
+
+#[test]
+fn a_weight_counts_calls_of_every_shape_in_its_sweep() {
+    let w = Workload::parse(
+        "samples = 12\nseed = 1\n\
+         [[sweep]]\ngroups = [1, 2]\nrows = [1]\ncontext = [8]\nweight = 40\n\
+         [[sweep]]\ngroups = [2]\nrows = [1]\ncontext = [8]\nweight = 2\n",
+    )
+    .unwrap();
+    let shapes: Vec<(String, u64)> = w.shapes().iter().map(|s| (s.label(), s.weight)).collect();
+    assert_eq!(shapes, [("g1-r1-kv8".into(), 40), ("g2-r1-kv8".into(), 42)]);
+    assert!(Workload::parse("samples = 12\nseed = 1\n[[sweep]]\nrows = [1]\ncontext = [8]\nweight = 0\n").is_err());
 }
 
 #[test]

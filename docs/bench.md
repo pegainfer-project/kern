@@ -60,6 +60,21 @@ list instead of a number, meaning one length per sequence; it pairs
 only with the group count it has lengths for, which must be one of the
 sweep's `groups`.
 
+A sweep may also say `weight = <calls>`: how many calls of each of its
+shapes the traffic being modeled makes (default 1; a shape repeated across
+sweeps sums its weights). `python -m kern_vllm.workload <trace>` writes one
+such sweep per bucket of a vLLM step trace. After the last scenario the
+report prices the workload: every shape once, at the fastest program that
+takes it, times its weight, and that time by op:
+
+```
+cost      <seconds> · <calls> calls[ · <n> dropped] · <op> <share> · … · +<n> more
+```
+
+It is the GPU time the modeled traffic costs on this manifest, the number
+an optimization is judged by. Shapes the manifest drops are counted
+beside it, not priced.
+
 A cross product is the point. On Qwen3-4B the same 2,048-row chunk is
 31% matrix multiply and 47% attention over an empty cache, and 2% matrix
 multiply and 96% attention over 32k of it (the `mix` line, GB300,

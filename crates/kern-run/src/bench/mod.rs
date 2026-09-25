@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{Config, Target};
 use crate::{le_bytes_i32, Vars};
-use workload::{Plan, Scenario, Workload};
+use workload::{Plan, Scenario, Shape, Workload};
 
 /// The report schema. Readers check it before they read anything else.
 const VERSION: u32 = 2;
@@ -138,6 +138,26 @@ fn mix(calls: &[(String, f64)]) -> Vec<(String, f64)> {
         by.into_iter().map(|(op, us)| (op.to_string(), if total > 0. { us / total } else { 0. })).collect();
     v.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     v
+}
+
+/// What the workload's traffic costs on this manifest: every shape once,
+/// at the fastest program that takes it, times its weight, in µs; and
+/// that time's share by op. `runs` is (shape, program p50 µs, op shares)
+/// per scenario.
+fn cost(runs: &[(Shape, f64, Vec<(String, f64)>)]) -> (f64, Vec<(String, f64)>) {
+    let mut fastest: BTreeMap<String, &(Shape, f64, Vec<(String, f64)>)> = BTreeMap::new();
+    for r in runs {
+        let e = fastest.entry(r.0.label()).or_insert(r);
+        if r.1 < e.1 {
+            *e = r;
+        }
+    }
+    let total = fastest.values().map(|(s, us, _)| s.weight as f64 * us).sum();
+    let by_op: Vec<(String, f64)> = fastest
+        .values()
+        .flat_map(|(s, us, shares)| shares.iter().map(move |(op, f)| (op.clone(), s.weight as f64 * us * f)))
+        .collect();
+    (total, mix(&by_op))
 }
 
 fn series(v: Vec<f64>) -> Value {
@@ -554,7 +574,7 @@ impl Bench {
     /// One scenario end to end on every rank: measure, say, record. The
     /// terminal shows the slowest rank, which is what a step waits for;
     /// the report keeps every rank.
-    fn scenario(&mut self, s: &Scenario) -> Result<Vec<Value>> {
+    fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, f64, Vec<(String, f64)>)> {
         let started = Instant::now();
         say("scenario", scenario_line(s, self.protocol.rows.max as usize));
         let (p, corpus, samples, isolate) = (&self.protocol, &self.corpus, self.samples, self.isolate);
@@ -570,12 +590,14 @@ impl Bench {
         timed("program", program_line(&stats(&slow.program.graph_us), calls.len()) + &ranks, started);
         let attributed: Vec<(String, f64)> =
             calls.iter().zip(&slow.program.attributed_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
-        say("mix", mix_line(&mix(&attributed)));
+        let shares = mix(&attributed);
+        say("mix", mix_line(&shares));
         if let Some(t) = slow.isolate_s {
             println!("{}", row("isolate", format!("{} cases · outputs match", slow.cases.len()), Some(t as f32)));
         }
         let elapsed_s = started.elapsed().as_secs_f64();
-        Ok(measured.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect())
+        let p50 = p50(slow);
+        Ok((measured.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), p50, shares))
     }
 }
 
@@ -591,8 +613,10 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     let inputs = crate::Inputs::resolve(given, cfg, target)?;
     let w = Workload::read(&o.workload)?;
     let json_bytes = std::fs::read(&inputs.manifest)?;
-    let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?;
-    let protocol = Protocol::check(&m)?;
+    // A vLLM manifest runs as vLLM runs it: bench is its host, and hands
+    // the host states to the runtime in their declared layouts.
+    let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?.self_hosted()?;
+    let protocol = Protocol::check_unsampled(&m)?;
     let plan = Plan::check(&w, &protocol, kern_pool::page_unit(&m) as usize)?;
     let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.isolate)?;
     bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
@@ -628,11 +652,23 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     report["calibration_before"] = before;
     write(&o.out, &report)?;
 
+    let mut runs = Vec::new();
     for s in &plan.scenarios {
-        let records = bench.scenario(s)?;
+        let (records, p50, shares) = bench.scenario(s)?;
         report["scenarios"].as_array_mut().unwrap().extend(records);
         write(&o.out, &report)?;
+        runs.push((s.shape.clone(), p50, shares));
     }
+    let (total_us, by_op) = cost(&runs);
+    let calls: u64 = w.shapes().iter().map(|s| s.weight).sum();
+    let dropped: u64 = plan.dropped.iter().map(|d| d.weight).sum();
+    let unpriced = match dropped {
+        0 => String::new(),
+        n => format!(" · {n} dropped"),
+    };
+    say("cost", format!("{:.3} s · {} calls{unpriced} · {}", total_us / 1e6, calls - dropped, mix_line(&by_op)));
+    report["cost"] = json!({"total_us":total_us,"calls":calls - dropped,"dropped_calls":dropped,
+        "by_op":by_op.iter().map(|(op, f)| json!({"op":op,"share":f})).collect::<Vec<_>>()});
     report["calibration_after"] = anchors(bench.ranks[0].probe.calibrate(&bench.ranks[0].rt, w.samples)?);
     write(&o.out, &report)?;
     timed("out", o.out.display().to_string(), started);
@@ -649,6 +685,18 @@ fn write(out: &std::path::Path, report: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cost_prices_each_shape_once_at_its_fastest_program() {
+        let shape = |rows, weight| Shape { groups: 1, rows, context: vec![0], weight };
+        let runs = [
+            (shape(1, 10), 2., vec![("gemm".into(), 1.)]),
+            (shape(1, 10), 3., vec![("attn".into(), 1.)]),
+            (shape(64, 2), 5., vec![("gemm".into(), 0.5), ("attn".into(), 0.5)]),
+        ];
+        let (total, by_op) = cost(&runs);
+        assert_eq!((total, by_op), (30., vec![("gemm".into(), 25. / 30.), ("attn".into(), 5. / 30.)]));
+    }
+
     #[test]
     fn shares_are_of_the_traced_total_and_sorted() {
         let by = mix(&[("gemm".into(), 30.), ("attn".into(), 50.), ("gemm".into(), 20.)]);
