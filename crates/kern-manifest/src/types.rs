@@ -923,6 +923,9 @@ pub struct KernelLaunch {
     /// Programmatic dependent launch, e.g. `true`: the kernel may start before the previous launch on the stream has finished, and it promises to execute `griddepcontrol.wait` before reading or writing anything that launch produces or consumes. Only reads of weights may precede the wait.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pdl: bool,
+    /// Run this launch only while a var is in range, e.g. `{"var": "tokens", "max": 16}`: an op picks its implementation by shape with one launch per range. Outside it the launch does nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<When>,
     /// Where each launch param comes from (default: the op's params in order), e.g. `[{"param": 0}, {"scratch": "pmax"}, {"i32": 64}]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     args: Option<Vec<LaunchArg>>,
@@ -938,9 +941,30 @@ pub struct ExternLaunch {
     /// This launch's own ABI when it differs from the op's params.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     params: Option<Vec<ParamType>>,
+    /// Run this launch only while a var is in range, e.g. `{"var": "tokens", "max": 16}`: an op picks its implementation by shape with one launch per range. Outside it the launch does nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<When>,
     /// Where each launch param comes from (default: the op's params in order).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     args: Option<Vec<LaunchArg>>,
+}
+
+/// The inclusive range of a var a launch runs in, e.g. `{"var": "tokens", "min": 17}`; an end left out is open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct When {
+    /// A manifest var, e.g. `"tokens"`.
+    pub var: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u64>,
+}
+
+impl When {
+    pub fn holds(&self, v: u64) -> bool {
+        self.min.is_none_or(|lo| v >= lo) && self.max.is_none_or(|hi| v <= hi)
+    }
 }
 
 impl Launch {
@@ -960,6 +984,14 @@ impl Launch {
         match self {
             Launch::Kernel(k) => Some(&k.module),
             Launch::Extern(_) => None,
+        }
+    }
+
+    /// The range this launch runs in; `None` runs always.
+    pub fn when(&self) -> Option<&When> {
+        match self {
+            Launch::Kernel(k) => k.when.as_ref(),
+            Launch::Extern(e) => e.when.as_ref(),
         }
     }
 

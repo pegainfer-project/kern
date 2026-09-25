@@ -459,6 +459,18 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
 
         for (li, launch) in imp.launches.iter().enumerate() {
             let ctx = format!("op `{oname}` launch #{li} ({})", launch.entry());
+            if let Some(w) = launch.when() {
+                if m.vars.contains_key(&w.var) {
+                    used_vars.insert(w.var.clone());
+                } else {
+                    errs.push(format!("{ctx}: when: unknown var `{}`", w.var));
+                }
+                if let (Some(lo), Some(hi)) = (w.min, w.max) {
+                    if lo > hi {
+                        errs.push(format!("{ctx}: when: `{}` range [{lo}, {hi}] is empty", w.var));
+                    }
+                }
+            }
             match launch {
                 Launch::Extern(e) => {
                     if !e.entry.starts_with("extern:") {

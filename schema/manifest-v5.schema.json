@@ -665,6 +665,17 @@
             "array",
             "null"
           ]
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/When"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Run this launch only while a var is in range, e.g. `{\"var\": \"tokens\", \"max\": 16}`: an op picks its implementation by shape with one launch per range. Outside it the launch does nothing."
         }
       },
       "required": [
@@ -1156,6 +1167,17 @@
             }
           ],
           "description": "Dynamic shared memory in bytes, e.g. `{\"mul\": [\"tokens\", 512]}`."
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/When"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Run this launch only while a var is in range, e.g. `{\"var\": \"tokens\", \"max\": 16}`: an op picks its implementation by shape with one launch per range. Outside it the launch does nothing."
         }
       },
       "required": [
@@ -1896,6 +1918,54 @@
       },
       "required": [
         "max"
+      ],
+      "type": "object"
+    },
+    "When": {
+      "additionalProperties": false,
+      "description": "The inclusive range of a var a launch runs in, e.g. `{\"var\": \"tokens\", \"min\": 17}`; an end left out is open.",
+      "properties": {
+        "max": {
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
+        },
+        "min": {
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
+        },
+        "var": {
+          "description": "A manifest var, e.g. `\"tokens\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "var"
       ],
       "type": "object"
     }

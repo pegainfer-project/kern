@@ -117,6 +117,19 @@ fn launch_defaults_resolve_to_interface() {
 }
 
 #[test]
+fn a_launch_runs_in_the_range_of_a_declared_var() {
+    let mut v = base();
+    v["ops"]["embed"]["impl"]["launches"][0]["when"] = serde_json::json!({"var": "tokens", "max": 16});
+    let m = check(v.clone()).unwrap();
+    let w = m.ops["embed"].imp.launches[0].when().unwrap();
+    assert_eq!((w.holds(1), w.holds(16), w.holds(17)), (true, true, false));
+    v["ops"]["embed"]["impl"]["launches"][0]["when"] = serde_json::json!({"var": "rows", "min": 2});
+    assert_err(v.clone(), "when: unknown var `rows`");
+    v["ops"]["embed"]["impl"]["launches"][0]["when"] = serde_json::json!({"var": "tokens", "min": 9, "max": 8});
+    assert_err(v, "range [9, 8] is empty");
+}
+
+#[test]
 fn unknown_module() {
     let mut v = base();
     v["ops"]["embed"]["impl"]["launches"][0]["module"] = "ghost".into();
