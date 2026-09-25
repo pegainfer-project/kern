@@ -127,6 +127,20 @@ covers the scenario so far, context copies included; the `out` line's is the
 whole run. A `source` line before `calibrate` says how long the ranks'
 source prefix took to build.
 
+## What an op is worth
+
+`mix` attributes the step by bracketing every call with events, and a
+bracket costs a few microseconds and breaks the overlap programmatic
+dependent launch buys, so ops with many tiny calls look bigger than they
+are. `--ablate` answers the question directly: for each op, the program is
+captured again with all of that op's calls left out and timed as a whole
+graph, and the `free` line says what share of the step (and, after
+`cost`, of the workload) would go if the op were free. On a Qwen3.8-27B
+decode at 8 sequences over 131k context `mix` gives the fused add-norm
+4.5% and `free` 2.3%; attention goes the other way, 43.5% → 50.8%. A left
+out call's outputs keep what the last full run wrote, so the rest of the
+program reads well-formed inputs. Single-device only, like `--isolate`.
+
 ## What is actually measured
 
 - **Every input is real.** Each rank builds one prefix, as long as the
