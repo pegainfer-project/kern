@@ -197,10 +197,11 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn check(w: &Workload, p: &Protocol, unit: usize) -> Result<Plan> {
+    /// `row` is the tokens one sequence can hold (`kern_pool::row_tokens`).
+    pub fn check(w: &Workload, p: &Protocol, unit: usize, row: Option<u64>) -> Result<Plan> {
         let (mut scenarios, mut dropped) = (Vec::new(), Vec::new());
         for shape in w.shapes() {
-            match forwards(p, &shape) {
+            match fits(&shape, row).and_then(|()| forwards(p, &shape)) {
                 Err(why) => dropped.push(Dropped { shape: shape.label(), weight: shape.weight, why }),
                 Ok(taken) => scenarios.extend(taken.into_iter().map(|program| Scenario {
                     id: format!("{program}-{}", shape.label()),
@@ -220,6 +221,16 @@ impl Plan {
             scenarios,
             dropped,
         })
+    }
+}
+
+/// Whether every sequence of a shape, its rows included, fits a page-table row.
+fn fits(s: &Shape, row: Option<u64>) -> std::result::Result<(), String> {
+    match (row, s.context.iter().max()) {
+        (Some(r), Some(&n)) if (n + s.rows) as u64 > r => {
+            Err(format!("a sequence of {} tokens is longer than a page-table row ({r})", n + s.rows))
+        }
+        _ => Ok(()),
     }
 }
 

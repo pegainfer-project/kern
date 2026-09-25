@@ -617,7 +617,8 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     // the host states to the runtime in their declared layouts.
     let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?.self_hosted()?;
     let protocol = Protocol::check_unsampled(&m)?;
-    let plan = Plan::check(&w, &protocol, kern_pool::page_unit(&m) as usize)?;
+    let unit = kern_pool::page_unit(&m);
+    let plan = Plan::check(&w, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
     let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.isolate)?;
     bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
     bench.samples = w.samples;
