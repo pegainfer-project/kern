@@ -1020,11 +1020,31 @@ fn host_state_layout_is_well_formed() {
     assert_err(v, "a zero stride aliases elements");
 }
 
-#[test]
-fn host_state_is_not_indexed_by_a_domain() {
+/// `hosted()` with `x` as the host's ids into `kv`, `stride` apart.
+fn indexed(stride: u64) -> Verified {
     let mut v = hosted();
-    v["buffers"]["x"]["domain"] = serde_json::json!({ "index_into": "kv" });
-    assert_err(v, "`index_into` host state `kv`");
+    v["buffers"]["x"]["domain"] = serde_json::json!({ "index_into": "kv", "stride": stride });
+    check(v).unwrap()
+}
+
+#[test]
+fn a_host_state_owned_by_the_runtime_keeps_its_layout() {
+    // 64-token blocks of 262,144 bytes: 4,096 bytes per token slot.
+    let m = indexed(64).self_hosted().unwrap();
+    let kv = &m.states["kv"];
+    assert_eq!((kv.is_owned(), kv.bytes_per_token, kv.bytes_per_seq), (true, 4096, 0));
+    // One line per block: a block per sequence.
+    let m = indexed(262144).self_hosted().unwrap();
+    let kv = &m.states["kv"];
+    assert_eq!((kv.is_owned(), kv.bytes_per_token, kv.bytes_per_seq), (true, 0, 262144));
+}
+
+#[test]
+fn a_host_state_needs_a_table_to_be_owned() {
+    let errs = check(hosted()).unwrap().self_hosted().unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("no table indexes host layout")), "{errs:#?}");
+    let errs = indexed(48).self_hosted().unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("do not tile")), "{errs:#?}");
 }
 
 #[test]

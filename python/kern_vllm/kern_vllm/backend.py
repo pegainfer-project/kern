@@ -16,7 +16,10 @@ from vllm.v1.attention.backend import (
     AttentionMetadataBuilder,
     CommonAttentionMetadata,
 )
+from vllm.v1.kv_cache_interface import FullAttentionSpec
 from vllm.v1.kv_cache_layout import KVCacheLayout
+
+from kern_vllm import trace
 
 KERNEL_BLOCK = 64
 
@@ -27,8 +30,11 @@ class KernBuilder(AttentionMetadataBuilder[CommonAttentionMetadata]):
 
     def __init__(self, kv_cache_spec, layer_names, vllm_config, device):
         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
+        self.traced = isinstance(kv_cache_spec, FullAttentionSpec)
 
     def build(self, common_prefix_len, common_attn_metadata, fast_build=False, **_):
+        if self.traced:
+            trace.step(common_attn_metadata)
         return common_attn_metadata
 
 

@@ -240,7 +240,7 @@ impl Var {
 }
 
 /// Opaque persistent memory; the runtime provisions the bytes and hands the base pointer to `inout state` params. Exactly one of the three sizes is non-zero. States are always allocated through the driver's virtual-memory API with a fabric-shareable handle when the device has one, so a `peer` buffer may be `of` a state.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct State {
     /// Bytes per token slot, scaled by the capacity — a paged KV cache, e.g. `147456`.
@@ -252,7 +252,7 @@ pub struct State {
     /// Bytes per sequence slot, one slot per live sequence — a recurrent conv/SSM state, e.g. `154140672`. The runtime starts with `seqs.max + 2` slots — slot 0 (never leased; kernels may read line index 0 as null), one per sequence, one for a batched caller's padding — and grows them out of the state budget as checkpoints keep the states of sleeping sequences.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub bytes_per_seq: u64,
-    /// Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{"dtype": "bf16", "shape": [0, 64, 4, 512], "strides": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set.
+    /// Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{"dtype": "bf16", "shape": [0, 64, 4, 512], "strides": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set. Inputs whose domain `index_into`s it declare the host's ids: a page table (`stride` tokens per block) or a line table (`stride` bytes per line, one line per block), shared by every host state of the same layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostTensor>,
 }
@@ -316,7 +316,7 @@ impl HostTensor {
         self.span(shape[0]).ok_or_else(|| want(format!("shape {shape:?}: span overflows 64 bits")))
     }
 
-    fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         format!("{} shape {:?} strides {:?}", self.dtype, self.shape, self.strides)
     }
 }
@@ -519,6 +519,10 @@ impl Domain {
             }));
         }
         if let Some(st) = m.states.get(t) {
+            if !st.is_owned() {
+                // The host allocated it and knows how many blocks: no bound here.
+                return Ok(None);
+            }
             // A per-sequence state is addressed in lines of `stride` bytes,
             // `seq_slots` slots of them; `resolve` divides by the stride
             // again, so hand back the byte count.

@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod constants;
+mod host;
 pub use constants::json_schema;
 
 pub mod protocol;

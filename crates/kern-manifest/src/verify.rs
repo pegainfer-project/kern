@@ -7,7 +7,7 @@
 //!   2. vars: max > 0
 //!   3. states: exactly one of bytes_per_token / bytes / bytes_per_seq is non-zero,
 //!      or none of them and a well-formed `host` layout; a host state is never
-//!      exported (`of`) nor indexed by a domain (the host owns its indices)
+//!      exported (`of`); a domain may index it, declaring the host's ids
 //!   4. buffers: shapes resolve, byte sizes don't overflow at var upper
 //!      bounds; a declared domain is well-formed (bound kinds vs dtype,
 //!      `index_into` resolves, min <= max at the var corners)
@@ -1029,9 +1029,6 @@ fn check_domain(
         match (m.buffers.contains_key(t), m.states.contains_key(t)) {
             (false, false) => errs.push(format!("{ctx}: `index_into` unknown buffer/state `{t}`")),
             (true, true) => errs.push(format!("{ctx}: `index_into` `{t}` is both a buffer and a state")),
-            (false, true) if !m.states[t].is_owned() => errs.push(format!(
-                "{ctx}: `index_into` host state `{t}`: the host allocates it and owns its indices, the runtime has no bound for them"
-            )),
             (false, true) if m.states[t].is_per_seq() && !m.states[t].bytes_per_seq.is_multiple_of(d.stride.max(1)) => {
                 errs.push(format!(
                     "{ctx}: `index_into` per-sequence state `{t}` in lines of {} bytes, which do not divide its {} bytes per sequence",

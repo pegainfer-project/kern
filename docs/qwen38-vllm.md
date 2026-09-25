@@ -54,8 +54,10 @@ runs as two launches: the conv over the chunk, then the conv state update.
   `hidden` instead of feeding the lm_head and argmax. `next_token` is dropped.
 - `head` is one gemm: `head_in` `[seqs, 5120]` × `lm_head.weight` →
   `logits` `[seqs, 248320]`.
-- `slot_mapping`, `block_table` and `gdn.line_index` lose their `domain`:
-  vLLM owns the block ids, so kern no longer indexes them into a state.
+- `slot_mapping` and `block_table` index `kv.l3` (1 and 64 tokens per id),
+  `gdn.line_index` indexes `gdn.l0` (one page per id). Every host state of
+  the same layout shares these ids, as vLLM's layers share its block ids, so
+  a tool that is its own host (`kern bench`) can provision the states.
 
 ## gemm16 in `decode_batch`
 

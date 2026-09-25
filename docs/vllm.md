@@ -14,7 +14,7 @@ pip install python/kern_vllm
 hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
 KERN_MANIFEST=kern-qwen38/manifests/qwen3.8-27b-vllm.json KERN_KERNELS=kern-qwen38/cubins \
 vllm serve Qwen/Qwen3.8-27B --hf-overrides '{"architectures": ["KernForCausalLM"]}' \
-  --max-num-seqs 128 --max-num-batched-tokens 8192 --no-enable-prefix-caching \
+  --max-num-seqs 128 --max-num-batched-tokens 8192 --enable-prefix-caching \
   -cc '{"mode": 0, "cudagraph_mode": "FULL_DECODE_ONLY"}'
 ```
 
@@ -51,10 +51,16 @@ live traffic:
 6. **Gate.** `kern test` covers every shape the manifest declares, not only
    the frequent ones: agents tuned on a histogram tend to regress the tail.
 
-Serving (1) is what this change adds. Locate and gate reuse `kern bench` and
-`kern test`; sampling, the agents and merging are not built yet. The shape
-distribution is also not fixed: a faster prefill changes how vLLM batches, so
-each turn samples again, not reusing the last histogram.
+Serve, sample, locate and gate exist; the agents and merging are not built
+yet. With `KERN_TRACE=<dir>` the plugin writes one JSON line per step
+(`kern_vllm/trace.py`, about 0.2% of a step's CPU time).
+`python -m kern_vllm.workload <trace>` buckets the steps into a weighted
+`kern bench` workload, and `kern bench` runs the served manifest itself
+(`Verified::self_hosted`) and prices the traffic in GPU seconds. On a
+5-minute Poisson run (2026-09-26, one GB300) the bench accounts for 294 of
+the 308 s the GPU was busy. The shape distribution is also not fixed: a
+faster prefill changes how vLLM batches, so each turn samples again, not
+reusing the last histogram.
 
 State as of 2026-09-25, Qwen3.8-27B on one GB300, vLLM `e97573215`:
 
@@ -67,7 +73,7 @@ State as of 2026-09-25, Qwen3.8-27B on one GB300, vLLM `e97573215`:
   (18% more throughput at 128), mostly because this first version runs every
   prefill of a mixed step as its own program call. Numbers are in
   [Results](#results).
-- **Scope.** Single GPU, prefix caching off, one model. The adapter
+- **Scope.** Single GPU, one model. The adapter
   reads a small named contract from the manifest (see [Limits](#limits)).
 
 The rest of this note explains why vLLM's model interface can host an external
@@ -390,8 +396,11 @@ Reading these, not yet profiled:
 
 - **Mixed steps.** One program call per prefill request. A ragged program that
   takes the whole mixed step in one call is not written.
-- **Prefix caching** is off. vLLM's align mode needs a state copy function from
-  the model.
+- **Prefix caching** runs in vLLM's align mode at vLLM's block size (832
+  tokens here), so up to one block of a cached prefix is recomputed. The
+  plugin runs each sequence on its last token's state page; vLLM copies the
+  state across blocks. Greedy multi-turn output with and without caching
+  agrees up to near-tie flips (top1/top2 margin ≤ 0.125).
 - **Single GPU only**; TP/EP are not wired.
 - **Named contract.** The adapter finds inputs by name (`token_ids`,
   `positions`, `slot_mapping`, `seq_lens`, `cu_seqlens_q`, `block_table`,

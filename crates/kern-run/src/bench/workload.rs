@@ -15,8 +15,13 @@
 //! cache and almost entirely attention over a long one. A combination no
 //! program accepts is dropped and named in the report rather than failing
 //! the run — which shapes a manifest serves is part of what a sweep asks.
+//!
+//! A sweep may carry a `weight`: how many calls of each of its shapes the
+//! traffic being modeled makes. The report prices the workload by it
+//! (every shape at its fastest program, times its weight), so a workload
+//! taken from a server's step trace says what that traffic costs.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{ensure, Context as _, Result};
@@ -32,7 +37,8 @@ enum Context {
     Each(Vec<usize>),
 }
 
-/// One cross product of shapes. `groups` defaults to a single sequence.
+/// One cross product of shapes. `groups` defaults to a single sequence,
+/// `weight` to one call of each shape.
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Sweep {
@@ -40,10 +46,16 @@ pub struct Sweep {
     groups: Vec<usize>,
     rows: Vec<usize>,
     context: Vec<Context>,
+    #[serde(default = "once")]
+    weight: u64,
 }
 
 fn alone() -> Vec<usize> {
     vec![1]
+}
+
+fn once() -> u64 {
+    1
 }
 
 /// A workload file: how many samples every measurement keeps, the seed its
@@ -58,17 +70,19 @@ pub struct Workload {
     sweep: Vec<Sweep>,
 }
 
-/// A call shape: one sequence per `context` entry, `rows` rows each.
+/// A call shape: one sequence per `context` entry, `rows` rows each, and
+/// how many calls of it the workload stands for.
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 pub struct Shape {
     pub groups: usize,
     pub rows: usize,
     pub context: Vec<usize>,
+    pub weight: u64,
 }
 
 impl Shape {
-    fn new(rows: usize, context: Vec<usize>) -> Shape {
-        Shape { groups: context.len(), rows, context }
+    fn new(rows: usize, context: Vec<usize>, weight: u64) -> Shape {
+        Shape { groups: context.len(), rows, context, weight }
     }
 
     /// The context: one number when every sequence is at the same depth,
@@ -106,6 +120,7 @@ impl Workload {
             ensure!(!s.rows.is_empty() && !s.context.is_empty(), "a sweep needs rows and context");
             ensure!(s.groups.iter().all(|&g| g > 0), "groups must be positive");
             ensure!(s.rows.iter().all(|&r| r > 0), "rows must be positive");
+            ensure!(s.weight > 0, "weight must be positive");
             for c in &s.context {
                 if let Context::Each(v) = c {
                     ensure!(
@@ -120,33 +135,41 @@ impl Workload {
         Ok(w)
     }
 
-    /// Every sweep's cross product, in file order, without repeats. A
-    /// per-sequence context only pairs with the group count it has lengths
-    /// for, and `parse` has checked that count is in the sweep.
+    /// Every sweep's cross product, in file order, a repeated shape once
+    /// with its weights summed. A per-sequence context only pairs with the
+    /// group count it has lengths for, and `parse` has checked that count
+    /// is in the sweep.
     pub fn shapes(&self) -> Vec<Shape> {
-        let mut seen = BTreeSet::new();
-        self.sweep
-            .iter()
-            .flat_map(|s| {
-                s.groups.iter().flat_map(move |&g| {
-                    s.rows.iter().flat_map(move |&r| {
-                        s.context.iter().filter_map(move |c| match c {
-                            Context::Every(n) => Some(Shape::new(r, vec![*n; g])),
-                            Context::Each(v) if v.len() == g => Some(Shape::new(r, v.clone())),
-                            Context::Each(_) => None,
-                        })
+        let all = self.sweep.iter().flat_map(|s| {
+            s.groups.iter().flat_map(move |&g| {
+                s.rows.iter().flat_map(move |&r| {
+                    s.context.iter().filter_map(move |c| match c {
+                        Context::Every(n) => Some(Shape::new(r, vec![*n; g], s.weight)),
+                        Context::Each(v) if v.len() == g => Some(Shape::new(r, v.clone(), s.weight)),
+                        Context::Each(_) => None,
                     })
                 })
             })
-            .filter(|s| seen.insert(s.label()))
-            .collect()
+        });
+        let mut at: BTreeMap<String, usize> = BTreeMap::new();
+        all.fold(Vec::new(), |mut shapes: Vec<Shape>, s| {
+            match at.get(&s.label()) {
+                Some(&i) => shapes[i].weight += s.weight,
+                None => {
+                    at.insert(s.label(), shapes.len());
+                    shapes.push(s);
+                }
+            }
+            shapes
+        })
     }
 }
 
-/// A shape this manifest has no program for.
+/// A shape this manifest has no program for, and the calls it stood for.
 #[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct Dropped {
     pub shape: String,
+    pub weight: u64,
     pub why: String,
 }
 
@@ -178,7 +201,7 @@ impl Plan {
         let (mut scenarios, mut dropped) = (Vec::new(), Vec::new());
         for shape in w.shapes() {
             match forwards(p, &shape) {
-                Err(why) => dropped.push(Dropped { shape: shape.label(), why }),
+                Err(why) => dropped.push(Dropped { shape: shape.label(), weight: shape.weight, why }),
                 Ok(taken) => scenarios.extend(taken.into_iter().map(|program| Scenario {
                     id: format!("{program}-{}", shape.label()),
                     shape: shape.clone(),

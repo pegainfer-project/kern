@@ -210,6 +210,17 @@ impl Protocol {
     /// is missing. Verification comes first: the protocol is built on
     /// buffers and programs that are already known to be consistent.
     pub fn check(m: &Verified) -> Result<Protocol, ProtocolErrors> {
+        Protocol::check_with(m, true)
+    }
+
+    /// The contract of a manifest whose host samples: its forwards may hand
+    /// back no token (a vLLM model's programs end at the hidden states). A
+    /// measurement drives it; a serving loop needs [`Protocol::check`].
+    pub fn check_unsampled(m: &Verified) -> Result<Protocol, ProtocolErrors> {
+        Protocol::check_with(m, false)
+    }
+
+    fn check_with(m: &Verified, sampled: bool) -> Result<Protocol, ProtocolErrors> {
         let mut errs = Vec::new();
         let var_max = |v: &str| m.vars.get(v).map(|v| v.max);
         let axis_var = |b: &Buffer| match b.shape.first() {
@@ -570,7 +581,7 @@ impl Protocol {
         }
         if forwards.is_empty() {
             errs.push("no program declares a `batch`: nothing for a serving loop to drive".into());
-        } else if forwards.iter().all(|f| f.emits.is_none()) {
+        } else if sampled && forwards.iter().all(|f| f.emits.is_none()) {
             errs.push("no program with a `batch` writes a `tokens` output: no call hands a token back".into());
         }
         if span_var.is_some() && one(Fill::SpanAt).is_none() {

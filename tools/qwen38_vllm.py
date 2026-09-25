@@ -3,7 +3,10 @@
 Rewrites `examples/qwen3.8-27b.json` into a manifest a vLLM model runner
 drives (`python/kern_vllm`): the KV cache and the GDN states become host
 states, one per layer, laid out the way vLLM's hybrid allocator lays them
-out, and the programs stop at the hidden states, since vLLM samples.
+out, and the programs stop at the hidden states, since vLLM samples. The
+tables index them as vLLM's ids do: 64-token blocks of every attention
+layer, one page per sequence of every GDN layer, so a tool that is its own
+host (`kern bench`) can provision them.
 
 vLLM gives every layer of a hybrid model one page per block, the same size
 for the attention and the GDN groups: a GDN line (conv [3][10240] bf16,
@@ -16,7 +19,10 @@ prefill conv, which baked the line stride in and is replaced by
 `gdn_conv_fwd`, pinned by sha; its source and cubin are published with
 the manifest in `Pegainfer/kern-qwen38-sm103` (`sources/`, `cubins/`).
 
-    python tools/qwen38_vllm.py [--input examples/qwen3.8-27b.json] --output qwen3.8-27b-vllm.json
+    python tools/qwen38_vllm.py [--input examples/qwen3.8-27b.json] --output qwen3.8-27b-vllm.json [--sampled]
+
+`--sampled` keeps the base's head and sampling after the final norm: vLLM
+never runs it, `kern test` gates on it.
 """
 import argparse
 import json
@@ -34,6 +40,7 @@ KV_HEADS, HEAD_DIM, BLOCK = 4, 256, 64
 KV_TOKEN_BYTES = KV_HEADS * 2 * HEAD_DIM * 2
 KV_BLOCK_BYTES = BLOCK * KV_TOKEN_BYTES
 GDN_DIM, GDN_WIDTH, QKVZ_WIDTH = 10240, 4, 16384
+QKVZBA_WIDTH = QKVZ_WIDTH + 96
 HIDDEN, MLP_WIDTH = 5120, 17408
 GDN_LINE_BYTES = (GDN_WIDTH - 1) * GDN_DIM * 2 + 48 * 128 * 128 * 4
 PAGE_BYTES = -(-GDN_LINE_BYTES // KV_BLOCK_BYTES) * KV_BLOCK_BYTES
@@ -126,8 +133,8 @@ def wide(call):
     layer = call["label"].rsplit(".", 1)[0]
     match call["op"]:
         case "gemm16_in_proj":
-            return [gemm(f"{layer}.in_proj_qkvz", a[0], a[1], a[3], QKVZ_WIDTH, HIDDEN),
-                    gemm(f"{layer}.in_proj_ba", a[0], a[2], a[4], 96, HIDDEN)]
+            return [gemm(f"{layer}.in_proj_qkvzba", a[0], {"buf": in_proj(layer_of(call))}, {"buf": "qkvzba"},
+                         QKVZBA_WIDTH, HIDDEN)]
         case "gemm16_gate_up_silu":
             return [gemm(f"{layer}.gate_up", a[0], a[1], {"buf": "gate_up"}, 2 * MLP_WIDTH, HIDDEN),
                     {"label": f"{layer}.silu_mul", "op": "silu_mul", "args": [a[2], {"buf": "gate_up"}]}]
@@ -137,6 +144,44 @@ def wide(call):
             return [gemm(call["label"], a[0], a[1], a[2], HIDDEN, 6144)]
         case _:
             return [call]
+
+
+def in_proj(layer):
+    return f"model.layers.{layer}.linear_attn.in_proj_qkvzba.weight"
+
+
+def fused_in_proj(m):
+    """One weight per GDN layer for qkvz and ba, the four checkpoint tensors
+    stacked. Decode reads it in one gemm into `qkvzba` rows (`wide`), and
+    the conv and step kernels take that row stride, `ba` at its column
+    16384; a small separate ba gemm is a launch and a tail for 1 MB. Prefill
+    keeps its two gemms, over the two row ranges of the same weight."""
+    qkvz = lambda l: f"model.layers.{l}.linear_attn.in_proj_qkvz.weight"
+    ba = lambda l: f"model.layers.{l}.linear_attn.in_proj_ba.weight"
+    moved = {qkvz(l): {"buf": in_proj(l)} for l in GDN_LAYERS} | \
+            {ba(l): {"buf": in_proj(l), "offset": QKVZ_WIDTH * HIDDEN * 2} for l in GDN_LAYERS}
+    arg = lambda x: moved.get(x.get("buf"), x)
+    step = {"gdn_conv": {0: {"buf": "qkvzba"}},
+            "gdn_step": {0: {"buf": "qkvzba"}, 1: {"buf": "qkvzba", "offset": QKVZ_WIDTH * 2}}}
+    call = lambda c: {**c, "args": [step.get(c["op"], {}).get(i, arg(x)) for i, x in enumerate(c["args"])]}
+    strides = {"gdn_conv": {5: QKVZ_WIDTH}, "gdn_step": {10: QKVZ_WIDTH, 11: 96}}
+
+    def restrided(name, op):
+        at = strides.get(name)
+        if not at:
+            return op
+        (launch,) = op["impl"]["launches"]
+        assert all(launch["args"][i] == {"i32": old} for i, old in at.items()), f"{name}: row strides moved"
+        args = [{"i32": QKVZBA_WIDTH} if i in at else x for i, x in enumerate(launch["args"])]
+        return {**op, "impl": {**op["impl"], "launches": [{**launch, "args": args}]}}
+
+    b = m["buffers"]
+    return {**m,
+            "ops": {k: restrided(k, v) for k, v in m["ops"].items()},
+            "programs": {k: {**p, "calls": [call(c) for c in p["calls"]]} for k, p in m["programs"].items()},
+            "buffers": b | {"qkvzba": {"dtype": "bf16", "shape": ["tokens", QKVZBA_WIDTH], "kind": "workspace"}} | {
+                in_proj(l): {**b[qkvz(l)], "shape": [QKVZBA_WIDTH, HIDDEN], "bind": b[qkvz(l)]["bind"] + b[ba(l)]["bind"]}
+                for l in GDN_LAYERS}}
 
 
 def headless(calls):
@@ -166,14 +211,31 @@ def hosted(m):
             {"var": "seqs"}, {"i32": 248320}, {"i32": 5120}]}]},
     }
     b = m["buffers"]
-    unindexed = {k: {kk: vv for kk, vv in b[k].items() if kk != "domain"}
-                 for k in ("slot_mapping", "block_table", "gdn.line_index")}
-    m["buffers"] = {k: v for k, v in b.items() if k != "next_token"} | unindexed | {
+    kv, gdn = f"kv.l{ATTN_LAYERS[0]}", f"gdn.l{GDN_LAYERS[0]}"
+    ids = {"slot_mapping": {"index_into": kv},
+           "block_table": {"index_into": kv, "stride": BLOCK},
+           "gdn.line_index": {"index_into": gdn, "stride": PAGE_BYTES}}
+    indexed = {k: {**b[k], "domain": d} for k, d in ids.items()}
+    m["buffers"] = {k: v for k, v in b.items() if k != "next_token"} | indexed | {
         "hidden": {"dtype": "bf16", "shape": ["tokens", 5120], "kind": "output"},
         "head_in": {"dtype": "bf16", "shape": ["seqs", 5120], "kind": "input"},
         "logits": {**b["logits"], "kind": "output"},
     }
     return m
+
+
+def sampled(m, base):
+    """Hands back the base's head after the final norm, reading `hidden`, so
+    `kern test` gates the hosted programs against the base manifest."""
+    def tail(p):
+        calls = base["programs"][p]["calls"]
+        end = next(i for i, c in enumerate(calls) if c["label"].endswith(".final_norm"))
+        return [{**c, "args": [{"buf": "hidden"} if a == {"buf": "x"} else a for a in c["args"]]}
+                for c in calls[end + 1:]]
+    programs = {p: {**m["programs"][p], "calls": m["programs"][p]["calls"] + tail(p)}
+                for p in ("prefill", "decode_batch")}
+    return {**m, "programs": {**m["programs"], **programs},
+            "buffers": m["buffers"] | {k: base["buffers"][k] for k in ("next_token", "final_x")}}
 
 
 def prune(m):
@@ -197,8 +259,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--input", type=pathlib.Path, default=pathlib.Path("examples/qwen3.8-27b.json"))
     p.add_argument("--output", type=pathlib.Path, required=True)
+    p.add_argument("--sampled", action="store_true", help="keep the base's head and sampling, for `kern test`")
     args = p.parse_args()
-    m = prune(hosted(resolve_constants(json.loads(args.input.read_text()))))
+    base = resolve_constants(json.loads(args.input.read_text()))
+    m = fused_in_proj(hosted(base))
+    m = prune(sampled(m, base) if args.sampled else m)
     args.output.write_text(json.dumps(name_constants(normalize(m)), indent=1) + "\n")
 
 

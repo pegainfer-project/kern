@@ -66,6 +66,19 @@ fn pool_rejects_a_manifest_it_cannot_lay_out() {
 }
 
 #[test]
+fn a_line_table_over_one_line_per_slot_holds_the_slot_in_every_row() {
+    // Lines of 24 bytes: one per slot, so the table's 3 rows are 3 states
+    // of that layout (a host's per-layer states), each at the lease's slot.
+    let mut m = hybrid();
+    m.buffers.get_mut("line_index").unwrap().domain.as_mut().unwrap().stride = 24;
+    let p = pool_of(&m, 8, 20, 4);
+    let a = p.lease(16).unwrap();
+    let slot = a.seq_slot().unwrap();
+    let rows: Vec<i32> = (0..3).map(|r| a.seq_line("line_index", r).unwrap()).collect();
+    assert_eq!((rows, a.seq_lines("line_index").unwrap()), (vec![slot; 3], 3));
+}
+
+#[test]
 fn the_chunk_budget_rounds_every_state_on_its_own() {
     // kv: 32 tokens of 1 byte = 4 chunks; gdn: 4 slots of 24 bytes = 12 chunks.
     assert_eq!(chunks_for(&hybrid(), 32, 4, 8), 16);

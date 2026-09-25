@@ -22,7 +22,10 @@
 //! never leased (a kernel may read line index 0 as the null line), the
 //! rest go one per lease. A line table is shaped `[lines, seqs]` (or
 //! `[lines]`): row `r` names, for every sequence of the batch, line `r` of
-//! its slot — `slot × lines_per_slot + r`. A wide table `[lines, seqs, w]`
+//! its slot — `slot × lines_per_slot + r`. Over a state of one line per
+//! slot a table may name more lines than that: its rows are as many states
+//! of that layout (a host's per-layer states, see `Verified::self_hosted`),
+//! and every row holds the slot. A wide table `[lines, seqs, w]`
 //! has `w` entries per (line, sequence) cell for kernels that take a
 //! per-sequence list of lines: the caller puts the line in one of them (the
 //! contract of the program says which) and 0, the null line, in the rest.
@@ -201,7 +204,7 @@ impl Storage for Pool {
 }
 
 /// The page tables: every input whose domain `index_into`s a paged state
-/// (an index a kernel writes — a carry — is the manifest's business, not
+/// the runtime owns (a host's ids are the host's; an index a kernel writes — a carry — is the manifest's business, not
 /// the host's).
 fn tables(m: &Manifest) -> BTreeMap<String, Table> {
     m.buffers
@@ -211,7 +214,7 @@ fn tables(m: &Manifest) -> BTreeMap<String, Table> {
                 return None;
             }
             let d = b.domain.as_ref()?;
-            if !m.states.get(d.index_into.as_deref()?).is_some_and(|s| !s.is_per_seq()) {
+            if !m.states.get(d.index_into.as_deref()?).is_some_and(|s| s.is_owned() && !s.is_per_seq()) {
                 return None;
             }
             let Some(Dim::Const(width)) = b.shape.last() else { return None };
@@ -242,7 +245,7 @@ fn seq_tables(m: &Manifest) -> Result<BTreeMap<String, SeqTable>> {
             ),
         };
         let per_slot = st.bytes_per_seq / d.stride.max(1);
-        if rows > per_slot {
+        if rows > per_slot && per_slot != 1 {
             bail!(Manifest, "`{name}` names {rows} lines per sequence, the state holds {per_slot}");
         }
         out.insert(name.clone(), SeqTable { rows: rows as usize, per_slot: per_slot as i32, width });
@@ -262,13 +265,16 @@ fn lcm(a: u64, b: u64) -> u64 {
     a / gcd(a, b) * b
 }
 
-/// The page unit: the lcm of every page table's stride (a per-sequence
-/// state's stride is bytes per line, not tokens: not a page).
+/// The page unit: the lcm of every page table's stride over an owned
+/// state (a per-sequence state's stride is bytes per line, not tokens: not
+/// a page; a host state's blocks are the host's).
 pub fn page_unit(m: &Manifest) -> u64 {
     m.buffers
         .values()
         .filter_map(|b| b.domain.as_ref())
-        .filter(|d| d.index_into.as_deref().and_then(|s| m.states.get(s)).is_some_and(|s| !s.is_per_seq()))
+        .filter(|d| {
+            d.index_into.as_deref().and_then(|s| m.states.get(s)).is_some_and(|s| s.is_owned() && !s.is_per_seq())
+        })
         .map(|d| d.stride.max(1))
         .fold(1u64, lcm)
 }
@@ -928,7 +934,7 @@ impl Lease {
         let Some(slot) = self.seq_slot() else {
             bail!(Api, "lease holds no sequence slot");
         };
-        Ok(slot * t.per_slot + row as i32)
+        Ok(slot * t.per_slot + row as i32 % t.per_slot)
     }
 
     /// Lines per sequence line table `table` names.

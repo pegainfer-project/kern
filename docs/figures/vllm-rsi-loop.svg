@@ -18,16 +18,16 @@
 <text x="480.0" y="52.0" text-anchor="middle" font-size="16" font-weight="600" fill="#9a3412">Serve in vLLM</text>
 <text x="480.0" y="72.0" text-anchor="middle" font-size="13" fill="#475569">kern_vllm plugin; canary replica,</text>
 <text x="480.0" y="90.0" text-anchor="middle" font-size="13" fill="#475569">then rolling restart</text>
-<circle cx="644.5" cy="235.0" r="30" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
-<text x="644.5" y="241.0" text-anchor="middle" font-size="18" font-weight="600" fill="#475569">2</text>
+<circle cx="644.5" cy="235.0" r="30" fill="#1e293b" stroke="#1e293b" stroke-width="2"/>
+<text x="644.5" y="241.0" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">2</text>
 <text x="690.5" y="221.0" text-anchor="start" font-size="16" font-weight="600" fill="#0f172a">Sample shapes</text>
-<text x="690.5" y="241.0" text-anchor="start" font-size="13" fill="#475569">plugin logs program, tokens, seqs,</text>
-<text x="690.5" y="259.0" text-anchor="start" font-size="13" fill="#475569">context lengths per step</text>
+<text x="690.5" y="241.0" text-anchor="start" font-size="13" fill="#475569">kern_vllm.trace: every step's</text>
+<text x="690.5" y="259.0" text-anchor="start" font-size="13" fill="#475569">query and seq lengths</text>
 <circle cx="644.5" cy="425.0" r="30" fill="#1e293b" stroke="#1e293b" stroke-width="2"/>
 <text x="644.5" y="431.0" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">3</text>
 <text x="690.5" y="411.0" text-anchor="start" font-size="16" font-weight="600" fill="#0f172a">Locate time</text>
-<text x="690.5" y="431.0" text-anchor="start" font-size="13" fill="#475569">step counts × kern bench per shape</text>
-<text x="690.5" y="449.0" text-anchor="start" font-size="13" fill="#475569">= GPU time by op and shape</text>
+<text x="690.5" y="431.0" text-anchor="start" font-size="13" fill="#475569">buckets weighted by count;</text>
+<text x="690.5" y="449.0" text-anchor="start" font-size="13" fill="#475569">kern bench prices them (cost)</text>
 <circle cx="480.0" cy="520.0" r="30" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
 <text x="480.0" y="526.0" text-anchor="middle" font-size="18" font-weight="600" fill="#475569">4</text>
 <text x="480.0" y="576.0" text-anchor="middle" font-size="16" font-weight="600" fill="#0f172a">Optimize</text>
@@ -47,7 +47,7 @@
 <text x="480" y="350" text-anchor="middle" font-size="13" fill="#64748b">each turn ships a new manifest</text>
 <text x="480" y="368" text-anchor="middle" font-size="13" fill="#64748b">and measures it on live traffic</text>
 <circle cx="44" cy="584" r="8" fill="#ea580c" stroke="#ea580c" stroke-width="2"/>
-<text x="60" y="589" font-size="13" fill="#475569">this change</text>
+<text x="60" y="589" font-size="13" fill="#475569">in vLLM</text>
 <circle cx="44" cy="608" r="8" fill="#1e293b" stroke="#1e293b" stroke-width="2"/>
 <text x="60" y="613" font-size="13" fill="#475569">exists in kern</text>
 <circle cx="44" cy="632" r="8" fill="#ffffff" stroke="#94a3b8" stroke-width="2" stroke-dasharray="3 2"/>

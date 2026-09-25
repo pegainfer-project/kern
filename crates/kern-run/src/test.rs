@@ -537,14 +537,18 @@ fn execute(mut o: Opts) -> Result<i32> {
     let t_start = Instant::now();
     let jb = std::fs::read_to_string(&o.inputs.manifest)
         .with_context(|| format!("reading {}", o.inputs.manifest.display()))?;
-    let mb = Verified::from_json(&jb).with_context(|| format!("B ({}) failed verification", o.harness.b))?;
+    let mb = Verified::from_json(&jb)
+        .and_then(|m| m.self_hosted())
+        .with_context(|| format!("B ({}) failed verification", o.harness.b))?;
     Protocol::check(&mb).with_context(|| format!("B ({}) does not fit the serving protocol", o.harness.b))?;
     let a = match &o.mode {
         Mode::Ab(a) => a.clone(),
         _ => return on_trace(o, mb, t_start),
     };
     let ja = std::fs::read_to_string(&a).with_context(|| format!("reading {}", a.display()))?;
-    let ma = Verified::from_json(&ja).with_context(|| format!("A ({}) failed verification", a.display()))?;
+    let ma = Verified::from_json(&ja)
+        .and_then(|m| m.self_hosted())
+        .with_context(|| format!("A ({}) failed verification", a.display()))?;
     Protocol::check(&ma).with_context(|| format!("A ({}) does not fit the serving protocol", a.display()))?;
     let out = Out { json: o.json };
     let (a, b) = (o.harness.a.clone(), o.harness.b.clone());
