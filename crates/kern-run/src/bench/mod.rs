@@ -293,32 +293,28 @@ fn output_fingerprints(rt: &Runtime, p: &Protocol, groups: usize) -> Result<Vec<
         .collect()
 }
 
-/// Build every sequence's real prefix by running the chunk program over
-/// real prose. Each sequence gets its own lease and its own tokens, from
-/// sequence `first` on: never duplicate one lease across the batch to
-/// save preparation time.
-fn prefixes(
-    rt: &mut Runtime,
-    p: &Protocol,
-    leases: &[Lease],
-    context: &[usize],
-    corpus: &[i64],
-    first: usize,
-) -> Result<()> {
-    let chunk = p.chunk().context("a prefix needs a variable-row program")?.name.clone();
-    for (i, &length) in context.iter().enumerate() {
-        let mut pos = 0;
-        while pos < length {
-            let q = (length - pos).min(p.rows.max as usize);
-            let vars = stage(rt, p, &leases[i..i + 1], &[pos], q, &tokens(corpus, first + i, pos, q))?;
-            if !rt.is_captured(&chunk, &vars) {
-                rt.capture(&chunk, &vars)?;
-            }
-            rt.run_captured(&chunk, &vars)?;
-            pos += q;
-        }
+/// One real prefix of `length` tokens of prose, built by running the chunk
+/// program over it: the source every scenario's sequences copy their
+/// context from. Copying keeps each sequence on its own pages, so a batch
+/// reads as much memory as distinct sequences would, and a long context
+/// costs a copy instead of its prefill.
+fn source(rt: &mut Runtime, p: &Protocol, length: usize, corpus: &[i64], seq: usize) -> Result<Option<Lease>> {
+    if length == 0 {
+        return Ok(None);
     }
-    Ok(())
+    let chunk = p.chunk().context("a prefix needs a variable-row program")?.name.clone();
+    let lease = rt.lease(length)?;
+    let mut pos = 0;
+    while pos < length {
+        let q = (length - pos).min(p.rows.max as usize);
+        let vars = stage(rt, p, std::slice::from_ref(&lease), &[pos], q, &tokens(corpus, seq, pos, q))?;
+        if !rt.is_captured(&chunk, &vars) {
+            rt.capture(&chunk, &vars)?;
+        }
+        rt.run_captured(&chunk, &vars)?;
+        pos += q;
+    }
+    Ok(Some(lease))
 }
 
 /// Lift each distinct call out of the program, measure it cold and warm,
@@ -365,17 +361,6 @@ fn timed(key: &str, body: String, since: Instant) {
     println!("{}", row(key, body, Some(since.elapsed().as_secs_f32())));
 }
 
-/// The id carries the whole shape. What it cannot carry is how much prefix
-/// has to run before any measurement starts, which is what a long scenario
-/// spends its time on.
-fn scenario_line(s: &Scenario, chunk_rows: usize) -> String {
-    match s.shape.context.iter().map(|n| n.div_ceil(chunk_rows)).sum::<usize>() {
-        0 => s.id.clone(),
-        1 => format!("{} · prefix 1 chunk", s.id),
-        n => format!("{} · prefix {n} chunks", s.id),
-    }
-}
-
 fn program_line(g: &Stats, calls: usize) -> String {
     format!(
         "{:.3} ms · p10–p90 {:.3}–{:.3} · cv {:.1}% · {calls} calls",
@@ -417,7 +402,7 @@ fn preamble(
             "samples_per_mode":w.samples,"tail_policy":"all measured samples retained; no outlier filtering",
             "warmup":"3 call executions; 4 whole-program executions",
             "grouping":"same op, resolved arguments, buffer shape, aliasing, offsets and vars; weight names omitted",
-            "context_data":"deterministic diverse prose, actual model prefix execution",
+            "context_data":"deterministic diverse prose; one real prefix per rank, copied onto each sequence's own pages",
             "units":"microseconds; bandwidth GB/s uses read+write traffic"},
         "modules":m.modules.iter().map(|(n,x)|json!({"name":n,"sha256":x.sha256})).collect::<Vec<_>>(),
         "workload":{"samples":w.samples,"seed":w.seed,"scenarios":&plan.scenarios,"dropped":&plan.dropped},
@@ -469,6 +454,7 @@ struct Rank {
     probe: Probe,
     gpu: usize,
     rank: usize,
+    source: Option<Lease>,
 }
 
 /// One rank's part of a scenario: lease, prefix, stage, measure. Every
@@ -486,7 +472,11 @@ fn measure(
     let before = telemetry(r.gpu);
     let leases = shape.context.iter().map(|n| r.rt.lease(n + shape.rows)).collect::<kern_runtime::Result<Vec<_>>>()?;
     let seq = |i: usize| r.rank * shape.groups + i;
-    prefixes(&mut r.rt, p, &leases, &shape.context, corpus, r.rank * shape.groups)?;
+    if let Some(src) = &r.source {
+        for (lease, &n) in leases.iter().zip(&shape.context) {
+            r.rt.replicate(src, lease, n)?;
+        }
+    }
     let input: Vec<i64> =
         shape.context.iter().enumerate().flat_map(|(i, &pos)| tokens(corpus, seq(i), pos, shape.rows)).collect();
     let vars = stage(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
@@ -566,9 +556,20 @@ impl Bench {
             .zip(probes)
             .zip(gpus)
             .enumerate()
-            .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank })
+            .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank, source: None })
             .collect();
         Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, isolate })
+    }
+
+    /// Build every rank's source prefix, the longest context any scenario
+    /// reaches.
+    fn prime(&mut self, length: usize) -> Result<()> {
+        let (p, corpus) = (&self.protocol, &self.corpus);
+        crate::each(&mut self.ranks, "building the source prefix", |r| {
+            r.source = source(&mut r.rt, p, length, corpus, r.rank)?;
+            Ok(())
+        })?;
+        Ok(())
     }
 
     /// One scenario end to end on every rank: measure, say, record. The
@@ -576,7 +577,7 @@ impl Bench {
     /// the report keeps every rank.
     fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, f64, Vec<(String, f64)>)> {
         let started = Instant::now();
-        say("scenario", scenario_line(s, self.protocol.rows.max as usize));
+        say("scenario", s.id.clone());
         let (p, corpus, samples, isolate) = (&self.protocol, &self.corpus, self.samples, self.isolate);
         let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples, isolate))?;
         let p50 = |x: &Measured| stats(&x.program.graph_us).p50;
@@ -622,6 +623,9 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.isolate)?;
     bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
     bench.samples = w.samples;
+    let at = Instant::now();
+    bench.prime(plan.source)?;
+    timed("source", format!("{} tokens of real prefix per rank", plan.source), at);
 
     let started = Instant::now();
     let (rt, probe) = (&bench.ranks[0].rt, &bench.ranks[0].probe);

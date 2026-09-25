@@ -105,8 +105,9 @@ fn a_sequence_longer_than_a_page_table_row_is_dropped() {
 #[test]
 fn capacity_is_the_largest_scenarios_reach() {
     let p = plan("[[sweep]]\ngroups = [1, 8]\nrows = [1]\ncontext = [128, 2048]\n");
-    // Eight sequences of 2,048 + 1, rounded to 16-token pages, plus one page.
-    assert_eq!((p.tokens, p.seqs), (8 * 2064 + 16, 8));
+    // Eight sequences of 2,048 + 1, rounded to 16-token pages, plus one page,
+    // plus the 2,048-token source they copy their prefix from.
+    assert_eq!((p.tokens, p.seqs, p.source), (8 * 2064 + 16 + 2048, 9, 2048));
 }
 
 #[test]

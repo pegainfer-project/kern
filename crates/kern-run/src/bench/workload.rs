@@ -194,6 +194,9 @@ pub struct Plan {
     /// sweep's cheap scenarios carry its expensive one's state.
     pub tokens: u64,
     pub seqs: u64,
+    /// The longest context of any scenario: one sequence of it is built
+    /// per rank, and every scenario's sequences copy their prefix from it.
+    pub source: usize,
 }
 
 impl Plan {
@@ -215,9 +218,13 @@ impl Plan {
             "no shape in this workload has a program: {}",
             dropped.iter().map(|d| format!("{} ({})", d.shape, d.why)).collect::<Vec<_>>().join(", ")
         );
+        let source = scenarios.iter().flat_map(|s| s.shape.context.iter().copied()).max().unwrap_or(0);
+        let held = usize::from(source > 0);
         Ok(Plan {
-            tokens: scenarios.iter().map(|s| s.shape.tokens(unit)).max().unwrap_or(unit) as u64,
-            seqs: scenarios.iter().map(|s| s.shape.groups).max().unwrap_or(1) as u64,
+            tokens: (scenarios.iter().map(|s| s.shape.tokens(unit)).max().unwrap_or(unit)
+                + source.div_ceil(unit) * unit) as u64,
+            seqs: (scenarios.iter().map(|s| s.shape.groups).max().unwrap_or(1) + held) as u64,
+            source,
             scenarios,
             dropped,
         })
