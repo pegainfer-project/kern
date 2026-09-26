@@ -189,7 +189,7 @@ impl Runtime {
         }
 
         // Op scratch is allocated here, at var max, like the buffers.
-        let resolved = compile::resolve_ops(&manifest, &modules, kernels_dir, &stream, &vars_max)?;
+        let resolved = compile::resolve_ops(&manifest, &modules, kernels_dir, &stream, &blt, &vars_max)?;
 
         // Everything but the states is on the device now: what is left is
         // the states' to take (weights are bound into buffers already
@@ -274,7 +274,7 @@ impl Runtime {
         let programs = if hosted {
             BTreeMap::new()
         } else {
-            compile::compile(&manifest, &resolved, &buffers, &states, &ranks, &peers)?
+            compile::compile(&manifest, &resolved, &buffers, &states, &ranks, &peers, &blt)?
         };
 
         let provision = Provision { tokens: pool.pages_max() as u64 * page, seq_slots: pool.slots_max() as u64 };

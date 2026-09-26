@@ -9,6 +9,7 @@ use cudarc::cublas;
 use cudarc::cublaslt::{self, CudaBlasLT, Matmul, MatmulConfig, MatmulShared};
 use cudarc::driver::{sys, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice, SyncOnDrop};
 use half::bf16;
+use kern_manifest::types::GemmAlgo;
 
 use crate::compile::RVal;
 use crate::error::{bail, Error, Result};
@@ -42,15 +43,11 @@ impl DevicePtrMut<bf16> for RawBf16 {
     }
 }
 
-/// `extern:cublaslt_bf16_tn`: row-major `C[m,n] = A[m,k] @ W[n,k]^T`,
-/// resolved args `[a, w, c, m, n, k]`. Column-major mapping: compute
-/// `C_cm[n,m] = W_cm^T[n,k] x A_cm[k,m]` -> transa=T on W (lda=k),
-/// transb=N on A (ldb=k), m'=n, n'=m, ldc=n.
-/// `extern:cublaslt_bf16_tn_acc` is the same with beta=1: `C += A @ W^T`.
-pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[RVal], beta: f32) -> Result<()> {
-    // `c[m, n] (+)= a[m, k] @ w[n, k]^T`; an optional 7th arg is C's row
-    // stride in elements (default n), and an optional 8th arg is A's row
-    // stride (default k). This permits group views without transposing A.
+/// The operands of a `cublaslt_bf16_tn[_acc]` call, `[a, w, c, m, n, k]` plus
+/// an optional C row stride (default n) and A row stride (default k), in
+/// elements, so a group view needs no transposed copy of A; checked against
+/// their buffers, `None` for an empty product.
+pub(crate) fn bf16_operands(args: &[RVal]) -> Result<Option<(&RVal, &RVal, &RVal, GemmShape)>> {
     let (a, w, c, m, n, k, ldc, a_stride) = match args {
         [a, w, c, m, n, k] => (a, w, c, m.val, n.val, k.val, n.val, k.val),
         [a, w, c, m, n, k, ldc] => (a, w, c, m.val, n.val, k.val, ldc.val, k.val),
@@ -64,11 +61,24 @@ pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[R
         bail!(Manifest, "gemm: A row stride {a_stride} < k {k}");
     }
     if m == 0 || n == 0 || k == 0 {
-        return Ok(());
+        return Ok(None);
     }
     if a.bytes < ((m - 1) * a_stride + k) * 2 || w.bytes < n * k * 2 || c.bytes < ((m - 1) * ldc + n) * 2 {
         bail!(Manifest, "gemm: operands too small for m={m} n={n} k={k} ldc={ldc} A row stride={a_stride}");
     }
+    Ok(Some((a, w, c, GemmShape { m, n, k, ldc, a_stride })))
+}
+
+/// `extern:cublaslt_bf16_tn`: row-major `C[m,n] = A[m,k] @ W[n,k]^T`,
+/// resolved args `[a, w, c, m, n, k]`. Column-major mapping: compute
+/// `C_cm[n,m] = W_cm^T[n,k] x A_cm[k,m]` -> transa=T on W (lda=k),
+/// transb=N on A (ldb=k), m'=n, n'=m, ldc=n.
+/// `extern:cublaslt_bf16_tn_acc` is the same with beta=1: `C += A @ W^T`.
+/// Optional row strides as [`bf16_operands`] reads them.
+pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[RVal], beta: f32) -> Result<()> {
+    let Some((a, w, c, GemmShape { m, n, k, ldc, a_stride })) = bf16_operands(args)? else {
+        return Ok(());
+    };
     let view = |rv: &RVal| RawBf16 { ptr: rv.val, len: (rv.bytes / 2) as usize, stream: stream.clone() };
     let cfg = MatmulConfig {
         transa: true,
@@ -94,6 +104,176 @@ pub(crate) fn gemm_bf16_tn(blt: &CudaBlasLT, stream: &Arc<CudaStream>, args: &[R
             .map_err(|e| Error::Cuda(format!("cublasLt matmul (m={m} n={n} k={k}): {e:?}")))?;
     }
     Ok(())
+}
+
+/// A bf16 GEMM's shape: `C[m, n] = A[m, k] · W[n, k]ᵀ` with C's and A's row strides.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GemmShape {
+    pub(crate) m: u64,
+    pub(crate) n: u64,
+    pub(crate) k: u64,
+    pub(crate) ldc: u64,
+    pub(crate) a_stride: u64,
+}
+
+/// A matmul descriptor and the `w`, `a`, `c` layouts of a bf16 `C = A · Wᵀ`,
+/// column-major as in [`gemm_bf16_tn`]; destroyed on drop.
+struct Described {
+    desc: cublaslt::sys::cublasLtMatmulDesc_t,
+    layouts: [cublaslt::sys::cublasLtMatrixLayout_t; 3],
+}
+
+impl Described {
+    fn new(s: GemmShape) -> Result<Self> {
+        use cublaslt::result;
+        use cublaslt::sys::{cublasComputeType_t, cublasLtMatmulDescAttributes_t as Attr, cudaDataType};
+        let err = |e: cublaslt::result::CublasError| Error::Cuda(format!("cublasLt descriptor ({s:?}): {e:?}"));
+        let bf = cudaDataType::CUDA_R_16BF;
+        unsafe {
+            let desc = result::create_matmul_desc(cublasComputeType_t::CUBLAS_COMPUTE_32F, cudaDataType::CUDA_R_32F)
+                .map_err(err)?;
+            let mut d = Described { desc, layouts: [std::ptr::null_mut(); 3] };
+            let t = cublas::sys::cublasOperation_t::CUBLAS_OP_T;
+            result::set_matmul_desc_attribute(
+                desc,
+                Attr::CUBLASLT_MATMUL_DESC_TRANSA,
+                &t as *const _ as *const c_void,
+                4,
+            )
+            .map_err(err)?;
+            d.layouts[0] = result::create_matrix_layout(bf, s.k, s.n, s.k as i64).map_err(err)?;
+            d.layouts[1] = result::create_matrix_layout(bf, s.k, s.m, s.a_stride as i64).map_err(err)?;
+            d.layouts[2] = result::create_matrix_layout(bf, s.n, s.m, s.ldc as i64).map_err(err)?;
+            Ok(d)
+        }
+    }
+}
+
+impl Drop for Described {
+    fn drop(&mut self) {
+        use cublaslt::result;
+        unsafe {
+            for l in self.layouts {
+                if !l.is_null() {
+                    let _ = result::destroy_matrix_layout(l);
+                }
+            }
+            let _ = result::destroy_matmul_desc(self.desc);
+        }
+    }
+}
+
+/// A launch's pinned cuBLASLt algorithm, built from the manifest's config.
+#[derive(Clone, Copy)]
+pub(crate) struct Pinned(cublaslt::sys::cublasLtMatmulAlgo_t);
+
+impl Pinned {
+    /// `cublasLtMatmulAlgoInit` for the bf16 GEMM's types, then every config
+    /// attribute set as `algo` says.
+    pub(crate) fn new(blt: &CudaBlasLT, algo: &GemmAlgo) -> Result<Pinned> {
+        use cublaslt::sys::{
+            self as lt, cublasComputeType_t, cublasLtMatmulAlgoConfigAttributes_t as Cfg, cudaDataType,
+        };
+        let bf = cudaDataType::CUDA_R_16BF;
+        let mut raw = std::mem::MaybeUninit::<lt::cublasLtMatmulAlgo_t>::zeroed();
+        let status = unsafe {
+            lt::cublasLtMatmulAlgoInit(
+                *blt.handle(),
+                cublasComputeType_t::CUBLAS_COMPUTE_32F,
+                cudaDataType::CUDA_R_32F,
+                bf,
+                bf,
+                bf,
+                bf,
+                algo.id,
+                raw.as_mut_ptr(),
+            )
+        };
+        if status != lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+            bail!(KernelArtifact, "cublasLt has no bf16 algorithm {} here ({status:?})", algo.id);
+        }
+        let mut raw = unsafe { raw.assume_init() };
+        let mut set = |attr: Cfg, (v, size): (*const c_void, usize), what: &str| {
+            let status = unsafe { lt::cublasLtMatmulAlgoConfigSetAttribute(&mut raw, attr, v, size) };
+            if status == lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+                Ok(())
+            } else {
+                Err(Error::KernelArtifact(format!("cublasLt algorithm {}: {what} rejected ({status:?})", algo.id)))
+            }
+        };
+        fn raw_of<T>(v: &T) -> (*const c_void, usize) {
+            (v as *const T as *const c_void, std::mem::size_of::<T>())
+        }
+        set(Cfg::CUBLASLT_ALGO_CONFIG_TILE_ID, raw_of(&algo.tile), "tile")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_STAGES_ID, raw_of(&algo.stages), "stages")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_SPLITK_NUM, raw_of(&algo.split_k), "split_k")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME, raw_of(&algo.reduction), "reduction")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, raw_of(&algo.swizzle), "swizzle")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION, raw_of(&algo.custom), "custom")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID, raw_of(&algo.inner_shape), "inner_shape")?;
+        set(Cfg::CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID, raw_of(&algo.cluster_shape), "cluster_shape")?;
+        Ok(Pinned(raw))
+    }
+
+    /// `cublasLtMatmulAlgoCheck` at `shape`, the workspace within `Blas`'s.
+    pub(crate) fn check(&self, blt: &CudaBlasLT, shape: GemmShape) -> Result<()> {
+        use cublaslt::sys as lt;
+        let d = Described::new(shape)?;
+        let mut result = std::mem::MaybeUninit::<lt::cublasLtMatmulHeuristicResult_t>::zeroed();
+        let [w, a, c] = d.layouts;
+        let status =
+            unsafe { lt::cublasLtMatmulAlgoCheck(*blt.handle(), d.desc, w, a, c, c, &self.0, result.as_mut_ptr()) };
+        if status != lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+            bail!(KernelArtifact, "the pinned cublasLt algorithm does not run at {shape:?} ({status:?})");
+        }
+        let need = unsafe { result.assume_init() }.workspaceSize;
+        if need > Blas::WORKSPACE {
+            bail!(
+                KernelArtifact,
+                "the pinned cublasLt algorithm needs {need} bytes of workspace at {shape:?}, over {}",
+                Blas::WORKSPACE
+            );
+        }
+        Ok(())
+    }
+}
+
+/// [`gemm_bf16_tn`] on a pinned algorithm: no heuristic, the workspace `Blas`'s.
+pub(crate) fn gemm_bf16_tn_pinned(
+    blt: &CudaBlasLT,
+    blas: &Blas,
+    stream: &Arc<CudaStream>,
+    args: &[RVal],
+    beta: f32,
+    algo: &Pinned,
+) -> Result<()> {
+    let Some((a, w, c, shape)) = bf16_operands(args)? else {
+        return Ok(());
+    };
+    let d = Described::new(shape)?;
+    let [wl, al, cl] = d.layouts;
+    let alpha = 1.0f32;
+    unsafe {
+        cublaslt::result::matmul(
+            *blt.handle(),
+            d.desc,
+            &alpha as *const _ as *const c_void,
+            &beta as *const _ as *const c_void,
+            w.val as *const c_void,
+            wl,
+            a.val as *const c_void,
+            al,
+            c.val as *const c_void,
+            cl,
+            c.val as *mut c_void,
+            cl,
+            &algo.0,
+            blas.ws as *mut c_void,
+            Blas::WORKSPACE,
+            stream.cu_stream() as *mut _,
+        )
+    }
+    .map_err(|e| Error::Cuda(format!("cublasLt matmul, pinned algorithm ({shape:?}): {e:?}")))
 }
 
 /// A cuBLAS handle bound to the runtime's stream with its own workspace, for

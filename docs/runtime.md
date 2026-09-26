@@ -137,6 +137,17 @@ park 31 ms、wake 28 ms，发起 0.9 / 0.5 ms（2500 页折成 ~50 次拷贝）�
 （默认 n），再追加第 8 参 A 行步长（默认 k），单位都是元素。
 配合 buffer 字节 offset，可直接读取交错存储的组并写入输出列带，
 无需先转置或复制输入。
+这两个入口的 launch 可写 `algo` 钉住 cublasLt 算法（`cublasLtMatmulAlgoConfigAttributes_t`
+的全部取值：`id` / `tile` / `stages` / `split_k` / `reduction` / `swizzle` / `custom` /
+`inner_shape` / `cluster_shape`），不写时照旧取启发式第一名。装载时 `cublasLtMatmulAlgoInit`
+建算法、逐项设属性，再在该 launch 会遇到的形状两端（所有 var 取下界、取上界，`when` 的 var
+夹在自己的区间里）跑 `cublasLtMatmulAlgoCheck`，并要求 workspace 不超过 `Blas` 的 32 MiB；
+设不上或查不过就是 kernel artifact 错误，绝不静默退回启发式。发射时不查启发式、不同步、
+不回读，workspace 用 `Blas` 的。按形状换算法用 `when`：一个 op 每段 m 区间一个 launch，
+各带自己的 `algo`。算法怎么选不归 kern：调用方在自己的真实负载里计时，把赢家写进
+manifest，输出照常由 `kern test` 对参考把关。不切 K 不等于逐位相同：sm_89 上 `sliced`
+的核（algo 30/31/16）在块内按 warp 切 k，`SPLITK_NUM` 却报 1，结果与 algo 5/6/21 不同；
+cuBLAS 只承诺同一算法在同架构、同库版本上可复现，所以换 `algo` 前要对输出重新把关。
 `extern:cublas_bf16_tn_f32` 同一映射但结果落 **f32**（cublasGemmEx，
 `CUBLAS_COMPUTE_32F` / `DEFAULT_TENSOR_OP`，独立 cuBLAS handle + 32 MiB
 workspace，可捕获）：K3 的每条稠密投影都是 f32 partial 再由认证的 `k3_land`

@@ -478,6 +478,11 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             "{ctx}: a launch without a module must be a runtime built-in (`extern:<name>`)"
                         ));
                     }
+                    if e.algo.is_some()
+                        && !matches!(e.entry.as_str(), "extern:cublaslt_bf16_tn" | "extern:cublaslt_bf16_tn_acc")
+                    {
+                        errs.push(format!("{ctx}: `algo` pins a cublaslt_bf16_tn[_acc] launch, not `{}`", e.entry));
+                    }
                 }
                 Launch::Kernel(k) => {
                     if k.entry.is_empty() {
