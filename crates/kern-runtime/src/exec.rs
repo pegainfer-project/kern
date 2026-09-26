@@ -204,6 +204,11 @@ impl Runtime {
     }
 
     pub(crate) fn launch(&self, l: &Launch, vars: &Dense) -> Result<()> {
+        if let Some((v, lo, hi)) = &l.when {
+            if !(*lo..=*hi).contains(&v.eval(vars)?) {
+                return Ok(());
+            }
+        }
         // Materialize the slots; only var-dependent scalars are left to
         // compute, everything else was finished at load. Packs (and the
         // tensor maps inside them) ride along as pointers to their images.

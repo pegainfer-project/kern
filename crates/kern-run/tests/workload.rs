@@ -15,7 +15,8 @@ fn manifest() -> Verified {
 fn plan(sweeps: &str) -> Plan {
     let m = manifest();
     let w = Workload::parse(&format!("samples = 12\nseed = 1\n{sweeps}")).unwrap();
-    Plan::check(&w, &Protocol::check(&m).unwrap(), kern_pool::page_unit(&m) as usize).unwrap()
+    let unit = kern_pool::page_unit(&m);
+    Plan::check(&w, &Protocol::check(&m).unwrap(), unit as usize, kern_pool::row_tokens(&m, unit)).unwrap()
 }
 
 fn ids(p: &Plan) -> Vec<&str> {
@@ -90,10 +91,23 @@ fn a_shape_no_program_takes_is_dropped_with_its_reason() {
 }
 
 #[test]
+fn a_sequence_longer_than_a_page_table_row_is_dropped() {
+    let m = manifest();
+    let row = kern_pool::row_tokens(&m, kern_pool::page_unit(&m)).unwrap();
+    let p = plan(&format!("[[sweep]]\nrows = [1]\ncontext = [{}, {}]\n", row - 1, row));
+    assert_eq!(ids(&p), [format!("decode-g1-r1-kv{}", row - 1), format!("prefill-g1-r1-kv{}", row - 1)]);
+    assert_eq!(
+        (p.dropped[0].shape.clone(), p.dropped[0].why.contains("page-table row")),
+        (format!("g1-r1-kv{row}"), true)
+    );
+}
+
+#[test]
 fn capacity_is_the_largest_scenarios_reach() {
     let p = plan("[[sweep]]\ngroups = [1, 8]\nrows = [1]\ncontext = [128, 2048]\n");
-    // Eight sequences of 2,048 + 1, rounded to 16-token pages, plus one page.
-    assert_eq!((p.tokens, p.seqs), (8 * 2064 + 16, 8));
+    // Eight sequences of 2,048 + 1, rounded to 16-token pages, plus one page,
+    // plus the 2,048-token source they copy their prefix from.
+    assert_eq!((p.tokens, p.seqs, p.source), (8 * 2064 + 16 + 2048, 9, 2048));
 }
 
 #[test]

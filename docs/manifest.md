@@ -92,7 +92,12 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     给 launch 加 `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`，
     核可以在前一个 launch 收尾时就上 SM，**manifest 承诺**该核在读写前一个
     launch 产出或消费的任何东西之前执行 `griddepcontrol.wait`，wait 之前只许
-    读 weight；verifier 不检查也检查不了，extern 不接受）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
+    读 weight；verifier 不检查也检查不了，extern 不接受）、`when` 条件
+    （kernel 与 extern 都可写，`{"var": "tokens", "max": 16}`：var 在闭区间
+    `[min, max]` 内才发射，两端可省；区间外该 launch 什么都不做。manifest
+    没有控制流，一个 op 按形状选实现就写几个 launch 各管一段区间，例如小
+    batch 走自研 split-K、`min: 17` 起交回 `extern:cublaslt_bf16_tn`；
+    verifier 查 var 已声明、区间非空，不查各段是否覆盖全部取值）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
     `{"scratch": name}` 接私有工作区 / 字面量标量（impl 私有常量）/
     `{"rank": group}` / `{"pack": {...}}`；**不写 = 按序转发接口参数**。
     **bytes<n> / pack** 是 launch 私有的参数类型：核的 ABI 收 struct

@@ -106,12 +106,12 @@ between facts, the section's time last.
 ```
 calibrate NVIDIA GB300 · 152 SMs · L2 129 MiB   170.6ms
 plan      6 scenarios · 0 dropped · 2128 tokens of state · 4 seqs
-scenario  decode-g1-r1-kv128 · prefix 1 chunk
+scenario  decode-g1-r1-kv128
 program   2.577 ms · p10–p90 2.575–2.580 · cv 0.1% · 436 calls   150.3ms
 mix       gemm 49.9% · fused_add_rms_norm 11.3% · attn 8.9% · rotary_embedding 6.7% · silu_mul 6.0% · rms_norm_qhead 5.7% · +5 more
 isolate   85 cases · outputs match   868.7ms
 …
-scenario  decode_batch-g4-r1-kv512 · prefix 4 chunks
+scenario  decode_batch-g4-r1-kv512
 program   3.324 ms · p10–p90 3.318–3.327 · cv 0.1% · 436 calls   152.7ms
 mix       gemm 44.2% · attn_batch 19.6% · fused_add_rms_norm 9.9% · rotary_embedding 5.8% · silu_mul 5.5% · rms_norm_qhead 5.0% · +5 more
 isolate   85 cases · outputs match   891.3ms
@@ -123,16 +123,35 @@ terminal because that is where the question is asked. The shares are of
 the traced total, not of the graph: bracketing every call costs time that
 belongs to no call, and dividing by the graph would quietly hand that
 time to whichever op happened to be measured. A `program` line's time
-covers the scenario so far, prefix included; the `out` line's is the
-whole run.
+covers the scenario so far, context copies included; the `out` line's is the
+whole run. A `source` line before `calibrate` says how long the ranks'
+source prefix took to build.
+
+## What an op is worth
+
+`mix` attributes the step by bracketing every call with events, and a
+bracket costs a few microseconds and breaks the overlap programmatic
+dependent launch buys, so ops with many tiny calls look bigger than they
+are. `--ablate` answers the question directly: for each op, the program is
+captured again with all of that op's calls left out and timed as a whole
+graph, and the `free` line says what share of the step (and, after
+`cost`, of the workload) would go if the op were free. On a Qwen3.8-27B
+decode at 8 sequences over 131k context `mix` gives the fused add-norm
+4.5% and `free` 2.3%; attention goes the other way, 43.5% → 50.8%. A left
+out call's outputs keep what the last full run wrote, so the rest of the
+program reads well-formed inputs. Single-device only, like `--isolate`.
 
 ## What is actually measured
 
-- **Every input is real.** A sequence's prefix is built by running the
-  chunk program over deterministic prose, chunk by chunk, into its own
-  lease. The page table, slot mapping, sequence lengths and KV pages are
-  what a server would hand the kernel. A context length is never
-  simulated by raising a scalar over uninitialised cache. `span_at` is
+- **Every input is real.** Each rank builds one prefix, as long as the
+  plan's longest context, by running the chunk program over deterministic
+  prose. A scenario's sequence copies its first n positions from it into
+  its own lease (`Runtime::replicate`): its own pages and state slot,
+  nothing shared, so a batch reads as much memory as distinct sequences
+  would, and a 185k context costs a copy, not its prefill. The page table,
+  slot mapping, sequence lengths and KV pages are what a server would hand
+  the kernel. A context length is never simulated by raising a scalar over
+  uninitialised cache. `span_at` is
   the one fill written at a constant.
 - **An isolated call is measured where it occurs.** The walk executes
   each call for real after measuring it, so the next call sees the inputs
@@ -165,7 +184,7 @@ the rank a step waits for.
 ```
 calibrate NVIDIA GB300 · 152 SMs · L2 129 MiB · rank 0 of 4   171.2ms
 plan      9 scenarios · 0 dropped · 33920 tokens of state · 8 seqs
-scenario  decode_batch-g8-r1-kv4096 · prefix 16 chunks
+scenario  decode_batch-g8-r1-kv4096
 program   9.070 ms · p10–p90 9.062–9.095 · cv 0.2% · 672 calls · rank 2 slowest of 4   3.1s
 mix       dsv41_mega_moe_e384.0799aa8f 33.6% · dsv41_dense.d9228a3b 5.7% · …
 ```

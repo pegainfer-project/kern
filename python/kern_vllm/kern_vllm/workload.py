@@ -9,7 +9,8 @@ weighted by its count, so `kern bench` prices the traced traffic.
 
 A decode call's sequence count rounds up to vLLM's CUDA graph sizes, which
 is what a pure decode step runs at; its context is the mean previous
-length. Lengths and prefill rows round to the nearest half octave.
+length. Lengths and prefill rows round to the nearest half octave, but no
+sequence grows past the longest one traced, which the server's limit bounds.
 
 vLLM's warmup and graph-capture batches repeat one (query, seq) pair across
 every row or decode from nothing; they are left out.
@@ -38,15 +39,18 @@ def half_octave(n: float) -> int:
     return 0 if n < 1 else round(2 ** (round(math.log2(n) * 2) / 2))
 
 
-def bucket(call: tuple[int, int, list[int]]) -> tuple[int, int, int]:
+def bucket(call: tuple[int, int, list[int]], longest: int) -> tuple[int, int, int]:
     groups, rows, context = call
     if rows == 1:
-        return next(g for g in GRAPH_SIZES if g >= groups), 1, half_octave(sum(context) / len(context))
-    return 1, half_octave(rows), half_octave(context[0])
+        return next(g for g in GRAPH_SIZES if g >= groups), 1, min(half_octave(sum(context) / len(context)), longest - 1)
+    rows = min(half_octave(rows), longest)
+    return 1, rows, min(half_octave(context[0]), longest - rows)
 
 
 def workload(steps: list[dict], samples: int, seed: int) -> str:
-    counts = collections.Counter(bucket(c) for s in steps if not dummy(s) for c in calls(s))
+    live = [s for s in steps if not dummy(s)]
+    longest = max(n for s in live for n in s["s"])
+    counts = collections.Counter(bucket(c, longest) for s in live for c in calls(s))
     body = [f"[[sweep]]\ngroups = [{g}]\nrows = [{r}]\ncontext = [{c}]\nweight = {n}\n"
             for (g, r, c), n in sorted(counts.items())]
     return "\n".join([f"# {sum(counts.values())} calls in {len(counts)} buckets",

@@ -105,6 +105,31 @@ impl Snapshot {
     }
 }
 
+/// What a sample of `program` restores before it runs.
+fn pre_image(rt: &Runtime, program: &str) -> Result<Snapshot> {
+    // The program's pre-image is what outlives a run and it writes: its
+    // carries and states. Workspace is written before it is read within
+    // a run, so it is left alone; snapshotting every carry and state of
+    // a large manifest would not fit beside them. An exported carry is
+    // not this rank's to restore either: peers write into it on their
+    // own clock, and the barrier epochs inside it must only advance.
+    // A paged state is only appended to: a run writes the rows it adds,
+    // as a function of what is restored, so a replay rewrites them with
+    // the same bytes. Snapshotting it would double the largest
+    // allocation, a long context's KV.
+    let n_calls = rt.manifest.programs[program].calls.len();
+    let (written, states) = declared_writes(rt, program, 0..n_calls);
+    let states = states.into_iter().filter(|s| rt.manifest.states[s].bytes_per_token == 0).collect();
+    let carries = written
+        .into_iter()
+        .filter(|b| {
+            let buffer = &rt.manifest.buffers[b];
+            buffer.kind == BufferKind::Carry && !buffer.export
+        })
+        .collect();
+    Snapshot::new(rt, carries, states)
+}
+
 /// The buffers and states calls `calls` of `program` declare they write:
 /// what a sample restores to its pre-image.
 fn declared_writes(rt: &Runtime, program: &str, calls: std::ops::Range<usize>) -> (BTreeSet<String>, BTreeSet<String>) {
@@ -407,22 +432,7 @@ impl Probe {
         samples: usize,
     ) -> Result<ProgramSamples> {
         rt.ctx.bind_to_thread()?;
-        // The program's pre-image is what outlives a run and it writes: its
-        // carries and states. Workspace is written before it is read within
-        // a run, so it is left alone; snapshotting every carry and state of
-        // a large manifest would not fit beside them. An exported carry is
-        // not this rank's to restore either: peers write into it on their
-        // own clock, and the barrier epochs inside it must only advance.
-        let n_calls = rt.manifest.programs[program].calls.len();
-        let (written, states) = declared_writes(rt, program, 0..n_calls);
-        let carries = written
-            .into_iter()
-            .filter(|b| {
-                let buffer = &rt.manifest.buffers[b];
-                buffer.kind == BufferKind::Carry && !buffer.export
-            })
-            .collect();
-        let snapshot = Snapshot::new(rt, carries, states)?;
+        let snapshot = pre_image(rt, program)?;
         let prog = &rt.programs[program];
         let dense = Dense::check(&rt.manifest, vars, &prog.vars)?;
         let n = prog.call_ranges.len();
@@ -467,5 +477,45 @@ impl Probe {
         snapshot.restore(rt)?;
         rt.stream.synchronize()?;
         Ok(result)
+    }
+
+    /// Whole-graph timings of `program` with the calls in `skip` left out:
+    /// what a step would take if they were free, overlap and launch gaps
+    /// included, which per-call brackets cannot show. A skipped call's
+    /// outputs keep what the last full run left in them, so every other
+    /// call still reads well-formed inputs.
+    pub fn without(
+        &self,
+        rt: &Runtime,
+        program: &str,
+        vars: &BTreeMap<String, u64>,
+        skip: &BTreeSet<usize>,
+        samples: usize,
+    ) -> Result<Vec<f64>> {
+        rt.ctx.bind_to_thread()?;
+        let snapshot = pre_image(rt, program)?;
+        let prog = &rt.programs[program];
+        let dense = Dense::check(&rt.manifest, vars, &prog.vars)?;
+        let whole = Events::new(2)?;
+        let graph = capture(rt, || {
+            whole.captured_record(0, rt)?;
+            let kept = prog.call_ranges.iter().enumerate().filter(|(i, _)| !skip.contains(i));
+            for (_, &(lo, hi)) in kept {
+                prog.launches[lo..hi].iter().try_for_each(|l| rt.launch(l, &dense))?;
+            }
+            whole.captured_record(1, rt)
+        })?;
+        let mut out = Vec::with_capacity(samples);
+        for i in 0..samples + 2 {
+            snapshot.restore(rt)?;
+            self.evict(rt)?;
+            replay(rt, &graph)?;
+            if i >= 2 {
+                out.push(whole.elapsed_ms(0, 1)? as f64 * 1000.);
+            }
+        }
+        snapshot.restore(rt)?;
+        rt.stream.synchronize()?;
+        Ok(out)
     }
 }

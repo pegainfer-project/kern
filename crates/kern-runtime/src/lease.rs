@@ -181,6 +181,15 @@ impl Runtime {
         Ok(lease)
     }
 
+    /// Fill the first `len` positions of `dst`, a fresh lease, with a copy
+    /// of `src`'s: pages and state slot copied on the stream, nothing
+    /// shared. A bench reaches a long context at copy speed this way, and
+    /// every sequence of a batch still reads its own pages.
+    pub fn replicate(&mut self, src: &Lease, dst: &Lease, len: usize) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        self.copy(&dst.replica_of(src, len))
+    }
+
     /// Run a pool decision's byte moves on the stream: whole pages of every
     /// paged state, whole slots of every per-sequence state.
     fn copy(&mut self, c: &Copies) -> Result<()> {

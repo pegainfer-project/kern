@@ -909,6 +909,20 @@ impl Lease {
         Ok(())
     }
 
+    /// The copies that make this lease's first `len` positions a private
+    /// replica of `src`'s: every page they touch and the state slot, with
+    /// nothing shared, so the replica reads its own memory. The lease is
+    /// fresh and holds `len` positions; `src` holds them filled.
+    pub fn replica_of(&self, src: &Lease, len: usize) -> Copies {
+        let n = len.div_ceil(self.pool.unit as usize);
+        assert!(self.shared == 0 && self.prefix == 0, "replicating into a lease that shares a prefix");
+        assert!(n <= self.pages.len() && n <= src.pages.len(), "replicating {len} positions: {self:?} from {src:?}");
+        Copies {
+            pages: src.pages[..n].iter().copied().zip(self.pages[..n].iter().copied()).collect(),
+            slot: src.seq_slot().zip(self.seq_slot()),
+        }
+    }
+
     /// The sequence slot held in every per-sequence state (`None` when
     /// the manifest has none). Slot 0 is never handed out.
     pub fn seq_slot(&self) -> Option<i32> {

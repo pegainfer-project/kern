@@ -173,6 +173,8 @@ pub(crate) enum LaunchKind {
 pub(crate) struct Launch {
     pub(crate) kind: LaunchKind,
     pub(crate) slots: Vec<Slot>,
+    /// The var and inclusive range the launch runs in; outside it, it does nothing.
+    pub(crate) when: Option<(CExpr, u64, u64)>,
     /// Error context: which call and impl launch this came from.
     pub(crate) ctx: String,
 }
@@ -190,8 +192,11 @@ pub(crate) struct CompiledProgram {
 }
 
 impl Launch {
-    /// Mark the vars the launch's grid, shared memory and args read.
+    /// Mark the vars the launch's range, grid, shared memory and args read.
     fn mark(&self, used: &mut [bool]) {
+        if let Some((v, _, _)) = &self.when {
+            v.mark(used);
+        }
         if let LaunchKind::Cubin { grid, shared_mem, .. } = &self.kind {
             grid.iter().chain(shared_mem.iter()).for_each(|e| e.mark(used));
         }
@@ -608,7 +613,17 @@ fn compile_call(
                 }
             }
         };
-        launches.push(Launch { kind, slots, ctx: format!("{cctx} launch #{li} (`{}`)", l.entry()) });
+        let when = l
+            .when()
+            .map(|w| {
+                Ok::<_, crate::Error>((
+                    CExpr::Var(var_index(vars, &w.var)?),
+                    w.min.unwrap_or(0),
+                    w.max.unwrap_or(u64::MAX),
+                ))
+            })
+            .transpose()?;
+        launches.push(Launch { kind, slots, when, ctx: format!("{cctx} launch #{li} (`{}`)", l.entry()) });
     }
     Ok(())
 }

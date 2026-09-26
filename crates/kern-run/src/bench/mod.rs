@@ -56,6 +56,10 @@ pub struct BenchOpts {
     /// Also measure every distinct call on its own, L2 cold and warm
     #[arg(long)]
     isolate: bool,
+    /// Also time each program with every call of one op left out: what the
+    /// step would save if that op were free
+    #[arg(long)]
+    ablate: bool,
     /// Manifest JSON (must pass verification)
     #[arg(long)]
     manifest: Option<PathBuf>,
@@ -140,24 +144,52 @@ fn mix(calls: &[(String, f64)]) -> Vec<(String, f64)> {
     v
 }
 
-/// What the workload's traffic costs on this manifest: every shape once,
-/// at the fastest program that takes it, times its weight, in µs; and
-/// that time's share by op. `runs` is (shape, program p50 µs, op shares)
-/// per scenario.
-fn cost(runs: &[(Shape, f64, Vec<(String, f64)>)]) -> (f64, Vec<(String, f64)>) {
-    let mut fastest: BTreeMap<String, &(Shape, f64, Vec<(String, f64)>)> = BTreeMap::new();
+/// One scenario's result on its slowest rank: program p50 µs, the share of
+/// it each op was attributed, and with `--ablate` the p50 µs of the program
+/// with each op left out.
+struct Priced {
+    shape: Shape,
+    us: f64,
+    shares: Vec<(String, f64)>,
+    free: Vec<(String, f64)>,
+}
+
+/// Each shape once, at the fastest program that takes it.
+fn fastest(runs: &[Priced]) -> Vec<&Priced> {
+    let mut best: BTreeMap<String, &Priced> = BTreeMap::new();
     for r in runs {
-        let e = fastest.entry(r.0.label()).or_insert(r);
-        if r.1 < e.1 {
+        let e = best.entry(r.shape.label()).or_insert(r);
+        if r.us < e.us {
             *e = r;
         }
     }
-    let total = fastest.values().map(|(s, us, _)| s.weight as f64 * us).sum();
+    best.into_values().collect()
+}
+
+/// What the workload's traffic costs on this manifest: every shape at its
+/// fastest program times its weight, in µs; and that time's share by op.
+fn cost(runs: &[Priced]) -> (f64, Vec<(String, f64)>) {
+    let fastest = fastest(runs);
+    let total = fastest.iter().map(|r| r.shape.weight as f64 * r.us).sum();
     let by_op: Vec<(String, f64)> = fastest
-        .values()
-        .flat_map(|(s, us, shares)| shares.iter().map(move |(op, f)| (op.clone(), s.weight as f64 * us * f)))
+        .iter()
+        .flat_map(|r| r.shares.iter().map(move |(op, f)| (op.clone(), r.shape.weight as f64 * r.us * f)))
         .collect();
     (total, mix(&by_op))
+}
+
+/// What the workload would save if each op were free, in µs, largest
+/// first, priced like [`cost`].
+fn savings(runs: &[Priced]) -> Vec<(String, f64)> {
+    let mut by_op: BTreeMap<String, f64> = BTreeMap::new();
+    for r in fastest(runs) {
+        for (op, without) in &r.free {
+            *by_op.entry(op.clone()).or_default() += r.shape.weight as f64 * (r.us - without).max(0.);
+        }
+    }
+    let mut v: Vec<(String, f64)> = by_op.into_iter().collect();
+    v.sort_by(|a, b| b.1.total_cmp(&a.1));
+    v
 }
 
 fn series(v: Vec<f64>) -> Value {
@@ -293,32 +325,28 @@ fn output_fingerprints(rt: &Runtime, p: &Protocol, groups: usize) -> Result<Vec<
         .collect()
 }
 
-/// Build every sequence's real prefix by running the chunk program over
-/// real prose. Each sequence gets its own lease and its own tokens, from
-/// sequence `first` on: never duplicate one lease across the batch to
-/// save preparation time.
-fn prefixes(
-    rt: &mut Runtime,
-    p: &Protocol,
-    leases: &[Lease],
-    context: &[usize],
-    corpus: &[i64],
-    first: usize,
-) -> Result<()> {
-    let chunk = p.chunk().context("a prefix needs a variable-row program")?.name.clone();
-    for (i, &length) in context.iter().enumerate() {
-        let mut pos = 0;
-        while pos < length {
-            let q = (length - pos).min(p.rows.max as usize);
-            let vars = stage(rt, p, &leases[i..i + 1], &[pos], q, &tokens(corpus, first + i, pos, q))?;
-            if !rt.is_captured(&chunk, &vars) {
-                rt.capture(&chunk, &vars)?;
-            }
-            rt.run_captured(&chunk, &vars)?;
-            pos += q;
-        }
+/// One real prefix of `length` tokens of prose, built by running the chunk
+/// program over it: the source every scenario's sequences copy their
+/// context from. Copying keeps each sequence on its own pages, so a batch
+/// reads as much memory as distinct sequences would, and a long context
+/// costs a copy instead of its prefill.
+fn source(rt: &mut Runtime, p: &Protocol, length: usize, corpus: &[i64], seq: usize) -> Result<Option<Lease>> {
+    if length == 0 {
+        return Ok(None);
     }
-    Ok(())
+    let chunk = p.chunk().context("a prefix needs a variable-row program")?.name.clone();
+    let lease = rt.lease(length)?;
+    let mut pos = 0;
+    while pos < length {
+        let q = (length - pos).min(p.rows.max as usize);
+        let vars = stage(rt, p, std::slice::from_ref(&lease), &[pos], q, &tokens(corpus, seq, pos, q))?;
+        if !rt.is_captured(&chunk, &vars) {
+            rt.capture(&chunk, &vars)?;
+        }
+        rt.run_captured(&chunk, &vars)?;
+        pos += q;
+    }
+    Ok(Some(lease))
 }
 
 /// Lift each distinct call out of the program, measure it cold and warm,
@@ -365,17 +393,6 @@ fn timed(key: &str, body: String, since: Instant) {
     println!("{}", row(key, body, Some(since.elapsed().as_secs_f32())));
 }
 
-/// The id carries the whole shape. What it cannot carry is how much prefix
-/// has to run before any measurement starts, which is what a long scenario
-/// spends its time on.
-fn scenario_line(s: &Scenario, chunk_rows: usize) -> String {
-    match s.shape.context.iter().map(|n| n.div_ceil(chunk_rows)).sum::<usize>() {
-        0 => s.id.clone(),
-        1 => format!("{} · prefix 1 chunk", s.id),
-        n => format!("{} · prefix {n} chunks", s.id),
-    }
-}
-
 fn program_line(g: &Stats, calls: usize) -> String {
     format!(
         "{:.3} ms · p10–p90 {:.3}–{:.3} · cv {:.1}% · {calls} calls",
@@ -417,7 +434,7 @@ fn preamble(
             "samples_per_mode":w.samples,"tail_policy":"all measured samples retained; no outlier filtering",
             "warmup":"3 call executions; 4 whole-program executions",
             "grouping":"same op, resolved arguments, buffer shape, aliasing, offsets and vars; weight names omitted",
-            "context_data":"deterministic diverse prose, actual model prefix execution",
+            "context_data":"deterministic diverse prose; one real prefix per rank, copied onto each sequence's own pages",
             "units":"microseconds; bandwidth GB/s uses read+write traffic"},
         "modules":m.modules.iter().map(|(n,x)|json!({"name":n,"sha256":x.sha256})).collect::<Vec<_>>(),
         "workload":{"samples":w.samples,"seed":w.seed,"scenarios":&plan.scenarios,"dropped":&plan.dropped},
@@ -433,6 +450,7 @@ struct Measured {
     cases: Vec<Value>,
     of_call: Vec<usize>,
     outputs: Vec<Value>,
+    free: Vec<(String, Vec<f64>)>,
     telemetry: (Value, Value),
     isolate_s: Option<f64>,
 }
@@ -456,9 +474,10 @@ fn record(m: &Manifest, s: &Scenario, rank: usize, x: Measured, elapsed_s: f64) 
         })
         .collect();
     let check = if x.of_call.is_empty() { Value::Null } else { json!("matches whole-program token outputs") };
+    let free: Vec<Value> = x.free.into_iter().map(|(op, us)| json!({"op":op,"graph":series(us)})).collect();
     json!({"scenario":s,"program":s.program,"rank":rank,"vars":x.vars,
         "graph":series(x.program.graph_us),"instrumented":series(x.program.instrumented_us),
-        "cases":x.cases,"calls":calls,"outputs":x.outputs,"output_check":check,
+        "cases":x.cases,"calls":calls,"outputs":x.outputs,"without_op":free,"output_check":check,
         "telemetry_before":x.telemetry.0,"telemetry_after":x.telemetry.1,"elapsed_s":elapsed_s})
 }
 
@@ -469,6 +488,7 @@ struct Rank {
     probe: Probe,
     gpu: usize,
     rank: usize,
+    source: Option<Lease>,
 }
 
 /// One rank's part of a scenario: lease, prefix, stage, measure. Every
@@ -481,17 +501,23 @@ fn measure(
     corpus: &[i64],
     samples: usize,
     isolate: bool,
+    ablating: bool,
 ) -> Result<Measured> {
     let shape = &s.shape;
     let before = telemetry(r.gpu);
     let leases = shape.context.iter().map(|n| r.rt.lease(n + shape.rows)).collect::<kern_runtime::Result<Vec<_>>>()?;
     let seq = |i: usize| r.rank * shape.groups + i;
-    prefixes(&mut r.rt, p, &leases, &shape.context, corpus, r.rank * shape.groups)?;
+    if let Some(src) = &r.source {
+        for (lease, &n) in leases.iter().zip(&shape.context) {
+            r.rt.replicate(src, lease, n)?;
+        }
+    }
     let input: Vec<i64> =
         shape.context.iter().enumerate().flat_map(|(i, &pos)| tokens(corpus, seq(i), pos, shape.rows)).collect();
     let vars = stage(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
     let program = r.probe.program(&r.rt, &s.program, &vars, samples)?;
     let whole = output_fingerprints(&r.rt, p, shape.groups)?;
+    let free = if ablating { ablate(r, &s.program, &vars, samples)? } else { Vec::new() };
     let (cases, of_call, outputs, isolate_s) = match isolate {
         false => (Vec::new(), Vec::new(), whole, None),
         true => {
@@ -505,7 +531,33 @@ fn measure(
             (cases, of_call, walked, Some(at.elapsed().as_secs_f64()))
         }
     };
-    Ok(Measured { vars, program, cases, of_call, outputs, telemetry: (before, telemetry(r.gpu)), isolate_s })
+    Ok(Measured { vars, program, cases, of_call, outputs, free, telemetry: (before, telemetry(r.gpu)), isolate_s })
+}
+
+/// For each op of `program`, in first-call order, the step's graph time
+/// with all of its calls left out.
+fn ablate(r: &Rank, program: &str, vars: &Vars, samples: usize) -> Result<Vec<(String, Vec<f64>)>> {
+    let calls = &r.rt.manifest.programs[program].calls;
+    let mut ops: Vec<&str> = Vec::new();
+    for c in calls {
+        if !ops.contains(&c.op.as_str()) {
+            ops.push(&c.op);
+        }
+    }
+    ops.into_iter()
+        .map(|op| {
+            let skip = calls.iter().enumerate().filter(|(_, c)| c.op == op).map(|(i, _)| i).collect();
+            Ok((op.to_string(), r.probe.without(&r.rt, program, vars, &skip, samples)?))
+        })
+        .collect()
+}
+
+/// Each op's saving as a share of `graph_us`, largest first.
+fn freed(graph_us: f64, free: &[(String, f64)]) -> Vec<(String, f64)> {
+    let mut v: Vec<(String, f64)> =
+        free.iter().map(|(op, us)| (op.clone(), (graph_us - us).max(0.) / graph_us)).collect();
+    v.sort_by(|a, b| b.1.total_cmp(&a.1));
+    v
 }
 
 /// What every scenario is measured against: loaded once, and unchanged by
@@ -517,16 +569,28 @@ struct Bench {
     corpus: Vec<i64>,
     samples: usize,
     isolate: bool,
+    ablate: bool,
 }
 
 impl Bench {
     /// Every rank on its GPU, peers connected, what the manifest runs once
     /// run, a probe over each.
-    fn load(m: &Verified, inputs: &crate::Inputs, protocol: Protocol, plan: &Plan, isolate: bool) -> Result<Bench> {
+    fn load(
+        m: &Verified,
+        inputs: &crate::Inputs,
+        protocol: Protocol,
+        plan: &Plan,
+        isolate: bool,
+        ablate: bool,
+    ) -> Result<Bench> {
         let n = crate::ranks_of(m)?;
         ensure!(
             n == 1 || !isolate,
             "--isolate needs a single-device manifest: a call that reads its peers cannot be replayed on one rank"
+        );
+        ensure!(
+            n == 1 || !ablate,
+            "--ablate needs a single-device manifest: leaving a call out on every rank can strand a peer's barrier"
         );
         let gpus: Vec<usize> = (inputs.gpu..inputs.gpu + n).collect();
         let host_weights = HostWeights::new();
@@ -566,19 +630,31 @@ impl Bench {
             .zip(probes)
             .zip(gpus)
             .enumerate()
-            .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank })
+            .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank, source: None })
             .collect();
-        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, isolate })
+        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, isolate, ablate })
+    }
+
+    /// Build every rank's source prefix, the longest context any scenario
+    /// reaches.
+    fn prime(&mut self, length: usize) -> Result<()> {
+        let (p, corpus) = (&self.protocol, &self.corpus);
+        crate::each(&mut self.ranks, "building the source prefix", |r| {
+            r.source = source(&mut r.rt, p, length, corpus, r.rank)?;
+            Ok(())
+        })?;
+        Ok(())
     }
 
     /// One scenario end to end on every rank: measure, say, record. The
     /// terminal shows the slowest rank, which is what a step waits for;
     /// the report keeps every rank.
-    fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, f64, Vec<(String, f64)>)> {
+    fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, Priced)> {
         let started = Instant::now();
-        say("scenario", scenario_line(s, self.protocol.rows.max as usize));
-        let (p, corpus, samples, isolate) = (&self.protocol, &self.corpus, self.samples, self.isolate);
-        let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples, isolate))?;
+        say("scenario", s.id.clone());
+        let (p, corpus, samples, isolate, ablating) =
+            (&self.protocol, &self.corpus, self.samples, self.isolate, self.ablate);
+        let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples, isolate, ablating))?;
         let p50 = |x: &Measured| stats(&x.program.graph_us).p50;
         let (q, slow) = measured.iter().enumerate().max_by(|a, b| p50(a.1).total_cmp(&p50(b.1))).unwrap();
         let m = &self.ranks[0].rt.manifest;
@@ -592,12 +668,16 @@ impl Bench {
             calls.iter().zip(&slow.program.attributed_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
         let shares = mix(&attributed);
         say("mix", mix_line(&shares));
+        let free: Vec<(String, f64)> = slow.free.iter().map(|(op, us)| (op.clone(), stats(us).p50)).collect();
+        if !free.is_empty() {
+            say("free", mix_line(&freed(p50(slow), &free)));
+        }
         if let Some(t) = slow.isolate_s {
             println!("{}", row("isolate", format!("{} cases · outputs match", slow.cases.len()), Some(t as f32)));
         }
         let elapsed_s = started.elapsed().as_secs_f64();
-        let p50 = p50(slow);
-        Ok((measured.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), p50, shares))
+        let priced = Priced { shape: s.shape.clone(), us: p50(slow), shares, free };
+        Ok((measured.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), priced))
     }
 }
 
@@ -617,10 +697,14 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     // the host states to the runtime in their declared layouts.
     let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?.self_hosted()?;
     let protocol = Protocol::check_unsampled(&m)?;
-    let plan = Plan::check(&w, &protocol, kern_pool::page_unit(&m) as usize)?;
-    let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.isolate)?;
+    let unit = kern_pool::page_unit(&m);
+    let plan = Plan::check(&w, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
+    let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.isolate, o.ablate)?;
     bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
     bench.samples = w.samples;
+    let at = Instant::now();
+    bench.prime(plan.source)?;
+    timed("source", format!("{} tokens of real prefix per rank", plan.source), at);
 
     let started = Instant::now();
     let (rt, probe) = (&bench.ranks[0].rt, &bench.ranks[0].probe);
@@ -654,10 +738,10 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
 
     let mut runs = Vec::new();
     for s in &plan.scenarios {
-        let (records, p50, shares) = bench.scenario(s)?;
+        let (records, priced) = bench.scenario(s)?;
         report["scenarios"].as_array_mut().unwrap().extend(records);
         write(&o.out, &report)?;
-        runs.push((s.shape.clone(), p50, shares));
+        runs.push(priced);
     }
     let (total_us, by_op) = cost(&runs);
     let calls: u64 = w.shapes().iter().map(|s| s.weight).sum();
@@ -669,6 +753,11 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     say("cost", format!("{:.3} s · {} calls{unpriced} · {}", total_us / 1e6, calls - dropped, mix_line(&by_op)));
     report["cost"] = json!({"total_us":total_us,"calls":calls - dropped,"dropped_calls":dropped,
         "by_op":by_op.iter().map(|(op, f)| json!({"op":op,"share":f})).collect::<Vec<_>>()});
+    if o.ablate {
+        let saved: Vec<(String, f64)> = savings(&runs).into_iter().map(|(op, us)| (op, us / total_us)).collect();
+        say("free", mix_line(&saved));
+        report["cost"]["free"] = json!(saved.iter().map(|(op, f)| json!({"op":op,"share":f})).collect::<Vec<_>>());
+    }
     report["calibration_after"] = anchors(bench.ranks[0].probe.calibrate(&bench.ranks[0].rt, w.samples)?);
     write(&o.out, &report)?;
     timed("out", o.out.display().to_string(), started);
@@ -685,16 +774,32 @@ fn write(out: &std::path::Path, report: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn priced(shape: Shape, us: f64, shares: Vec<(String, f64)>, free: Vec<(String, f64)>) -> Priced {
+        Priced { shape, us, shares, free }
+    }
+
     #[test]
     fn cost_prices_each_shape_once_at_its_fastest_program() {
         let shape = |rows, weight| Shape { groups: 1, rows, context: vec![0], weight };
         let runs = [
-            (shape(1, 10), 2., vec![("gemm".into(), 1.)]),
-            (shape(1, 10), 3., vec![("attn".into(), 1.)]),
-            (shape(64, 2), 5., vec![("gemm".into(), 0.5), ("attn".into(), 0.5)]),
+            priced(shape(1, 10), 2., vec![("gemm".into(), 1.)], vec![]),
+            priced(shape(1, 10), 3., vec![("attn".into(), 1.)], vec![]),
+            priced(shape(64, 2), 5., vec![("gemm".into(), 0.5), ("attn".into(), 0.5)], vec![]),
         ];
         let (total, by_op) = cost(&runs);
         assert_eq!((total, by_op), (30., vec![("gemm".into(), 25. / 30.), ("attn".into(), 5. / 30.)]));
+    }
+
+    #[test]
+    fn savings_price_each_shape_at_its_fastest_program() {
+        let shape = |rows, weight| Shape { groups: 1, rows, context: vec![0], weight };
+        let runs = [
+            priced(shape(1, 10), 2., vec![], vec![("gemm".into(), 1.5), ("attn".into(), 1.75)]),
+            priced(shape(1, 10), 3., vec![], vec![("gemm".into(), 0.)]),
+            priced(shape(64, 2), 5., vec![], vec![("gemm".into(), 4.), ("attn".into(), 6.)]),
+        ];
+        assert_eq!(savings(&runs), vec![("gemm".into(), 10. * 0.5 + 2. * 1.), ("attn".into(), 10. * 0.25)]);
     }
 
     #[test]
