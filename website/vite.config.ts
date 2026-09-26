@@ -43,6 +43,7 @@ export default defineConfig({
         schema: resolve(here, "schema/index.html"),
         qwen38: resolve(here, "qwen38/index.html"),
         perf: resolve(here, "perf/index.html"),
+        rsi: resolve(here, "rsi/index.html"),
       },
     },
   },
