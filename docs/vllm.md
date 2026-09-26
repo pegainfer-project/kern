@@ -51,8 +51,9 @@ live traffic:
 6. **Gate.** `kern test` covers every shape the manifest declares, not only
    the frequent ones: agents tuned on a histogram tend to regress the tail.
 
-Serve, sample, locate and gate exist; the agents and merging are not built
-yet. With `KERN_TRACE=<dir>` the plugin writes one JSON line per step
+All six steps now run; [vllm-rsi-example.md](vllm-rsi-example.md) is one
+night of the loop on this model (17% more requests than stock vLLM, −5.3% GPU
+time over three rounds). With `KERN_TRACE=<dir>` the plugin writes one JSON line per step
 (`kern_vllm/trace.py`, about 0.2% of a step's CPU time).
 `python -m kern_vllm.workload <trace>` buckets the steps into a weighted
 `kern bench` workload, and `kern bench` runs the served manifest itself
