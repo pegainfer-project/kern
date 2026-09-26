@@ -76,7 +76,15 @@ impl Runtime {
         for (_, exec) in std::mem::take(&mut self.graphs) {
             cuda_check(unsafe { sys::cuGraphExecDestroy(exec) }, "cuGraphExecDestroy")?;
         }
-        match compile::compile(&self.manifest, &self.ops, &self.buffers, &self.states, &self.ranks, &self.peers) {
+        match compile::compile(
+            &self.manifest,
+            &self.ops,
+            &self.buffers,
+            &self.states,
+            &self.ranks,
+            &self.peers,
+            &self.blt,
+        ) {
             Ok(programs) => {
                 self.programs = programs;
                 Ok(())

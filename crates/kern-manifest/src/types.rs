@@ -944,9 +944,36 @@ pub struct ExternLaunch {
     /// Run this launch only while a var is in range, e.g. `{"var": "tokens", "max": 16}`: an op picks its implementation by shape with one launch per range. Outside it the launch does nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<When>,
+    /// For `cublaslt_bf16_tn` and `cublaslt_bf16_tn_acc`: the cuBLASLt algorithm to run instead of the heuristic's first answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algo: Option<GemmAlgo>,
     /// Where each launch param comes from (default: the op's params in order).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     args: Option<Vec<LaunchArg>>,
+}
+
+/// One cuBLASLt algorithm as its `cublasLtMatmulAlgoConfigAttributes_t` values, e.g. `{"id": 6, "tile": 24, "stages": 9, "split_k": 1, "reduction": 0, "swizzle": 0, "custom": 0, "inner_shape": 0, "cluster_shape": 0}`. Built at load and checked against every shape the launch runs at; one that does not fit is an error, never a fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GemmAlgo {
+    /// `CUBLASLT_ALGO_CONFIG_ID`.
+    pub id: i32,
+    /// `CUBLASLT_ALGO_CONFIG_TILE_ID`.
+    pub tile: u32,
+    /// `CUBLASLT_ALGO_CONFIG_STAGES_ID`.
+    pub stages: u32,
+    /// `CUBLASLT_ALGO_CONFIG_SPLITK_NUM`.
+    pub split_k: i32,
+    /// `CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME`.
+    pub reduction: u32,
+    /// `CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING`.
+    pub swizzle: u32,
+    /// `CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION`.
+    pub custom: u32,
+    /// `CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID`.
+    pub inner_shape: u16,
+    /// `CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID`.
+    pub cluster_shape: u16,
 }
 
 /// The inclusive range of a var a launch runs in, e.g. `{"var": "tokens", "min": 17}`; an end left out is open.

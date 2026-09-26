@@ -402,8 +402,8 @@ forward，launch 开销被摊薄。
 - **manifest 里唯一没被 sha256 钉住的东西就是残差的来源。** Stage 1 的逐 op
   对比把 kern 与 vLLM 的差异收敛到 cuBLAS 在 M=43、N=96 GEMM 上的算法选择
   （1 ulp / 4 个元素）——`extern:cublaslt_bf16_tn` 是 manifest 里唯一由
-  runtime 自行挑算法的 dispatch。下一步自然是把 cublasLt 的 algo id 也写进
-  manifest（`extern` 带 `algo` 字段），让 GEMM 和 Triton 核一样可钉、可 diff。
+  runtime 自行挑算法的 dispatch。extern launch 现在可以带 `algo` 把 cublasLt
+  算法写进 manifest（见 runtime.md），让 GEMM 和 Triton 核一样可钉、可 diff。
 - **`kern test` 需要"外部参考"这一侧。** 现在它 diff 的是两份 manifest；
   这次真正有用的是"manifest vs vLLM 的逐 op 中间量"（`KERN_PROBE_LAYER` +
   `qwen38_probe_vllm.py`）。把 vLLM 的 forward hook 输出当作一份"参考 tap"

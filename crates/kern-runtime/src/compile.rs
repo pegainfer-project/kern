@@ -10,13 +10,15 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use cudarc::cublaslt::CudaBlasLT;
 use cudarc::driver::{result as cu, sys, CudaStream};
 use kern_manifest::types::{
-    Arg, Call, Dim, Expr, FieldSrc, LaunchArg, Manifest, Op, Pack, ParamType, TensorMap, TmaDType, Var,
+    Arg, Call, Dim, Expr, FieldSrc, LaunchArg, Manifest, Op, Pack, ParamType, TensorMap, TmaDType, Var, When,
 };
 use std::os::raw::c_void;
 
 use crate::cubin::{param_sizes, LoadedModule, MulticastScan};
+use crate::cublas::{bf16_operands, Pinned};
 use crate::device::{alloc, DeviceBuf};
 use crate::error::{bail, cuda_check, Error, Result};
 use crate::nccl::{Coll, Elem};
@@ -159,8 +161,9 @@ pub(crate) enum LaunchKind {
         pdl: bool,
     },
     /// `extern:cublaslt_bf16_tn` / `..._acc` (beta 0.0 / 1.0); 6 args, or
-    /// 7 with C's row stride, or 8 with C's and A's row strides.
-    Gemm { beta: f32 },
+    /// 7 with C's row stride, or 8 with C's and A's row strides. On the
+    /// launch's pinned algorithm when it names one.
+    Gemm { beta: f32, algo: Option<Pinned> },
     /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
     GemmF32,
     /// `extern:cublaslt_fp8_tn` / `..._f32`: e4m3 operands with per-tensor
@@ -226,6 +229,7 @@ enum LaunchImpl {
     },
     GemmBf16Tn {
         beta: f32,
+        algo: Option<Pinned>,
     },
     /// cublasGemmEx with an f32 result (`extern:cublas_bf16_tn_f32`).
     GemmBf16TnF32,
@@ -295,6 +299,7 @@ pub(crate) fn resolve_ops(
     modules: &[LoadedModule],
     kernels_dir: Option<&Path>,
     stream: &Arc<CudaStream>,
+    blt: &CudaBlasLT,
     vars_max: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, ResolvedOp>> {
     let mut ops = BTreeMap::new();
@@ -305,8 +310,13 @@ pub(crate) fn resolve_ops(
                 kern_manifest::types::Launch::Extern(e) => {
                     let ext = e.entry.strip_prefix("extern:").unwrap_or(&e.entry);
                     match ext {
-                        "cublaslt_bf16_tn" => launches.push(LaunchImpl::GemmBf16Tn { beta: 0.0 }),
-                        "cublaslt_bf16_tn_acc" => launches.push(LaunchImpl::GemmBf16Tn { beta: 1.0 }),
+                        "cublaslt_bf16_tn" | "cublaslt_bf16_tn_acc" => {
+                            let algo = e.algo.as_ref().map(|a| Pinned::new(blt, a)).transpose().map_err(|err| {
+                                Error::Call { context: format!("op `{name}` launch #{li}"), source: Box::new(err) }
+                            })?;
+                            let beta = if ext == "cublaslt_bf16_tn" { 0.0 } else { 1.0 };
+                            launches.push(LaunchImpl::GemmBf16Tn { beta, algo });
+                        }
                         "cublas_bf16_tn_f32" => launches.push(LaunchImpl::GemmBf16TnF32),
                         "cublaslt_fp8_tn" => launches.push(LaunchImpl::GemmFp8Tn { f32_out: false }),
                         "cublaslt_fp8_tn_f32" => launches.push(LaunchImpl::GemmFp8Tn { f32_out: true }),
@@ -412,6 +422,40 @@ struct Ranks<'a> {
     peer_buffers: &'a BTreeSet<String>,
 }
 
+/// What checking a pinned GEMM needs: the Lt handle and every var's upper bound.
+struct PinnedCheck<'a> {
+    blt: &'a CudaBlasLT,
+    maxima: &'a [u64],
+}
+
+impl PinnedCheck<'_> {
+    /// `cublasLtMatmulAlgoCheck` the launch's algorithm at the shapes its
+    /// args take with every var at its lower bound and at its upper one, the
+    /// `when` var held to the launch's range.
+    fn check(&self, algo: &Pinned, slots: &[Slot], when: Option<&When>, vars: &BTreeMap<&str, usize>) -> Result<()> {
+        let range = when.map(|w| Ok::<_, Error>((var_index(vars, &w.var)?, w))).transpose()?;
+        for high in [false, true] {
+            let mut v = if high { self.maxima.to_vec() } else { vec![Var::MIN; self.maxima.len()] };
+            if let Some((i, w)) = range {
+                v[i] = if high { v[i].min(w.max.unwrap_or(u64::MAX)) } else { v[i].max(w.min.unwrap_or(0)) };
+            }
+            let at = Dense(v);
+            let vals = slots
+                .iter()
+                .map(|s| match s {
+                    Slot::Const(rv) => Ok(*rv),
+                    Slot::Expr(e) => Ok(RVal { val: e.eval(&at)?, bytes: 0 }),
+                    Slot::Pack(_) => bail!(Manifest, "an extern gemm takes no pack"),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if let Some((_, _, _, shape)) = bf16_operands(&vals)? {
+                algo.check(self.blt, shape)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Lower every program's call list into a flat launch list. Every launch
 /// that receives a peer buffer is SASS-scanned for multicast TMA first.
 fn compile_programs(
@@ -420,8 +464,11 @@ fn compile_programs(
     buffers: &BTreeMap<String, DeviceBuf>,
     states: &BTreeMap<String, DeviceBuf>,
     ranks: &Ranks,
+    blt: &CudaBlasLT,
 ) -> Result<BTreeMap<String, CompiledProgram>> {
     let vars: BTreeMap<&str, usize> = manifest.vars.keys().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
+    let maxima: Vec<u64> = manifest.vars.values().map(|v| v.max).collect();
+    let pinned = PinnedCheck { blt, maxima: &maxima };
     let mut scan = MulticastScan::new();
     let mut programs = BTreeMap::new();
     for (pname, p) in &manifest.programs {
@@ -434,7 +481,7 @@ fn compile_programs(
                 bail!(Manifest, "program `{pname}` {cctx}: unknown op");
             };
             let lo = launches.len();
-            compile_call(c, op, rop, &cctx, buffers, states, &vars, ranks, &mut scan, &mut launches)
+            compile_call(c, op, rop, &cctx, buffers, states, &vars, ranks, &pinned, &mut scan, &mut launches)
                 .map_err(|e| Error::Call { context: format!("program `{pname}` {cctx}"), source: Box::new(e) })?;
             call_ranges.push((lo, launches.len()));
         }
@@ -454,9 +501,10 @@ pub(crate) fn compile(
     states: &BTreeMap<String, DeviceBuf>,
     ranks: &BTreeMap<String, u64>,
     peers: &BTreeMap<String, crate::peers::PeerSlot>,
+    blt: &CudaBlasLT,
 ) -> Result<BTreeMap<String, CompiledProgram>> {
     let peer_buffers: BTreeSet<String> = peers.keys().cloned().collect();
-    compile_programs(manifest, ops, buffers, states, &Ranks { ranks, peer_buffers: &peer_buffers })
+    compile_programs(manifest, ops, buffers, states, &Ranks { ranks, peer_buffers: &peer_buffers }, blt)
 }
 
 /// The impl-private scratch of every resolved op, whose addresses the
@@ -479,6 +527,7 @@ fn compile_call(
     states: &BTreeMap<String, DeviceBuf>,
     vars: &BTreeMap<&str, usize>,
     ranks: &Ranks,
+    pinned: &PinnedCheck,
     scan: &mut MulticastScan,
     launches: &mut Vec<Launch>,
 ) -> Result<()> {
@@ -553,7 +602,12 @@ fn compile_call(
                     );
                 }
                 match imp {
-                    LaunchImpl::GemmBf16Tn { beta } => LaunchKind::Gemm { beta: *beta },
+                    LaunchImpl::GemmBf16Tn { beta, algo } => {
+                        if let Some(algo) = algo {
+                            pinned.check(algo, &slots, l.when(), vars)?;
+                        }
+                        LaunchKind::Gemm { beta: *beta, algo: *algo }
+                    }
                     _ => LaunchKind::GemmF32,
                 }
             }

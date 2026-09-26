@@ -97,7 +97,9 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     `[min, max]` 内才发射，两端可省；区间外该 launch 什么都不做。manifest
     没有控制流，一个 op 按形状选实现就写几个 launch 各管一段区间，例如小
     batch 走自研 split-K、`min: 17` 起交回 `extern:cublaslt_bf16_tn`；
-    verifier 查 var 已声明、区间非空，不查各段是否覆盖全部取值）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
+    verifier 查 var 已声明、区间非空，不查各段是否覆盖全部取值）、`algo`
+    （只限 `cublaslt_bf16_tn` / `_acc`：钉住的 cublasLt 算法配置，装载时对
+    该 launch 的形状检查，见 runtime.md）、`args` 连线：`{"param": i}` 转发接口第 i 参 /
     `{"scratch": name}` 接私有工作区 / 字面量标量（impl 私有常量）/
     `{"rank": group}` / `{"pack": {...}}`；**不写 = 按序转发接口参数**。
     **bytes<n> / pack** 是 launch 私有的参数类型：核的 ABI 收 struct

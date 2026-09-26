@@ -26,7 +26,7 @@ use std::os::raw::c_void;
 use cudarc::driver::sys;
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
-use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_fp8_tn};
+use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
@@ -224,7 +224,10 @@ impl Runtime {
             images.push(m);
         }
         match &l.kind {
-            LaunchKind::Gemm { beta } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
+            LaunchKind::Gemm { beta, algo: None } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
+            LaunchKind::Gemm { beta, algo: Some(algo) } => {
+                gemm_bf16_tn_pinned(&self.blt, &self.blas, &self.stream, &vals, *beta, algo)
+            }
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
             LaunchKind::GemmFp8 { f32_out } => gemm_fp8_tn(&self.blt, &self.blas, &self.stream, &vals, *f32_out),
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
