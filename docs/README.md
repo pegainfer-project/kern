@@ -29,6 +29,7 @@ The stable, flat paths below are grouped here by purpose.
 - [Runtime](runtime.md)
 - [Serving](serve.md)
 - [kern inside vLLM: a manifest as vLLM's model](vllm.md)
+- [kern inside SGLang: a manifest as SGLang's model](sglang.md)
 - [`kern test`](test.md)
 - [`kern bench`](bench.md)
 - [Speculative decode](spec-decode.md)
