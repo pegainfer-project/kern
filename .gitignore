@@ -20,3 +20,4 @@ tools/kernel-capture/libkernelcapture.so
 
 /tools/kernels/index/
 *.egg-info/
+/python/*/build/
