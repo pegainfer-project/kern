@@ -233,6 +233,8 @@ def check_prefill(prefills, by_dec):
         assert pv(u, 1) == pv(by["rope"][0], 1), "attention query 不是 roped q"
         assert pv(by["cache"][0], 8) == QKV_DIM, \
             "cache value stride 不是融合 qkv 行距"
+        assert by["cache"][0]["grid"] == [t, by_dec["cache"][0]["grid"][1], 1], \
+            "cache grid is not [tokens, tiles, 1]"
         ref = u
     return ref["symbol"], ref["block"], ref["dynamic_shared_mem_bytes"]
 
@@ -603,7 +605,10 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
              "inout state", "in buffer<i64>", "in buffer<f32>",
              "in buffer<f32>", "i64", "i64", "i64", "i64", "i64", "i64",
              "i64", "i64", "i64"],
-            blk("cache"), [T, 1, 1], **mp("cache")),
+            # grid.y tiles a token's num_kv_heads·head_size elements by the
+            # launcher's TILE_SIZE, which vLLM caps at 512 below sm_90: one
+            # tile on sm_100/sm_103, two on sm_89.
+            blk("cache"), [T, by["cache"][0]["grid"][1], 1], **mp("cache")),
         # decode attention：3D split-KV 微程序。decode 恒 tokens=1，grid 与
         # scratch 定常（scratch 若挂 tokens 会按 CHUNK_MAX 上界多付 ~500MB）
         "attn": {
