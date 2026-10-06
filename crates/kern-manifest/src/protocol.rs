@@ -183,6 +183,9 @@ impl std::ops::Deref for ProtocolErrors {
 /// The manifest's serving contract, checked once and read everywhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Protocol {
+    /// Identical one-row batches and rank-local paged copies on TP members,
+    /// rather than owner-first rotated tray blocks.
+    pub replicated_rows: bool,
     /// The var a call's rows on this rank go in.
     pub rows: Bound,
     /// The var a call's sequences go in.
@@ -588,8 +591,35 @@ impl Protocol {
             errs.push("a program takes a run of rows (batch.span) but no input has fill `span_at`".into());
         }
 
+        let replicated_rows = m.topology.as_ref().is_some_and(|t| t.replicated_rows);
+        if replicated_rows {
+            if tray.is_some() || one(Fill::Blocks).is_some() {
+                errs.push("replicated rows cannot use a tray axis or fill `blocks`".into());
+            }
+            // Fixed-width speculative rounds use the same canonical sequence
+            // order as decode. Rows, not groups, grow by the round width.
+            // Variable prompt chunks and span/rotated layouts remain outside
+            // this contract; use the one-row forward to bootstrap the state.
+            if forwards.iter().any(|f| f.rows == Rows::Var || f.span) {
+                errs.push("replicated rows require one-row steps or fixed-width rounds without batch.span (prefill through steps)".into());
+            }
+            for f in &forwards {
+                if let Rows::Const(r) = f.rows {
+                    if r > 1 {
+                        if f.count.is_none() || !f.emits.is_some_and(|i| fills[i].width == r) {
+                            errs.push(format!("program `{}`: replicated round requires tokens [groups,{r}] and count [groups]", f.name));
+                        }
+                        if !forwards.iter().any(|d| d.rows == Rows::Const(1) && !d.span && d.emits.is_some()) {
+                            errs.push("replicated round requires a one-row token-emitting bootstrap forward".into());
+                        }
+                    }
+                }
+            }
+        }
+
         if errs.is_empty() {
             Ok(Protocol {
+                replicated_rows,
                 rows,
                 groups,
                 tray,
@@ -691,4 +721,42 @@ fn is_line_table(m: &Manifest, b: &Buffer) -> bool {
             .and_then(|d| d.index_into.as_deref())
             .and_then(|s| m.states.get(s))
             .is_some_and(State::is_per_seq)
+}
+
+#[cfg(test)]
+mod replicated_round_tests {
+    use super::*;
+    fn fixture() -> Manifest {
+        let mut v: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/replicated.json")).unwrap();
+        v["vars"]["tokens"]["max"] = 32.into();
+        v["buffers"]["round_tokens"] = serde_json::json!({"kind":"output","dtype":"i64","shape":["seqs",3],"fill":"tokens"});
+        v["buffers"]["nacc"] = serde_json::json!({"kind":"output","dtype":"i32","shape":["seqs"],"fill":"count"});
+        v["ops"]["accept"] = serde_json::json!({"params":["out buffer<i64>","out buffer<i32>"],"impl":{"launches":[{"entry":"extern:x"}]}});
+        v["programs"]["round_k2"] = serde_json::json!({"batch":{"groups":8,"rows":3},"graph":true,"calls":[{"op":"accept","args":[{"buf":"round_tokens"},{"buf":"nacc"}]}]});
+        Manifest::from_json(&v.to_string()).unwrap()
+    }
+    #[test]
+    fn fixed_round_uses_groups_and_rows_separately() {
+        let p=Protocol::check(&crate::verify(fixture()).unwrap()).unwrap();
+        assert_eq!(p.row_shapes(), vec![1,3]);
+        assert_eq!(p.max_groups(Rows::Const(3)),8);
+        let vars=p.vars(8,3,24,2051);
+        assert_eq!(vars["tokens"],24);
+        assert_eq!(vars["seqs"],8);
+        let f=p.forward(8,Rows::Const(3)).unwrap();
+        assert_eq!(p.fills[f.emits.unwrap()].width,3);
+        assert!(f.count.is_some());
+    }
+    #[test]
+    fn fixed_round_needs_count_and_bootstrap() {
+        let mut m=fixture();
+        m.buffers.get_mut("nacc").unwrap().fill = None;
+        // A syntactically valid output with no count role cannot serve a round.
+        let error=Protocol::check(&crate::verify(m).unwrap()).unwrap_err().to_string();
+        assert!(error.contains("replicated round requires tokens"),"{error}");
+        let mut m=fixture();
+        m.programs.get_mut("decode").unwrap().batch = None;
+        let error=Protocol::check(&crate::verify(m).unwrap()).unwrap_err().to_string();
+        assert!(error.contains("one-row token-emitting bootstrap"),"{error}");
+    }
 }

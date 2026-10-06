@@ -249,7 +249,7 @@ fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
 
 /// A rank that has not returned in this long is hung: a collective
 /// waiting for a peer that failed. Nothing in the process can go on.
-const HUNG: Duration = Duration::from_secs(600);
+const HUNG: Duration = Duration::from_secs(3600);
 
 /// A rank moved to a thread once, or lent to one for a call that is
 /// joined before the borrow ends. The `Runtime` inside holds raw CUDA

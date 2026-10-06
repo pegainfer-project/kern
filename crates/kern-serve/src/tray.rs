@@ -34,6 +34,12 @@
 //! everything that descends from it: pages live on that GPU, a parked
 //! copy lives in that GPU's pinned block.
 //!
+//! With `topology.replicated_rows`, a group instead runs one identical
+//! logical batch in cell order on every member. Every member owns pages
+//! and recurrent state; slots and tables always name that member's lease.
+//! The group leader owns the scheduling/readback identity only. There is
+//! no tray rotation, `blocks` fill or implicit collective in this mode.
+//!
 //! # Staging
 //!
 //! A step is a list of [`Cell`]s, one per row of the tray: the row, the
@@ -137,8 +143,8 @@ impl Groups {
 /// One sequence's pieces across its owner's group, one per member in
 /// member order: leases (a [`Row`]), checkpoints (a [`Snapshot`]),
 /// parked copies (a [`Sleeping`]) or wakes in flight (a [`Rising`]). The
-/// owner's piece, at `me`, is the paged one; the peers' hold a slot
-/// alone. Dropping it returns all of them.
+/// owner's piece is at `me`. Peers hold a slot alone in rotated mode,
+/// full paged leases in replicated mode. Dropping it returns all of them.
 pub struct Group<X> {
     owner: Rank,
     me: usize,
@@ -278,6 +284,21 @@ impl Layout {
         }
         let widest = block.iter().copied().max().unwrap_or(1);
         Layout { own, b: bucket(widest).max(widest), per, len, lead, block, tray }
+    }
+
+    /// Replicated TP: the same cells, in caller order, on every member.
+    /// Bucket the logical group batch once, not the sum of eight copies
+    /// or eight mandatory per-rank padding blocks.
+    fn replicated(cells: &[(usize, usize)], per: usize, groups: &Groups, bucket: impl Fn(usize) -> usize) -> Layout {
+        let own: Vec<Vec<usize>> = (0..groups.n)
+            .map(|q| {
+                cells.iter().enumerate().filter(|(_, (o, _))| groups.members(q).contains(o)).map(|(i, _)| i).collect()
+            })
+            .collect();
+        let len: Vec<usize> = cells.iter().map(|&(_, l)| l).collect();
+        let most = own.iter().map(|rows| rows.iter().map(|&i| len[i]).sum::<usize>()).max().unwrap_or(0).max(1);
+        let b = bucket(most).max(most);
+        Layout { own, b, per, len, lead: vec![0; groups.n], block: vec![b; groups.n], tray: b }
     }
 
     /// The runs' length, when a cell feeds one.
@@ -459,7 +480,7 @@ impl Tray {
         // A tray of several members lays its blocks out through the
         // `blocks` fill (peer_collective.cu "own rows first"); alone, the
         // block is the tray.
-        if t > 1 && !protocol.fills.iter().any(|f| f.fill == Fill::Blocks) {
+        if t > 1 && !protocol.replicated_rows && !protocol.fills.iter().any(|f| f.fill == Fill::Blocks) {
             bail!(
                 "the manifest's `tp` group has {t} members but no input has fill `blocks` (the tray's rows per member)"
             );
@@ -586,6 +607,16 @@ impl Tray {
         self.groups.t
     }
 
+    /// Ranks that execute a scheduled row. Admission counts a replicated
+    /// row against every member, so a TP8 batch of 16 is 16, not 128.
+    pub fn row_ranks(&self, owner: Rank) -> Range<usize> {
+        if self.protocol.replicated_rows {
+            self.groups.members(owner.0)
+        } else {
+            owner.0..owner.0 + 1
+        }
+    }
+
     // ---- accounting, summed over the ranks.
 
     /// Page unit in tokens.
@@ -657,24 +688,30 @@ impl Tray {
 
     /// A fresh row of `tokens` on the open rank with the fewest rows, then
     /// the fewest pages in use (`rows` says how many a rank holds, `None`
-    /// when it can take no more), a slot-only lease on each of its peers.
+    /// when it can take no more). Replicated mode chooses a group leader
+    /// and gives every member pages; rotated mode gives peers slots only.
     /// [`Denied::Busy`] when no rank is open.
     pub fn lease(&mut self, tokens: usize, rows: impl Fn(Rank) -> Option<usize>) -> Result<Row, Error> {
+        let replicated = self.protocol.replicated_rows;
         let owner = (0..self.groups.n)
+            .filter(|&q| !replicated || self.groups.member(q) == 0)
             .filter_map(|q| rows(Rank(q)).map(|n| (n, self.ranks[q].pages_used(), q)))
             .min()
             .map(|(_, _, q)| q)
             .ok_or(Error::Denied(Denied::Busy))?;
         let me = self.groups.member(owner);
         let slots = Group { owner: Rank(owner), me, parts: vec![(); self.groups.t] };
-        self.each(slots, |rt, m, ()| if m == me { rt.lease(tokens) } else { rt.lease_slot() })
+        self.each(slots, |rt, m, ()| if replicated || m == me { rt.lease(tokens) } else { rt.lease_slot() })
     }
 
     /// A row continuing from the first `len` tokens of `snap` with room
     /// for `tokens`, on the snapshot's owner; the peers continue their
     /// slots at the snapshot's length.
     pub fn lease_from(&mut self, snap: &Snapshot, len: usize, tokens: usize) -> Result<Row, Error> {
-        self.each(snap.by_ref(), |rt, m, cp| rt.lease_from(cp, if m == snap.me { len } else { cp.tokens() }, tokens))
+        let replicated = self.protocol.replicated_rows;
+        self.each(snap.by_ref(), |rt, m, cp| {
+            rt.lease_from(cp, if replicated || m == snap.me { len } else { cp.tokens() }, tokens)
+        })
     }
 
     /// The first `len` tokens of `row` as a snapshot it keeps running past.
@@ -706,7 +743,10 @@ impl Tray {
     /// the snapshot's length. The copies are in flight until
     /// [`Tray::awake`] hands the row out.
     pub fn wake(&mut self, sleeping: &Sleeping, len: usize, tokens: usize) -> Result<Rising, Error> {
-        self.each(sleeping.by_ref(), |rt, m, p| rt.wake(p, if m == sleeping.me { len } else { p.tokens() }, tokens))
+        let replicated = self.protocol.replicated_rows;
+        self.each(sleeping.by_ref(), |rt, m, p| {
+            rt.wake(p, if replicated || m == sleeping.me { len } else { p.tokens() }, tokens)
+        })
     }
 
     /// The row of a wake whose copies have all landed; `Err(r)` while any
@@ -753,10 +793,17 @@ impl Tray {
         };
         let placed: Vec<(usize, usize)> =
             cells.iter().map(|c| (c.row.owner.0, if run.is_some() { c.ids.len() } else { 1 })).collect();
-        let layout = Layout::new(&placed, per, &self.groups, bucket);
+        let layout = if self.protocol.replicated_rows {
+            Layout::replicated(&placed, per, &self.groups, bucket)
+        } else {
+            Layout::new(&placed, per, &self.groups, bucket)
+        };
         let b = layout.b;
         if b > self.protocol.groups.max as usize {
             bail!("{b} rows per rank, the manifest allows {}", self.protocol.groups.max);
+        }
+        if (b * per) as u64 > self.protocol.rows.max {
+            bail!("{} token rows per rank, the manifest allows {}", b * per, self.protocol.rows.max);
         }
         if let Some(t) = &self.protocol.tray {
             if (layout.tray * per) as u64 > t.max {
@@ -813,9 +860,9 @@ impl Tray {
                     .flat_map(|c| match c {
                         Some((i, _)) => {
                             let pos = pos_of(c);
-                            cells[i].row.own().slots(pos..pos + per)
+                            lease_on(i).slots(pos..pos + per)
                         }
-                        None => vec![pad.slots(0..1)[0]; per],
+                        None => pad.slots(0..per),
                     })
                     .collect(),
                 (Fill::SeqLen, _) => l.rows(q).map(|c| (pos_of(c) + per) as i64).collect(),
@@ -831,7 +878,7 @@ impl Tray {
         for t in &p.page_tables {
             let mut table = Vec::new();
             for c in l.rows(q) {
-                c.map_or(pad, |(i, _)| cells[i].row.own()).extend_row(&t.name, &mut table)?;
+                c.map_or(pad, |(i, _)| lease_on(i)).extend_row(&t.name, &mut table)?;
             }
             tables.push((&t.name, table));
         }
@@ -954,6 +1001,11 @@ impl Staged<'_> {
         let (t, c) = (&p.fills[i], f.count.map(|c| &p.fills[c]));
         let k = t.width as usize;
         for (q, rt) in self.tray.ranks.iter().enumerate() {
+            // Replicas all emit the same logical rows. Read exactly one
+            // copy per TP group; do not overwrite results from its peers.
+            if p.replicated_rows && self.tray.groups.member(q) != 0 {
+                continue;
+            }
             if self.layout.own[q].is_empty() {
                 continue;
             }
@@ -1107,5 +1159,185 @@ mod tests {
         let other = layout.valid(2);
         assert_eq!(&other[..6], &[1; 6]);
         assert!(other[6..].iter().all(|&x| x == 0));
+    }
+
+    #[test]
+    fn replicated_layout_keeps_one_common_order_at_every_bucket() {
+        let g = Groups { n: 8, t: 8 };
+        for n in [0usize, 1, 2, 3, 4, 5, 8, 9, 16] {
+            // Owners deliberately differ: they must not rotate cell order.
+            let cells: Vec<_> = (0..n).map(|i| (i % 8, 1)).collect();
+            let l = Layout::replicated(&cells, 1, &g, |n| n.next_power_of_two());
+            assert_eq!(l.b, n.max(1).next_power_of_two());
+            assert_eq!(l.tray, l.b);
+            for q in 0..8 {
+                assert_eq!(l.rows(q).collect::<Vec<_>>(), l.rows(0).collect::<Vec<_>>());
+                assert_eq!(l.last_rows(q).collect::<Vec<_>>(), (0..n).map(|i| (i, i)).collect::<Vec<_>>());
+                assert_eq!(l.valid(q), (0..l.b).map(|i| i64::from(i < n)).collect::<Vec<_>>());
+            }
+        }
+        // A scheduler cap must not silently drop the seventeenth row.
+        let l = Layout::replicated(&vec![(0, 1); 17], 1, &g, |n| n.min(16));
+        assert_eq!(l.b, 17); // stage rejects it against groups.max = 16
+    }
+
+    #[test]
+    fn replicated_round_keeps_sequences_distinct_from_token_rows() {
+        let g = Groups { n: 8, t: 8 };
+        for n in [1usize, 2, 3, 4, 5, 8] {
+            let cells = vec![(0, 1); n];
+            let l = Layout::replicated(&cells, 3, &g, |n| n.next_power_of_two());
+            assert_eq!(l.b, n.next_power_of_two());
+            assert_eq!(l.per, 3);
+            assert_eq!(l.run(), None);
+            assert!(l.b * l.per <= 24);
+            for q in 0..8 {
+                assert_eq!(l.rows(q).collect::<Vec<_>>(), l.rows(0).collect::<Vec<_>>());
+                assert_eq!(l.valid(q).len(), l.b * 3);
+                assert_eq!(l.valid(q).iter().filter(|&&v| v != 0).count(), n * 3);
+            }
+        }
+    }
+
+    #[test]
+    fn replicated_round_stages_local_slots_and_group_anchors() {
+        use kern_pool::Pool;
+        use std::sync::Arc;
+
+        let mut v: serde_json::Value = serde_json::from_str(include_str!(
+            "../../kern-manifest/tests/fixtures/replicated.json"
+        )).unwrap();
+        v["vars"]["tokens"]["max"] = 32.into();
+        v["buffers"]["anchor"] = serde_json::json!({
+            "kind":"input", "dtype":"i64", "shape":["seqs"], "fill":"token"
+        });
+        v["buffers"]["round_tokens"] = serde_json::json!({
+            "kind":"output", "dtype":"i64", "shape":["seqs",3], "fill":"tokens"
+        });
+        v["buffers"]["nacc"] = serde_json::json!({
+            "kind":"output", "dtype":"i32", "shape":["seqs"], "fill":"count"
+        });
+        v["ops"]["accept"] = serde_json::json!({
+            "params":["in buffer<i64>","out buffer<i64>","out buffer<i32>"],
+            "impl":{"launches":[{"entry":"extern:x"}]}
+        });
+        v["programs"]["round"] = serde_json::json!({
+            "batch":{"groups":8,"rows":3},
+            "calls":[{"op":"accept","args":[{"buf":"anchor"},{"buf":"round_tokens"},{"buf":"nacc"}]}]
+        });
+        let m = Manifest::from_json(&v.to_string()).unwrap();
+        let protocol = Protocol::check(&verify(m.clone()).unwrap()).unwrap();
+        let pools: Vec<_> = (0..8).map(|_| Arc::new(Pool::new(&m, 8, 512, 24, None).unwrap().0)).collect();
+        let _held: Vec<Vec<_>> = pools.iter().enumerate()
+            .map(|(q, p)| (0..q).map(|_| p.lease(1).unwrap()).collect()).collect();
+        let pad: Vec<_> = pools.iter().map(|p| p.lease(1).unwrap()).collect();
+        let rows: Vec<Row> = (0..5).map(|_| Group {
+            owner: Rank(0), me: 0, parts: pools.iter().map(|p| p.lease(40).unwrap()).collect()
+        }).collect();
+        let cells: Vec<_> = rows.iter().enumerate().map(|(i, row)| Cell {
+            row, ids: vec![100+i as i64; 3], pos: [0,1,3,15,16][i]
+        }).collect();
+        let t = Tray { ranks: Vec::new(), workers: Vec::new(), groups: Groups { n: 8, t: 8 }, protocol, pad };
+        let l = Layout::replicated(&vec![(0,1);5], 3, &t.groups, |n| n.next_power_of_two());
+        for q in 0..8 {
+            let writes = t.stage_rank(q, &cells, &l).unwrap();
+            let values = |name: &str| {
+                let f = t.protocol.fills.iter().find(|f| f.name == name).unwrap();
+                f.decode(&writes.iter().find(|w| w.name == name).unwrap().bytes)
+            };
+            let filled = |role: Fill| values(&t.protocol.any(role).unwrap().name);
+            assert_eq!(values("anchor"), [100,101,102,103,104,0,0,0]);
+            assert_eq!(filled(Fill::CuSeqlens), (0..=8).map(|i| i*3).collect::<Vec<_>>());
+            assert_eq!(filled(Fill::SeqLen), [3,4,6,18,19,3,3,3]);
+            let slots = filled(Fill::Slot);
+            let pos = filled(Fill::Position);
+            let valid = filled(Fill::Valid);
+            for (i,c) in cells.iter().enumerate() {
+                assert_eq!(&slots[i*3..i*3+3], c.row.parts[q].slots(c.pos..c.pos+3));
+                assert_eq!(&pos[i*3..i*3+3], &[c.pos as i64,c.pos as i64+1,c.pos as i64+2]);
+                assert_eq!(&valid[i*3..i*3+3], &[1,1,1]);
+            }
+            for i in 5..8 {
+                assert_eq!(&slots[i*3..i*3+3], t.pad[q].slots(0..3));
+                assert_eq!(&pos[i*3..i*3+3], &[0,1,2]);
+                assert_eq!(&valid[i*3..i*3+3], &[0,0,0]);
+            }
+        }
+    }
+
+    #[test]
+    fn replicated_groups_pad_together_without_mixing_requests() {
+        let g = Groups { n: 16, t: 8 };
+        let l = Layout::replicated(&[(8, 1), (0, 1), (8, 1), (0, 1), (8, 1)], 1, &g, |n| n.next_power_of_two());
+        assert_eq!((l.b, l.tray), (4, 4));
+        assert_eq!(l.rows(0).collect::<Vec<_>>(), [Some((1, 0)), Some((3, 0)), None, None]);
+        assert_eq!(l.rows(15).collect::<Vec<_>>(), [Some((0, 0)), Some((2, 0)), Some((4, 0)), None]);
+    }
+
+    #[test]
+    fn replicated_staging_uses_local_pages_and_lines_for_common_logical_rows() {
+        use kern_pool::Pool;
+        use std::sync::Arc;
+
+        let m = Manifest::from_json(include_str!("../../kern-manifest/tests/fixtures/replicated.json")).unwrap();
+        let protocol = Protocol::check(&verify(m.clone()).unwrap()).unwrap();
+        assert_eq!(seqs_max(&protocol, 8), 16);
+        let pools: Vec<_> = (0..8).map(|_| Arc::new(Pool::new(&m, 8, 512, 24, None).unwrap().0)).collect();
+        // Different allocator histories ensure that identical page/slot IDs
+        // cannot accidentally make use of the owner's lease appear correct.
+        let _held: Vec<Vec<_>> =
+            pools.iter().enumerate().map(|(q, p)| (0..q).map(|_| p.lease(1).unwrap()).collect()).collect();
+        let pad: Vec<_> = pools.iter().map(|p| p.lease(1).unwrap()).collect();
+        let rows: Vec<Row> = (0..5)
+            .map(|_| Group { owner: Rank(0), me: 0, parts: pools.iter().map(|p| p.lease(40).unwrap()).collect() })
+            .collect();
+        let cells: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, row)| Cell { row, ids: vec![100 + i as i64], pos: [0, 1, 4, 15, 16][i] })
+            .collect();
+        let t = Tray { ranks: Vec::new(), workers: Vec::new(), groups: Groups { n: 8, t: 8 }, protocol, pad };
+        let l = Layout::replicated(&vec![(0, 1); 5], 1, &t.groups, |n| n.next_power_of_two());
+        for q in 0..8 {
+            let writes = t.stage_rank(q, &cells, &l).unwrap();
+            let bytes = |name: &str| writes.iter().find(|w| w.name == name).unwrap().bytes.as_slice();
+            let fill = |f: Fill| {
+                let f = t.protocol.any(f).unwrap();
+                f.decode(bytes(&f.name))
+            };
+            assert_eq!(fill(Fill::Token), [100, 101, 102, 103, 104, 0, 0, 0]);
+            assert_eq!(fill(Fill::Position), [0, 1, 4, 15, 16, 0, 0, 0]);
+            assert_eq!(fill(Fill::SeqLen), [1, 2, 5, 16, 17, 1, 1, 1]);
+            assert_eq!(fill(Fill::Valid), [1, 1, 1, 1, 1, 0, 0, 0]);
+            assert_eq!(fill(Fill::CuSeqlens), (0..=8).collect::<Vec<_>>());
+            let slots = fill(Fill::Slot);
+            let pages: Vec<_> =
+                bytes("block_table").chunks_exact(4).map(|b| i32::from_le_bytes(b.try_into().unwrap())).collect();
+            let lines: Vec<_> =
+                bytes("line_index").chunks_exact(4).map(|b| i32::from_le_bytes(b.try_into().unwrap())).collect();
+            for (i, c) in cells.iter().enumerate() {
+                let local = &c.row.parts[q];
+                assert_eq!(slots[i], local.slots(c.pos..c.pos + 1)[0]);
+                let mut expected = Vec::new();
+                local.extend_row("block_table", &mut expected).unwrap();
+                assert_eq!(&pages[i * 3..(i + 1) * 3], expected);
+                for layer in 0..3 {
+                    assert_eq!(lines[layer * 16 + i], local.seq_line("line_index", layer).unwrap());
+                }
+            }
+            assert_eq!(t.row_ranks(Rank(q)), 0..8);
+        }
+        assert_ne!(rows[0].parts[0].page_ids(), rows[0].parts[7].page_ids());
+        // Checkpoint/restore remains all-member: every copy has pages and a
+        // recurrent slot, including the partial page of a five-token prefix.
+        let mut row = Group { owner: Rank(0), me: 0, parts: pools.iter().map(|p| p.lease(40).unwrap()).collect() };
+        for (q, p) in pools.iter().enumerate() {
+            let (cp, copies) = p.checkpoint(&mut row.parts[q], 5).unwrap();
+            assert_eq!(copies.pages.len(), 1);
+            assert!(copies.slot.is_some());
+            let (restored, copies) = p.restore(&cp, 5, 40).unwrap();
+            assert_eq!(restored.prefix(), 5);
+            assert!(restored.pages() > 0 && copies.slot.is_some());
+        }
     }
 }

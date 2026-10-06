@@ -296,3 +296,30 @@ fn what_a_forward_hands_back_is_dataflow() {
         vec![serde_json::from_str(r#"{"op": "accept", "args": [{"buf": "next_token"}, {"buf": "nacc"}]}"#).unwrap()];
     rejects(&m, "no `tokens` output of several per sequence to count");
 }
+
+#[test]
+fn replicated_tp_has_no_rotated_axis_or_blocks_and_keeps_the_full_batch_bound() {
+    let m = Manifest::from_json(include_str!("fixtures/replicated.json")).unwrap();
+    let p = protocol(&m).unwrap();
+    assert!(p.replicated_rows);
+    assert_eq!(p.tray, None);
+    assert!(p.any(Fill::Blocks).is_none());
+    assert_eq!(p.vars(5, 1, 5, 26), BTreeMap::from([("tokens".into(), 5), ("seqs".into(), 5)]));
+    assert!(p.forward(16, Rows::Const(1)).is_some());
+    assert!(p.chunk().is_none());
+    assert!(!protocol(&tray()).unwrap().replicated_rows);
+    assert!(!protocol(&plain()).unwrap().replicated_rows);
+}
+
+#[test]
+fn replicated_tp_rejects_rotated_layouts_and_non_decode_programs() {
+    let mut m = tray();
+    m.topology.as_mut().unwrap().replicated_rows = true;
+    rejects(&m, "replicated rows cannot use a tray axis");
+    let mut m = plain();
+    m.topology = Some(serde_json::from_str(r#"{"groups":{"tp":8},"replicated_rows":true}"#).unwrap());
+    rejects(&m, "replicated rows require one-row steps");
+    m.topology.as_mut().unwrap().groups.clear();
+    let e = verify(m).unwrap_err().to_string();
+    assert!(e.contains("topology.replicated_rows: unknown topology group `tp`"), "{e}");
+}

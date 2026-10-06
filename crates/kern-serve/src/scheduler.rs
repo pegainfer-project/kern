@@ -197,7 +197,14 @@ impl Plan {
         if rows as usize - 1 > MAX_SPEC_TOKENS {
             bail!("{} rows past the first per step, the frontend's metrics hold {MAX_SPEC_TOKENS}", rows - 1);
         }
-        let chunk = p.chunk().cloned();
+        // A replicated MTP manifest can bootstrap with the same one-row
+        // program used by --rows 1. Finish the prompt before running rounds:
+        // recurrent state must never advance over guessed prompt tokens.
+        let chunk = p.chunk().cloned().or_else(|| {
+            (p.replicated_rows && rows > 1)
+                .then(|| p.forward(1, Rows::Const(1)).filter(|f| f.emits.is_some()).cloned())
+                .flatten()
+        });
         if chunk.is_none() && rows > 1 {
             bail!(
                 "no program takes a prompt chunk, so prompts go through steps, which takes one-row steps, not {rows}"
@@ -243,6 +250,9 @@ struct Seq {
     /// Its KV pages and state slots across the tray; returned when the
     /// sequence drops.
     row: Row,
+    /// Previous round output length, including the bonus token. `None` means
+    /// that this sequence has not completed a speculative round yet.
+    prev_nacc: Option<usize>,
     prompt_len: usize,
     /// The tokens in the state, `pos` of them; the prefix tree keys this
     /// sequence's snapshots by them.
@@ -361,12 +371,20 @@ struct Stats {
     /// The acceptance counters at the window's start, so the window's
     /// acceptance is reported rather than the process's.
     spec_at: (u64, u64, u64),
+    /// Per-draft-position acceptance counters at the window start.
+    spec_pos_at: [u64; MAX_SPEC_TOKENS],
+    /// Carry/index diagnostic: attempts and p1 acceptance grouped by the
+    /// previous round's total accepted length (1, 2, or 3).
+    carry_prev: [u64; 3],
+    carry_p1: [u64; 3],
+    carry_p2: [u64; 3],
 }
 
 impl Stats {
     fn new(counters: &Option<SpecDecodeCounters>) -> Stats {
         let spec_at =
             counters.as_ref().map_or((0, 0, 0), |c| (c.num_drafts, c.num_draft_tokens, c.num_accepted_tokens));
+        let spec_pos_at = counters.as_ref().map_or([0; MAX_SPEC_TOKENS], |c| c.num_accepted_tokens_per_pos);
         Stats {
             since: Instant::now(),
             steps: 0,
@@ -385,6 +403,10 @@ impl Stats {
             wakes: 0,
             wake_tokens: 0,
             spec_at,
+            spec_pos_at,
+            carry_prev: [0; 3],
+            carry_p1: [0; 3],
+            carry_p2: [0; 3],
         }
     }
 }
@@ -490,10 +512,14 @@ impl KernScheduler {
     fn rows_per_rank(&self) -> Vec<usize> {
         let mut rows = vec![0usize; self.tray.len()];
         for s in &self.running {
-            rows[s.row.owner().index()] += 1;
+            for q in self.tray.row_ranks(s.row.owner()) {
+                rows[q] += 1;
+            }
         }
         for (_, r) in &self.waking {
-            rows[r.owner().index()] += 1;
+            for q in self.tray.row_ranks(r.owner()) {
+                rows[q] += 1;
+            }
         }
         rows
     }
@@ -667,6 +693,7 @@ impl KernScheduler {
             history: ids[..n_pre].to_vec(),
             checkpointed: start / page * page,
             admitted: t0,
+            prev_nacc: None,
         };
         self.checkpoint(&mut seq)?;
         if let Some(tok) = first {
@@ -738,6 +765,17 @@ impl KernScheduler {
             debug!(request = %s.id, tokens = s.pos, visible, "not kept");
             return;
         }
+        // A shifted NextN cache depends on the successor of the last target
+        // token. A restored round can rewrite pos-1. At a page boundary that
+        // page would be shared/immutable; do not publish such a snapshot until
+        // the pool has a writable-lookbehind contract. Non-aligned tails are
+        // already copied by restore. Apply even under --rows 1 on this model.
+        if self.tray.protocol().replicated_rows && self.tray.protocol().row_shapes().iter().any(|&r| r > 1)
+            && s.pos.is_multiple_of(self.tray.page())
+        {
+            debug!(request = %s.id, tokens = s.pos, "not kept: speculative writable lookbehind");
+            return;
+        }
         let snap = self.tray.retire(s.row, s.pos);
         self.prefix.insert(&s.history, snap);
     }
@@ -759,7 +797,10 @@ impl KernScheduler {
     /// `start..` of `row` (`start` is the row's prefix) through `f`; the
     /// first generated token when `f` hands it back.
     fn prefill(&mut self, f: &Forward, row: &Row, ids: &[i64], start: usize) -> Result<Option<u32>> {
-        let chunk = self.chunk;
+        let chunk = match f.rows {
+            Rows::Const(1) => 1, // fixed-width bootstrap, not a variable chunk
+            _ => self.chunk,
+        };
         let mut first = None;
         let mut pos = start;
         while pos < ids.len() {
@@ -828,10 +869,26 @@ impl KernScheduler {
             let toks: Vec<u32> = out[i].iter().map(|&t| t as u32).collect();
             // The tokens in the state now: the run's, or the one fed.
             let fed = if runners.contains(&i) { fed[i].clone() } else { vec![s.next] };
+            // The first token is the next input's answer; the rest are
+            // accepted drafts. For rows=3, `toks.len()` is the device nacc,
+            // including the bonus token. Group the next round's first-draft
+            // acceptance by this previous nacc.
+            let accepted = toks.len().saturating_sub(1);
+            if self.counters.is_some() {
+                if let Some(prev) = s.prev_nacc {
+                    if let Some(bucket) = prev.checked_sub(1).filter(|&b| b < 3) {
+                        self.stats.carry_prev[bucket] += 1;
+                        if accepted > 0 {
+                            self.stats.carry_p1[bucket] += 1;
+                            if accepted > 1 {
+                                self.stats.carry_p2[bucket] += 1;
+                            }
+                        }
+                    }
+                }
+                s.prev_nacc = Some(toks.len());
+            }
             if let Some(c) = &mut self.counters {
-                // The first token is the next input's answer; the rest are
-                // accepted drafts.
-                let accepted = toks.len().saturating_sub(1);
                 for p in &mut c.num_accepted_tokens_per_pos[..accepted] {
                     *p += 1;
                 }
@@ -882,9 +939,19 @@ impl KernScheduler {
             let round = |x: f64, d: f64| (x * d).round() / d;
             let host = self.tray.host_tier();
             let (slots, slots_used) = self.tray.seq_slots();
-            let (drafts, draft_tokens, accepted) = self.counters.as_ref().map_or((0, 0, 0), |c| {
-                (c.num_drafts - st.spec_at.0, c.num_draft_tokens - st.spec_at.1, c.num_accepted_tokens - st.spec_at.2)
-            });
+            let (drafts, draft_tokens, accepted, bucket_1, bucket_2, bucket_3) =
+                self.counters.as_ref().map_or((0, 0, 0, 0, 0, 0), |c| {
+                    let p0 = c.num_accepted_tokens_per_pos[0].saturating_sub(st.spec_pos_at[0]);
+                    let p1 = c.num_accepted_tokens_per_pos[1].saturating_sub(st.spec_pos_at[1]);
+                    (
+                        c.num_drafts - st.spec_at.0,
+                        c.num_draft_tokens - st.spec_at.1,
+                        c.num_accepted_tokens - st.spec_at.2,
+                        (c.num_drafts - st.spec_at.0).saturating_sub(p0),
+                        p0.saturating_sub(p1),
+                        p1,
+                    )
+                });
             info!(
                 running = self.running.len(),
                 rows_per_rank = ?self.rows_per_rank(),
@@ -915,6 +982,27 @@ impl KernScheduler {
                 accepted = self.counters.as_ref().map(|_| round((accepted + drafts) as f64 / drafts.max(1) as f64, 100.0)),
                 accept_pct =
                     self.counters.as_ref().map(|_| round(accepted as f64 * 100.0 / draft_tokens.max(1) as f64, 1.0)),
+                accepted_len_1 = self.counters.as_ref().map(|_| bucket_1),
+                accepted_len_2 = self.counters.as_ref().map(|_| bucket_2),
+                accepted_len_3 = self.counters.as_ref().map(|_| bucket_3),
+                accepted_len_1_pct = self.counters.as_ref().map(|_| round(bucket_1 as f64 * 100.0 / drafts.max(1) as f64, 1.0)),
+                accepted_len_2_pct = self.counters.as_ref().map(|_| round(bucket_2 as f64 * 100.0 / drafts.max(1) as f64, 1.0)),
+                accepted_len_3_pct = self.counters.as_ref().map(|_| round(bucket_3 as f64 * 100.0 / drafts.max(1) as f64, 1.0)),
+                carry_prev_nacc1 = self.counters.as_ref().map(|_| self.stats.carry_prev[0]),
+                carry_prev_nacc2 = self.counters.as_ref().map(|_| self.stats.carry_prev[1]),
+                carry_prev_nacc3 = self.counters.as_ref().map(|_| self.stats.carry_prev[2]),
+                carry_p1_nacc1 = self.counters.as_ref().map(|_| self.stats.carry_p1[0]),
+                carry_p1_nacc2 = self.counters.as_ref().map(|_| self.stats.carry_p1[1]),
+                carry_p1_nacc3 = self.counters.as_ref().map(|_| self.stats.carry_p1[2]),
+                carry_p2_nacc1 = self.counters.as_ref().map(|_| self.stats.carry_p2[0]),
+                carry_p2_nacc2 = self.counters.as_ref().map(|_| self.stats.carry_p2[1]),
+                carry_p2_nacc3 = self.counters.as_ref().map(|_| self.stats.carry_p2[2]),
+                carry_p1_nacc1_pct = self.counters.as_ref().map(|_| round(self.stats.carry_p1[0] as f64 * 100.0 / self.stats.carry_prev[0].max(1) as f64, 1.0)),
+                carry_p1_nacc2_pct = self.counters.as_ref().map(|_| round(self.stats.carry_p1[1] as f64 * 100.0 / self.stats.carry_prev[1].max(1) as f64, 1.0)),
+                carry_p1_nacc3_pct = self.counters.as_ref().map(|_| round(self.stats.carry_p1[2] as f64 * 100.0 / self.stats.carry_prev[2].max(1) as f64, 1.0)),
+                carry_p2_given_p1_nacc1_pct = self.counters.as_ref().map(|_| round(self.stats.carry_p2[0] as f64 * 100.0 / self.stats.carry_p1[0].max(1) as f64, 1.0)),
+                carry_p2_given_p1_nacc2_pct = self.counters.as_ref().map(|_| round(self.stats.carry_p2[1] as f64 * 100.0 / self.stats.carry_p1[1].max(1) as f64, 1.0)),
+                carry_p2_given_p1_nacc3_pct = self.counters.as_ref().map(|_| round(self.stats.carry_p2[2] as f64 * 100.0 / self.stats.carry_p1[2].max(1) as f64, 1.0)),
                 "stats"
             );
         }
@@ -1074,6 +1162,21 @@ mod tests {
         // The plain step on the same manifest, on request.
         let p = check(&speculative(), 16, Some(1), 4).unwrap();
         assert_eq!((p.rows, p.step.name.as_str(), p.max_seqs), (1, "decode", 4));
+    }
+
+    #[test]
+    fn replicated_round_bootstraps_with_one_row_and_no_chunk() {
+        let mut m=speculative();
+        m.programs.remove("prefill");
+        m.ops.remove("write");
+        m.topology=Some(serde_json::from_str(r#"{"groups":{"tp":8},"replicated_rows":true}"#).unwrap());
+        let p=check(&m,16,None,4).unwrap();
+        assert_eq!(p.rows,4);
+        assert_eq!(p.chunk.as_ref().unwrap().rows,Rows::Const(1));
+        assert_eq!(p.max_seqs,2);
+        assert_eq!(p.headroom(),3);
+        // --rows 1 retains the original prompt-through-steps path.
+        assert!(check(&m,16,Some(1),4).unwrap().chunk.is_none());
     }
 
     #[test]
