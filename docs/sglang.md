@@ -25,8 +25,7 @@ so SGLang still treats the model as what it is (pool layout, cache policy,
 defaults) and only the class that runs the forward changes. It does nothing
 unless `KERN_MANIFEST` is set. The page size and attention backend are set
 explicitly because kern's attention kernels are TRT-LLM-gen's on 64-token
-pages; SGLang's own defaults for this model are 1-token pages and Triton
-attention.
+pages.
 
 The manifest above is the one the [vLLM optimization loop](vllm-rsi-example.md)
 ended with, rewritten for SGLang's memory. Nothing the loop optimized was
@@ -40,9 +39,8 @@ State as of 2026-10-05, Qwen3.8-27B on one GB300, SGLang nightly `f70e8c68`:
   equals `kern run` for 48 of 48 tokens, and a request answered from cached
   GDN snapshots matches the same request computed cold.
 - **Ahead on agent traffic.** In an hour of AgentX replay, SGLang + kern
-  served 10.5% more requests than SGLang running its own model with the same
-  flags, and 10× more than SGLang out of the box. Numbers are in
-  [Results](#results).
+  served 10.5% more requests and 7% more output tokens than SGLang running
+  its own model with the same flags. Numbers are in [Results](#results).
 - **Scope.** Single GPU, one model, mixed chunks off. The adapter reads a
   small named contract from the manifest (see [Limits](#limits)).
 
@@ -213,21 +211,17 @@ reads the slot ids from it and ignores the rest.
 
 ## Results
 
-2026-10-05, tray04, one GB300 per server, SGLang nightly `f70e8c68`.
-Three server configurations appear below:
+2026-10-05, tray04, one GB300 per server, SGLang nightly `f70e8c68`. Two
+servers ran side by side:
 
 - **SGLang + kern**: the plugin and the launch command at the top.
-- **SGLang, kern's flags**: SGLang's own Qwen3.8 model with the same flags
+- **SGLang**: SGLang's own Qwen3.8 model with the same flags
   (`--page-size 64 --attention-backend trtllm_mha
   --mamba-radix-cache-strategy extra_buffer`). Attention runs the same
   TRT-LLM-gen kernels as kern's; GDN, gemms and the small ops are SGLang's.
-- **SGLang out of the box**: SGLang's own model with no backend flags. For
-  this model SGLang picks 1-token pages, Triton attention, Triton GDN and
-  `extra_buffer`.
 
-All three use `--max-running-requests 128 --chunked-prefill-size 8192
---mem-fraction-static 0.85`. Servers being compared ran side by side, on
-two GPUs of the same tray.
+Both use `--max-running-requests 128 --chunked-prefill-size 8192
+--mem-fraction-static 0.85`.
 
 ### Correctness
 
@@ -257,76 +251,35 @@ Each server was driven by the aiperf command of
 concurrency 24, 3600 s, the same seed). Every server also ran with
 `--served-model-name qwen38 --enable-cache-report --enable-metrics`.
 
-| | SGLang out of the box | SGLang, kern's flags | SGLang + kern |
-|---|---|---|---|
-| requests in 1 h (0 errors) | 104 | 970 | **1072** |
-| output tok/s | 23.1 | 217.8 | **233.0** |
-| ITL p50 / p99 ms | 261.7 / 943.4 | 26.8 / **146.4** | **25.2** / 179.5 |
-| TTFT p50 / p99 ms | 110552 / 483286 | **548** / 59053 | 649 / **48720** |
-| request latency p50 ms | 315964 | 17418 | **16306** |
-| prompt-cache hit | 22.0% | 74.0% | 72.1% |
+| | SGLang | SGLang + kern |
+|---|---|---|
+| requests in 1 h (0 errors) | 970 | **1072** |
+| output tok/s | 217.8 | **233.0** |
+| ITL p50 / p99 ms | 26.8 / **146.4** | **25.2** / 179.5 |
+| TTFT p50 / p99 ms | **548** / 59053 | 649 / **48720** |
+| request latency p50 ms | 17418 | **16306** |
+| prompt-cache hit | 74.0% | 72.1% |
 
-The SGLang + kern column ran beside "kern's flags". A second SGLang + kern
-hour, run beside "out of the box", served 1070 requests at 235.2 tok/s
-(ITL p50 24.5 ms), so the column repeats within 1%.
+A second SGLang + kern hour served 1070 requests at 235.2 tok/s (ITL p50
+24.5 ms), so the column repeats within 1%.
 
-- **Against SGLang with kern's flags**, kern served 10.5% more requests and
-  7.0% more output tokens, with ITL p50 6% lower. Attention is the same
-  kernel on both sides, so the difference is the rest of the step: kern's
-  GDN, gemm and fused small ops against SGLang's. ITL p99 is worse (180 vs
-  146 ms) for the reason it is under vLLM: an extend step runs one eager
-  `prefill` call per request.
-- **SGLang out of the box** does not keep up with this traffic. An
-  8192-token prefill chunk over a 100k-token prefix runs at about 2300
-  tokens/s on Triton attention, the queue never drains, the KV pool stays
-  about 94% full, and only 22% of prompt tokens hit the cache.
+- **kern served 10.5% more requests** and 7.0% more output tokens, with
+  ITL p50 6% lower. Attention is the same kernel on both sides, so the
+  difference is the rest of the step: kern's GDN, gemm and fused small ops
+  against SGLang's. ITL p99 is worse (180 vs 146 ms) for the reason it is
+  under vLLM: an extend step runs one eager `prefill` call per request.
 - **Against vLLM.** The same manifest inside vLLM served 1528 requests in
   the loop's hour (on another tray, vLLM at 0.92 memory), with 93% of prompt
-  tokens cached. Here both SGLang servers with 64-token pages cache 72–74%,
-  so the gap is in how SGLang's cache holds up under this traffic, not in
-  kern. Not yet profiled.
-
-### Online A/B
-
-These and the TTFT scan below are on the examples-base manifest, against
-SGLang out of the box. vllm-bench, random prompts as token ids, ignore-eos,
-prefix cache flushed before each run.
-
-| shape | concurrency | output tok/s, kern / SGLang | TTFT p50 ms | TPOT p50 ms |
-|---|---|---|---|---|
-| 1024→256 | 1 | 101 / 96 | 58.5 / 66.3 | 9.70 / 9.95 |
-| 1024→256 | 8 | 678 / 579 | 371 / 316 | 10.38 / 10.71 |
-| 1024→256 | 32 | 1746 / 1814 | 1098 / 725 | 14.09 / 14.87 |
-| 1024→256 | 64 | 2387 / 2498 | 1814 / 1334 | 19.80 / 20.47 |
-| 1024→256 | 128 | 2764 / 2887 | 3254 / 2554 | 28.19 / 29.38 |
-| 8192→256 | 1 | 90 / 75 | 336 / 365 | 9.81 / 11.90 |
-| 8192→256 | 8 | 378 / 337 | 1512 / 1644 | 15.28 / 17.35 |
-| 8192→256 | 32 | 576 / 524 | 5432 / 5903 | 34.48 / 38.19 |
-
-### Single-request TTFT (one output token)
-
-| input tokens | 256 | 512 | 1k | 2k | 4k | 8k | 16k | 32k |
-|---|---|---|---|---|---|---|---|---|
-| SGLang + kern, ms | 31.1 | 38.6 | 57.1 | 95.2 | 173 | 335 | 677 | 1402 |
-| SGLang out of the box, ms | 68.8 | 66.6 | 66.6 | 95.3 | 176 | 363 | 892 | 2711 |
-
-Reading these, not yet profiled:
-
-- **Decode.** kern's step is 3–4% faster at 1k context and 11–18% at 8k,
-  where SGLang's Triton attention reads a longer KV.
-- **Long prefill.** Even from 2k to 8k, then ahead at 16k and 32k (1.3× and
-  1.9×), where Triton prefill attention falls behind TRT-LLM-gen. This is
-  the same effect that sinks SGLang out of the box on AgentX.
-- **Concurrency ≥ 32 with 1k prompts.** SGLang leads by 4–5% throughput and
-  on TTFT: an extend step with several new requests is one `prefill` call
-  per request, reading every weight once per request, where SGLang runs the
-  batch in one pass. This is the same limit as under vLLM.
+  tokens cached. Here both SGLang servers cache 72–74%, so the gap is in
+  how SGLang's cache holds up under this traffic, not in kern. Not yet
+  profiled.
 
 ## Limits
 
 - **One program call per prefill request**, as under vLLM; a request with a
-  snapshot position costs one more. A ragged program over a whole extend
-  step is not written.
+  snapshot position costs one more. An extend step with several new
+  requests reads every weight once per request, where SGLang runs the batch
+  in one pass. A ragged program over a whole extend step is not written.
 - **Mixed chunks off.** With `--enable-mixed-chunk`, decode rows ride in
   extend steps, and their decode snapshots are not taken.
 - **Prefix-cache hit below vLLM's** on AgentX (72% vs 93%), for SGLang's own
