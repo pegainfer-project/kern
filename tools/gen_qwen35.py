@@ -71,7 +71,7 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from qwen_weights import qwen38  # noqa: E402
 from kern_manifest import normalize, program, resolve_constants, SCHEMA_VERSION  # noqa: E402
-from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
+from kernels.index import variant  # noqa: E402
 
 # --- model geometry (config.json; asserted against the capture below)
 HIDDEN = 5120
@@ -543,7 +543,7 @@ def scr(name):
     return {"scratch": name}
 
 
-def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=None):
+def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=None, label=None):
     s = {"entry": symbol, "params": params, "block": block, "grid": [_e(g) for g in grid], "args": args}
     if shared_mem is not None:
         s["shared_mem"] = shared_mem
@@ -551,13 +551,15 @@ def step(symbol, params, block, grid, args, shared_mem=None, cubin=None, sha256=
         s["cubin"] = cubin
     if sha256 is not None:
         s["sha256"] = sha256
+    if label is not None:
+        s["label"] = label
     return s
 
 
-def single(symbol, params, block, grid, shared_mem=None, cubin=None, sha256=None):
+def single(symbol, params, block, grid, shared_mem=None, cubin=None, sha256=None, label=None):
     return {"params": params,
             "impl": {"launches": [step(symbol, params, block, grid, [a(i) for i in range(len(params))],
-                                    shared_mem, cubin, sha256)]}}
+                                    shared_mem, cubin, sha256, label)]}}
 
 
 TOKEN_DOMAIN = {"index_into": "model.embed_tokens.weight"}

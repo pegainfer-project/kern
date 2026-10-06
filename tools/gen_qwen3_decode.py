@@ -65,7 +65,7 @@ from kern_manifest import DumpIndex, normalize, program, SCHEMA_VERSION  # noqa:
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mine_capture as mc
-from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
+from kernels.index import variant  # noqa: E402
 
 HIDDEN = 2560
 LAYERS = 36
@@ -388,7 +388,7 @@ def scr(name):
 
 
 def step(symbol, params, block, grid, args, shared_mem=None, cubin=None,
-         sha256=None):
+         sha256=None, label=None):
     s = {"entry": symbol, "params": params, "block": block,
          "grid": [_e(g) for g in grid], "args": args}
     if shared_mem is not None:
@@ -397,16 +397,18 @@ def step(symbol, params, block, grid, args, shared_mem=None, cubin=None,
         s["cubin"] = cubin
     if sha256 is not None:
         s["sha256"] = sha256
+    if label is not None:
+        s["label"] = label
     return s
 
 
 def single(symbol, params, block, grid, shared_mem=None, cubin=None,
-           sha256=None):
+           sha256=None, label=None):
     """单步实现，恒等布线：接口即该核的 launch ABI。"""
     return {"params": params,
             "impl": {"launches": [step(symbol, params, block, grid,
                                     [a(i) for i in range(len(params))],
-                                    shared_mem, cubin, sha256)]}}
+                                    shared_mem, cubin, sha256, label)]}}
 
 
 # 结构输入的先验（domain）：接模型的人才知道 buffer<i32> 是页表不是激活。
