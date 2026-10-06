@@ -49,7 +49,9 @@ packed struct / TMA descriptor，不可 rebind）：
   全链路正确；接错 tap/头只会掉接受率。
 
 跑法：python3 tools/gen_qwen3_decode.py \
-    [primary launches.jsonl] [spec dump dir]
+    [primary launches.jsonl] [spec dump dir | -]
+
+With `-` for the spec dump, qwen3-4b-dspark.json is not written.
 """
 
 import hashlib
@@ -246,6 +248,14 @@ def unified_regs(recs, want):
     return regs
 
 
+def primary_causal_regs(primary_jsonl):
+    """The register count of the plain dump's 28-parameter unified launches:
+    the causal instance, the only 2D one a capture without speculation runs."""
+    causal = unified_regs(mc.load(primary_jsonl), lambda g: True)
+    assert len(causal) == 1, f"the plain dump's 2D instance has several register counts: {causal}"
+    return causal.pop()
+
+
 def check_spec(spec_dir, primary_jsonl, pf):
     """spec capture 证伪 dspark 布线，并消歧两个同 ABI 的 unified 实例。
 
@@ -255,9 +265,7 @@ def check_spec(spec_dir, primary_jsonl, pf):
     的 draft launch 是 non-causal。返回 (causal_regs, draft_regs)。"""
     _, pf_block, pf_smem = pf
     recs = mc.load(str(pathlib.Path(spec_dir) / "launches.jsonl"))
-    causal = unified_regs(mc.load(primary_jsonl), lambda g: True)
-    assert len(causal) == 1, f"primary dump 的 2D 实例 regs 不唯一: {causal}"
-    causal_regs = causal.pop()
+    causal_regs = primary_causal_regs(primary_jsonl)
 
     # 一轮投机窗口内（rejection kernel 之间）：grid=[2,8,1]（ceil(7/4)）是
     # draft 的 5 层，grid=[3,8,1] 是 verify 的 36 层——短 prompt 的 prefill
@@ -1076,6 +1084,7 @@ def main():
         repo / "dumped-kernels" / "pid3977275" / "launches.jsonl")
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else str(
         repo / "dumped-kernels" / "pid2633632")
+    with_spec = spec_dir != "-"
     fwd, prefills = pick_forwards(jsonl)
     by = extract(fwd)
     eps, scale = check_topology(by)
@@ -1083,12 +1092,17 @@ def main():
 
     # unified 实例消歧 + cubin 钉定：spec dump 证伪 draft/verify 假设，
     # cuobjdump 按 num_regs 定位两个同 ABI 实例各自的 module 文件
-    causal_regs, draft_regs = check_spec(spec_dir, jsonl, pf)
+    if with_spec:
+        causal_regs, draft_regs = check_spec(spec_dir, jsonl, pf)
+    else:
+        causal_regs, draft_regs = primary_causal_regs(jsonl), None
     cfile, csha, _ = find_unified_module(pathlib.Path(jsonl).parent, causal_regs)
-    dfile, dsha, _ = find_unified_module(spec_dir, draft_regs)
     # `cubin` is a label; the runtime resolves the sha256. extract_kernels.sh
     # finds the non-causal instance in the spec dump by hash.
-    pins = {"causal": ("unified_causal.cubin", csha), "draft": ("unified_noncausal.cubin", dsha)}
+    pins = {"causal": ("unified_causal.cubin", csha)}
+    if with_spec:
+        dfile, dsha, _ = find_unified_module(spec_dir, draft_regs)
+        pins["draft"] = ("unified_noncausal.cubin", dsha)
     # Every mined launch pins its dump module too: the manifest's `modules`
     # table is the complete dependency list, the runtime loads nothing else.
     # Labels say what the module is (vLLM's layernorm_kernels.cu, …); the
@@ -1101,19 +1115,20 @@ def main():
     for tag, (label, sha) in sorted(pins.items()):
         print(f"  pin {tag:<9} -> {label:<26} {sha[:12]}")
 
-    for spec, silu, name in [(False, "hub", "qwen3-4b.json"),
-                             (False, "mined", "qwen3-4b-silu-mined.json"),
-                             (True, "mined", "qwen3-4b-dspark.json")]:
+    outputs = [(False, "hub", "qwen3-4b.json"), (False, "mined", "qwen3-4b-silu-mined.json")]
+    if with_spec:
+        outputs.append((True, "mined", "qwen3-4b-dspark.json"))
+    for spec, silu, name in outputs:
         manifest = qwen3(build(by, eps, scale, pf, pins, spec=spec, silu=silu))
         out = repo / "examples" / name
         out.write_text(json.dumps(manifest, indent=1) + "\n")
         counts = {p: len(v["calls"]) for p, v in manifest["programs"].items()}
         print(f"wrote {out} ({out.stat().st_size // 1024} KiB, "
               f"{len(manifest['buffers'])} buffers, calls {counts})")
+    draft = f"draft={dfile} {dsha[:12]} regs={draft_regs}" if with_spec else "no draft (no spec dump)"
     print(f"topology checks passed (eps={eps!r}, attn scale={scale!r}, "
           f"prefill fwds={[t for t, _ in prefills]}; unified pins: "
-          f"causal={cfile} {csha[:12]} regs={causal_regs}, "
-          f"draft={dfile} {dsha[:12]} regs={draft_regs})")
+          f"causal={cfile} {csha[:12]} regs={causal_regs}, {draft})")
 
 
 if __name__ == "__main__":
