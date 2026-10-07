@@ -24,7 +24,8 @@ ABI 校验兼做实例选择，绕开了 capture 缺 launch→module 映射的�
 var max 分配全部 buffer / 分配 state（分页与 per-seq 的走下面的块池）→
 按每个 weight buffer 的 `bind` 从 checkpoint 里拷张量段拼出 buffer
 （张量来自一个 `Tensors`，见下「权重来源」；scratch 按 impl 声明另行私有分配）
-→ 跑 `once` program 算派生表 → 顺序重放
+→ 同一次 `load_weights` 里逐 call 跑 `derive` program，`source` 张量随用随传、
+共用一块暂存（manifest.md「权重」）→ 跑 `once` program 算派生表 → 顺序重放
 call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scratch/
 填字面量后 raw `cuLaunchKernel`（实参 staging 成小端 u64 slot；>48KB
 动态 shmem 自动 `cuFuncSetAttribute`）。

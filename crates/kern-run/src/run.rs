@@ -226,6 +226,7 @@ fn banner(rt: &Runtime, manifest: &Path, kernels: Option<&Path>, load: Duration)
         let shape = match &p.batch {
             Some(b) => format!(", {} × {:?} per call", b.groups, b.rows),
             None if p.once => ", once after load".into(),
+            None if p.derive => ", inside weight loading".into(),
             None => String::new(),
         };
         info!("  program  `{name}`: {} calls{shape}", p.calls.len());

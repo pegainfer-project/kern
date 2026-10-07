@@ -14,7 +14,7 @@ ops.<name>.impl.launches[]   launch   起一次 module 入口 {"module": "argmax
 modules.<name>               module   launch 钉住的工件  {"source": "argmax.cubin", "sha256": "…"}
 vars.<name>                  var      caller 每次调用供应的标量，有上界
 states.<name>                state    不透明持久内存，runtime 按字节供应
-buffers.<name>               buffer   有类型的张量：input / output / weight / workspace / carry / peer
+buffers.<name>               buffer   有类型的张量：input / output / weight / source / workspace / carry / peer
 topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和大小
 ```
 
@@ -50,7 +50,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
 - `buffers`：`dtype + shape + kind`，可选 `domain`（内容的先验，见下）与
   `fill`（在 serving 循环里的角色，见「Serving 协议」）。shape 维度是常量或 var 名；kind 说
   的是"谁供应、活多久"：`input`（runtime 写入）/ `output`（runtime 读回）
-  / `weight`（load 时从 checkpoint 的张量拼出来，`bind` 说是哪些，见「权重」）/ `workspace`（runtime 规划，跨次执行
+  / `weight`（load 时从 checkpoint 的张量拼出来，`bind` 说是哪些，见「权重」）/ `source`（同样 `bind`
+  checkpoint 张量，但只活在 load 里、只给 `derive` program 读，见「权重」）/ `workspace`（runtime 规划，跨次执行
   不保留）/ `carry`（一个 program 写、另一个 program 读的交接棒，跨次
   执行保留；谁先跑是 caller 契约，verifier 只要求它被某个 program 写到
   ——投机解码的 aux 隐状态逼出来的）/ `peer`（runtime 填的地址数组，见
@@ -134,8 +135,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     vLLM attention（unified + reduce_segments）这类"一个逻辑算子 = 多次
     launch + 私有中间缓冲"整体折叠成一个 impl，不向调用方泄漏。
 - `programs`：每个 program（如 `prefill`/`decode`）是
-  `{"batch"?, "once"?, "calls": [...]}`——`batch` / `once` 说它怎么被
-  serving 循环调（见「Serving 协议」），`calls` 是一段顺序 call 列表：
+  `{"batch"?, "once"?, "derive"?, "calls": [...]}`——`batch` / `once` /
+  `derive` 说它怎么被 serving 循环或 load 调（见「Serving 协议」），`calls` 是一段顺序 call 列表：
   `op` 名 + 接口实参（buffer/state 实参可带字节 `offset`，默认 0：kernel
   收到 base+offset——provider 用它寻址融合 buffer 里的视图如 qkv 的
   q/k/v 切片、state 里的逐层区域，offset 是 provider 布局算术的字面量，
@@ -316,6 +317,17 @@ cos / sin 表、全 1 的 kv scale、chunk 索引表——不是权重，是 `ca
 `tools/kernels-src/weight_prep.cu` 的几个 elementwise 核）。拼接方式与派生
 表都是模型知识，住在生成器（`tools/qwen_weights.py`），不住在 runtime。
 
+checkpoint 张量要先变换才能用（K3 的 mxfp4 专家按 GEMM 布局 shuffle），而原样
+那份没人再读时，原样的张量声明成 `source`，变换写成 `derive` program：
+runtime 在 `load_weights` 里逐 call 跑它，每个 source 只在第一个读它的 call
+之前上传、最后一个读它的 call 之后让出——所有 source 共用一块暂存，同一
+call 上活着的 source 互不重叠（`kern-runtime/src/derive.rs` 的 `layout`）。
+显存峰值是派生结果加上同时活着的最宽一组 source（K3 全量一层的 w13 ≈ 10
+GB），不是整份 checkpoint 两遍。跑完暂存释放、derive program 一起丢掉，
+不能再跑；同一个 runtime 不能第二次 `load_weights`。derive program 不碰
+state / input / output / peer、不调 collective（它跑在这些都还没意义的时候），
+与 `once` / `batch` / `graph` 互斥。
+
 ## Serving 协议：`fill`、`batch`、`once`
 
 runtime 之上还有一层契约：一个 serving 循环（`kern run`、kern-serve 的
@@ -350,6 +362,8 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   测试）。
 - **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
   allreduce 的 poison 值）。与 `batch` 互斥。
+- **program 上的 `derive`**：runtime 自己在 `load_weights` 里跑，caller
+  不跑（见「权重」）。
 - **program 上的 `graph`**：runtime 按调用形状（这次调用的 var 值）首次
   capture 成一张 CUDA graph、之后 replay，一步一次 launch。给形状固定、
   launch 多而短的 program（decode 步、投机 round）；行数随调用变的
@@ -410,7 +424,8 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
    能接 `state`、var/表达式的取值范围必须装进标量参数类型、offset 对齐
    且在界内）；
 9. 逐 program 数据流：禁止读未写（read-before-write）、禁止写 input/
-   weight；output / carry 必须被**某个** program 写到（prefill 这类只落
+   weight/source；source 只许 `derive` program 读，`derive` program 不碰
+   state / input / output / peer、不调 collective；output / carry 必须被**某个** program 写到（prefill 这类只落
    state 的 program 合法地不写任何 output；carry 在每个 program 内视为
    已写——它的生产者是另一个 program）；program 的 `once` 与 `batch`
    互斥，`batch.groups ≥ 1`、`rows` 是 ≥ 1 的常量或已声明的 var（fill 之间

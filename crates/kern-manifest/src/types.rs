@@ -148,6 +148,9 @@ pub struct Program {
     /// Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.
     #[serde(default, skip_serializing_if = "is_false")]
     pub once: bool,
+    /// Run by the runtime inside weight loading, call by call, to turn `source` buffers into the `carry` buffers the other programs read (a shuffle into a kernel's layout, a dtype cast). Reads no state, peer, input or output; nothing else may run it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub derive: bool,
     /// Driven through a CUDA graph: the runtime captures the call list at each var assignment the program is called with and replays it with one launch. For a program of fixed shape per call whose launches are many and short (a decode step, a speculative round); a program whose rows vary per call (a prefill chunk) runs launch by launch.
     #[serde(default, skip_serializing_if = "is_false")]
     pub graph: bool,
@@ -353,7 +356,7 @@ pub struct Buffer {
     /// `peer` buffers only: the topology group the addresses are indexed by, e.g. `"ep"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// `weight` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{"tensor": "q_proj.weight"}, {"tensor": "k_proj.weight"}]`.
+    /// `weight` and `source` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{"tensor": "q_proj.weight"}, {"tensor": "k_proj.weight"}]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bind: Vec<Segment>,
 }
@@ -579,6 +582,8 @@ pub enum BufferKind {
     Output,
     /// Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.
     Weight,
+    /// Checkpoint tensors bound like a weight but alive only while a `derive` program reads them during load: device memory holds what is derived from them, never both at once, e.g. an expert stack before its shuffle.
+    Source,
     /// Runtime-owned scratch, dead between runs, e.g. `hidden`.
     Workspace,
     /// Written by one program and read by another, kept between runs, e.g. the `fc_out` hidden states a draft reads.
@@ -593,6 +598,7 @@ impl fmt::Display for BufferKind {
             BufferKind::Input => "input",
             BufferKind::Output => "output",
             BufferKind::Weight => "weight",
+            BufferKind::Source => "source",
             BufferKind::Workspace => "workspace",
             BufferKind::Carry => "carry",
             BufferKind::Peer => "peer",

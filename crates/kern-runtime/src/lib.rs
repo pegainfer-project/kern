@@ -28,6 +28,7 @@ mod compare;
 mod compile;
 mod cubin;
 mod cublas;
+mod derive;
 mod device;
 mod error;
 mod exec;
@@ -179,6 +180,8 @@ pub struct Runtime {
     /// ([`Runtime::enqueue_after`]): host work before the program, the
     /// program before host work after it.
     joins: [sys::CUevent; 2],
+    /// The derive programs and their staging, until `load_weights` runs them.
+    derivation: Option<derive::Derivation>,
 }
 
 impl Drop for Runtime {
@@ -208,9 +211,14 @@ impl Runtime {
         self.n_modules
     }
 
-    /// (name, class, allocated bytes) for every buffer.
+    /// (name, class, allocated bytes) for every buffer device memory
+    /// holds: the sources only until `load_weights` has derived from them.
     pub fn buffer_sizes(&self) -> Vec<(&str, BufferKind, u64)> {
-        self.manifest.buffers.iter().map(|(n, b)| (n.as_str(), b.kind, self.buffers[n].bytes)).collect()
+        self.manifest
+            .buffers
+            .iter()
+            .filter_map(|(n, b)| Some((n.as_str(), b.kind, self.buffers.get(n)?.bytes)))
+            .collect()
     }
 
     /// (name, declaration, allocated bytes) for every state.

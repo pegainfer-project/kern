@@ -203,6 +203,9 @@ pub struct Protocol {
     pub forwards: Vec<Forward>,
     /// Programs run once after load, in name order.
     pub once: Vec<String>,
+    /// Programs the runtime runs inside weight loading, in name order: no
+    /// caller runs them.
+    pub derive: Vec<String>,
 }
 
 impl Protocol {
@@ -409,6 +412,7 @@ impl Protocol {
         // Forwards: the shape, and by dataflow what each hands back.
         let mut forwards: Vec<Forward> = Vec::new();
         let mut once = Vec::new();
+        let derive = m.programs.iter().filter(|(_, p)| p.derive).map(|(n, _)| n.clone()).collect();
         let mut span_var: Option<Bound> = None;
         let mut context_var: Option<Bound> = None;
         for (pname, p) in &m.programs {
@@ -599,6 +603,7 @@ impl Protocol {
                 line_tables,
                 forwards,
                 once,
+                derive,
             })
         } else {
             Err(ProtocolErrors(errs))
