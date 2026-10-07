@@ -1091,3 +1091,56 @@ fn host_span_ends_at_the_last_element() {
     let h = HostTensor { dtype: DType::U8, shape: vec![0, 10], strides: vec![16, 1] };
     assert_eq!((h.span(1), h.span(3)), (Some(10), Some(42)));
 }
+
+/// The base with its weight turned into a source that a derive program
+/// shuffles into the carry `decode` embeds from.
+fn derived() -> serde_json::Value {
+    let mut v = base();
+    v["buffers"].as_object_mut().unwrap().remove("w");
+    v["buffers"]["raw"] =
+        serde_json::json!({ "dtype": "bf16", "shape": [64, 64], "kind": "source", "bind": [{ "tensor": "raw" }] });
+    v["buffers"]["ws"] = serde_json::json!({ "dtype": "bf16", "shape": [64, 64], "kind": "carry" });
+    v["ops"]["shuffle"] = serde_json::json!({
+        "params": ["in buffer<bf16>", "out buffer<bf16>", "i32"],
+        "impl": { "launches": [{ "module": "toy", "entry": "shuffle_k", "block": [128, 1, 1], "grid": [32, 1, 1] }] }
+    });
+    v["programs"]["load"] = serde_json::json!({ "derive": true, "calls": [
+        { "op": "shuffle", "args": [{ "buf": "raw" }, { "buf": "ws" }, { "i32": 4096 }] }
+    ] });
+    v["programs"]["decode"]["calls"][0]["args"][1] = serde_json::json!({ "buf": "ws" });
+    v
+}
+
+#[test]
+fn a_source_is_read_by_derive_programs_only() {
+    check(derived()).unwrap();
+    let mut v = derived();
+    v["programs"]["decode"]["calls"][0]["args"][1] = serde_json::json!({ "buf": "raw" });
+    assert_err(v, "source buffer `raw` is read only by a `derive` program");
+    let mut v = derived();
+    v["programs"]["load"]["calls"][0]["args"] = serde_json::json!([{ "buf": "ws" }, { "buf": "raw" }, { "i32": 1 }]);
+    assert_err(v, "op writes to read-only source buffer `raw`");
+    let mut v = derived();
+    v["buffers"]["raw"]["bind"] = serde_json::json!([]);
+    assert_err(v, "a source buffer binds at least one checkpoint tensor");
+    let mut v = derived();
+    v["buffers"]["raw"]["export"] = serde_json::json!(true);
+    assert_err(v, "a source lives only while weights load");
+}
+
+#[test]
+fn a_derive_program_touches_nothing_serving_owns() {
+    let mut v = derived();
+    v["programs"]["load"]["once"] = serde_json::json!(true);
+    assert_err(v, "`derive` (run inside weight loading) excludes `once`, `batch` and `graph`");
+    let mut v = derived();
+    v["programs"]["load"]["calls"].as_array_mut().unwrap().push(
+        serde_json::json!({ "op": "embed", "args": [{ "buf": "x" }, { "buf": "ws" }, { "buf": "h" }, { "i32": 1 }] }),
+    );
+    assert_err(v, "before any input buffer such as `x` means anything");
+    let mut v = derived();
+    v["programs"]["load"]["calls"].as_array_mut().unwrap().push(serde_json::json!(
+        { "op": "attn", "args": [{ "buf": "ws" }, { "state": "kv" }, { "buf": "h" }, { "i32": 1 }, { "i64": 0 }] }
+    ));
+    assert_err(v, "before state `kv` holds anything");
+}

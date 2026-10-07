@@ -175,7 +175,7 @@ pub fn frontier_inputs(m: &Manifest, prog: &str, calls: Range<usize>) -> BTreeSe
     inputs
 }
 
-/// Buffers the `once` programs write: load-time constants (a packed
+/// Buffers the `once` and `derive` programs write: load-time constants (a packed
 /// weight, a rope table), each side's own like its weights, never handed
 /// from A to B.
 pub fn constants(m: &Manifest, once: &[String]) -> BTreeSet<String> {

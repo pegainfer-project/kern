@@ -460,8 +460,9 @@ impl PinnedCheck<'_> {
     }
 }
 
-/// Lower every program's call list into a flat launch list. Every launch
-/// that receives a peer buffer is SASS-scanned for multicast TMA first.
+/// Lower the call list of every program whose `derive` is `derive` into
+/// a flat launch list. Every launch that receives a peer buffer is
+/// SASS-scanned for multicast TMA first.
 fn compile_programs(
     manifest: &Manifest,
     ops: &BTreeMap<String, ResolvedOp>,
@@ -469,13 +470,14 @@ fn compile_programs(
     states: &BTreeMap<String, DeviceBuf>,
     ranks: &Ranks,
     blt: &CudaBlasLT,
+    derive: bool,
 ) -> Result<BTreeMap<String, CompiledProgram>> {
     let vars: BTreeMap<&str, usize> = manifest.vars.keys().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
     let maxima: Vec<u64> = manifest.vars.values().map(|v| v.max).collect();
     let pinned = PinnedCheck { blt, maxima: &maxima };
     let mut scan = MulticastScan::new();
     let mut programs = BTreeMap::new();
-    for (pname, p) in &manifest.programs {
+    for (pname, p) in manifest.programs.iter().filter(|(_, p)| p.derive == derive) {
         let calls = &p.calls;
         let mut launches = Vec::new();
         let mut call_ranges = Vec::with_capacity(calls.len());
@@ -496,8 +498,8 @@ fn compile_programs(
     Ok(programs)
 }
 
-/// [`compile_programs`] with the placement read off the runtime's ranks and
-/// its peer buffers.
+/// [`compile_programs`] over every program but the derive ones, with the
+/// placement read off the runtime's ranks and its peer buffers.
 pub(crate) fn compile(
     manifest: &Manifest,
     ops: &BTreeMap<String, ResolvedOp>,
@@ -508,7 +510,20 @@ pub(crate) fn compile(
     blt: &CudaBlasLT,
 ) -> Result<BTreeMap<String, CompiledProgram>> {
     let peer_buffers: BTreeSet<String> = peers.keys().cloned().collect();
-    compile_programs(manifest, ops, buffers, states, &Ranks { ranks, peer_buffers: &peer_buffers }, blt)
+    compile_programs(manifest, ops, buffers, states, &Ranks { ranks, peer_buffers: &peer_buffers }, blt, false)
+}
+
+/// The derive programs, lowered: they read no state and no peer, so they
+/// compile at load whatever the host binds later.
+pub(crate) fn compile_derive(
+    manifest: &Manifest,
+    ops: &BTreeMap<String, ResolvedOp>,
+    buffers: &BTreeMap<String, DeviceBuf>,
+    ranks: &BTreeMap<String, u64>,
+    blt: &CudaBlasLT,
+) -> Result<BTreeMap<String, CompiledProgram>> {
+    let none = BTreeSet::new();
+    compile_programs(manifest, ops, buffers, &BTreeMap::new(), &Ranks { ranks, peer_buffers: &none }, blt, true)
 }
 
 /// The impl-private scratch of every resolved op, whose addresses the

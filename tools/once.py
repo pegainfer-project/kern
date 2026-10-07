@@ -125,7 +125,9 @@ class Once:
                 self.derive(name)
         self.call("rope_table", [buf(*cos), buf(*sin), {"i32": rows}, {"i32": half}, {"i32": stride}, {"f32": base}], rows)
 
-    def finish(self):
+    def finish(self, name="load", derive=False):
+        """The queued calls as program `name`: once after load, or with
+        `derive` inside weight loading (its reads may be `source` buffers)."""
         for op, n in self.widest.items():
             cubin, entry, params = KERNELS[op]
             grid, block = ([n, 1, 1], [64, 1, 1]) if op == "rope_table" else ([(n + BLOCK - 1) // BLOCK, 1, 1], [BLOCK, 1, 1])
@@ -133,6 +135,6 @@ class Once:
             self.m["ops"][op] = {"params": params, "impl": {"launches": [
                 {"entry": entry, "params": params, "block": block, "grid": grid,
                  "args": [{"param": i} for i in range(len(params))], **variant(cubin).module}]}}
-        assert "load" not in self.m["programs"]
-        self.m["programs"]["load"] = program(self.calls, once=True)
+        assert name not in self.m["programs"]
+        self.m["programs"][name] = program(self.calls, once=not derive, derive=derive)
         return self.m
