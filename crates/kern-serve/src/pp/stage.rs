@@ -1,8 +1,9 @@
 //! A downstream stage: loads its slice of the model, says hello to the
 //! head, maps the next stage's mailbox from the table it gets back, then
 //! replays the head's items in order. It keeps no accounting: the page
-//! ids, positions and slots of every item are the head's. The last stage
-//! hands back the tokens of every item whose program emits them.
+//! ids, positions and slots of every item are the head's, and so is the
+//! zeroing of a fresh sequence's slot. The last stage hands back the
+//! tokens of the item that finishes a prompt.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -107,13 +108,16 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
             Err(mpsc::TryRecvError::Disconnected) => break,
         };
         let vars: Vars = item.vars.into_iter().filter(|(k, _)| rt.manifest.vars.contains_key(k)).collect();
+        if let Some(slot) = item.zero_slot {
+            rt.zero_slot(slot)?;
+        }
         for (name, v) in &item.rows {
             kern_run::write_named(&mut rt, &p, name, v, &vars)?;
         }
         rt.issue(&item.program, &vars).with_context(|| format!("`{}`", item.program))?;
         clock.issued(vars.get(&p.rows.var).copied().unwrap_or(0));
         let emits = p.forwards.iter().find(|f| f.name == item.program).and_then(|f| f.emits);
-        if let Some(i) = emits.filter(|_| last) {
+        if let Some(i) = emits.filter(|_| last && item.reply) {
             let t = &p.fills[i];
             let mut tokens = t.decode(&rt.read_output(&t.name)?);
             tokens.truncate(t.width as usize);

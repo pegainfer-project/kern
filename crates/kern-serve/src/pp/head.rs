@@ -1,9 +1,12 @@
 //! The head: stage 0 of a pipeline, the scheduler every stage follows.
 //!
-//! A request leases its prompt's pages from the head's pool, the one pool
-//! of the pipeline, and goes out as items: the prompt but its last token
-//! in chunks through the chunk program, then the last token through the
-//! one-row step, whose tokens the last stage hands back. Each item is sent
+//! A request leases its prompt's pages (and slot) from the head's pool,
+//! the one pool of the pipeline, and goes out as items: the prompt but its
+//! last token in chunks through the chunk program, then the last token
+//! through the one-row step, whose tokens the last stage hands back; or,
+//! when the chunk program hands a token back itself (a model whose chunked
+//! kernels must see every prompt token), the whole prompt in chunks, the
+//! last chunk's token the answer. Each item is sent
 //! to every stage before the head stages and issues it itself, so a stage
 //! waiting on its device for an item always has it on the way. The first
 //! token finishes the request. Nothing waits on the head's device but the
@@ -14,7 +17,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc;
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::{Forward, Rows};
+use kern_manifest::protocol::{Axis, Forward, Rows};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::{Denied, Lease};
 use kern_run::Weights;
@@ -50,7 +53,9 @@ pub struct PpHead {
     rt: Runtime,
     p: Protocol,
     prefill: Forward,
-    step: Forward,
+    /// The one-row step the last prompt token goes through; none when the
+    /// chunk program hands the first token back itself.
+    step: Option<Forward>,
     chunk: usize,
     max_seqs: usize,
     stop_tokens: Vec<u32>,
@@ -107,7 +112,6 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
     connect_downstream(&mut rt, &hellos[&1].0.mailbox)?;
     let p = Protocol::check_unsampled(&rt.manifest)?;
     kern_run::run_once(&rt, &p)?;
-    ensure!(p.line_tables.is_empty(), "a pipeline serves paged state only; this manifest has per-sequence states");
     let pages = rt.pages_total() as u64;
 
     let downstream: Vec<Option<Handles>> =
@@ -123,7 +127,10 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
 
     let prefill =
         p.chunk().cloned().context("a pipeline prefills through a program taking one sequence's rows as fed")?;
-    let step = p.forward(1, Rows::Const(1)).cloned().context("no program takes one sequence of one row")?;
+    let step = match prefill.emits {
+        Some(_) => None,
+        None => Some(p.forward(1, Rows::Const(1)).cloned().context("no program takes one sequence of one row")?),
+    };
     let max = p.rows.max as usize;
     let chunk = match h.chunk {
         None => max,
@@ -131,7 +138,8 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
         Some(c) => bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
     };
     let clock = Clock::new(&p)?;
-    info!(pages, page = rt.page(), chunk, prefill = %prefill.name, step = %step.name, "pipeline head ready");
+    let step_name = step.as_ref().map_or("-", |f| f.name.as_str()).to_string();
+    info!(pages, page = rt.page(), chunk, prefill = %prefill.name, step = %step_name, "pipeline head ready");
     Ok(PpHead {
         rt,
         p,
@@ -221,21 +229,27 @@ impl PpHead {
     }
 
     /// The prompt as items: all but its last token in chunks, the last
-    /// through the step, whose token comes back.
+    /// through the step, whose token comes back; or all of it in chunks
+    /// when the chunk program hands the token back.
     fn send_prompt(&mut self, q: &QueuedRequest, lease: &Lease) -> Result<()> {
         let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
         let n = ids.len();
         let (prefill, step) = (self.prefill.clone(), self.step.clone());
+        let chunked = if step.is_some() { n - 1 } else { n };
         let mut pos = 0;
-        while pos < n - 1 {
-            let c = (n - 1 - pos).min(self.chunk);
-            self.send_item(&prefill, lease, pos, &ids[pos..pos + c])?;
+        while pos < chunked {
+            let c = (chunked - pos).min(self.chunk);
+            let reply = step.is_none() && pos + c == n;
+            self.send_item(&prefill, lease, pos, &ids[pos..pos + c], reply)?;
             pos += c;
         }
-        self.send_item(&step, lease, n - 1, &ids[n - 1..])
+        match &step {
+            Some(f) => self.send_item(f, lease, n - 1, &ids[n - 1..], true),
+            None => Ok(()),
+        }
     }
 
-    fn send_item(&mut self, f: &Forward, lease: &Lease, pos: usize, ids: &[i64]) -> Result<()> {
+    fn send_item(&mut self, f: &Forward, lease: &Lease, pos: usize, ids: &[i64], reply: bool) -> Result<()> {
         let (vars, values) = kern_run::fills(&self.p, std::slice::from_ref(lease), &[pos], ids.len(), ids);
         let mut rows: BTreeMap<String, Vec<i64>> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
         for t in &self.p.page_tables {
@@ -243,9 +257,22 @@ impl PpHead {
             lease.extend_row(&t.name, &mut v)?;
             rows.insert(t.name.clone(), v.into_iter().map(i64::from).collect());
         }
-        let item = Item { program: f.name.clone(), vars, rows };
+        // A sequence's line tables and slot are the same on every item: its
+        // first item carries them and zeroes the slot on every stage (the
+        // head's own lease zeroed its slot already).
+        let first = pos == 0;
+        for t in self.p.line_tables.iter().filter(|_| first) {
+            let cols = match t.axis {
+                Axis::Tray => self.p.tray.as_ref().map_or(1, |b| b.max),
+                _ => self.p.groups.max,
+            };
+            let v = kern_run::line_rows(t, std::slice::from_ref(lease), cols as usize)?;
+            rows.insert(t.name.clone(), v.into_iter().map(i64::from).collect());
+        }
+        let item = Item { program: f.name.clone(), vars, rows, zero_slot: None, reply };
+        let out = Item { zero_slot: lease.seq_slot().filter(|_| first), ..item.clone() };
         for w in &mut self.stages {
-            self.io.block_on(send(w, &item))?;
+            self.io.block_on(send(w, &out))?;
         }
         for (name, v) in &item.rows {
             kern_run::write_named(&mut self.rt, &self.p, name, v, &item.vars)?;
