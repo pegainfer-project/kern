@@ -18,6 +18,8 @@ struct LiteralManifest {
     #[serde(default)]
     topology: Option<Topology>,
     #[serde(default)]
+    cut: Option<Cut>,
+    #[serde(default)]
     vars: BTreeMap<String, Var>,
     #[serde(default)]
     states: BTreeMap<String, State>,

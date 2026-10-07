@@ -71,6 +71,23 @@ enum Cmd {
         /// Manifest JSON to verify (does not read kern.toml)
         manifest: PathBuf,
     },
+    /// Cut a manifest into pipeline stages before the given call indices
+    /// of every program a serving loop drives; writes `stage<s>.json`
+    /// into `--out`, each verified. No GPU
+    Cut {
+        /// Manifest JSON to cut (does not read kern.toml)
+        manifest: PathBuf,
+        /// Call indices to cut before, increasing
+        #[arg(long, value_delimiter = ',', required = true)]
+        at: Vec<usize>,
+        /// The mailbox kernels' cubin (`tools/kernels-src/pp_mailbox.cu`),
+        /// pinned by its sha256; it goes into each stage's kernels dir
+        #[arg(long)]
+        module: PathBuf,
+        /// Directory the stages are written to
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -85,7 +102,7 @@ fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     let cfg = match &cli.cmd {
-        Cmd::Verify { .. } => None,
+        Cmd::Verify { .. } | Cmd::Cut { .. } => None,
         _ => Config::find(cli.config.as_deref())?,
     };
     match cli.cmd {
@@ -118,7 +135,36 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Cut { manifest, at, module, out } => cut(&manifest, &at, &module, &out),
     }
+}
+
+/// `kern cut`: the stages of a manifest cut before `at`, written as
+/// `stage<s>.json`.
+fn cut(manifest: &Path, at: &[usize], module: &Path, out: &Path) -> Result<()> {
+    use sha2::Digest;
+    let json = std::fs::read_to_string(manifest).with_context(|| format!("reading {}", manifest.display()))?;
+    let m = kern_manifest::Verified::from_json(&json)?;
+    let bytes = std::fs::read(module).with_context(|| format!("reading {}", module.display()))?;
+    let pp = kern_manifest::types::Module {
+        source: module.file_name().context("--module names a file")?.to_string_lossy().into_owned(),
+        sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+    };
+    let stages = kern_manifest::cut::cut(&m, at, &pp)?;
+    std::fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    for (s, st) in stages.iter().enumerate() {
+        let path = out.join(format!("stage{s}.json"));
+        std::fs::write(&path, st.to_json()).with_context(|| format!("writing {}", path.display()))?;
+        let calls: Vec<String> = st.programs.iter().map(|(n, p)| format!("{n} {}", p.calls.len())).collect();
+        tracing::info!(
+            "stage {s}: {} ({} weights; calls: {})",
+            path.display(),
+            st.buffers.values().filter(|b| b.kind == kern_manifest::types::BufferKind::Weight).count(),
+            calls.join(", ")
+        );
+    }
+    tracing::info!("cut `{}` into {} stages", stages[0].cut.as_ref().map_or("", |c| c.id.as_str()), stages.len());
+    Ok(())
 }
 
 /// The target a command runs on: the named one, else the only one, else

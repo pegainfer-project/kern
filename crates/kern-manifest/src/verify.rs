@@ -37,6 +37,7 @@
 //!      `of` and `group` only where they mean something; `{"rank": g}`
 //!      binds only to i32/i64 params; an op with an extern launch never
 //!      receives a peer buffer (runtime built-ins may not touch peer memory)
+//!  11. cut: at least two stages, the stage below their count, an id
 //!
 //! What this deliberately cannot check: kernel *behavior*, and the
 //! *semantics* of interface params (that a replacement implementation
@@ -195,6 +196,14 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             }
         }
     }
+    if let Some(c) = &m.cut {
+        if c.id.is_empty() || c.stages < 2 || c.stage >= c.stages {
+            errs.push(format!(
+                "cut: stage {} of {} with id `{}`; a cut has at least 2 stages, a stage below their count and an id",
+                c.stage, c.stages, c.id
+            ));
+        }
+    }
     let group_ctx = |g: &str, errs: &mut Vec<String>, used_groups: &mut BTreeSet<String>, ctx: &str| -> Option<u64> {
         match m.group_size(g) {
             Some(sz) => {
@@ -241,7 +250,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
         let ctx = format!("buffer `{name}`");
         // 9b. fill
         if let Some(fill) = b.fill {
-            let output = matches!(fill, Fill::Tokens | Fill::Count | Fill::Error);
+            let output = matches!(fill, Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock);
             match (b.kind, output) {
                 (BufferKind::Input, false) | (BufferKind::Output, true) => {}
                 (BufferKind::Input | BufferKind::Output, _) => errs.push(format!(

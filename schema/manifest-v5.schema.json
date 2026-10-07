@@ -419,6 +419,54 @@
       ],
       "type": "object"
     },
+    "Cut": {
+      "additionalProperties": false,
+      "description": "One stage of a manifest cut into a pipeline (`kern cut`): every stage of one cut carries the same `id`; stage `stage` of `stages` receives its predecessor's activations and sends its own to the next.",
+      "properties": {
+        "id": {
+          "description": "Names the cut: a hash of the manifest it was cut from and where.",
+          "type": "string"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "description": "This stage's place in the pipeline, from 0.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "This stage's place in the pipeline, from 0."
+        },
+        "stages": {
+          "anyOf": [
+            {
+              "description": "Stages in the pipeline, at least 2.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Stages in the pipeline, at least 2."
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "stages"
+      ],
+      "type": "object"
+    },
     "DType": {
       "description": "Element type of a buffer or scratch, e.g. `\"bf16\"`.",
       "enum": [
@@ -958,6 +1006,11 @@
         {
           "const": "error",
           "description": "Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.",
+          "type": "string"
+        },
+        {
+          "const": "clock",
+          "description": "Output: a pipeline stage's clock, `i64 [ring × 5]`: entry `item % ring` is {item + 1, receive wait begin, end, send wait begin, end} in globaltimer ns, 0 where the stage has no such edge. A cut declares it; the stage reads it when it pleases.",
           "type": "string"
         }
       ]
@@ -2154,6 +2207,17 @@
       },
       "type": "object"
     },
+    "cut": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Cut"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The pipeline stage this manifest is, when it is one piece of a cut manifest, e.g. `{\"id\": \"9f2c…\", \"stage\": 1, \"stages\": 2}`."
+    },
     "model": {
       "description": "Free-form model label, e.g. `\"qwen3-4b\"`.",
       "type": "string"
@@ -2201,7 +2265,7 @@
           "type": "null"
         }
       ],
-      "description": "Rank groups a multi-GPU manifest is SPMD over, e.g. `{\"groups\": {\"ep\": 4}}`; every rank loads the same manifest."
+      "description": "Rank groups of a multi-GPU manifest, e.g. `{\"groups\": {\"ep\": 4}}`: every rank of an SPMD group loads the same manifest; the two stages a cut's group joins load their own, agreeing only on the peer's `of` buffer."
     },
     "vars": {
       "additionalProperties": {

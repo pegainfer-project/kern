@@ -71,9 +71,12 @@ pub struct Manifest {
     pub schema_version: u32,
     /// Free-form model label, e.g. `"qwen3-4b"`.
     pub model: String,
-    /// Rank groups a multi-GPU manifest is SPMD over, e.g. `{"groups": {"ep": 4}}`; every rank loads the same manifest.
+    /// Rank groups of a multi-GPU manifest, e.g. `{"groups": {"ep": 4}}`: every rank of an SPMD group loads the same manifest; the two stages a cut's group joins load their own, agreeing only on the peer's `of` buffer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology: Option<Topology>,
+    /// The pipeline stage this manifest is, when it is one piece of a cut manifest, e.g. `{"id": "9f2c…", "stage": 1, "stages": 2}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<Cut>,
     /// Per-call scalars the caller supplies, e.g. `{"tokens": {"max": 2048}}`.
     #[serde(default, deserialize_with = "unique_map", skip_serializing_if = "BTreeMap::is_empty")]
     pub vars: BTreeMap<String, Var>,
@@ -197,6 +200,8 @@ pub enum Fill {
     Count,
     /// Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.
     Error,
+    /// Output: a pipeline stage's clock, `i64 [ring × 5]`: entry `item % ring` is {item + 1, receive wait begin, end, send wait begin, end} in globaltimer ns, 0 where the stage has no such edge. A cut declares it; the stage reads it when it pleases.
+    Clock,
 }
 
 impl fmt::Display for Fill {
@@ -213,6 +218,7 @@ impl fmt::Display for Fill {
             Fill::Tokens => "tokens",
             Fill::Count => "count",
             Fill::Error => "error",
+            Fill::Clock => "clock",
         })
     }
 }
@@ -224,6 +230,18 @@ pub struct Topology {
     /// Group name to member count, e.g. `{"ep": 4}`.
     #[serde(deserialize_with = "unique_map")]
     pub groups: BTreeMap<String, u64>,
+}
+
+/// One stage of a manifest cut into a pipeline (`kern cut`): every stage of one cut carries the same `id`; stage `stage` of `stages` receives its predecessor's activations and sends its own to the next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Cut {
+    /// Names the cut: a hash of the manifest it was cut from and where.
+    pub id: String,
+    /// This stage's place in the pipeline, from 0.
+    pub stage: u64,
+    /// Stages in the pipeline, at least 2.
+    pub stages: u64,
 }
 
 /// A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.

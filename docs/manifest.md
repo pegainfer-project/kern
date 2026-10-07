@@ -16,6 +16,7 @@ vars.<name>                  var      caller 每次调用供应的标量，有�
 states.<name>                state    不透明持久内存，runtime 按字节供应
 buffers.<name>               buffer   有类型的张量：input / output / weight / workspace / carry / peer
 topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和大小
+cut                          cut      流水线的一段：id、第几段、共几段
 ```
 
 `call` 调 `op`，`op` 由若干 `launch` 实现，`launch` 起 `module` 里的
@@ -68,6 +69,10 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     / TRT-LLM / DeepEP intranode 都是这个形状）。
   - `{"rank": "ep"}`：call 或 launch 的标量实参来源，本 rank 在组里的
     下标，load 时烧成常量，只能接 `i32`/`i64` 参。
+- `cut`（可选，`kern cut` 写的）：`{"id": "6a23…", "stage": 1, "stages":
+  2}`——这份 manifest 是一份整 manifest 在某些 call 下标处切开后的第
+  `stage` 段，同一刀切出的各段 `id` 相同（整 manifest 的 JSON 与切点的
+  hash）。见「流水线切分」。
 - `modules`：manifest 的依赖清单（必填）——每个 kernel launch 钉住的代码工件：
   `source`（本地文件名 `argmax.cubin`，或 registry ref
   `hf:<org>/<repo>/<path>[@revision]`）+ `sha256`。**身份是 sha256，
@@ -385,6 +390,40 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
 段代码，`--rows` 选每组行数（缺省取 manifest 声明的最宽）。设计与取舍见
 [v4-design.md](v4-design.md)。
 
+## 流水线切分：`kern cut`
+
+`kern cut <manifest> --at <call>[,<call>…] --module pp_mailbox.cubin --out
+<dir>` 把一份单卡 manifest 在 call 下标处切成 S 段（`tools/kernels-src/pp_mailbox.cu`
+是邮箱核，与模型无关；`kern_manifest::cut::cut` 是纯函数，不碰 GPU）：
+
+- 每个 batch program 在同一下标处切开（下标须小于每个 batch program 的
+  长度）；once program 在每段按"本段读到的东西"往回切片。活跃性分析找出
+  切点两侧都活着的 buffer：只许是 workspace、至多一个 var 维（字节数
+  `var × 常数`）；output / carry 只许在末段写；一个 (state, offset) 区域
+  只许一段碰（按层切 KV 时各段各持自己那些层）。做不到的切点报错并说明
+  哪条不满足，不会静默切出错的东西。
+- 边界处插一对 send / recv：上游段末尾 `pp.wait_empty → pp.put.<dtype>…
+  → pp.post_full`，下游段开头 `pp.wait_full → pp.take.<dtype>… →
+  pp.post_empty`；邮箱 `pp.<e>.box`（`u8[256 + 最大载荷]`）在下游 GPU 上，
+  `full` / `empty` 两个计数在头里，上游经 `pp.<e>.peer` 远程写。等待在设备
+  上自旋，超时（60 s）`__trap`——进程死于 launch failure，不会挂住。
+- 每段声明 `pp.clock`（`fill: clock`，`i64 [256 × 5]` output）：第 k 项 =
+  {k+1, 收等开始, 收等结束, 发等开始, 发等结束}（globaltimer ns），首段的
+  "收等结束"是本段开始、末段的"发等开始"是本段结束，于是每段 busy = 发等
+  开始 − 收等结束。item 下标由邮箱计数在设备上导出，不需要输入。
+- 非末段声明拓扑组 `pp.<e>`（大小 2，本段是 0 号）。**这里放宽了 SPMD**：
+  组两端装的是不同的 manifest，只在 `of` buffer（同名同字节数的
+  `pp.<e>.box`，上游那份是不用的 workspace + export）上对上——
+  `import_peers` 本来就只按名字和字节数匹配，runtime 不用改。
+- 首段之外不需要 `token` fill（`Protocol` 只对 `cut.stage == 0` 要求它）。
+  一个 chunk program 若自己吐 token（hybrid GDN）则拒切：prefill-only 的
+  流水线约定首个 token 从一行的 step program 出。
+
+门禁：`crates/kern-manifest/tests/cut.rs` 用随机 manifest（400 个种子）
++ 符号解释器验证"能切的切点，各段依次跑 == 整份跑"，且确实有切点被拒；
+GPU 上 `crates/kern-run/examples/pp_chain.rs` 把各段在同一进程里串起来，
+logits 与 token 与整份逐位同（serve.md「流水线」）。
+
 ## Verifier（`kern-manifest`）
 
 `verify()` 收集全部错误一次报告（`VerifyErrors`）：
@@ -423,7 +462,7 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
     `export`；`of`/`group` 只许出现在 peer 上；peer 对 op 只读且视为初始
     已写；`{"rank": g}` 只接 `i32`/`i64` 参且 g 已声明；**带 extern launch
     的 op 不得收到 peer buffer**——runtime 内置（cublasLt）永远不碰 peer
-    内存；
+    内存；`cut` 有 id、`stages ≥ 2`、`stage < stages`；
 12. pack / tensormap / cluster：`bytes<n>` 只许作 launch 参（不进 extern）、
     只接 `{"pack"}` 实参且 `size == n`，字段都在 image 内、互不重叠，引用的
     接口参 / scratch / var / group 都存在；引用 `out` 接口参的指针字段算

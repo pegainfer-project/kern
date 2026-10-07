@@ -822,7 +822,7 @@ impl Tray {
                 (Fill::CuSeqlens, _) => (0..=b as i64).map(|i| i * per as i64).collect(),
                 (Fill::SpanAt, _) => vec![span_at],
                 (Fill::Blocks, _) => l.offsets(&groups, q).into_iter().map(|o| (o * per) as i64).collect(),
-                (Fill::Tokens | Fill::Count | Fill::Error, _) => continue,
+                (Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock, _) => continue,
                 (Fill::Token, Axis::Fixed(_)) => unreachable!("the protocol checks fill shapes"),
             };
             writes.push((f, v));
