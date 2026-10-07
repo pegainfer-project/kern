@@ -389,14 +389,43 @@ Reading these, not yet profiled:
   1.12–1.14, which points at the prefill kernels, not scheduling or the bridge.
   The bridge adds on the order of 150 small torch ops per step, negligible at
   these lengths.
-- **Mixed steps.** At high concurrency, a mixed step makes one `prefill` call per
+- **Mixed steps.** At high concurrency, a mixed step made one `prefill` call per
   prefill request, re-reading the weights each time, and runs eagerly
-  launch by launch.
+  launch by launch. The packed `prefill` below removes the per-request calls.
+
+### Ragged prefill
+
+2026-10-06, one GB300. `prefill` takes `seqs` sequences of any lengths, so
+the plugin packs a step's prefill rows into one call (see
+`docs/qwen38-vllm.md`). Calling it once per sequence is bit-identical to the
+previous manifest (`kern test` PASS at every span); packed and per-sequence
+calls agree up to bf16 noise from the GEMM's row count, and greedy output
+inside vLLM diverges only at margins ≤ 0.125.
+
+Packed vs one call per sequence, same manifest, empty cache:
+
+| sequences × new tokens | 16×32 | 32×64 | 32×128 | 16×512 | 4×2048 |
+|---|---|---|---|---|---|
+| speedup | 7.5× | 5.3× | 3.0× | 1.26× | 1.05× |
+
+Each call re-reads the weights (about 12 ms), so the gain is in many short
+prefills per step. AgentX replay (`inferencex-agentx-mvp`, seed 20260925),
+same kern wheel, per-sequence vs packed:
+
+| concurrency | requests | output tok/s | TTFT p50 ms | steps with ≥ 2 prefill rows |
+|---|---|---|---|---|
+| 24, 3600 s | 1526 / 1523 | 336.1 / 335.1 | 428 / 421 | 0.08% |
+| 64, 1800 s | 306 / 303 | 101.5 / 97.1 | ~115 000 both | 3.8% |
+
+On one GPU AgentX rarely presents the shape: at 24 agents prefills arrive one
+at a time, and at 64 the KV pool cannot hold the agents' contexts (cache hit
+14%), so steps fill with 8k-token recomputes where packing is worth ~1.05×.
 
 ## Limits
 
-- **Mixed steps.** One program call per prefill request. A ragged program that
-  takes the whole mixed step in one call is not written.
+- **Mixed steps.** A step's consecutive prefill rows share one `prefill` call
+  and its decode rows one `decode_batch`; a mixed step is still two calls or
+  more, run eagerly.
 - **Prefix caching** runs in vLLM's align mode at vLLM's block size (832
   tokens here), so up to one block of a cached prefix is recomputed. The
   plugin runs each sequence on its last token's state page; vLLM copies the

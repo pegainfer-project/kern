@@ -10,12 +10,14 @@ The manifest contract, read from the manifest and nothing else:
   `cu_seqlens_q`, `block_table` (`[seqs, W]` kernel blocks) and
   `gdn.line_index` (`[state layers, seqs]` state pages, rows in layer order);
   output `hidden`; `head_in` -> `head` -> `logits`.
-- programs `prefill` (one sequence, `tokens` rows), `decode_batch` (`seqs`
-  sequences of one row), `head` (`seqs` rows of logits), and `once`
-  programs to run after binding.
+- programs `prefill` (`seqs` sequences of any lengths, `tokens` rows in
+  all, split by `cu_seqlens_q`), `decode_batch` (`seqs` sequences of one
+  row), `head` (`seqs` rows of logits), and `once` programs to run after
+  binding.
 
 A step is split into runs the programs accept: consecutive one-token rows go
-through `decode_batch` together, every longer row through `prefill` alone.
+through `decode_batch` together, consecutive longer rows through one
+`prefill`, so the step's prefill rows share every weight read.
 A pure decode step is one `decode_batch` over vLLM's padded batch, so vLLM
 can capture it; padded rows have no slot and the null state page, which
 the kernels skip. A sequence's first chunk finds its state pages zeroed
@@ -158,9 +160,11 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
             "token_ids", "positions", "slot_mapping", "seq_lens", "cu_seqlens_q", "block_table",
             "gdn.line_index", "hidden", "head_in", "logits")}
         tokens, width = self.b["hidden"].shape
+        self.tokens = tokens
         self.out = torch.zeros(tokens, width, dtype=torch.bfloat16, device="cuda")
         self.vocab = self.b["logits"].shape[1]
         self.decode_rows = resolve(m, m["programs"]["decode_batch"]["batch"]["groups"])
+        self.prefill_seqs = resolve(m, m["vars"]["seqs"]["max"])
         self.cache_config = vllm_config.cache_config
         self.bound = None
         self.rope_dims = vllm_config.model_config.mrope_num_dims if vllm_config.model_config.uses_mrope else 1
@@ -222,7 +226,7 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
             return self.out[:n]
         self.zero_fresh(attn, states)
         qsl = attn.query_start_loc_cpu.numpy()
-        for r0, r1 in runs(np.diff(qsl[: attn.num_reqs + 1]), self.decode_rows):
+        for r0, r1 in runs(np.diff(qsl[: attn.num_reqs + 1]), self.decode_rows, self.prefill_seqs, self.tokens):
             program = "prefill" if qsl[r1] - qsl[r0] > r1 - r0 else "decode_batch"
             self.run(stream, program, input_ids, positions, attn, lines, r0, r1, int(qsl[r0]), int(qsl[r1]))
         return self.out[:n]
@@ -279,12 +283,20 @@ def chunks(r0: int, r1: int, size: int) -> list[tuple[int, int]]:
     return [(r, min(r + size, r1)) for r in range(r0, r1, size)]
 
 
-def runs(qlens: np.ndarray, decode_rows: int) -> list[tuple[int, int]]:
+def runs(qlens: np.ndarray, decode_rows: int, prefill_seqs: int, tokens: int) -> list[tuple[int, int]]:
     """Row ranges one program call each: runs of up to `decode_rows`
-    one-token rows, and every longer row alone."""
+    one-token rows, and runs of longer rows up to `prefill_seqs` rows and
+    `tokens` tokens."""
+    def joins(r0: int, r: int) -> bool:
+        if (qlens[r] == 1) != (qlens[r0] == 1):
+            return False
+        if qlens[r] == 1:
+            return r - r0 < decode_rows
+        return r - r0 < prefill_seqs and qlens[r0 : r + 1].sum() <= tokens
+
     out: list[tuple[int, int]] = []
     for r, q in enumerate(qlens):
-        if q == 1 and out and out[-1][1] == r and qlens[out[-1][0]] == 1 and r - out[-1][0] < decode_rows:
+        if q > 0 and out and out[-1][1] == r and joins(out[-1][0], r):
             out[-1] = (out[-1][0], r + 1)
         elif q > 0:
             out.append((r, r + 1))

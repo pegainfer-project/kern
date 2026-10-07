@@ -59,6 +59,35 @@ runs as two launches: the conv over the chunk, then the conv state update.
   the same layout shares these ids, as vLLM's layers share its block ids, so
   a tool that is its own host (`kern bench`) can provision the states.
 
+## Ragged prefill
+
+The base `prefill` serves one sequence: `fla.chunk_indices` and
+`fla.chunk_offsets` are written once by a load call, the chunk kernels' grids
+are `ceil(tokens / 64)`, and `h` / `has_initial` hold one sequence. The
+hosted `prefill` takes `seqs` sequences split by `cu_seqlens_q`:
+
+- `fla_chunk_index` (`sources/fla_chunk_index.cu`) runs first in every call
+  and builds both tables from `cu_seqlens_q`.
+- Grids that walk `fla.chunk_indices` cover `ceil(tokens / 64) + seqs`, the
+  most chunks `tokens` rows split into `seqs` sequences can make. Entries
+  past the call's chunks name a chunk past the last sequence, whose rows
+  are out of range, so they write nothing. `chunk_h` walks `seqs × 48`.
+  This needs `add` of two expressions in the manifest grammar.
+- `h` grows by one chunk state per sequence, `has_initial` to `seqs`.
+
+Two kernels were only correct for one sequence, and are rebuilt (pinned by
+sha in the generator, sources in the HF repo):
+
+- `chunk_h` built with `-DLINE` located a sequence's state line at
+  `seq * 48 + head`; the line is already the sequence's, so the offset is
+  `head`. Sequences after the first read and wrote past their line.
+- `solve_tril` stored only the diagonal blocks of its inverse and left the
+  zeros above them to a workspace nobody else writes. A ragged call moves a
+  row's position within its 64-row chunk, so stale values from an earlier
+  call reached `recompute`. It now stores whole rows.
+
+One sequence per call stays bit-identical to the previous manifest.
+
 ## gemm16 in `decode_batch`
 
 The base `decode_batch` declares 128 groups (sequences), but its `gemm16_*`
