@@ -114,6 +114,18 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
     kern_run::run_once(&rt, &p)?;
     let pages = rt.pages_total() as u64;
 
+    let prefill =
+        p.chunk().cloned().context("a pipeline prefills through a program taking one sequence's rows as fed")?;
+    // The head is stage 0: whether the last stage's chunk emits is not in its manifest, so
+    // a pipeline with no one-row step feeds every prompt row as chunks and the last stage answers.
+    let step = p.forward(1, Rows::Const(1)).cloned();
+    let max = p.rows.max as usize;
+    let chunk = match h.chunk {
+        None => max,
+        Some(c) if (1..=max as u64).contains(&c) => c as usize,
+        Some(c) => bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
+    };
+    let clock = Clock::new(&p)?;
     let downstream: Vec<Option<Handles>> =
         (1..cut.stages).map(|s| hellos.get(&(s + 1)).map(|(x, ..)| x.mailbox.clone())).collect();
     let (tx, replies) = mpsc::channel();
@@ -125,19 +137,6 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
         stages.push(w);
     }
 
-    let prefill =
-        p.chunk().cloned().context("a pipeline prefills through a program taking one sequence's rows as fed")?;
-    let step = match prefill.emits {
-        Some(_) => None,
-        None => Some(p.forward(1, Rows::Const(1)).cloned().context("no program takes one sequence of one row")?),
-    };
-    let max = p.rows.max as usize;
-    let chunk = match h.chunk {
-        None => max,
-        Some(c) if (1..=max as u64).contains(&c) => c as usize,
-        Some(c) => bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
-    };
-    let clock = Clock::new(&p)?;
     let step_name = step.as_ref().map_or("-", |f| f.name.as_str()).to_string();
     info!(pages, page = rt.page(), chunk, prefill = %prefill.name, step = %step_name, "pipeline head ready");
     Ok(PpHead {
