@@ -175,12 +175,18 @@ pub fn fills<'p>(
 }
 
 /// Write `values` into input `name` of `rt` the way `p` reads it: a fill
-/// in its dtype, a page table as i32. `false` when the manifest has no
-/// such input (a pipeline stage that never reads it).
+/// in its dtype, a page table as i32, a line table as i32 and whole (its
+/// rows sit at the bound of their var, see [`line_rows`]). `false` when the
+/// manifest has no such input (a pipeline stage that never reads it).
 pub fn write_named(rt: &mut Runtime, p: &Protocol, name: &str, values: &[i64], vars: &Vars) -> Result<bool> {
+    let i32s = |v: &[i64]| -> Vec<u8> { v.iter().flat_map(|&x| (x as i32).to_le_bytes()).collect() };
+    if p.line_tables.iter().any(|t| t.name == name) {
+        rt.write_input(name, &i32s(values))?;
+        return Ok(true);
+    }
     let bytes = match (p.fills.iter().find(|f| f.name == name), p.page_tables.iter().any(|t| t.name == name)) {
         (Some(f), _) => f.encode(values),
-        (None, true) => values.iter().flat_map(|&v| (v as i32).to_le_bytes()).collect(),
+        (None, true) => i32s(values),
         (None, false) => return Ok(false),
     };
     rt.write_input_at(name, &bytes, vars)?;
@@ -217,7 +223,7 @@ fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
 /// line in entry 0 and zeros through the rest of a wide cell (a program
 /// that moves along one does so on the device). Columns past the leases
 /// given repeat the last.
-fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
+pub fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
     let mut v = Vec::with_capacity(t.lines * cols * t.width);
     for line in 0..t.lines {
         for c in 0..cols {
