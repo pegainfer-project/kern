@@ -603,7 +603,7 @@
           "type": "object"
         },
         {
-          "description": "`e + c`, e.g. `{\"add\": [{\"ceil_div\": [\"tokens\", 64]}, 56]}`.",
+          "description": "`a + b`, e.g. `{\"add\": [{\"ceil_div\": [\"tokens\", 64]}, \"seqs\"]}`.",
           "properties": {
             "add": {
               "maxItems": 2,
@@ -613,18 +613,7 @@
                   "$ref": "#/$defs/Expr"
                 },
                 {
-                  "anyOf": [
-                    {
-                      "format": "uint64",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    {
-                      "description": "Name of a numeric constant declared in constants.",
-                      "minLength": 1,
-                      "type": "string"
-                    }
-                  ]
+                  "$ref": "#/$defs/Expr"
                 }
               ],
               "type": "array"
@@ -636,7 +625,7 @@
           "type": "object"
         }
       ],
-      "description": "A scalar expression: a constant, a var name, `{\"ceil_div\": [e, c]}`, `{\"mul\": [e, c]}` or `{\"add\": [e, c]}`, e.g. `{\"ceil_div\": [\"tokens\", 128]}`."
+      "description": "A scalar expression: a constant, a var name, `{\"ceil_div\": [e, c]}`, `{\"mul\": [e, c]}` or `{\"add\": [e, e]}`, e.g. `{\"ceil_div\": [\"tokens\", 128]}`."
     },
     "ExternLaunch": {
       "additionalProperties": false,

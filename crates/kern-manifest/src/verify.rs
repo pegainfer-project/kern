@@ -1105,6 +1105,9 @@ fn check_expr(e: &Expr, m: &Manifest, used_vars: &mut BTreeSet<String>, errs: &m
             }
             check_expr(inner, m, used_vars, errs, ctx);
         }
-        Expr::Add { add: (inner, _) } => check_expr(inner, m, used_vars, errs, ctx),
+        Expr::Add { add: (a, b) } => {
+            check_expr(a, m, used_vars, errs, ctx);
+            check_expr(b, m, used_vars, errs, ctx);
+        }
     }
 }

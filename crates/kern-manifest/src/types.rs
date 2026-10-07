@@ -1397,7 +1397,7 @@ impl RegistryRef {
     }
 }
 
-/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}`, `{"mul": [e, c]}` or `{"add": [e, c]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
+/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}`, `{"mul": [e, c]}` or `{"add": [e, e]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Expr {
@@ -1409,8 +1409,8 @@ pub enum Expr {
     CeilDiv { ceil_div: (Box<Expr>, u64) },
     /// `e * c`, e.g. `{"mul": ["tokens", 32]}`.
     Mul { mul: (Box<Expr>, u64) },
-    /// `e + c`, e.g. `{"add": [{"ceil_div": ["tokens", 64]}, 56]}`.
-    Add { add: (Box<Expr>, u64) },
+    /// `a + b`, e.g. `{"add": [{"ceil_div": ["tokens", 64]}, "seqs"]}`.
+    Add { add: (Box<Expr>, Box<Expr>) },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1436,7 +1436,7 @@ impl Expr {
                 Ok(x.checked_add(c - 1).ok_or(EvalError::Overflow)? / c)
             }
             Expr::Mul { mul: (inner, c) } => inner.eval(vars)?.checked_mul(*c).ok_or(EvalError::Overflow),
-            Expr::Add { add: (inner, c) } => inner.eval(vars)?.checked_add(*c).ok_or(EvalError::Overflow),
+            Expr::Add { add: (a, b) } => a.eval(vars)?.checked_add(b.eval(vars)?).ok_or(EvalError::Overflow),
         }
     }
 }
