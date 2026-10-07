@@ -333,6 +333,16 @@ fn grid_division_by_zero() {
 }
 
 #[test]
+fn grid_add_sums_two_exprs() {
+    let mut v = base();
+    v["ops"]["embed"]["impl"]["launches"][0]["grid"][0] =
+        serde_json::json!({ "add": [{ "ceil_div": ["tokens", 64] }, "tokens"] });
+    check(v.clone()).unwrap();
+    v["ops"]["embed"]["impl"]["launches"][0]["grid"][0]["add"][1] = "ghost".into();
+    assert_err(v, "unknown var `ghost`");
+}
+
+#[test]
 fn unused_buffer() {
     let mut v = base();
     v["buffers"]["dead"] = serde_json::json!({ "dtype": "bf16", "shape": [8], "kind": "workspace" });

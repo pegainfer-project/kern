@@ -19,6 +19,14 @@ prefill conv, which baked the line stride in and is replaced by
 `gdn_conv_fwd`, pinned by sha; its source and cubin are published with
 the manifest in `Pegainfer/kern-qwen38-sm103` (`sources/`, `cubins/`).
 
+`prefill` takes a ragged batch: `seqs` sequences of any lengths, `tokens`
+rows in all, split by `cu_seqlens_q`, so a step's prefill rows are one
+call. The GDN chunk kernels already index chunks through
+`fla.chunk_indices` / `fla.chunk_offsets`; `fla_chunk_index` builds those
+from `cu_seqlens_q` at the start of every call, and the chunk kernels'
+grids cover the bound ceil(tokens / 64) + seqs, the entries past the
+call's chunks naming rows nobody owns.
+
     python tools/qwen38_vllm.py [--input examples/qwen3.8-27b.json] --output qwen3.8-27b-vllm.json [--sampled]
 
 `--sampled` keeps the base's head and sampling after the final norm: vLLM
@@ -49,6 +57,13 @@ OLD_KV_PAGE_BYTES = len(ATTN_LAYERS) * KV_BLOCK_BYTES
 OLD_GDN_LINE_BYTES = 3211264
 MAX_SEQS = 128
 CONV_SHA256 = "98b86305a3d49a0b930c6bbbed3f981417b6a7eda584e8645ee4cd51136c9f59"
+CHUNK_INDEX_SHA256 = "f6710e1540f0916e2cefc5249d9d928c79b0d1154a2fcbc3885861eff31f9df3"
+# chunk_h.cu -DNW=4 -DST=3 -DLINE with a sequence's state line indexed by head alone
+CHUNK_H_SHA256 = "e213c16337a8d9caaf5888407ee0b8a3d9227559d434eafd35b74098e6936bdd"
+# solve_tril.cu storing whole rows: a ragged call moves a row's place in its chunk, so the zeros above
+# the diagonal blocks recompute reads can no longer be left to an untouched workspace
+SOLVE_TRIL_SHA256 = "45e872b7d3f13ded775bb16fb0485808ce029dbf2966d52a34b4ec13c083c849"
+BT = 64
 
 
 def layer_of(call):
@@ -184,6 +199,56 @@ def fused_in_proj(m):
                 for l in GDN_LAYERS}}
 
 
+def ragged(m):
+    """`prefill` over `seqs` sequences of any lengths: the chunk tables are
+    built per call from `cu_seqlens_q` instead of once for one sequence, the
+    chunk kernels' grids cover every sequence, and the buffers indexed by
+    chunk or sequence grow to the bound."""
+    b, max_seqs = m["buffers"], m["vars"]["seqs"]["max"]
+    chunks = b["h"]["shape"][0] + max_seqs
+    bound = {"add": [{"ceil_div": ["tokens", BT]}, "seqs"]}
+    tables = {"fla.chunk_indices", "fla.chunk_offsets"}
+    reads = lambda name: {a.get("buf") for c in m["programs"]["prefill"]["calls"] if c["op"] == name for a in c["args"]}
+
+    def regrid(name, op):
+        r = reads(name)
+        if "fla.chunk_indices" in r:
+            g = lambda d: bound if d == {"ceil_div": ["tokens", BT]} else d
+        elif "fla.chunk_offsets" in r:
+            g = lambda d: {"mul": ["seqs", d]} if d == 48 else d
+        elif name == "fill_u8":
+            return {**op, "impl": {**op["impl"], "launches": [
+                {**l, "args": [{"i32": max_seqs} if a == {"i32": 16} else a for a in l["args"]]}
+                for l in op["impl"]["launches"]]}}
+        else:
+            return op
+        return {**op, "impl": {**op["impl"], "launches": [
+            {**l, "grid": [g(d) for d in l["grid"]]} for l in op["impl"]["launches"]]}}
+
+    index = dict(params=["in buffer<i32>", "out buffer<i32>", "out buffer<i64>", "i32", "i32"], impl=dict(launches=[
+        dict(module="fla_chunk_index", entry="kern_fla_chunk_index",
+             params=["in buffer<i32>", "out buffer<i32>", "out buffer<i64>", "i32", "i32"],
+             block=[256, 1, 1], grid=[1, 1, 1], args=[{"param": i} for i in range(5)])]))
+    call = {"label": "fla_chunk_index", "op": "fla_chunk_index", "args": [
+        {"buf": "cu_seqlens_q"}, {"buf": "fla.chunk_indices"}, {"buf": "fla.chunk_offsets"},
+        {"var": "seqs"}, {"expr": bound}]}
+    load = [c for c in m["programs"]["load"]["calls"] if not {a.get("buf") for a in c["args"]} & tables]
+    return {**m,
+            "ops": {k: regrid(k, v) for k, v in m["ops"].items()} | {"fla_chunk_index": index},
+            "modules": m["modules"] | {
+                "fla_chunk_index": {"source": "fla_chunk_index.cubin", "sha256": CHUNK_INDEX_SHA256},
+                "chunk_h_64": {"source": "chunk_h_64.cubin", "sha256": CHUNK_H_SHA256},
+                "solve_tril_64": {"source": "solve_tril_64.cubin", "sha256": SOLVE_TRIL_SHA256}},
+            "programs": m["programs"] | {
+                "load": {**m["programs"]["load"], "calls": load},
+                "prefill": {**m["programs"]["prefill"], "calls": [call, *m["programs"]["prefill"]["calls"]]}},
+            "buffers": b | {
+                "fla.chunk_indices": {"dtype": "i32", "shape": [chunks, 2], "kind": "workspace"},
+                "fla.chunk_offsets": {"dtype": "i64", "shape": [max_seqs], "kind": "workspace"},
+                "gdn.has_initial": {**b["gdn.has_initial"], "shape": [max_seqs]},
+                "h": {**b["h"], "shape": [chunks, *b["h"]["shape"][1:]]}}}
+
+
 def headless(calls):
     """The step up to the final norm, which writes `hidden`; vLLM samples."""
     end = next(i for i, c in enumerate(calls) if c["label"].endswith(".final_norm"))
@@ -262,7 +327,7 @@ def main():
     p.add_argument("--sampled", action="store_true", help="keep the base's head and sampling, for `kern test`")
     args = p.parse_args()
     base = resolve_constants(json.loads(args.input.read_text()))
-    m = fused_in_proj(hosted(base))
+    m = ragged(fused_in_proj(hosted(base)))
     m = prune(sampled(m, base) if args.sampled else m)
     args.output.write_text(json.dumps(name_constants(normalize(m)), indent=1) + "\n")
 
