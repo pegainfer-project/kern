@@ -112,7 +112,7 @@ fn plain_contract() {
     assert_eq!(p.forward(5, Rows::Const(1)), None);
     assert_eq!(p.chunk().map(|f| f.name.as_str()), Some("prefill"));
     assert_eq!((p.row_shapes(), p.max_groups(Rows::Const(1))), (vec![1], 4));
-    assert_eq!(p.vars(3, 2, 6, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
+    assert_eq!(p.vars(3, 6, 6, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn tray_contract() {
     assert_eq!(p.line_tables[0].axis, Axis::Tray);
     assert_eq!(p.any(Fill::Error).map(|f| f.name.as_str()), Some("tp_err"));
     assert_eq!(p.once, vec!["tp_init".to_string()]);
-    assert_eq!(p.vars(2, 1, 8, 9), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
+    assert_eq!(p.vars(2, 2, 8, 9), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
 }
 
 #[test]
@@ -254,7 +254,11 @@ fn batch_rules() {
     let mut m = plain();
     m.programs.get_mut("prefill").unwrap().batch =
         Some(Batch { groups: 2, rows: Dim::Var("tokens".into()), span: None, context: None });
-    rejects(&m, "one sequence, not 2 groups");
+    let p = protocol(&m).unwrap();
+    let prefill = p.forwards.iter().find(|f| f.name == "prefill").unwrap();
+    assert_eq!((prefill.groups, prefill.rows), (2, Rows::Var));
+    m.buffers.get_mut("cu_seqlens_q").unwrap().fill = None;
+    rejects(&m, "needs a `cu_seqlens` fill to split them");
     let mut m = plain();
     m.programs.get_mut("prefill").unwrap().batch =
         Some(Batch { groups: 1, rows: Dim::Var("seqs".into()), span: None, context: None });

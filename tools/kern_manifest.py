@@ -44,7 +44,7 @@ def program(calls, groups=None, rows=None, span=None, context=None, once=False, 
     """A program object of the wire form: a forward of `groups` sequences of
     `rows` rows each (rows a constant or the name of the var fed per call;
     `span` the var one sequence's run of rows is sized by; `context` the var
-    the call's longest sequence length goes in), a
+    the call's sequences' lengths go in, summed), a
     once-after-load program, a derive program the runtime runs inside
     weight loading over `source` buffers, or a plain one. `graph`: the runtime drives
     it through a CUDA graph captured per call shape (a fixed-shape step,

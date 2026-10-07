@@ -45,9 +45,10 @@
 //!
 //! A kernel sized by the context rather than by the call (a prefill that
 //! expands every cached row of its sequence) runs over a var the program's
-//! `batch` names as `context`: the length of the call's longest sequence
-//! once its rows are in, which the driver already knows from the lengths
-//! it stages. One var bounds every context in a manifest.
+//! `batch` names as `context`: the call's sequences' lengths once their
+//! rows are in, summed (a call of several sequences expands them all), which
+//! the driver already knows from the lengths it stages. One var bounds every
+//! context in a manifest.
 
 use crate::types::*;
 use crate::Verified;
@@ -127,7 +128,8 @@ pub struct LineTable {
 pub enum Rows {
     /// Exactly this many, the layout the program's kernels expect.
     Const(u64),
-    /// As many as the call feeds: one sequence, the rows var set per call.
+    /// As many as the call feeds, the rows var set per call: one
+    /// sequence's, or several back to back split by the `cu_seqlens` fill.
     Var,
 }
 
@@ -271,9 +273,11 @@ impl Protocol {
         let downstream = m.cut.as_ref().is_some_and(|c| c.stage > 0);
         let groups = if downstream && !m.buffers.values().any(|b| b.fill == Some(Fill::SeqLen)) {
             let paged = |b: &Buffer| {
-                b.domain.as_ref().and_then(|d| d.index_into.as_deref()).and_then(|s| m.states.get(s)).is_some_and(
-                    |s| s.bytes_per_token > 0,
-                )
+                b.domain
+                    .as_ref()
+                    .and_then(|d| d.index_into.as_deref())
+                    .and_then(|s| m.states.get(s))
+                    .is_some_and(|s| s.bytes_per_token > 0)
             };
             let var = m
                 .buffers
@@ -469,8 +473,11 @@ impl Protocol {
                             rows.var
                         ));
                     }
-                    if batch.groups != 1 {
-                        errs.push(format!("{ctx}: rows set per call means one sequence, not {} groups", batch.groups));
+                    if batch.groups != 1 && one(Fill::CuSeqlens).is_none() {
+                        errs.push(format!(
+                            "{ctx}: rows set per call over {} groups needs a `cu_seqlens` fill to split them",
+                            batch.groups
+                        ));
                     }
                     Rows::Var
                 }
@@ -677,18 +684,18 @@ impl Protocol {
         self.forwards.iter().filter(|f| !f.span && f.rows == rows).map(|f| f.groups).max().unwrap_or(0)
     }
 
-    /// The var vars of a call: `b` sequences of `per` rows on this rank,
-    /// `tray` rows in the whole tray batch (the sum of its members' blocks;
-    /// this rank's `b * per` when it is alone), `longest` the length of
-    /// the call's longest sequence once its rows are in (only read into a
+    /// The var vars of a call: `b` sequences of `rows` rows in all on this
+    /// rank, `tray` rows in the whole tray batch (the sum of its members'
+    /// blocks; this rank's `rows` when it is alone), `context` the call's
+    /// sequences' lengths once their rows are in, summed (only read into a
     /// context var).
-    pub fn vars(&self, b: u64, per: u64, tray: u64, longest: u64) -> BTreeMap<String, u64> {
-        let mut vars = BTreeMap::from([(self.rows.var.clone(), b * per), (self.groups.var.clone(), b)]);
+    pub fn vars(&self, b: u64, rows: u64, tray: u64, context: u64) -> BTreeMap<String, u64> {
+        let mut vars = BTreeMap::from([(self.rows.var.clone(), rows), (self.groups.var.clone(), b)]);
         if let Some(t) = &self.tray {
             vars.insert(t.var.clone(), tray);
         }
         if let Some(c) = &self.context {
-            vars.insert(c.var.clone(), longest);
+            vars.insert(c.var.clone(), context);
         }
         vars
     }

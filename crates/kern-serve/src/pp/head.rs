@@ -249,7 +249,7 @@ impl PpHead {
     }
 
     fn send_item(&mut self, f: &Forward, lease: &Lease, pos: usize, ids: &[i64], reply: bool) -> Result<()> {
-        let (vars, values) = kern_run::fills(&self.p, std::slice::from_ref(lease), &[pos], ids.len(), ids);
+        let (vars, values) = kern_run::fills(&self.p, std::slice::from_ref(lease), &[pos], &[ids.len()], ids);
         let mut rows: BTreeMap<String, Vec<i64>> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
         for t in &self.p.page_tables {
             let mut v = Vec::with_capacity(t.width);

@@ -763,8 +763,8 @@ impl Tray {
                 bail!("{} rows in the tray batch, the manifest allows {}", layout.tray * per, t.max);
             }
         }
-        let longest = cells.iter().map(|c| c.pos + c.ids.len()).max().unwrap_or(per);
-        let mut vars = self.protocol.vars(b as u64, per as u64, (layout.tray * per) as u64, longest as u64);
+        let context: usize = cells.iter().map(|c| c.pos + c.ids.len()).sum();
+        let mut vars = self.protocol.vars(b as u64, (b * per) as u64, (layout.tray * per) as u64, context as u64);
         if let (Some(s), Some(c)) = (&self.protocol.span, run) {
             vars.insert(s.var.clone(), c as u64);
         }

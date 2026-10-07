@@ -102,7 +102,7 @@ fn logits(m: &Verified, program: &str, tokens: &str) -> Result<String> {
 /// Stage one call of `ids` at `pos` into `rt` from the values `p` and
 /// `lease` give.
 fn item(p: &Protocol, lease: &Lease, pos: usize, ids: &[i64]) -> Result<(Vars, BTreeMap<String, Vec<i64>>)> {
-    let (vars, values) = fills(p, std::slice::from_ref(lease), &[pos], ids.len(), ids);
+    let (vars, values) = fills(p, std::slice::from_ref(lease), &[pos], &[ids.len()], ids);
     let mut rows: BTreeMap<String, Vec<i64>> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
     for t in &p.page_tables {
         let mut v = Vec::new();

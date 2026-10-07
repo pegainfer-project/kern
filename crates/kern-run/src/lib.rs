@@ -21,6 +21,7 @@ pub mod weights;
 pub use inputs::{Given, Inputs};
 pub use weights::Weights;
 
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -134,21 +135,25 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
     unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("mapping weights {}", f.display()))
 }
 
-/// What one call writes into each fill: `rows` rows for each lease, at
-/// that sequence's position, `ids` in row order; and the call's vars.
+/// What one call writes into each fill: `lens[i]` rows for lease `i`, at
+/// that sequence's position, `ids` in row order (the sequences back to
+/// back); and the call's vars.
 ///
 /// Every fill a caller of one rank produces is there; `blocks` is the
 /// tray batch's and only a caller that spans a rank group can fill it.
-pub fn fills<'p>(
+pub fn fills<'p, L: Borrow<Lease>>(
     p: &'p Protocol,
-    leases: &[Lease],
+    leases: &[L],
     positions: &[usize],
-    rows: usize,
+    lens: &[usize],
     ids: &[i64],
 ) -> (Vars, Vec<(&'p Filled, Vec<i64>)>) {
     let b = leases.len();
-    let longest = positions.iter().map(|&pos| pos + rows).max().unwrap_or(rows);
-    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64, longest as u64);
+    let rows: usize = lens.iter().sum();
+    let context: usize = positions.iter().zip(lens).map(|(pos, n)| pos + n).sum();
+    let vars = p.vars(b as u64, rows as u64, rows as u64, context as u64);
+    let starts: Vec<usize> = lens.iter().scan(0, |at, n| Some(std::mem::replace(at, *at + n))).collect();
+    let spans = || positions.iter().zip(lens).map(|(&pos, &n)| pos..pos + n);
     let values = p
         .fills
         .iter()
@@ -156,15 +161,13 @@ pub fn fills<'p>(
             let v: Vec<i64> = match (f.fill, f.axis) {
                 // Each sequence's first token: the anchor a drafting program
                 // splices its own rows from.
-                (Fill::Token, Axis::Groups) => ids.chunks(rows).map(|x| x[0]).collect(),
+                (Fill::Token, Axis::Groups) => starts.iter().map(|&s| ids[s]).collect(),
                 (Fill::Token, _) => ids.to_vec(),
-                (Fill::Valid, _) => vec![1; b * rows],
-                (Fill::Position, _) => positions.iter().flat_map(|&pos| (pos..pos + rows).map(|v| v as i64)).collect(),
-                (Fill::Slot, _) => {
-                    leases.iter().zip(positions).flat_map(|(l, &pos)| l.slots(pos..pos + rows)).collect()
-                }
-                (Fill::SeqLen, _) => positions.iter().map(|&pos| (pos + rows) as i64).collect(),
-                (Fill::CuSeqlens, _) => (0..=b).map(|i| (i * rows) as i64).collect(),
+                (Fill::Valid, _) => vec![1; rows],
+                (Fill::Position, _) => spans().flat_map(|r| r.map(|v| v as i64)).collect(),
+                (Fill::Slot, _) => leases.iter().zip(spans()).flat_map(|(l, r)| l.borrow().slots(r)).collect(),
+                (Fill::SeqLen, _) => spans().map(|r| r.end as i64).collect(),
+                (Fill::CuSeqlens, _) => starts.iter().chain([&rows]).map(|&s| s as i64).collect(),
                 (Fill::SpanAt, _) => vec![0],
                 (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock, _) => return None,
             };
@@ -202,7 +205,7 @@ fn stage(
     rows: usize,
     ids: &[i64],
 ) -> Result<Vars> {
-    let (vars, values) = fills(p, leases, positions, rows, ids);
+    let (vars, values) = fills(p, leases, positions, &vec![rows; leases.len()], ids);
     for (f, v) in values {
         rt.write_input_at(&f.name, &f.encode(&v), &vars)?;
     }
@@ -223,11 +226,11 @@ fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
 /// line in entry 0 and zeros through the rest of a wide cell (a program
 /// that moves along one does so on the device). Columns past the leases
 /// given repeat the last.
-pub fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
+pub fn line_rows<L: Borrow<Lease>>(t: &LineTable, leases: &[L], cols: usize) -> Result<Vec<i32>> {
     let mut v = Vec::with_capacity(t.lines * cols * t.width);
     for line in 0..t.lines {
         for c in 0..cols {
-            v.push(leases[c.min(leases.len() - 1)].seq_line(&t.name, line)?);
+            v.push(leases[c.min(leases.len() - 1)].borrow().seq_line(&t.name, line)?);
             v.extend(std::iter::repeat_n(0, t.width - 1));
         }
     }
