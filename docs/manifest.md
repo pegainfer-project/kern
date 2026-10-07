@@ -402,6 +402,13 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
   `var × 常数`）；output / carry 只许在末段写；一个 (state, offset) 区域
   只许一段碰（按层切 KV 时各段各持自己那些层）。做不到的切点报错并说明
   哪条不满足，不会静默切出错的东西。
+- state 整个留或整个丢：一段只要碰到一个 state 的一块就分配整个。`kern cut`
+  逐段打印每个 state 被本段碰到的区域数 / 整份碰到的区域数（区域 = 不同的
+  call offset，按等大估字节），不满的就是给别段占着的内存（报告，不拒）。
+  所以生成器把 KV 写成每层一个 state（qwen3-4b：`kv.0`…`kv.35`），各段只带
+  自己那些层；生成器不知道流水线。页表 / slot 的 `index_into` 指向一个本段
+  丢掉的 state 时改指本段留下的同类 state（pool 给所有 paged state 同一套
+  页号）。
 - 边界处插一对 send / recv：上游段末尾 `pp.wait_empty → pp.put.<dtype>…
   → pp.post_full`，下游段开头 `pp.wait_full → pp.take.<dtype>… →
   pp.post_empty`；邮箱 `pp.<e>.box`（`u8[256 + 最大载荷]`）在下游 GPU 上，

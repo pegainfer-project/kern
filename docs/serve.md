@@ -605,9 +605,11 @@ stop、fault 消息：任何错误进程退出，连接断了对端退出；设�
 | | | | | |  | 1 | 9.52 | 2.13 | 0.73 | - |
 
 单请求内 chunk 之间就流水起来（stage 0 算第 k+1 块时 stage 1 算第 k 块），所以长 prompt conc1 也
-接近 2×；1 块的 prompt 没有可重叠的东西，略慢（邮箱 + 两段 launch）。v1 的限制：每段按整份的
-`bytes_per_token` 分 KV（只用自己那些层，浪费一半）；只认纯 paged 的 manifest；chunk program
-自己吐 token 的模型拒切；上游那份 box 是不用的占位。
+接近 2×；1 块的 prompt 没有可重叠的东西，略慢（邮箱 + 两段 launch）。KV 每层一个 state 之后（同日，
+`examples/qwen3-4b.json` 重生成，`kern test qwen3-4b` 位一致、`kern run` 文本同），每段只带自己的
+18 层：不给 `--capacity` 时每段 122,993 → 245,760 页（2.0×）；切点、gate、扫描数字与上表一致
+（`~/bench_results/2026-10-07-kern-pp-v1/perlayer/`）。v1 的限制：只认纯 paged 的 manifest；
+chunk program 自己吐 token 的模型拒切；上游那份 box 是不用的占位。
 
 ## 没做（按需要加）
 

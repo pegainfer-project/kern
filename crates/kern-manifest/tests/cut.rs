@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use kern_manifest::cut::cut;
+use kern_manifest::cut::{cut, state_use};
 use kern_manifest::types::{Arg, Dir, Manifest, Module, ParamType};
 use kern_manifest::{verify, Protocol, Verified};
 use serde_json::{json, Value};
@@ -268,6 +268,14 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
     );
     assert!(tail.buffers.contains_key("lm_head.weight") && !head.buffers.contains_key("lm_head.weight"));
     assert!(!head.buffers.contains_key("model.layers.18.self_attn.qkv_proj.weight"));
+    // A KV state per layer: each stage keeps its 18 and uses them whole,
+    // and its tables index one it kept.
+    for (st, first) in [(head, "kv.0"), (tail, "kv.18")] {
+        let used = state_use(&qwen3(), st);
+        assert_eq!((used.len(), used.iter().all(|(_, a, b)| a == b)), (18, true));
+        let table = |b: &str| st.buffers[b].domain.as_ref().and_then(|d| d.index_into.clone());
+        assert_eq!((table("block_table"), table("slot_mapping")), (Some(first.into()), Some(first.into())));
+    }
     // The head stages tokens and hands nothing back; the tail is fed
     // activations and samples.
     let ph = Protocol::check_unsampled(head).unwrap_or_else(|e| panic!("{e}"));

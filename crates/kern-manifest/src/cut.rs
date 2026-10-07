@@ -30,7 +30,13 @@
 //! The prompt reaches the step program's first token the way it does
 //! unsplit; a chunk program that hands a token back itself is refused, so
 //! a pipeline's first token always comes from a step. Everything a stage
-//! does not use is dropped, and every stage verifies.
+//! does not use is dropped, and every stage verifies. A state is kept whole
+//! or not at all, so a state laid out over the whole model (one KV state
+//! for every layer) is carried whole by every stage that touches a piece of
+//! it; [`state_use`] says how much of each one a stage uses, and a
+//! generator that gives each piece its own state (one per layer) lets a
+//! stage carry only its own. A table whose state a stage dropped indexes a
+//! kept state of the same kind: a pool hands every paged state the same ids.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -356,9 +362,17 @@ fn stage(
     let states: BTreeMap<String, State> =
         calls.iter().flat_map(|c| state_args(c)).map(|(st, _)| (st.to_string(), m.states[st].clone())).collect();
     let names: BTreeSet<String> = buffers.keys().chain(states.keys()).cloned().collect();
+    // A table hands the same ids to every state of its kind: one naming a
+    // state this stage dropped names a kept state of that kind instead.
+    let kind = |s: &State| (s.bytes_per_token > 0, s.bytes_per_seq > 0, s.is_owned());
     for b in buffers.values_mut() {
-        if b.domain.as_ref().and_then(|d| d.index_into.as_ref()).is_some_and(|t| !names.contains(t)) {
-            b.domain = None;
+        let Some(t) = b.domain.as_ref().and_then(|d| d.index_into.clone()).filter(|t| !names.contains(t)) else {
+            continue;
+        };
+        let to = m.states.get(&t).and_then(|old| states.iter().find(|(_, s)| kind(s) == kind(old))).map(|(n, _)| n);
+        match (to, b.domain.as_mut()) {
+            (Some(n), Some(d)) => d.index_into = Some(n.clone()),
+            _ => b.domain = None,
         }
     }
     let ops: BTreeMap<String, Op> =
@@ -466,6 +480,24 @@ fn live_in<'a>(m: &'a Manifest, calls: &'a [Call]) -> BTreeSet<&'a str> {
         }
     }
     live
+}
+
+/// How much of each state a stage keeps it uses: per state, the regions
+/// (distinct call offsets) the stage's calls touch and those the whole
+/// manifest's calls touch. A stage allocates a state whole, so a share
+/// below one is memory it holds for another stage's regions: a state laid
+/// out over the whole model rather than one per piece.
+pub fn state_use(whole: &Manifest, stage: &Manifest) -> Vec<(String, usize, usize)> {
+    let regions = |m: &Manifest, st: &str| -> BTreeSet<u64> {
+        m.programs
+            .values()
+            .flat_map(|p| &p.calls)
+            .flat_map(state_args)
+            .filter(|(s, _)| *s == st)
+            .map(|(_, o)| o)
+            .collect()
+    };
+    stage.states.keys().map(|st| (st.clone(), regions(stage, st).len(), regions(whole, st).len())).collect()
 }
 
 /// Every state region `c` touches.

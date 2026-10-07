@@ -162,6 +162,15 @@ fn cut(manifest: &Path, at: &[usize], module: &Path, out: &Path) -> Result<()> {
             st.buffers.values().filter(|b| b.kind == kern_manifest::types::BufferKind::Weight).count(),
             calls.join(", ")
         );
+        let (whole, part): (Vec<_>, Vec<_>) =
+            kern_manifest::cut::state_use(&m, st).into_iter().partition(|(_, a, b)| a == b);
+        tracing::info!("stage {s}: {} of {} states used whole", whole.len(), whole.len() + part.len());
+        for (name, a, b) in part {
+            tracing::warn!(
+                "stage {s}: state `{name}` is allocated whole and its calls touch {a} of its {b} regions (~{:.0}% of its bytes)",
+                100.0 * a as f64 / b as f64
+            );
+        }
     }
     tracing::info!("cut `{}` into {} stages", stages[0].cut.as_ref().map_or("", |c| c.id.as_str()), stages.len());
     Ok(())
