@@ -16,9 +16,9 @@ packed struct / TMA descriptor，不可 rebind）：
   被 Triton 特化进 binary 不再传参）——这里 pin 的是 decode 实例。
 - GEMM 是 runtime 特判（symbol 前缀 `extern:`，cublasLt）；embedding 是
   待写的 Triton 占位。
-- KV state 布局从 vLLM 的逐层池改为层交织 `[page][layer][16][8][2][128]`
-  （同一批 kernel，靠 stride 参数 ×LAYERS 和 state offset 字面量适配），
-  bytes_per_token = 36*2*8*128*2 = 147456。
+- KV 是每层一个 paged state `kv.<i>`（vLLM 的逐层池布局，bytes_per_token
+  = 2*8*128*2 = 4096），页号由 pool 统一发；一份切开的 manifest 每段只带
+  自己那些层的 state。
 - 发射前对挖矿数据做结构断言：q/k/v 在 qkv 中的视图偏移、residual 全程
   同址、逐层权重互异、KV 池 k/v 相距 256B、cache/attention 共享同一
   KV 池与 scale 指针、unified 与 reduce 共享 segm 缓冲——连线是手写的，
@@ -65,7 +65,7 @@ from kern_manifest import DumpIndex, normalize, program, SCHEMA_VERSION  # noqa:
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mine_capture as mc
-from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
+from kernels.index import variant  # noqa: E402
 
 HIDDEN = 2560
 LAYERS = 36
@@ -96,12 +96,13 @@ MARKOV_RANK = 256
 TAPS = {0: 0, 8: 1, 16: 2, 24: 3, 32: 4}  # target_layer_ids [1,9,17,25,33]-1
 DRAFT_KV_DIM = DRAFT_LAYERS * 2 * KV_DIM  # 融合 KV GEMM 输出行宽 10240
 
-# 层交织 KV 布局（vLLM 逐层池 -> 我们的单 state）：
-# 一个 block(16 token) 在一层里占 16*8*2*128 = 32768 elems；层间连续。
+# target KV：每层一个 paged state `kv.<i>`，即 vLLM 的逐层池布局
+# `[page][16][8][2][128]`；pool 给所有 paged state 同一套页号。一个
+# block(16 token) 在一层里占 16*8*2*128 = 32768 elems。draft 仍是一个
+# 层交织的 state（`draft_kv`，stride × 层数）。
 BLOCK_ELEMS_PER_LAYER = 16 * KV_HEADS * 2 * HEAD_DIM
-BLOCK_STRIDE = LAYERS * BLOCK_ELEMS_PER_LAYER          # 传给 kernel 的 elems
-LAYER_KV_BYTES = BLOCK_ELEMS_PER_LAYER * BF16          # state offset 步长
-KV_BYTES_PER_TOKEN = LAYERS * 2 * KV_DIM * BF16        # 147456
+LAYER_KV_BYTES = BLOCK_ELEMS_PER_LAYER * BF16          # draft_kv 的层 offset 步长
+LAYER_KV_BYTES_PER_TOKEN = 2 * KV_DIM * BF16           # 4096
 DRAFT_BLOCK_STRIDE = DRAFT_LAYERS * BLOCK_ELEMS_PER_LAYER
 DRAFT_KV_BYTES_PER_TOKEN = DRAFT_LAYERS * 2 * KV_DIM * BF16  # 20480
 V_BYTE_OFF = 2 * HEAD_DIM                              # 挖矿实测 k/v 相距 256B
@@ -388,7 +389,7 @@ def scr(name):
 
 
 def step(symbol, params, block, grid, args, shared_mem=None, cubin=None,
-         sha256=None):
+         sha256=None, label=None):
     s = {"entry": symbol, "params": params, "block": block,
          "grid": [_e(g) for g in grid], "args": args}
     if shared_mem is not None:
@@ -397,16 +398,18 @@ def step(symbol, params, block, grid, args, shared_mem=None, cubin=None,
         s["cubin"] = cubin
     if sha256 is not None:
         s["sha256"] = sha256
+    if label is not None:
+        s["label"] = label
     return s
 
 
 def single(symbol, params, block, grid, shared_mem=None, cubin=None,
-           sha256=None):
+           sha256=None, label=None):
     """单步实现，恒等布线：接口即该核的 launch ABI。"""
     return {"params": params,
             "impl": {"launches": [step(symbol, params, block, grid,
                                     [a(i) for i in range(len(params))],
-                                    shared_mem, cubin, sha256)]}}
+                                    shared_mem, cubin, sha256, label)]}}
 
 
 # 结构输入的先验（domain）：接模型的人才知道 buffer<i32> 是页表不是激活。
@@ -415,8 +418,8 @@ TOKEN_DOMAIN = {"index_into": "model.embed_tokens.weight"}
 DOMAINS = {
     "token_ids": TOKEN_DOMAIN,
     "positions": {"index_into": "rope.cos_sin_cache"},
-    "slot_mapping": {"index_into": "kv"},
-    "block_table": {"index_into": "kv", "stride": 16},  # vLLM block_size
+    "slot_mapping": {"index_into": "kv.0"},
+    "block_table": {"index_into": "kv.0", "stride": 16},  # vLLM block_size
     "seq_lens": {"min": 1},
     "cu_seqlens_q": {"min": 0, "max": "tokens", "monotone": True},
     "next_token": TOKEN_DOMAIN,
@@ -822,8 +825,8 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
                  [buf(x), i64(HIDDEN), buf("residual"), buf(w), f32(eps), T,
                   i32(HIDDEN), i64(HIDDEN)])
 
-    def forward(attn_kernel, tail, mp="model.", layers=LAYERS, kv_state="kv",
-                block_stride=BLOCK_STRIDE, scales="kv_scales", taps=False,
+    def forward(attn_kernel, tail, mp="model.", layers=LAYERS, kv_state=None,
+                block_stride=BLOCK_ELEMS_PER_LAYER, scales="kv_scales", taps=False,
                 lm_head_w="lm_head.weight", final_norm_w="model.norm.weight",
                 ids="token_ids"):
         """embed + 逐层的直线 dispatch 表，target/draft 共用（几何同构，
@@ -848,7 +851,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         for i in range(layers):
             p = f"{mp}layers.{i}."
             l = f"l{i}."
-            koff = i * LAYER_KV_BYTES
+            st, koff = (f"kv.{i}", 0) if kv_state is None else (kv_state, i * LAYER_KV_BYTES)
             ks, vs = buf(scales, i * 8), buf(scales, i * 8 + 4)
             last = i + 1 == layers
             ds += [
@@ -867,14 +870,14 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
                   # [8]=value 行距=QKV_DIM（v 视图在融合 qkv 里；decode
                   # capture 的 1024 同样是 tokens=1 下的假常量）
                   [buf("k_n"), buf("qkv", (Q_DIM + KV_DIM) * BF16),
-                   state(kv_state, koff), state(kv_state, koff + V_BYTE_OFF),
+                   state(st, koff), state(st, koff + V_BYTE_OFF),
                    buf("slot_mapping"), ks, vs,
                    i64(KV_DIM), i64(QKV_DIM), i64(block_stride),
                    i64(2 * HEAD_DIM), i64(0), i64(0),
                    i64(KV_HEADS * 2 * HEAD_DIM), i64(0), i64(0)]),
                 d(l + "attn", attn_kernel,
                   [buf("attn_out"), buf("q_n"),
-                   state(kv_state, koff), state(kv_state, koff + V_BYTE_OFF),
+                   state(st, koff), state(st, koff + V_BYTE_OFF),
                    buf("block_table"), buf("seq_lens"), f32(scale), ks, vs,
                    f32(1.0), f32(0.0),
                    i64(MAX_BLOCKS), i64(Q_DIM), i64(HEAD_DIM), i64(Q_DIM),
@@ -1000,7 +1003,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
             ]
         return ds
 
-    states = {"kv": {"bytes_per_token": KV_BYTES_PER_TOKEN}}
+    states = {f"kv.{i}": {"bytes_per_token": LAYER_KV_BYTES_PER_TOKEN} for i in range(LAYERS)}
     programs = {
         # prefill: one sequence, as many rows as the chunk holds (tokens);
         # decode: the bs=1 contract, 3D split-KV kernels; decode_batch: up
