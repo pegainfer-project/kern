@@ -24,12 +24,13 @@
 //! what makes the stages' page tables interchangeable: a sequence's pages
 //! hold the first stage's layers on one GPU and the next stage's on
 //! another, under the same page ids. A region two stages touch is refused.
-//! A program run once after load is sliced per stage to the calls the
-//! stage's own calls need, so every stage derives its own tables.
+//! A program run once after load, and one deriving weights while they
+//! load, is sliced per stage to the calls the stage's own calls need, so
+//! every stage derives its own tables and weights.
 //!
-//! The prompt reaches the step program's first token the way it does
-//! unsplit; a chunk program that hands a token back itself is refused, so
-//! a pipeline's first token always comes from a step. Everything a stage
+//! The prompt reaches its first token the way it does unsplit, from the
+//! step or from a chunk program that hands one back; either way the last
+//! stage writes it, since only the last stage writes an output. Everything a stage
 //! does not use is dropped, and every stage verifies. A state is kept whole
 //! or not at all, so a state laid out over the whole model (one KV state
 //! for every layer) is carried whole by every stage that touches a piece of
@@ -108,12 +109,6 @@ pub fn cut(m: &Verified, at: &[usize], pp: &Module) -> Result<Vec<Verified>, Cut
             if last >= p.calls.len() {
                 errs.push(format!("program `{name}` has {} calls; it cannot be cut before call {last}", p.calls.len()));
             }
-        }
-        let chunk = p.batch.as_ref().is_some_and(|b| matches!(b.rows, Dim::Var(_)));
-        if chunk && writes(m, &p.calls).iter().any(|b| m.buffers[*b].fill == Some(Fill::Tokens)) {
-            errs.push(format!(
-                "program `{name}` takes a chunk and hands a token back; a pipeline takes its first token from a step"
-            ));
         }
     }
     if !errs.is_empty() {
@@ -299,7 +294,8 @@ fn pp_op(name: &str) -> Op {
 }
 
 /// Stage `s` of `stages`: `programs` (already cut and wired), the once
-/// programs sliced to what they need, and every declaration they use.
+/// and derive programs sliced to what they need, and every declaration
+/// they use.
 fn stage(
     m: &Manifest,
     mut programs: BTreeMap<String, Program>,
@@ -311,7 +307,7 @@ fn stage(
 ) -> Manifest {
     let mut needed: BTreeSet<String> =
         programs.values().flat_map(|p| &p.calls).flat_map(|c| reads(m, c)).map(str::to_string).collect();
-    for (name, p) in m.programs.iter().filter(|(_, p)| p.once) {
+    for (name, p) in m.programs.iter().filter(|(_, p)| p.once || p.derive) {
         let mut kept = Vec::new();
         for c in p.calls.iter().rev() {
             if accesses(m, c).iter().any(|(b, _, d)| *d != Dir::In && needed.contains(*b)) {
