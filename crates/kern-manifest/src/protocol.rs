@@ -265,7 +265,26 @@ impl Protocol {
             }
         };
         let rows = axis_of(Fill::Slot, &mut errs);
-        let groups = axis_of(Fill::SeqLen, &mut errs);
+        // A stage past the first of a cut may read no sequence length (its
+        // attention lengths came through the mailbox): its sequences are
+        // then the rows of its page table, or none of its own.
+        let downstream = m.cut.as_ref().is_some_and(|c| c.stage > 0);
+        let groups = if downstream && !m.buffers.values().any(|b| b.fill == Some(Fill::SeqLen)) {
+            let paged = |b: &Buffer| {
+                b.domain.as_ref().and_then(|d| d.index_into.as_deref()).and_then(|s| m.states.get(s)).is_some_and(
+                    |s| s.bytes_per_token > 0,
+                )
+            };
+            let var = m
+                .buffers
+                .values()
+                .filter(|b| b.kind == BufferKind::Input && b.fill.is_none() && paged(b))
+                .find_map(axis_var)
+                .unwrap_or_default();
+            Some(Bound { max: var_max(&var).unwrap_or(1), var })
+        } else {
+            axis_of(Fill::SeqLen, &mut errs)
+        };
         if let (Some(r), Some(g)) = (&rows, &groups) {
             if r.var == g.var {
                 errs.push(format!(
