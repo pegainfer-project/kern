@@ -74,6 +74,12 @@ hosted `prefill` takes `seqs` sequences split by `cu_seqlens_q`:
   are out of range, so they write nothing. `chunk_h` walks `seqs × 48`.
   This needs `add` of two expressions in the manifest grammar.
 - `h` grows by one chunk state per sequence, `has_initial` to `seqs`.
+- Where the chunk kernel takes the initial state by pointer (vLLM's Triton
+  `chunk_h` in the base manifest), `line_gather` / `line_scatter` copy one
+  line per sequence, one grid row each, into an `h0` of `seqs` states.
+  Its `solve_tril` leaves the blocks above the diagonal unwritten too, and
+  is not ours to rebuild, so `prefill` zeroes `Ai` once per call: every
+  layer of a call writes the same places.
 
 Two kernels were only correct for one sequence, and are rebuilt (pinned by
 sha in the generator, sources in the HF repo):

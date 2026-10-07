@@ -63,6 +63,8 @@ CHUNK_H_SHA256 = "e213c16337a8d9caaf5888407ee0b8a3d9227559d434eafd35b74098e6936b
 # solve_tril.cu storing whole rows: a ragged call moves a row's place in its chunk, so the zeros above
 # the diagonal blocks recompute reads can no longer be left to an untouched workspace
 SOLVE_TRIL_SHA256 = "45e872b7d3f13ded775bb16fb0485808ce029dbf2966d52a34b4ec13c083c849"
+# line_copy.cu with one sequence per grid row, for the FLA chunk kernels that take h0 by pointer
+LINE_COPY_SHA256 = "9eb23dab7d156d3a73183e36bb129ebd8b7fef169e2c8de179e62636bbb711b1"
 BT = 64
 
 
@@ -209,6 +211,8 @@ def ragged(m):
     bound = {"add": [{"ceil_div": ["tokens", BT]}, "seqs"]}
     tables = {"fla.chunk_indices", "fla.chunk_offsets"}
     reads = lambda name: {a.get("buf") for c in m["programs"]["prefill"]["calls"] if c["op"] == name for a in c["args"]}
+    copies = {c["op"] for c in m["programs"]["prefill"]["calls"]
+              if any(l.get("module") == "line_copy" for l in m["ops"][c["op"]]["impl"]["launches"])}
 
     def regrid(name, op):
         r = reads(name)
@@ -216,6 +220,9 @@ def ragged(m):
             g = lambda d: bound if d == {"ceil_div": ["tokens", BT]} else d
         elif "fla.chunk_offsets" in r:
             g = lambda d: {"mul": ["seqs", d]} if d == 48 else d
+        elif name in copies:
+            return {**op, "impl": {**op["impl"], "launches": [
+                {**l, "grid": [l["grid"][0], "seqs", 1]} for l in op["impl"]["launches"]]}}
         elif name == "fill_u8":
             return {**op, "impl": {**op["impl"], "launches": [
                 {**l, "args": [{"i32": max_seqs} if a == {"i32": 16} else a for a in l["args"]]}
@@ -233,20 +240,33 @@ def ragged(m):
         {"buf": "cu_seqlens_q"}, {"buf": "fla.chunk_indices"}, {"buf": "fla.chunk_offsets"},
         {"var": "seqs"}, {"expr": bound}]}
     load = [c for c in m["programs"]["load"]["calls"] if not {a.get("buf") for a in c["args"]} & tables]
+    # vLLM's Triton solve_tril leaves the blocks above the diagonal to the workspace; every layer of a call
+    # writes the same places, so one zeroing per call keeps the rows a ragged call moves clean
+    words = {"mul": ["tokens", b["Ai"]["shape"][1] * b["Ai"]["shape"][2] // 2]}
+    zero = [{"label": "zero_ai", "op": "zero_ai", "args": [{"buf": "Ai"}, {"expr": words}]}] if any(
+        l.get("module") == "solve_tril" for c in m["programs"]["prefill"]["calls"]
+        for l in m["ops"][c["op"]]["impl"]["launches"]) else []
+    zero_ai = dict(params=["out buffer<bf16>", "i32"], impl=dict(launches=[
+        dict(module="weight_prep", entry="kern_fill_f32", params=["out buffer<bf16>", "i32", "f32"],
+             block=[256, 1, 1], grid=[{"ceil_div": [words, 256]}, 1, 1],
+             args=[{"param": 0}, {"param": 1}, {"f32": 0.0}])]))
+    lines = {"line_copy": {"source": "line_copy.cubin", "sha256": LINE_COPY_SHA256}} if copies else {}
+    h0 = {"h0": {**b["h0"], "shape": [max_seqs, *b["h0"]["shape"]]}} if lines else {}
     return {**m,
-            "ops": {k: regrid(k, v) for k, v in m["ops"].items()} | {"fla_chunk_index": index},
+            "ops": {k: regrid(k, v) for k, v in m["ops"].items()} | {"fla_chunk_index": index}
+            | ({"zero_ai": zero_ai} if zero else {}),
             "modules": m["modules"] | {
                 "fla_chunk_index": {"source": "fla_chunk_index.cubin", "sha256": CHUNK_INDEX_SHA256},
                 "chunk_h_64": {"source": "chunk_h_64.cubin", "sha256": CHUNK_H_SHA256},
-                "solve_tril_64": {"source": "solve_tril_64.cubin", "sha256": SOLVE_TRIL_SHA256}},
+                "solve_tril_64": {"source": "solve_tril_64.cubin", "sha256": SOLVE_TRIL_SHA256}} | lines,
             "programs": m["programs"] | {
                 "load": {**m["programs"]["load"], "calls": load},
-                "prefill": {**m["programs"]["prefill"], "calls": [call, *m["programs"]["prefill"]["calls"]]}},
+                "prefill": {**m["programs"]["prefill"], "calls": [call, *zero, *m["programs"]["prefill"]["calls"]]}},
             "buffers": b | {
                 "fla.chunk_indices": {"dtype": "i32", "shape": [chunks, 2], "kind": "workspace"},
                 "fla.chunk_offsets": {"dtype": "i64", "shape": [max_seqs], "kind": "workspace"},
                 "gdn.has_initial": {**b["gdn.has_initial"], "shape": [max_seqs]},
-                "h": {**b["h"], "shape": [chunks, *b["h"]["shape"][1:]]}}}
+                "h": {**b["h"], "shape": [chunks, *b["h"]["shape"][1:]]}} | h0}
 
 
 def headless(calls):
