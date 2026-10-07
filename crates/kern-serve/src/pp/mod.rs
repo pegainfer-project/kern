@@ -17,8 +17,8 @@
 //! handles, to map its own outgoing peer from, and the pages. From then on
 //! the connection carries the log: the head sends every stage every
 //! [`Item`] in issue order — the program, its vars and the values of each
-//! input it staged — and the last stage answers the item that finishes a
-//! prompt with its tokens. TCP keeps the order; there is no
+//! input it staged — and the last stage answers every item with its tokens
+//! (none for a program that hands none back). TCP keeps the order; there is no
 //! sequence number, no stop message and no fault message. A stage that
 //! fails exits; a closed connection ends the process on the other side.
 //!
@@ -28,6 +28,7 @@
 //! has nothing to enqueue (to read its clock) or when it must read tokens.
 
 pub mod head;
+mod pack;
 pub mod stage;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -67,15 +68,12 @@ pub struct Table {
 pub struct Item {
     pub program: String,
     pub vars: BTreeMap<String, u64>,
-    /// Each input's values by name: the fills, the page tables and, on a
-    /// sequence's first item, its line tables.
+    /// Each input's values by name: the fills, the page tables and the
+    /// line tables when the item's sequences change them.
     pub rows: BTreeMap<String, Vec<i64>>,
-    /// The sequence slot to zero before the call: on its first item, the
-    /// recurrent state a fresh lease starts from.
-    pub zero_slot: Option<i32>,
-    /// Whether the last stage hands this call's tokens back: the item
-    /// that finishes a prompt.
-    pub reply: bool,
+    /// The sequence slots to zero before the call, the ones of sequences
+    /// on their first item: the recurrent state a fresh lease starts from.
+    pub zero_slots: Vec<i32>,
 }
 
 pub type Handles = BTreeMap<String, String>;
