@@ -567,6 +567,48 @@ toy 抓到的几条：
 
 toy 不测 kernel 数值和性能，也没有 tray（EP4 的 toy 要一个走 peer 指针的 collective，还没写）。
 
+## 流水线（prefill-only PP v1，2026-10-07，tray07 GB300）
+
+一段一个进程：`kern cut` 切出的 stage 0 是 head（`--pp-listen host:port`：HTTP、scheduler、唯一的
+`Pool`），其余段 `--pp-head host:port`。握手：每段连上 head 发 `Hello { stage, cut, pages, mailbox }`
+（export handle 的 hex），head 收齐 S−1 个、按最少的页数装自己的池，回 `Table { downstream_mailbox,
+pages }`；之后同一条 TCP（tokio-util `LengthDelimitedCodec` + JSON）上 head 按发射顺序给每段发
+`Item { program, vars, rows }`（fill 与页表的值，页号全流水共用），末段对吐 token 的 item 回 token。
+激活不走 TCP，走 GPU 上的邮箱（manifest.md「流水线切分」），各段设备自己等上游。没有序号、
+stop、fault 消息：任何错误进程退出，连接断了对端退出；设备上的邮箱等待 60 s 超时 trap。
+只做 prefill：prompt 除末 token 按 chunk 走 chunk program，末 token 走一行的 step，首 token 即结束
+（`max_tokens` 视为 1）。每段每个 item 一行 `pp item` 日志：rows、busy_ns、recv_wait_ns、send_wait_ns
+（读 `clock` fill，空闲时读，不加协议消息）。
+
+门禁（qwen3-4b，切在 `l18.qkv_proj` 前，2 段）：
+- 只切不分进程：`pp_chain` 各段依次跑 vs 整份，7 条 prompt（1–2049 token），chunk 512 × 8 步、
+  chunk 64 × 16 步（2049 token 32 个 chunk），每步 logits 与 token **逐位同**。
+- 两进程 serve：7 条 gate prompt 首 token 与单卡 kern-serve 全同；杀末段 → head 立即退出；冻住末段
+  （SIGSTOP）→ head 61 s 后 trap 退出，恢复的末段 61 s 后同样退出。
+
+扫描（chunk 512，`--max-seqs 16`，每格 conc1 4 条 / conc4 16 条不同 prompt；TTFT = max_tokens=1 的
+请求延迟；busy/wait 是每 item 均值）：
+
+| conc | prompt | chunks | TTFT unsplit ms | TTFT pp ms | speedup | stage | chunk busy ms | step busy ms | recv_wait ms/item | send_wait ms/item |
+|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|
+| c1 | 513 | 1 | 8.1 | 8.5 | 0.95x | 0 | 2.99 | 1.32 | - | 0.00 |
+| | | | | |  | 1 | 2.90 | 1.46 | 1.48 | - |
+| c1 | 2049 | 4 | 38.2 | 25.3 | 1.51x | 0 | 4.27 | 1.46 | - | 0.00 |
+| | | | | |  | 1 | 4.21 | 1.60 | 1.16 | - |
+| c1 | 8193 | 16 | 313.4 | 173.8 | 1.80x | 0 | 9.57 | 1.99 | - | 0.00 |
+| | | | | |  | 1 | 9.52 | 2.13 | 1.01 | - |
+| c4 | 513 | 1 | 29.7 | 17.6 | 1.68x | 0 | 2.96 | 1.32 | - | 0.00 |
+| | | | | |  | 1 | 2.91 | 1.46 | 0.09 | - |
+| c4 | 2049 | 4 | 139.6 | 78.5 | 1.78x | 0 | 4.26 | 1.46 | - | 0.19 |
+| | | | | |  | 1 | 4.20 | 1.60 | 0.30 | - |
+| c4 | 8193 | 16 | 1194.0 | 664.5 | 1.80x | 0 | 9.57 | 1.99 | - | 0.61 |
+| | | | | |  | 1 | 9.52 | 2.13 | 0.73 | - |
+
+单请求内 chunk 之间就流水起来（stage 0 算第 k+1 块时 stage 1 算第 k 块），所以长 prompt conc1 也
+接近 2×；1 块的 prompt 没有可重叠的东西，略慢（邮箱 + 两段 launch）。v1 的限制：每段按整份的
+`bytes_per_token` 分 KV（只用自己那些层，浪费一半）；只认纯 paged 的 manifest；chunk program
+自己吐 token 的模型拒切；上游那份 box 是不用的占位。
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
