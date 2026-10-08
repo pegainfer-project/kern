@@ -17,10 +17,14 @@ API 里的模型名缺省是 manifest 的 `model`，`--served-model-name` 覆盖
 的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 pegainfer `139d925e` / vLLM `89dbb264`（2026-09-11）。包含上游 #56260：
-DSV4/V4.1 历史 tool call 的非法 JSON 或非对象参数按原文包在 `arguments` 中，不再拒绝请求。
-双重编码的对象也保留原文，不按 checkpoint 的旧 `encoding.py` 二次解码；renderer 回归测试
-保留旧 oracle fixture，只对这一处已知差异调整期望，仍比较完整对话文本。
+当前钉在 pegainfer `f53b282f` / vLLM `f4dde313`（2026-10-08）。这一轮 bump 带来的：
+停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
+降成一份策略，scheduler 只 `classify`，结束时带 `stop_cause`），kern-serve 不再自己读
+`generation_config.json` 的 eos，`--stop-tokens` 删除；DSV4.1 renderer 的 reasoning effort
+映射跟着上游 #58316 的 Flash 版参考改了（缺省 75、low 50、high 75，`minimal` / `medium` 拒绝），
+fixture 的期望随之更新。更早的 #56260 仍在：DSV4/V4.1 历史 tool call 的非法 JSON 或非对象参数
+按原文包在 `arguments` 中，不再拒绝请求；双重编码的对象也保留原文，renderer 回归测试只对这一处
+已知差异调整期望，仍比较完整对话文本。
 
 
 ## 分工
@@ -49,7 +53,8 @@ DSV4/V4.1 历史 tool call 的非法 JSON 或非对象参数按原文包在 `arg
     `graph` 的 program 每个 bucket 首次使用时 capture 一张图；pad 行写进
     scheduler 自己租的一页。
   - greedy：采样就是 manifest 里的 `argmax`。非 greedy 参数 warn 一次后按
-    greedy 服务。EOS 本身不发出（pegainfer 约定），仍计入 `max_tokens`。
+    greedy 服务。停止 token 带着 `stop_cause` 交给 ledger（pegainfer 约定：前端像 vLLM
+    一样把它计入 `completion_tokens`、从文本里剥掉），计入 `max_tokens`。
 - **manifest**（`tools/gen_qwen3_decode.py`）多了一个 var `seqs`（≤256）和
   一个 program：
   - `decode`：原样，bs=1 契约（3D split-KV unified + reduce_segments——挖到

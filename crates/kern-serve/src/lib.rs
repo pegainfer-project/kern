@@ -24,7 +24,7 @@ use kern_runtime::{Capacity, Runtime, Topology};
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler,
 };
-use pegainfer_frontend::vllm;
+use pegainfer_frontend::vllm::{self, ParserSelection};
 use tracing::info;
 
 use scheduler::{KernScheduler, Policy};
@@ -80,10 +80,6 @@ pub struct ServeOpts {
     #[arg(long)]
     pub rows: Option<u64>,
 
-    /// Extra stop token ids (generation_config.json's eos ids always apply)
-    #[arg(long, value_delimiter = ',')]
-    pub stop_tokens: Vec<u32>,
-
     /// Pinned host memory (GiB) per rank for snapshots parked off the
     /// device: a lease short of pages or slots parks the coldest snapshot
     /// there instead of dropping it, and a prompt hitting one wakes it
@@ -103,16 +99,6 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     );
     let gpus = if o.gpus.is_empty() { vec![0] } else { o.gpus.clone() };
     let model_path = weights.dirs().remove(0);
-    let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&model_path).into_iter().map(|x| x as u32).collect();
-    stop_tokens.extend(&o.stop_tokens);
-    stop_tokens.sort_unstable();
-    stop_tokens.dedup();
-    anyhow::ensure!(
-        !stop_tokens.is_empty(),
-        "no stop tokens: none in {}/generation_config.json or config.json and no --stop-tokens",
-        model_path.display()
-    );
-    info!(ids = ?stop_tokens, "stop tokens");
 
     let manifest_json = std::fs::read_to_string(&art.manifest)
         .with_context(|| format!("reading manifest {}", art.manifest.display()))?;
@@ -129,8 +115,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let (handle, backend) = scheduler_pair();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<scheduler::Facts>>();
     let host_bytes = (o.host_gib * (1u64 << 30) as f64) as u64;
-    let policy =
-        Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, stop_tokens, rows: o.rows, host_bytes };
+    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes };
     let join = std::thread::Builder::new()
         .name("kern-scheduler".into())
         .spawn(move || {
@@ -179,6 +164,16 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     rt.block_on(async move {
         // Needs the runtime: it spawns the signal listener.
         let shutdown = vllm::shutdown_token_from_ctrl_c();
-        vllm::serve_with_engine_count(engine, &model_path, vec![served_name], o.port, None, 1, shutdown).await
+        vllm::serve_with_engine_count(
+            engine,
+            &model_path,
+            vec![served_name],
+            ParserSelection::default(),
+            o.port,
+            None,
+            1,
+            shutdown,
+        )
+        .await
     })
 }

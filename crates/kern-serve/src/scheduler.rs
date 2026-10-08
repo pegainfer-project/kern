@@ -89,7 +89,7 @@ use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
 use kern_runtime::Error;
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
-    SpecDecodeCounters, MAX_SPEC_TOKENS,
+    SpecDecodeCounters, StopPolicy, MAX_SPEC_TOKENS,
 };
 use tracing::{debug, info, warn};
 
@@ -150,8 +150,6 @@ pub struct Policy {
     /// Cap on concurrently running sequences per rank (≤ the manifest's
     /// `seqs` bound).
     pub max_seqs: usize,
-    /// Token ids that end a request unless it asked `ignore_eos`.
-    pub stop_tokens: Vec<u32>,
     /// Rows per sequence of a step, a shape the manifest declares; the
     /// widest by default.
     pub rows: Option<u64>,
@@ -239,7 +237,9 @@ struct Seq {
     /// a speculative round accepted past `max_tokens` or the stop.
     emitted: usize,
     max_tokens: usize,
-    ignore_eos: bool,
+    /// The request's EOS and explicit stop ids, as the frontend lowered
+    /// them (`ignore_eos` arrives as a policy without an EOS).
+    stop: StopPolicy,
     /// Its KV pages and state slots across the tray; returned when the
     /// sequence drops.
     row: Row,
@@ -262,27 +262,31 @@ impl Seq {
     }
 
     /// Account `toks` as generated, in order: each is emitted until a stop
-    /// token (itself not emitted, pegainfer convention; it still counts
-    /// against `max_tokens` like vLLM's) or `max_tokens`. Finishes the
-    /// request in the ledger when it is done, otherwise the last token is
-    /// the next step's input. Returns how many tokens were emitted and
-    /// whether the sequence finished.
-    fn emit(&mut self, toks: &[u32], stop: &[u32], ledger: &mut RequestLedger) -> (u64, bool) {
+    /// token or `max_tokens`. The stop token goes to the ledger with its
+    /// cause (pegainfer convention: the frontend counts it as vLLM does and
+    /// strips it from the text) but not into `emitted`. Finishes the request
+    /// in the ledger when it is done, otherwise the last token is the next
+    /// step's input. Returns how many tokens were emitted and whether the
+    /// sequence finished.
+    fn emit(&mut self, toks: &[u32], ledger: &mut RequestLedger) -> (u64, bool) {
         let mut out = Vec::with_capacity(toks.len());
         let mut reason = None;
+        let mut cause = None;
         for &tok in toks {
             self.generated += 1;
-            if !self.ignore_eos && stop.contains(&tok) {
+            out.push(tok);
+            if let Some(c) = self.stop.classify(tok, |_| false) {
                 reason = Some(FinishReason::Stop);
+                cause = Some(c);
                 break;
             }
-            out.push(tok);
             if self.generated >= self.max_tokens {
                 reason = Some(FinishReason::Length);
                 break;
             }
         }
-        self.emitted += out.len();
+        let emitted = out.len() - cause.is_some() as usize;
+        self.emitted += emitted;
         if !out.is_empty() {
             ledger.push_tokens(self.id, &out, &[]);
         }
@@ -296,7 +300,7 @@ impl Seq {
                     elapsed_s = logline::secs(self.admitted.elapsed()),
                     "finished"
                 );
-                ledger.finish(self.id, r);
+                ledger.finish_with_cause(self.id, r, cause);
                 true
             }
             None => {
@@ -306,7 +310,7 @@ impl Seq {
                 false
             }
         };
-        (out.len() as u64, done)
+        (emitted as u64, done)
     }
 }
 
@@ -661,7 +665,7 @@ impl KernScheduler {
             generated: 0,
             emitted: 0,
             max_tokens,
-            ignore_eos: q.request.params.ignore_eos,
+            stop: q.request.stop_policy.clone(),
             row,
             prompt_len: prompt,
             history: ids[..n_pre].to_vec(),
@@ -670,7 +674,7 @@ impl KernScheduler {
         };
         self.checkpoint(&mut seq)?;
         if let Some(tok) = first {
-            let (emitted, done) = seq.emit(&[tok], &self.policy.stop_tokens, ledger);
+            let (emitted, done) = seq.emit(&[tok], ledger);
             self.stats.tokens += emitted;
             if done {
                 self.finish(seq);
@@ -734,7 +738,7 @@ impl KernScheduler {
         // next turn ends the answer with it.
         let visible = s.prompt_len + s.emitted;
         let past = s.history.get(visible..).unwrap_or_default();
-        if s.pos > visible + 1 || past.iter().any(|&t| !self.policy.stop_tokens.contains(&(t as u32))) {
+        if s.pos > visible + 1 || past.iter().any(|&t| s.stop.classify(t as u32, |_| false).is_none()) {
             debug!(request = %s.id, tokens = s.pos, visible, "not kept");
             return;
         }
@@ -854,7 +858,7 @@ impl KernScheduler {
                     self.stats.prefill_tokens += fed.len() as u64 - 1;
                     let taken = toks.len().max(1);
                     s.advance(fed.into_iter().chain(toks[..taken - 1].iter().copied()));
-                    let (n, done) = s.emit(&toks, &self.policy.stop_tokens, ledger);
+                    let (n, done) = s.emit(&toks, ledger);
                     self.stats.tokens += n;
                     done
                 }
