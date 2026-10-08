@@ -17,7 +17,8 @@ API 里的模型名缺省是 manifest 的 `model`，`--served-model-name` 覆盖
 的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 pegainfer `f53b282f` / vLLM `f4dde313`（2026-10-08）。这一轮 bump 带来的：
+当前钉在 pegainfer `18d0c29d` / vLLM `f4dde313`（2026-10-08）。`18d0c29d` 是 pegainfer #1140：chat 层量出
+`Request::history_tokens`（见下文"带循环状态"一条）。之前的 `f53b282f` bump 带来的：
 停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
 降成一份策略，scheduler 只 `classify`，结束时带 `stop_cause`），kern-serve 不再自己读
 `generation_config.json` 的 eos，`--stop-tokens` 删除；DSV4.1 renderer 的 reasoning effort
@@ -143,9 +144,20 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
 
 - 纯 KV（qwen3-4b，页 16 token）：序列每填满一页就 `Runtime::checkpoint` 一次——页进
   共享链，不拷字节，所以任何早先的 prompt 或输出都按页粒度可复用；
-- 带循环状态（qwen3.8-27b，页 784 token，GDN state 154 MB/序列）：只在请求结束时
-  `Runtime::retire`——结束序列的 state slot 原样成为 checkpoint 的，不拷；因此只有
-  "续着上一轮整段上下文"的 prompt 命中，同一 prompt 重发不命中（checkpoint 比它长）。
+- 带循环状态（qwen3.8-27b，页 784 token，GDN state 154 MB/序列）：state 回不去，只在
+  两处留。一处在 prefill 途中、下一轮 prompt 与这一轮分开的地方 `Runtime::checkpoint` 一次
+  （那半页和 state slot 拷给快照）：chat template 的 generation prompt（qwen3.8 是
+  `<|im_start|>assistant\n<think>\n`）在下一轮的历史里渲染成别的样子（`<think>\n\n</think>`），
+  所以两轮 prompt 共享的前缀到最后一条消息结束为止；这个位置由前端量，不由 scheduler 猜——
+  pegainfer 的 chat 层在 `/v1/chat/completions` 前把请求的最后一条消息单独渲染两遍（带 / 不带
+  generation prompt），两份 token 不共享的尾巴长度写进 `vllm_xargs.generation_prompt_tokens`，
+  bridge 算成 `Request::history_tokens = prompt_len - 尾巴`（跨边界的 token 算进尾巴，快照只会
+  提前不会越界；`add_generation_prompt=false` / `continue_final_message` 时尾巴为 0）。另一处是
+  请求结束时 `Runtime::retire`——结束序列的 state slot 原样成为 checkpoint 的，不拷。"续着上一轮
+  整段上下文"的 prompt 命中后者；回放录下来的回复而不是我们生成的回复的下一轮（AgentX、改过历史
+  的对话）命中前者，只付上一轮 prompt 之后的部分；同一 prompt 重发也命中前者，只付尾巴。history
+  末尾的快照拿不到 slot 时按租约的规则腾地方，腾不出（或 remap 在途）就不留，请求照跑（stats 行
+  的 `prompt_checkpoints` / `prompt_skips`）。
   slot 从 manifest 的 `seqs.max + 2` 个起，与 KV 页共用一份显存预算按需互换（K1b）：
   睡着的 session 的 checkpoint 拿着 slot，活跃请求再要 slot 就从空闲页拆，页不够
   再从空闲 slot 拆回来；租约 `Busy` 时按最久未命中淘汰，`Remapping` 时等它落地

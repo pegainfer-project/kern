@@ -59,13 +59,25 @@
 //!   longest snapshot holding a proper prefix of it (`Tray::lease_from`;
 //!   prefill covers the rest). A paged-only manifest checkpoints every
 //!   whole page as a sequence fills it — free, a shared page — so any
-//!   earlier prompt or output is reusable at page granularity; a manifest
-//!   with a recurrent state checkpoints only where a request ends (the
-//!   finished sequence's state slots become the snapshot's, nothing is
-//!   copied), so only a prompt that continues an earlier request's whole
-//!   context hits; a speculative round that accepted past `max_tokens` or
-//!   the stop leaves a state no next turn continues, which is not kept.
-//!   A `Busy` lease makes room and retries until it fits or
+//!   earlier prompt or output is reusable at page granularity. A recurrent
+//!   state cannot roll back, so a manifest with one checkpoints where its
+//!   state is worth continuing and nowhere else. Once where the next
+//!   turn's prompt parts from this one, `Request::history_tokens`: the
+//!   frontend's chat layer measured where the rendered conversation ends
+//!   and the template's generation prompt begins, since the next turn
+//!   renders the reply as history and the generation prompt anew; the
+//!   prefill stops there for it, and the page it ends inside and the
+//!   state slots are copied into the snapshot's own. And once where the
+//!   request ends (the finished sequence's state slots become the
+//!   snapshot's, nothing is copied). A next turn that continues the whole
+//!   context hits the second; one that replays a reply other than ours
+//!   (an agent trace, an edited history) still hits the first, and pays
+//!   only for the reply and what follows it. A speculative round that
+//!   accepted past `max_tokens` or the stop leaves a state no next turn
+//!   continues, which is not kept. The prompt's snapshot is an
+//!   optimization, never a reason to fail its request: `Busy` makes room
+//!   as a lease does, and when nothing is left to make room with it is
+//!   skipped. A `Busy` lease makes room and retries until it fits or
 //!   nothing is left: the least recently hit snapshot is parked into the
 //!   host tier (`--host-gib`: pinned DRAM per rank, `Tray::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
@@ -330,7 +342,7 @@ pub struct KernScheduler {
     /// one (see the module doc).
     prefix: Prefix<Snapshot, Sleeping>,
     /// Checkpoint at every page (a paged-only manifest) rather than only
-    /// where a request ends (one with a recurrent state).
+    /// where a prompt's history and a request end (one with a recurrent state).
     every_page: bool,
     warned_sampling: bool,
     stats: Stats,
@@ -356,6 +368,10 @@ struct Stats {
     resident_hit_tokens: u64,
     host_hits: u64,
     host_hit_tokens: u64,
+    /// Prompts checkpointed where their history ends (a recurrent state),
+    /// and those skipped for want of room.
+    prompt_checkpoints: u64,
+    prompt_skips: u64,
     /// Snapshots parked to the host, dropped from it for room, woken
     /// from it, and the tokens woken.
     parks: u64,
@@ -384,6 +400,8 @@ impl Stats {
             resident_hit_tokens: 0,
             host_hits: 0,
             host_hit_tokens: 0,
+            prompt_checkpoints: 0,
+            prompt_skips: 0,
             parks: 0,
             host_evictions: 0,
             wakes: 0,
@@ -484,7 +502,7 @@ impl KernScheduler {
                 Some(f) => format!("`{}`, state only", f.name),
                 None => "through steps".to_string(),
             },
-            checkpoints = if self.every_page { "every page" } else { "at request end" },
+            checkpoints = if self.every_page { "every page" } else { "at history end and request end" },
             host_gib_per_rank = (policy.host_bytes > 0).then_some(policy.host_bytes >> 30),
             "scheduler ready"
         );
@@ -601,7 +619,7 @@ impl KernScheduler {
     /// Start `q` running in `row` (past the row's prefix, `woken` from
     /// the host tier or resident): through the chunk forward when the
     /// manifest has one, else with the prompt queued for the steps.
-    fn admit_one(&mut self, q: QueuedRequest, row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<()> {
+    fn admit_one(&mut self, q: QueuedRequest, mut row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<()> {
         let id = q.id;
         let prompt = q.request.prompt_tokens.len();
         let max_tokens = q.request.max_tokens;
@@ -627,11 +645,27 @@ impl KernScheduler {
         // hands the first generated token back itself; otherwise
         // everything but the last, which is the first step's input. A
         // snapshot hit skips its tokens (never the last one). Without one
-        // the prompt past the hit is fed a token per step.
+        // the prompt past the hit is fed a token per step. A recurrent
+        // state is kept where the frontend says the next turn parts from
+        // this prompt, so the prefill stops there once.
         let (n_pre, first, pending) = match self.plan.chunk.clone() {
             Some(f) => {
                 let n_pre = if f.emits.is_some() { prompt } else { prompt - 1 };
-                let first = self.prefill(&f, &row, &ids[..n_pre], start)?;
+                let mark = (!self.every_page)
+                    .then_some(q.request.history_tokens)
+                    .flatten()
+                    .filter(|&m| m > start && m <= n_pre);
+                let first = match mark {
+                    Some(m) => {
+                        let first = self.prefill(&f, &row, &ids[..m], start)?;
+                        self.keep_prompt(&mut row, &ids[..m], id)?;
+                        match m < n_pre {
+                            true => self.prefill(&f, &row, &ids[..n_pre], m)?,
+                            false => first,
+                        }
+                    }
+                    None => self.prefill(&f, &row, &ids[..n_pre], start)?,
+                };
                 self.stats.prefill_ns += t0.elapsed().as_nanos();
                 self.stats.prefill_tokens += (n_pre - start) as u64;
                 (n_pre, first, VecDeque::new())
@@ -683,6 +717,29 @@ impl KernScheduler {
         }
         self.running.push(seq);
         Ok(())
+    }
+
+    /// The `key.len()` tokens `row` holds, which `key` names, as a snapshot
+    /// of its recurrent state. `Busy` makes room and retries; with nothing
+    /// left to make room with, a remap in flight (it lands between steps,
+    /// not here) or any other denial, the request runs on without it.
+    fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId) -> Result<()> {
+        loop {
+            match self.tray.checkpoint(row, key.len()) {
+                Ok(snap) => {
+                    self.prefix.insert(key, snap);
+                    self.stats.prompt_checkpoints += 1;
+                    return Ok(());
+                }
+                Err(Error::Denied(Denied::Busy)) if self.make_room()? => {}
+                Err(Error::Denied(d)) => {
+                    debug!(request = %id, tokens = key.len(), denied = %d, "history not kept");
+                    self.stats.prompt_skips += 1;
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     /// Room for a `Busy` lease: the coldest resident snapshot goes to
@@ -906,6 +963,8 @@ impl KernScheduler {
                 host_hits = host.map(|_| st.host_hits),
                 host_hit_tokens = host.map(|_| st.host_hit_tokens),
                 checkpoints = self.prefix.entries(),
+                prompt_checkpoints = (!self.every_page).then_some(st.prompt_checkpoints),
+                prompt_skips = (!self.every_page).then_some(st.prompt_skips),
                 evictions = st.evictions,
                 parked = host.map(|_| self.prefix.count(Tier::Parked)),
                 host_gib = host.map(|(u, _)| round(u as f64 / (1u64 << 30) as f64, 10.0)),

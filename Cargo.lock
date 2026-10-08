@@ -3018,7 +3018,7 @@ dependencies = [
 [[package]]
 name = "pegainfer-frontend"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/pegainfer?rev=f53b282f90d4548485e0955c46c6e07b72cbdb56#f53b282f90d4548485e0955c46c6e07b72cbdb56"
+source = "git+https://github.com/pegainfer-project/pegainfer?rev=18d0c29df4e9ffcda46c2900c498dc43c0bc6e2e#18d0c29df4e9ffcda46c2900c498dc43c0bc6e2e"
 dependencies = [
  "anyhow",
  "axum",
