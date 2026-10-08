@@ -18,28 +18,31 @@
 //! the connection carries the log: the head sends every stage every
 //! [`Item`] in issue order — the program, its vars and the values of each
 //! input it staged — and the last stage answers every item with its tokens
-//! (none for a program that hands none back). TCP keeps the order; there is no
-//! sequence number, no stop message and no fault message. A stage that
-//! fails exits; a closed connection ends the process on the other side.
+//! (none for a program that hands none back). TCP keeps the order, so an
+//! item's number is its place in it and every stage counts the same items
+//! alike; there is no sequence number, no stop message and no fault
+//! message. A stage that fails exits; a closed connection ends the process
+//! on the other side.
 //!
 //! The activations never touch the connection: they go GPU to GPU through
 //! the mailbox the cut wired in, and each stage's device waits for its
-//! predecessor on its own. A stage only enqueues; it synchronizes when it
-//! has nothing to enqueue (to read its clock) or when it must read tokens.
+//! predecessor on its own. A stage only enqueues; the last one waits for
+//! its tokens, nothing else waits on a device. A [`Watch`] beside each
+//! stage logs when every item left the device, and is where a device
+//! fault (a mailbox wait that gave up on a dead stage) ends the process.
 
 pub mod head;
 mod pack;
 pub mod stage;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
+use std::sync::mpsc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use kern_manifest::protocol::Axis;
-use kern_manifest::types::Fill;
-use kern_manifest::Protocol;
-use kern_runtime::{GroupRank, PeerHandle, Runtime, Topology};
+use kern_runtime::{GroupRank, Mark, PeerHandle, Runtime, Topology};
 use serde::{Deserialize, Serialize};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
@@ -152,64 +155,55 @@ fn io() -> Result<tokio::runtime::Runtime> {
     Ok(tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?)
 }
 
-/// What a stage's device spent per item, read off its clock output: one
-/// log line per item, busy and waiting on either side.
-struct Clock {
-    name: String,
-    ring: u64,
-    logged: u64,
-    /// Rows of each item issued and not yet logged, oldest first.
-    rows: VecDeque<u64>,
+/// When each item a stage issued left its device: one `pp item` line per
+/// item (its number, its rows, `issued_us` and `done_us` of the wall
+/// clock), logged by a
+/// thread that waits on the item's [`Mark`] so the issuing thread never
+/// does. A stage's period is done to done; against what the stage alone
+/// takes for the item's shape, the rest is its pipeline bubble. A fault on
+/// the device surfaces at its item's mark and ends the process.
+struct Watch {
+    marks: Option<mpsc::Sender<(u64, u64, u64, Mark)>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    next: u64,
 }
 
-impl Clock {
-    fn new(p: &Protocol) -> Result<Clock> {
-        let f = p.any(Fill::Clock).context("a cut stage declares a `clock` fill")?;
-        let Axis::Fixed(n) = f.axis else { bail!("`{}`: a clock is a fixed ring", f.name) };
-        Ok(Clock { name: f.name.clone(), ring: n / 5, logged: 0, rows: VecDeque::new() })
-    }
-
-    fn issued(&mut self, rows: u64) {
-        self.rows.push_back(rows);
-    }
-
-    /// Items issued and not yet logged.
-    fn pending(&self) -> usize {
-        self.rows.len()
-    }
-
-    /// Whether the oldest unread entry is half a ring from being overwritten.
-    fn half_full(&self) -> bool {
-        self.rows.len() as u64 >= self.ring / 2
-    }
-
-    /// Read the clock (waiting for the stage's stream) and log every item
-    /// issued since the last read.
-    fn flush(&mut self, rt: &Runtime, stage: u64) -> Result<()> {
-        if self.rows.is_empty() {
-            return Ok(());
-        }
-        let raw = rt.read_output(&self.name)?;
-        let e: Vec<i64> = raw.as_chunks::<8>().0.iter().map(|c| i64::from_le_bytes(*c)).collect();
-        let span = |a: i64, b: i64| (a != 0 && b != 0).then_some(b - a);
-        for rows in self.rows.drain(..) {
-            let k = self.logged;
-            self.logged += 1;
-            let x = &e[(k % self.ring) as usize * 5..][..5];
-            if x[0] != k as i64 + 1 {
-                tracing::warn!(stage, item = k, "pp clock entry overwritten before it was read");
-                continue;
+impl Watch {
+    fn new(stage: u64) -> Watch {
+        let (marks, rx) = mpsc::channel::<(u64, u64, u64, Mark)>();
+        let thread = std::thread::spawn(move || {
+            for (item, rows, issued_us, mark) in rx {
+                if let Err(e) = mark.wait() {
+                    tracing::error!(stage, item, "device: {e:#}");
+                    std::process::exit(1);
+                }
+                tracing::info!(stage, item, rows, issued_us, done_us = now_us(), "pp item");
             }
-            tracing::info!(
-                stage,
-                item = k,
-                rows,
-                busy_ns = span(x[2], x[3]),
-                recv_wait_ns = span(x[1], x[2]),
-                send_wait_ns = span(x[3], x[4]),
-                "pp item"
-            );
+        });
+        Watch { marks: Some(marks), thread: Some(thread), next: 0 }
+    }
+
+    /// Mark the item just issued, of `rows` rows.
+    fn issued(&mut self, rt: &Runtime, rows: u64) -> Result<()> {
+        let marks = self.marks.as_ref().expect("taken only on drop");
+        if marks.send((self.next, rows, now_us(), rt.mark()?)).is_err() {
+            bail!("the watch thread is gone");
         }
+        self.next += 1;
         Ok(())
+    }
+}
+
+fn now_us() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as u64)
+}
+
+/// The items still in flight are logged before the stage goes.
+impl Drop for Watch {
+    fn drop(&mut self) {
+        drop(self.marks.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
     }
 }

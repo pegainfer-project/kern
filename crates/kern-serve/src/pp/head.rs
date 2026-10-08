@@ -16,8 +16,7 @@
 //! goes out at once, a partial one only
 //! while fewer items than stages are in flight, so packing waits for rows
 //! only when the stages have work. The first token finishes the request.
-//! Nothing waits on the head's device but the clock read, done when
-//! nothing is in flight or the clock ring is half full.
+//! Nothing waits on the head's device; its [`Watch`] logs each item.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc;
@@ -35,7 +34,7 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use super::pack::{pack, Bounds, Waiting};
-use super::{connect_downstream, recv, send, topology, wire, Clock, Handles, Hello, Item, Reader, Table, Writer};
+use super::{connect_downstream, recv, send, topology, wire, Handles, Hello, Item, Reader, Table, Watch, Writer};
 use crate::scheduler::Facts;
 
 /// How the head loads and what it may run at once.
@@ -87,7 +86,7 @@ pub struct PpHead {
     due: VecDeque<Vec<Finish>>,
     /// The line tables as the stages last had them written.
     lines: BTreeMap<String, Vec<i64>>,
-    clock: Clock,
+    watch: Watch,
 }
 
 /// Wait for every other stage, load stage 0 at the pages they all have,
@@ -150,7 +149,6 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
     };
     let context = p.context.as_ref().map_or(usize::MAX, |c| c.max as usize);
     let bounds = Bounds { rows: chunk, seqs: prefill.groups as usize, context };
-    let clock = Clock::new(&p)?;
     let downstream: Vec<Option<Handles>> =
         (1..cut.stages).map(|s| hellos.get(&(s + 1)).map(|(x, ..)| x.mailbox.clone())).collect();
     let (tx, replies) = mpsc::channel();
@@ -181,7 +179,7 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
         active: VecDeque::new(),
         due: VecDeque::new(),
         lines: BTreeMap::new(),
-        clock,
+        watch: Watch::new(0),
     })
 }
 
@@ -368,22 +366,14 @@ impl PpHead {
             kern_run::write_named(&mut self.rt, &self.p, name, v, &item.vars)?;
         }
         self.rt.issue(&item.program, &item.vars).with_context(|| format!("`{}`", item.program))?;
-        self.clock.issued(ids.len() as u64);
+        self.watch.issued(&self.rt, ids.len() as u64)?;
         Ok(())
     }
 
-    /// Admit, send, collect, and read the clock whenever this step issued
-    /// nothing: the read waits for the head's device, which is also how a
-    /// mailbox wait that gave up on a dead stage surfaces here.
     fn advance(&mut self, ledger: &mut RequestLedger) -> Result<()> {
-        let issued = self.clock.pending();
         self.admit(ledger)?;
         self.issue()?;
-        self.collect(ledger)?;
-        if self.clock.pending() == issued || self.clock.half_full() {
-            self.clock.flush(&self.rt, 0)?;
-        }
-        Ok(())
+        self.collect(ledger)
     }
 
     /// Every answer back since the last step retires its item and finishes

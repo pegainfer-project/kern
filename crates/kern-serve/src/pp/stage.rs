@@ -15,7 +15,7 @@ use kern_runtime::{Capacity, Runtime};
 use tokio::net::TcpStream;
 use tracing::{error, info};
 
-use super::{connect_downstream, handles, recv, send, topology, wire, Clock, Hello, Item, Table};
+use super::{connect_downstream, handles, recv, send, topology, wire, Hello, Item, Table, Watch};
 
 /// How a stage loads and where its head listens.
 pub struct Stage {
@@ -94,19 +94,8 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         }
     });
 
-    let mut clock = Clock::new(&p)?;
-    loop {
-        let item = match items.try_recv() {
-            Ok(item) => item,
-            Err(mpsc::TryRecvError::Empty) => {
-                clock.flush(&rt, cut.stage)?;
-                match items.recv() {
-                    Ok(item) => item,
-                    Err(_) => break,
-                }
-            }
-            Err(mpsc::TryRecvError::Disconnected) => break,
-        };
+    let mut watch = Watch::new(cut.stage);
+    for item in items {
         let vars: Vars = item.vars.into_iter().filter(|(k, _)| rt.manifest.vars.contains_key(k)).collect();
         for &slot in &item.zero_slots {
             rt.zero_slot(slot)?;
@@ -115,7 +104,7 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
             kern_run::write_named(&mut rt, &p, name, v, &vars)?;
         }
         rt.issue(&item.program, &vars).with_context(|| format!("`{}`", item.program))?;
-        clock.issued(vars.get(&p.rows.var).copied().unwrap_or(0));
+        watch.issued(&rt, vars.get(&p.rows.var).copied().unwrap_or(0))?;
         if last {
             let emits = p.forwards.iter().find(|f| f.name == item.program).and_then(|f| f.emits);
             let tokens = match emits.map(|i| &p.fills[i]) {
@@ -128,11 +117,7 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
             };
             io.block_on(send(&mut w, &tokens))?;
         }
-        if clock.half_full() {
-            clock.flush(&rt, cut.stage)?;
-        }
     }
-    clock.flush(&rt, cut.stage)?;
     Ok(())
 }
 
