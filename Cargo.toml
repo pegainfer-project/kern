@@ -33,7 +33,7 @@ kern-run = { path = "crates/kern-run" }
 # the chat renderers, picked by the checkpoint's model_type. `vllm-chat` is the
 # same vLLM rev pegainfer pins, so the renderer tests read the crate the
 # server runs.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "f53b282f90d4548485e0955c46c6e07b72cbdb56" }
+pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "18d0c29df4e9ffcda46c2900c498dc43c0bc6e2e" }
 vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
 
 anyhow = "1"
