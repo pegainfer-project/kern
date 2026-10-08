@@ -64,8 +64,8 @@ kern 在内部 RSI 里是 kernel agent 的反馈环境（`kern test` 裁判、`k
 |---|---|---|
 | PP1 ✅ | `kern cut`（按 call 下标切、活跃性找边界、send/recv 邮箱核）+ kern-serve 一段一进程的 prefill-only 流水（head 持唯一的池，TCP 发 item，GPU 邮箱传激活） | **2026-10-07 tray07 过**：qwen3-4b 2 段，各段依次跑 logits/token 与整份逐位同（chunk 512/64）；两进程首 token 与单卡同；8193 token conc1 TTFT 313 → 174 ms（serve.md「流水线」） |
 | PP1.1 ✅ | qwen3-4b 的 KV 每层一个 state，`kern cut` 每段只带自己碰的 state、逐段报告 state 用了几成 | **2026-10-07 tray07 过**：`kern test qwen3-4b` 位一致、`kern run` 文本同；chain / serve gate 位一致；每段页数 122,993 → 245,760 |
-| PP2 | decode 走流水；K3 的 state 拆分；per-seq state（GDN）与吐 token 的 chunk program | |
-| PP3 | manifest 说得出"值从另一份 manifest 来"：跨切点的 buffer 是一种边界 kind（运行前从上游到达 / 运行后交给下游），边是 manifest 之间的有向关系，runtime 负责等、拷、通知；`kern cut` 只切 call 列表、标边界，不再生成 `pp.*` op，`pp_mailbox.cu` 退成 runtime 的一种传输（NVLink 邮箱 / RDMA / 同进程拷贝可换） | 切出的段里没有 `pp.*` op；chain / serve gate 位一致 |
+| PP3 | manifest 说得出"值从另一份 manifest 来"：跨切点的 buffer 是一种边界 kind（`edge: in` 运行前已到达，`edge: out` 运行后送出），字段只有方向、dtype 与 shape，不认"第几段"；连到谁是部署的事，不进 manifest（`cut {id, stage, stages}` 只做握手核对）；runtime 负责等、拷、通知，`pp_mailbox.cu` 退成它的一种传输（NVLink 邮箱 / RDMA / 同进程拷贝可换）；`kern cut` 只切 call 列表、标边界，不再生成 `pp.*` op，不再认识任何 kernel。EP 的 all-to-all 是这个 kind 的第二个用户，字段名为它留门 | 切出的段里没有 `pp.*` op，kern-manifest 里没有 kernel 名；verify 拒绝本段写 `in` 边界、本段不写 `out` 边界；chain / serve gate 位一致 |
+| PP2 | decode 走流水；K3 的 state 拆分；per-seq state（GDN）与吐 token 的 chunk program | 在 PP3 之后：decode 的流水用边界 kind，不用 `pp.*` op |
 | EP-PP | EP 也一卡一进程：head 持 N 个池、全连握手分发 handle 与 NcclId、每步给每个 rank 发它自己的 item、token 回 head；`Tray` 的单进程多 runtime 路径删除；manifest 不变 | K3 EP8 decode 跨两 tray 进 kern-serve，conc1 文本与单 tray 同；每 rank 的 `pp item` 时间线 |
 
 ## 协议线
