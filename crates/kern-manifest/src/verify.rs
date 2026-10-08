@@ -211,6 +211,10 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
         }
     };
 
+    if m.topology.as_ref().is_some_and(|t| t.replicated_rows) {
+        group_ctx("tp", &mut errs, &mut used_groups, "topology.replicated_rows");
+    }
+
     // 3. states
     for (name, st) in &m.states {
         let set = [st.bytes_per_token, st.bytes, st.bytes_per_seq].iter().filter(|&&b| b > 0).count();

@@ -7,6 +7,10 @@ tools/kernel-capture/libkernelcapture.so
 # 派生产物：extract_kernels.sh 从 dump 拷的 module + nvcc 编的自写核
 /kernels
 /kernels-qwen38
+/kernels-glm53
+/kernels-glm53-handwritten
+/dumped-kernels-glm53-sglang
+/glm53-artifacts
 /.wrangler/
 /test-report.json
 /kernels-qwen38-dflash2

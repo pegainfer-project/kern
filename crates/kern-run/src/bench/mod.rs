@@ -330,15 +330,28 @@ fn output_fingerprints(rt: &Runtime, p: &Protocol, groups: usize) -> Result<Vec<
 /// context from. Copying keeps each sequence on its own pages, so a batch
 /// reads as much memory as distinct sequences would, and a long context
 /// costs a copy instead of its prefill.
+///
+/// A replicated-rows manifest has no chunk program by protocol ("prefill
+/// through steps"), so its prefix runs through the one-row step exactly
+/// the way the serving loop ingests a prompt.
 fn source(rt: &mut Runtime, p: &Protocol, length: usize, corpus: &[i64], seq: usize) -> Result<Option<Lease>> {
     if length == 0 {
         return Ok(None);
     }
-    let chunk = p.chunk().context("a prefix needs a variable-row program")?.name.clone();
+    let (chunk, width) = match p.chunk() {
+        Some(f) => (f.name.clone(), p.rows.max as usize),
+        None => (
+            p.forward(1, kern_manifest::protocol::Rows::Const(1))
+                .context("a prefix needs a variable-row program or a one-row step")?
+                .name
+                .clone(),
+            1,
+        ),
+    };
     let lease = rt.lease(length)?;
     let mut pos = 0;
     while pos < length {
-        let q = (length - pos).min(p.rows.max as usize);
+        let q = (length - pos).min(width);
         let vars = stage(rt, p, std::slice::from_ref(&lease), &[pos], q, &tokens(corpus, seq, pos, q))?;
         if !rt.is_captured(&chunk, &vars) {
             rt.capture(&chunk, &vars)?;

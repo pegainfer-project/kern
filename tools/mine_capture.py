@@ -246,9 +246,14 @@ def analyze_sites(forwards, tokens_per_forward):
             site = {"grid": [fit([(t, r["grid"][ax]) for t, r in recs]) for ax in range(3)]}
             p0 = recs[0][1].get("params")
             if isinstance(p0, list):
+                # Param staging can differ across forwards at one call site
+                # (e.g. a launch that staged no bytes once); classify only
+                # the prefix every sample has.
+                n_params = min(len(r.get("params") or []) for _, r in recs)
+                n_params = min(n_params, len(p0))
                 site["params"] = [
                     classify_param(pi, [(t, r["params"][pi]) for t, r in recs])
-                    for pi in range(len(p0))
+                    for pi in range(n_params)
                 ]
             else:
                 site["params"] = p0  # null 或 "unknown-layout"，原样透传

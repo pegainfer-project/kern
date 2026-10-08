@@ -224,6 +224,11 @@ pub struct Topology {
     /// Group name to member count, e.g. `{"ep": 4}`.
     #[serde(deserialize_with = "unique_map")]
     pub groups: BTreeMap<String, u64>,
+    /// Serve each TP group with identical logical rows in identical order and
+    /// paged state on every member. No rotated tray axis or `blocks` fill.
+    /// Currently supports one-row steps only (prefill through steps).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub replicated_rows: bool,
 }
 
 /// A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.

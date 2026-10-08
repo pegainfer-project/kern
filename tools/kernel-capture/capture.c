@@ -30,6 +30,8 @@
 #define _GNU_SOURCE
 #include <cupti.h>
 #include <cuda.h>
+#include <cuda_runtime.h>
+#include <cudaTypedefs.h>
 // cuLaunchKernel_params / cuLaunchKernelEx_params come from
 // generated_cuda_meta.h, which cupti.h already includes transitively.
 
@@ -546,6 +548,29 @@ static void CUPTIAPI callback(void *userdata, CUpti_CallbackDomain domain,
     record_launch(data->symbolName, p->f, cfg->gridDimX, cfg->gridDimY,
                   cfg->gridDimZ, cfg->blockDimX, cfg->blockDimY, cfg->blockDimZ,
                   cfg->sharedMemBytes, p->kernelParams);
+  } else if (cbid == CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000) {
+    // Kernels launched through the runtime API never hit the driver-API
+    // callbacks (FlashInfer sm90 sparse MLA, FA3, DeepGEMM paged MQA logits
+    // all launch this way). symbolName carries the kernel's mangled name;
+    // the host stub resolves to the same CUfunction the driver sees.
+    const cudaLaunchKernel_v7000_params *p =
+        (const cudaLaunchKernel_v7000_params *)data->functionParams;
+    CUfunction cf = NULL;
+    if (cudaGetFuncBySymbol(&cf, p->func) == cudaSuccess && cf) {
+      record_launch(data->symbolName, cf, p->gridDim.x, p->gridDim.y,
+                    p->gridDim.z, p->blockDim.x, p->blockDim.y, p->blockDim.z,
+                    (unsigned int)p->sharedMem, p->args);
+    }
+  } else if (cbid == CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060) {
+    const cudaLaunchKernelExC_v11060_params *p =
+        (const cudaLaunchKernelExC_v11060_params *)data->functionParams;
+    CUfunction cf = NULL;
+    if (cudaGetFuncBySymbol(&cf, p->func) == cudaSuccess && cf) {
+      const cudaLaunchConfig_t *cfg = p->config;
+      record_launch(data->symbolName, cf, cfg->gridDim.x, cfg->gridDim.y,
+                    cfg->gridDim.z, cfg->blockDim.x, cfg->blockDim.y,
+                    cfg->blockDim.z, (unsigned int)cfg->dynamicSmemBytes, p->args);
+    }
   }
 }
 
@@ -581,6 +606,10 @@ int InitializeInjection(void) {
                       CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx);
   cuptiEnableCallback(1, g_subscriber, CUPTI_CB_DOMAIN_DRIVER_API,
                       CUPTI_DRIVER_TRACE_CBID_cuTensorMapEncodeTiled);
+  cuptiEnableCallback(1, g_subscriber, CUPTI_CB_DOMAIN_RUNTIME_API,
+                      CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000);
+  cuptiEnableCallback(1, g_subscriber, CUPTI_CB_DOMAIN_RUNTIME_API,
+                      CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060);
   fprintf(stderr, "[kernel-capture] active, writing to %s\n", g_out_dir);
   return 1;
 }

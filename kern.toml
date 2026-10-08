@@ -44,3 +44,19 @@ weights   = ["weights/Qwen3.8-27B"]
 manifest  = "examples/qwen3.8-27b-dflash2.json"
 kernels   = "kernels-qwen38-dflash2"
 weights   = ["weights/Qwen3.8-27B", "weights/Qwen3.8-27B-DFlash2"]
+
+# GLM-5.3-Flash TP8 decode (mined sglang kernels, tools/glm53/gen.py). The
+# committed fixture is 4 layers; the full 45-layer manifest is
+# `python3 tools/glm53/gen.py --bundle kernels-glm53` (CPU-only).
+[targets.glm53-flash]
+manifest  = "examples/glm53-flash-4l.json"
+kernels   = "kernels-glm53"
+weights   = ["weights/GLM-5.3-Flash"]
+
+# Experimental GLM-5.3-Flash MTP: k-step speculative rounds (rows=k+1, TP8).
+# The manifest is not committed; generate it with
+# `python3 tools/glm53/gen.py --mtp --mtp-steps 6 --bundle kernels-glm53`.
+[targets.glm53-flash-mtp]
+manifest  = "examples/glm53-flash-mtp.json"
+kernels   = "kernels-glm53"
+weights   = ["weights/GLM-5.3-Flash"]

@@ -248,7 +248,7 @@ fn forwards(p: &Protocol, s: &Shape) -> std::result::Result<Vec<String>, String>
     if s.groups * s.rows > p.rows.max as usize {
         return Err(format!("{} rows exceeds the manifest's {}", s.groups * s.rows, p.rows.max));
     }
-    if s.context.iter().any(|&n| n > 0) && p.chunk().is_none() {
+    if s.context.iter().any(|&n| n > 0) && p.chunk().is_none() && p.forward(1, Rows::Const(1)).is_none() {
         return Err("a prefix needs a rows-as-fed program and this manifest has none".into());
     }
     let taken: Vec<String> = [Rows::Const(s.rows as u64), Rows::Var]
