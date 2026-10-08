@@ -58,6 +58,7 @@ use device::{alloc, DeviceBuf, Pinned};
 pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
+pub use exec::Mark;
 pub use harness::Scratch;
 pub use host::HostRegion;
 pub use host_weights::HostWeights;

@@ -19,18 +19,61 @@
 //! Ranks whose kernels wait on each other (an EP dispatch, a tray
 //! collective) must all be issued before any is waited for: `enqueue` or
 //! `issue` each, then [`Runtime::synchronize`] each.
+//!
+//! A caller that wants to know when the device got somewhere without
+//! stopping the thread that issues takes a [`Mark`] and waits on it from
+//! another thread.
 
 use std::collections::BTreeMap;
 use std::os::raw::c_void;
+use std::sync::Arc;
 
-use cudarc::driver::sys;
+use cudarc::driver::{sys, CudaContext};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
 use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn};
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
 
+/// A point on the compute stream: everything issued before
+/// [`Runtime::mark`]. [`Mark::wait`] sleeps until the device has passed it,
+/// on any thread, and returns the fault of any launch before it.
+pub struct Mark {
+    ctx: Arc<CudaContext>,
+    event: sys::CUevent,
+}
+
+// The event is a handle into the context the mark carries; waiting binds
+// that context, so the mark may be waited on from any thread.
+unsafe impl Send for Mark {}
+
+impl Mark {
+    pub fn wait(self) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        cuda_check(unsafe { sys::cuEventSynchronize(self.event) }, "cuEventSynchronize")
+    }
+}
+
+impl Drop for Mark {
+    fn drop(&mut self) {
+        unsafe { sys::cuEventDestroy_v2(self.event) };
+    }
+}
+
 impl Runtime {
+    /// Mark the compute stream where it is now. The event blocks rather
+    /// than spins, so a thread waiting on it costs no core.
+    pub fn mark(&self) -> Result<Mark> {
+        self.ctx.bind_to_thread()?;
+        let mut event: sys::CUevent = std::ptr::null_mut();
+        let flags =
+            sys::CUevent_flags::CU_EVENT_DISABLE_TIMING as u32 | sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC as u32;
+        cuda_check(unsafe { sys::cuEventCreate(&mut event, flags) }, "cuEventCreate")?;
+        let mark = Mark { ctx: self.ctx.clone(), event };
+        cuda_check(unsafe { sys::cuEventRecord(mark.event, self.stream.cu_stream()) }, "cuEventRecord")?;
+        Ok(mark)
+    }
+
     fn require_ready(&self) -> Result<()> {
         if self.awaits_host() {
             bail!(Api, "the manifest's host states are not bound; bind_host before executing programs");
