@@ -5,7 +5,7 @@ use vllm_chat::{ChatMessage, ChatRenderer, ChatRequest, DeepSeekV4ChatRenderer};
 fn native_nonthinking_user_prompt_matches_supplied_v41_encoding() {
     let mut request = ChatRequest { messages: vec![ChatMessage::user("Hello.")], ..ChatRequest::for_test() };
     request.chat_options.template_kwargs.insert("thinking".into(), serde_json::Value::Bool(false));
-    let actual = DeepSeekV4ChatRenderer::new().render(&request).unwrap().prompt.into_text().unwrap();
+    let actual = DeepSeekV4ChatRenderer::new(Default::default()).render(&request).unwrap().prompt.into_text().unwrap();
     // Generated with the supplied encoding.py encode_messages(..., thinking_mode="chat").
     // This deliberately covers only the common nonthinking text format; V4.1
     // changes system messages, reasoning effort and tool tags.
@@ -64,7 +64,7 @@ fn v41_matches_released_reference_text_cases() {
         {
             request.chat_options.template_kwargs.insert(key.into(), case[source].clone());
         }
-        let rendered = DeepSeekV41ChatRenderer::new().render(&request);
+        let rendered = DeepSeekV41ChatRenderer::new(Default::default()).render(&request);
         if case["error"] == Value::Bool(true) {
             assert!(rendered.is_err(), "{} should fail", case["name"]);
         } else {
@@ -83,21 +83,19 @@ fn v41_matches_released_reference_text_cases() {
 
 #[test]
 fn v41_typed_reasoning_effort_controls_numeric_budget() {
-    use vllm_chat::{DeepSeekV41ChatRenderer, ReasoningEffort};
-    for (effort, budget) in [
-        (ReasoningEffort::Low, 25),
-        (ReasoningEffort::High, 50),
-        (ReasoningEffort::XHigh, 75),
-        (ReasoningEffort::Max, 100),
-    ] {
+    use vllm_chat::{DeepSeekV41ChatRenderer, EffortValue};
+    let render = |request: &ChatRequest| DeepSeekV41ChatRenderer::new(Default::default()).render(request);
+    for (effort, budget) in [("low", 50), ("high", 75), ("xhigh", 75), ("max", 100)] {
         let mut request = ChatRequest::for_test();
-        request.chat_options.reasoning_effort = Some(effort);
-        let prompt = DeepSeekV41ChatRenderer::new().render(&request).unwrap().prompt.into_text().unwrap();
+        request.chat_options.reasoning_effort = Some(EffortValue::from(effort));
+        let prompt = render(&request).unwrap().prompt.into_text().unwrap();
         assert!(
             prompt.starts_with(&format!("<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: {budget} (range 1-100,"))
         );
     }
-    let mut request = ChatRequest::for_test();
-    request.chat_options.reasoning_effort = Some(ReasoningEffort::Medium);
-    assert!(DeepSeekV41ChatRenderer::new().render(&request).is_err());
+    for effort in ["minimal", "medium"] {
+        let mut request = ChatRequest::for_test();
+        request.chat_options.reasoning_effort = Some(EffortValue::from(effort));
+        assert!(render(&request).is_err(), "{effort}");
+    }
 }
