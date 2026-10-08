@@ -4,7 +4,7 @@
 //!
 //! Checks:
 //!   1. schema_version
-//!   2. vars: max > 0
+//!   2. vars: max > 0, at most one var per axis
 //!   3. states: exactly one of bytes_per_token / bytes / bytes_per_seq is non-zero,
 //!      or none of them and a well-formed `host` layout; a host state is never
 //!      exported (`of`); a domain may index it, declaring the host's ids
@@ -185,6 +185,12 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
     for (name, v) in &m.vars {
         if v.max < Var::MIN {
             errs.push(format!("var `{name}`: max must be >= {}", Var::MIN));
+        }
+    }
+    for axis in [VarAxis::Rows, VarAxis::Groups, VarAxis::Tray] {
+        let named: Vec<&String> = m.vars.iter().filter(|(_, v)| v.axis == Some(axis)).map(|(n, _)| n).collect();
+        if named.len() > 1 {
+            errs.push(format!("vars {named:?} all count the `{axis}` axis; one var does"));
         }
     }
     let vars_max: BTreeMap<String, u64> = m.vars.iter().map(|(k, v)| (k.clone(), v.max)).collect();

@@ -3,13 +3,13 @@
  "model": "kimi-k3-pruned-75pct/4l/ep8",
  "vars": {
   "tokens": {
-   "max": 8
+   "max": 8, "axis": "rows"
   },
   "seqs": {
-   "max": 8
+   "max": 8, "axis": "groups"
   },
   "rows": {
-   "max": 8
+   "max": 8, "axis": "tray"
   },
   "span": {
    "max": 8

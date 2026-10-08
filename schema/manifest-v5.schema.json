@@ -2118,6 +2118,17 @@
       "additionalProperties": false,
       "description": "A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.",
       "properties": {
+        "axis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VarAxis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The axis of a call this var counts, for the serving loop: every buffer shaped over it has one entry per element of that axis, e.g. `\"rows\"`. At most one var per axis; a manifest with a `batch` names a `rows` var and a `groups` var. Absent for a var that sizes something else (a run's length, a context)."
+        },
         "max": {
           "anyOf": [
             {
@@ -2139,6 +2150,26 @@
         "max"
       ],
       "type": "object"
+    },
+    "VarAxis": {
+      "description": "What a var counts in one call of a program: this rank's rows, its sequences, or the rows of the whole tray batch. The runtime never reads it.",
+      "oneOf": [
+        {
+          "const": "rows",
+          "description": "One per row of this rank's call, e.g. `tokens`.",
+          "type": "string"
+        },
+        {
+          "const": "groups",
+          "description": "One per sequence of this rank's call, e.g. `seqs`.",
+          "type": "string"
+        },
+        {
+          "const": "tray",
+          "description": "One per row of the whole tray batch, this rank's rows first, e.g. a `tp` manifest's `rows`.",
+          "type": "string"
+        }
+      ]
     },
     "When": {
       "additionalProperties": false,

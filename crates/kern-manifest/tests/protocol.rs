@@ -89,7 +89,11 @@ fn plain_contract() {
     assert_eq!((p.rows.var.as_str(), p.rows.max, p.groups.var.as_str(), p.groups.max), ("tokens", 8, "seqs", 4));
     assert_eq!(p.tray, None);
     assert_eq!(
-        (p.token_rows().name.as_str(), p.slots().name.as_str(), p.seq_lens().name.as_str()),
+        (
+            p.token_rows().unwrap().name.as_str(),
+            p.any(Fill::Slot).unwrap().name.as_str(),
+            p.any(Fill::SeqLen).unwrap().name.as_str()
+        ),
         ("token_ids", "slot_mapping", "seq_lens")
     );
     assert_eq!(p.any(Fill::CuSeqlens).map(|f| f.axis), Some(Axis::Fixed(5)));
@@ -196,7 +200,7 @@ fn span_rules() {
 fn tray_contract() {
     let p = protocol(&tray()).unwrap();
     assert_eq!(p.tray, Some(Bound { var: "rows".into(), max: 32 }));
-    assert_eq!(p.token_rows().axis, Axis::Tray);
+    assert_eq!(p.token_rows().unwrap().axis, Axis::Tray);
     assert_eq!(p.line_tables[0].axis, Axis::Tray);
     assert_eq!(p.any(Fill::Error).map(|f| f.name.as_str()), Some("tp_err"));
     assert_eq!(p.once, vec!["tp_init".to_string()]);
@@ -206,27 +210,36 @@ fn tray_contract() {
 #[test]
 fn encodes_by_dtype() {
     let p = protocol(&plain()).unwrap();
-    assert_eq!(p.seq_lens().encode(&[3, -1]), vec![3, 0, 0, 0, 255, 255, 255, 255]);
-    assert_eq!(p.slots().encode(&[2]), 2i64.to_le_bytes());
-    assert_eq!(p.seq_lens().decode(&[7, 0, 0, 0]), vec![7]);
+    let (slots, seq_lens) = (p.any(Fill::Slot).unwrap(), p.any(Fill::SeqLen).unwrap());
+    assert_eq!(seq_lens.encode(&[3, -1]), vec![3, 0, 0, 0, 255, 255, 255, 255]);
+    assert_eq!(slots.encode(&[2]), 2i64.to_le_bytes());
+    assert_eq!(seq_lens.decode(&[7, 0, 0, 0]), vec![7]);
 }
 
+/// The axes are the vars', not the roles': a manifest may read no slot and
+/// no length (a pipeline stage past the first) and still have both axes.
 #[test]
-fn missing_pieces_are_all_named() {
+fn axes_are_declared_on_the_vars() {
     let mut m = plain();
-    m.buffers.get_mut("slot_mapping").unwrap().fill = None;
     m.buffers.get_mut("seq_lens").unwrap().fill = None;
+    m.buffers.get_mut("token_ids").unwrap().fill = None;
+    let p = protocol(&m).unwrap();
+    assert_eq!((p.rows.var.as_str(), p.groups.var.as_str(), p.token_rows()), ("tokens", "seqs", None));
+    let mut m = plain();
+    m.vars.get_mut("tokens").unwrap().axis = None;
+    m.vars.get_mut("seqs").unwrap().axis = None;
     let Err(e) = protocol(&m) else { panic!() };
     assert_eq!(e.len(), 2);
-    rejects(&m, "no input has fill `slot`");
-    rejects(&m, "no input has fill `seq_len`");
+    rejects(&m, "no var has `axis: rows`");
+    rejects(&m, "no var has `axis: groups`");
+    let mut m = plain();
+    m.vars.insert("other".into(), serde_json::from_str(r#"{"max": 8}"#).unwrap());
+    m.buffers.get_mut("positions").unwrap().shape = vec![Dim::Var("other".into())];
+    rejects(&m, "fill `position` `positions` is over var `other`, which counts no axis");
 }
 
 #[test]
 fn shape_rules() {
-    let mut m = plain();
-    m.buffers.get_mut("token_ids").unwrap().shape = vec![Dim::Var("seqs".into())];
-    rejects(&m, "no input has fill `token` over the rows");
     let mut m = plain();
     m.buffers.get_mut("cu_seqlens_q").unwrap().shape = vec![Dim::Const(4)];
     rejects(&m, "expected [n] with n >= groups + 1");
@@ -238,7 +251,7 @@ fn shape_rules() {
     rejects(&m, "column per row");
     let mut m = plain();
     m.buffers.get_mut("seq_lens").unwrap().shape = vec![Dim::Var("tokens".into())];
-    rejects(&m, "both over var `tokens`");
+    rejects(&m, "expected [groups]");
 }
 
 #[test]

@@ -119,7 +119,7 @@ def manifest(
     return {
         "schema_version": 5,
         "model": name,
-        "vars": {"tokens": {"max": tokens_max}, "seqs": {"max": seqs_max}},
+        "vars": {"tokens": {"max": tokens_max, "axis": "rows"}, "seqs": {"max": seqs_max, "axis": "groups"}},
         "states": states,
         "buffers": buffers,
         "modules": {"toy": {"source": src, "sha256": sha}},

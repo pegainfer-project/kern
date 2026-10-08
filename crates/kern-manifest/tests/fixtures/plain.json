@@ -1,6 +1,6 @@
 {
   "schema_version": 5, "model": "t",
-  "vars": {"tokens": {"max": 8}, "seqs": {"max": 4}},
+  "vars": {"tokens": {"max": 8, "axis": "rows"}, "seqs": {"max": 4, "axis": "groups"}},
   "states": {"kv": {"bytes_per_token": 1}, "gdn": {"bytes_per_seq": 24}},
   "buffers": {
     "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token"},

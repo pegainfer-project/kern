@@ -1058,7 +1058,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
     return normalize({
         "schema_version": SCHEMA_VERSION,
         "model": "qwen3-4b-dspark" if spec else "qwen3-4b",
-        "vars": {"tokens": {"max": CHUNK_MAX}, "seqs": {"max": MAX_SEQS}},
+        "vars": {"tokens": {"max": CHUNK_MAX, "axis": "rows"}, "seqs": {"max": MAX_SEQS, "axis": "groups"}},
         "states": states,
         "buffers": buffers,
         "ops": kernels,

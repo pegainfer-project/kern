@@ -250,6 +250,31 @@ pub struct Cut {
 pub struct Var {
     /// Upper bound, e.g. `2048` for the token count of a prefill chunk.
     pub max: u64,
+    /// The axis of a call this var counts, for the serving loop: every buffer shaped over it has one entry per element of that axis, e.g. `"rows"`. At most one var per axis; a manifest with a `batch` names a `rows` var and a `groups` var. Absent for a var that sizes something else (a run's length, a context).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<VarAxis>,
+}
+
+/// What a var counts in one call of a program: this rank's rows, its sequences, or the rows of the whole tray batch. The runtime never reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VarAxis {
+    /// One per row of this rank's call, e.g. `tokens`.
+    Rows,
+    /// One per sequence of this rank's call, e.g. `seqs`.
+    Groups,
+    /// One per row of the whole tray batch, this rank's rows first, e.g. a `tp` manifest's `rows`.
+    Tray,
+}
+
+impl fmt::Display for VarAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            VarAxis::Rows => "rows",
+            VarAxis::Groups => "groups",
+            VarAxis::Tray => "tray",
+        })
+    }
 }
 
 impl Var {

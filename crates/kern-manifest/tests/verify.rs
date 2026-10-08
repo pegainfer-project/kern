@@ -81,6 +81,14 @@ fn assert_err(v: serde_json::Value, needle: &str) {
 }
 
 #[test]
+fn one_var_per_axis() {
+    let mut v = base();
+    v["vars"]["tokens"]["axis"] = serde_json::json!("rows");
+    v["vars"]["more"] = serde_json::json!({"max": 4, "axis": "rows"});
+    assert_err(v, "all count the `rows` axis");
+}
+
+#[test]
 fn base_manifest_verifies() {
     check(base()).unwrap();
 }

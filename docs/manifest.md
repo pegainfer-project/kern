@@ -38,7 +38,9 @@ cut                          cut      流水线的一段：id、第几段、共�
 - `vars`：caller 每次调用时提供的标量（如 `tokens`），声明 `max`，下界
   恒为 1；所有静态校验在界上进行，运行时拒绝越界值。**会改变内存尺寸或
   launch 几何的标量才是 var**；别的标量（temperature 之类）是数据，走
-  `[1]` 形状的 input buffer。
+  `[1]` 形状的 input buffer。可选的 `axis`（`rows` / `groups` / `tray`）
+  说这个 var 数的是一次调用的哪根轴——本卡的行、本卡的序列、整个 tray
+  batch 的行——每根轴至多一个 var；runtime 不读它（见「Serving 协议」）。
 - `states`：不透明持久内存。**runtime 只知道字节数**——`bytes_per_token`
   （按 token 容量伸缩：paged KV）、`bytes_per_seq`（每个活跃序列一个
   slot：GDN 的 conv + SSM 递归状态；runtime 供应 `seqs.max + 2` 个 slot，
@@ -379,11 +381,14 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   值一张图是 manifest 作者量过才知道、runtime 猜不到的事，所以写在这里；
   `--eager` 只是调试开关，全部按 launch 跑。要求有 `batch`。
 
-轴全部从 fill 派生：行轴的 var 是 `slot` fill 的维（`tokens`），组轴的
-var 是 `seq_len` fill 的维（`seqs`），fill 或 line 表跨过的第三个 var 是
-tray 轴（k3 的 `rows`）；manifest 里没有一个名字是 caller 认得的。派生
-这层的是 `kern_manifest::Protocol::check(&Manifest)`（纯函数，不碰 GPU，
-verify 之后的第二遍）：每个 fill 至多一个 buffer、形状与角色相符、
+轴是 var 自己声明的（`axis: rows` 的 `tokens`、`axis: groups` 的 `seqs`、
+`axis: tray` 的 k3 `rows`），fill 只说角色，不定轴：一份不读 `seq_len`
+的 manifest 照样有序列轴，流水线首段之外的段根本不吃 token（v5 之前轴从
+`slot` / `seq_len` fill 所在的维反推，于是每个 forward 都"必须"有这两个
+角色——把 scheduler 的习惯写成了函数的类型）。manifest 里没有一个名字是
+caller 认得的。读这层的是 `kern_manifest::Protocol::check(&Manifest)`
+（纯函数，不碰 GPU，verify 之后的第二遍）：有 `batch` 就得有 rows 与
+groups 两根轴的 var、每个 fill 至多一个 buffer、形状与角色相符、
 `[seqs, r]` 的 `tokens` 的 r 是某个 `batch` 的 `rows`、`count` 只在有它时
 合法、两个 program 不得同形状（span 算形状的一部分）、`groups × rows ≤
 tokens.max`、`span` 只落在 `rows: 1` 的 program 上、全 manifest 一个 span
@@ -435,7 +440,8 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
   组两端装的是不同的 manifest，只在 `of` buffer（同名同字节数的
   `pp.<e>.box`，上游那份是不用的 workspace + export）上对上——
   `import_peers` 本来就只按名字和字节数匹配，runtime 不用改。
-- 首段之外不需要 `token` fill（`Protocol` 只对 `cut.stage == 0` 要求它）。
+- 首段之外的段没有 `token` fill，也常常没有 `seq_len`（长度随激活从邮箱来），
+  `Protocol` 对它们没有特判：轴写在 var 上，角色有就用。
   一个 chunk program 若自己吐 token（hybrid GDN）则拒切：prefill-only 的
   流水线约定首个 token 从一行的 step program 出。
 
