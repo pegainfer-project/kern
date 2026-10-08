@@ -348,7 +348,6 @@ impl Protocol {
                 Fill::Tokens => axis == Axis::Groups || (axis == Axis::Tray && width == 1),
                 Fill::SpanAt | Fill::Error => axis == Axis::Fixed(1) && b.dtype == DType::I32,
                 Fill::Blocks => matches!(axis, Axis::Fixed(n) if n >= 2) && b.dtype == DType::I32,
-                Fill::Clock => matches!(axis, Axis::Fixed(n) if n > 0 && n % 5 == 0) && b.dtype == DType::I64,
             };
             if !ok {
                 errs.push(format!(
@@ -362,7 +361,6 @@ impl Protocol {
                         Fill::Tokens => "expected [groups], [groups, w] or [tray]",
                         Fill::SpanAt | Fill::Error => "expected i32 [1]",
                         Fill::Blocks => "expected i32 [members + 1]",
-                        Fill::Clock => "expected i64 [ring × 5]",
                     }
                 ));
                 continue;
@@ -383,16 +381,8 @@ impl Protocol {
         if fills.iter().filter(|f| f.fill == Fill::Token && f.axis == Axis::Groups).count() > 1 {
             errs.push("fill `token` over the sequences is on more than one buffer".into());
         }
-        for fill in [
-            Fill::Position,
-            Fill::Valid,
-            Fill::CuSeqlens,
-            Fill::SpanAt,
-            Fill::Blocks,
-            Fill::Count,
-            Fill::Error,
-            Fill::Clock,
-        ] {
+        for fill in [Fill::Position, Fill::Valid, Fill::CuSeqlens, Fill::SpanAt, Fill::Blocks, Fill::Count, Fill::Error]
+        {
             if one(fill).is_none() && m.buffers.values().any(|b| b.fill == Some(fill)) {
                 errs.push(format!("fill `{fill}` is on more than one buffer"));
             }

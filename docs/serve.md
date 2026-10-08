@@ -577,8 +577,14 @@ pages }`；之后同一条 TCP（tokio-util `LengthDelimitedCodec` + JSON）上 
 激活不走 TCP，走 GPU 上的邮箱（manifest.md「流水线切分」），各段设备自己等上游。没有序号、
 stop、fault 消息：任何错误进程退出，连接断了对端退出；设备上的邮箱等待 60 s 超时 trap。
 只做 prefill：prompt 除末 token 按 chunk 走 chunk program，末 token 走一行的 step，首 token 即结束
-（`max_tokens` 视为 1）。每段每个 item 一行 `pp item` 日志：rows、busy_ns、recv_wait_ns、send_wait_ns
-（读 `clock` fill，空闲时读，不加协议消息）。
+（`max_tokens` 视为 1）。item 的编号是它在 TCP 上的次序，各段数得一样。每段 issue 完一个 item 就打一个
+`Runtime::mark`（event），旁边一个线程等它，落地时记一行 `pp item`：stage、item、rows、`issued_us`、
+`done_us`（墙钟）。host 上谁也不为它停：段的周期 = 相邻 done 之差；按 item 号把各段的行拼起来，段 s 开始
+item k = max(本段 issue k、本段 done k−1、上游 done k)，于是每段每 item 的空等与占用都有了
+（`tools/pp_timeline.py`，带 `--gantt`；跨 tray 的段用 `--skew` 扣两台机器的时钟差）。占用里含等下游取走的
+时间，要拆出纯计算就拿该段单独跑这个形状的时间（`kern bench` 段 manifest）去比。
+设备上的 fault（邮箱等待超时 trap）在该 item 的 mark 上冒出来，进程退出。下表的 busy / wait 列是当时
+设备上 globaltimer 打点量的（`clock` fill，已删：它让输出不再是 forward 的纯函数）。
 
 门禁（qwen3-4b，切在 `l18.qkv_proj` 前，2 段）：
 - 只切不分进程：`pp_chain` 各段依次跑 vs 整份，7 条 prompt（1–2049 token），chunk 512 × 8 步、

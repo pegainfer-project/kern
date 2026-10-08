@@ -104,7 +104,7 @@ fn main() -> anyhow::Result<()> {
                             Fill::CuSeqlens => vec![0, rows as i64],
                             Fill::SpanAt => vec![0],
                             Fill::Blocks => anyhow::bail!("unexpected collective row blocks in DP manifest"),
-                            Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock => continue,
+                            Fill::Tokens | Fill::Count | Fill::Error => continue,
                         };
                         rt.write_input_at(&f.name, &f.encode(&values), &vars)?;
                     }
@@ -159,7 +159,7 @@ fn main() -> anyhow::Result<()> {
                                 Fill::CuSeqlens => vec![0, 6],
                                 Fill::SpanAt => vec![0],
                                 Fill::Blocks => anyhow::bail!("unexpected blocks"),
-                                Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock => continue,
+                                Fill::Tokens | Fill::Count | Fill::Error => continue,
                             };
                             rt.write_input_at(&f.name, &f.encode(&values), &dv)?;
                         }

@@ -428,10 +428,9 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
   pp.post_empty`；邮箱 `pp.<e>.box`（`u8[256 + 最大载荷]`）在下游 GPU 上，
   `full` / `empty` 两个计数在头里，上游经 `pp.<e>.peer` 远程写。等待在设备
   上自旋，超时（60 s）`__trap`——进程死于 launch failure，不会挂住。
-- 每段声明 `pp.clock`（`fill: clock`，`i64 [256 × 5]` output）：第 k 项 =
-  {k+1, 收等开始, 收等结束, 发等开始, 发等结束}（globaltimer ns），首段的
-  "收等结束"是本段开始、末段的"发等开始"是本段结束，于是每段 busy = 发等
-  开始 − 收等结束。item 下标由邮箱计数在设备上导出，不需要输入。
+- 切分只加传输，不加观测：首段没有 recv、末段没有 send，各段的输出都是
+  forward 的纯函数。一个 item 什么时候离开设备是 serving 外壳的事（host 上
+  等 event，见 serve.md「流水线」）。
 - 非末段声明拓扑组 `pp.<e>`（大小 2，本段是 0 号）。**这里放宽了 SPMD**：
   组两端装的是不同的 manifest，只在 `of` buffer（同名同字节数的
   `pp.<e>.box`，上游那份是不用的 workspace + export）上对上——

@@ -1012,11 +1012,6 @@
           "const": "error",
           "description": "Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.",
           "type": "string"
-        },
-        {
-          "const": "clock",
-          "description": "Output: a pipeline stage's clock, `i64 [ring × 5]`: entry `item % ring` is {item + 1, receive wait begin, end, send wait begin, end} in globaltimer ns, 0 where the stage has no such edge. A cut declares it; the stage reads it when it pleases.",
-          "type": "string"
         }
       ]
     },

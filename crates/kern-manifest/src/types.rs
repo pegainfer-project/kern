@@ -203,8 +203,6 @@ pub enum Fill {
     Count,
     /// Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.
     Error,
-    /// Output: a pipeline stage's clock, `i64 [ring × 5]`: entry `item % ring` is {item + 1, receive wait begin, end, send wait begin, end} in globaltimer ns, 0 where the stage has no such edge. A cut declares it; the stage reads it when it pleases.
-    Clock,
 }
 
 impl fmt::Display for Fill {
@@ -221,7 +219,6 @@ impl fmt::Display for Fill {
             Fill::Tokens => "tokens",
             Fill::Count => "count",
             Fill::Error => "error",
-            Fill::Clock => "clock",
         })
     }
 }

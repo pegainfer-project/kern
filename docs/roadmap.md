@@ -62,7 +62,7 @@ kern 在内部 RSI 里是 kernel agent 的反馈环境（`kern test` 裁判、`k
 
 | 级 | 内容 | 门禁 |
 |---|---|---|
-| PP1 ✅ | `kern cut`（按 call 下标切、活跃性找边界、send/recv 邮箱核、`clock` fill）+ kern-serve 一段一进程的 prefill-only 流水（head 持唯一的池，TCP 发 item，GPU 邮箱传激活） | **2026-10-07 tray07 过**：qwen3-4b 2 段，各段依次跑 logits/token 与整份逐位同（chunk 512/64）；两进程首 token 与单卡同；8193 token conc1 TTFT 313 → 174 ms（serve.md「流水线」） |
+| PP1 ✅ | `kern cut`（按 call 下标切、活跃性找边界、send/recv 邮箱核）+ kern-serve 一段一进程的 prefill-only 流水（head 持唯一的池，TCP 发 item，GPU 邮箱传激活） | **2026-10-07 tray07 过**：qwen3-4b 2 段，各段依次跑 logits/token 与整份逐位同（chunk 512/64）；两进程首 token 与单卡同；8193 token conc1 TTFT 313 → 174 ms（serve.md「流水线」） |
 | PP1.1 ✅ | qwen3-4b 的 KV 每层一个 state，`kern cut` 每段只带自己碰的 state、逐段报告 state 用了几成 | **2026-10-07 tray07 过**：`kern test qwen3-4b` 位一致、`kern run` 文本同；chain / serve gate 位一致；每段页数 122,993 → 245,760 |
 | PP2 | decode 走流水；K3 的 state 拆分；per-seq state（GDN）与吐 token 的 chunk program | |
 

@@ -52,12 +52,8 @@ pub const TIMEOUT_NS: i64 = 60_000_000_000;
 const HEADER: u64 = 256;
 /// Each carried buffer starts at a multiple of this in the box.
 const ALIGN: u64 = 256;
-/// Entries of a stage's clock.
-const RING: u64 = 256;
 /// The module name the pipeline kernels go under in every stage.
 const MODULE: &str = "pp";
-/// The stage's clock (fill `clock`).
-const CLOCK: &str = "pp.clock";
 
 /// Every reason a manifest cannot be cut where asked, reported together.
 #[derive(Debug)]
@@ -226,14 +222,12 @@ fn call(op: &str, args: serde_json::Value) -> Call {
     serde_json::from_value(json!({"label": op, "op": op, "args": args})).expect("a well-formed call")
 }
 
-/// The calls that start stage `s`: take what the edge into it carries, or
-/// stamp the start of a first stage.
+/// The calls that start stage `s`: take what the edge into it carries
+/// (none on a first stage).
 fn receive(s: usize, into: Option<&[Carried]>) -> Vec<Call> {
-    let Some(list) = into else {
-        return vec![call("pp.stamp_first", json!([{"buf": peer_name(s)}, {"buf": CLOCK}]))];
-    };
+    let Some(list) = into else { return Vec::new() };
     let b = box_name(s - 1);
-    std::iter::once(call("pp.wait_full", json!([{"buf": b}, {"buf": CLOCK}])))
+    std::iter::once(call("pp.wait_full", json!([{"buf": b}])))
         .chain(list.iter().map(|c| {
             call(
                 &format!("pp.take.{}", c.dtype),
@@ -244,14 +238,12 @@ fn receive(s: usize, into: Option<&[Carried]>) -> Vec<Call> {
         .collect()
 }
 
-/// The calls that end stage `s`: put what the edge out of it carries, or
-/// stamp the end of a last stage.
+/// The calls that end stage `s`: put what the edge out of it carries
+/// (none on a last stage).
 fn send(s: usize, out: Option<&[Carried]>) -> Vec<Call> {
-    let Some(list) = out else {
-        return vec![call("pp.stamp_last", json!([{"buf": box_name(s - 1)}, {"buf": CLOCK}]))];
-    };
+    let Some(list) = out else { return Vec::new() };
     let p = peer_name(s);
-    std::iter::once(call("pp.wait_empty", json!([{"buf": p}, {"buf": CLOCK}])))
+    std::iter::once(call("pp.wait_empty", json!([{"buf": p}])))
         .chain(list.iter().map(|c| {
             call(
                 &format!("pp.put.{}", c.dtype),
@@ -263,17 +255,16 @@ fn send(s: usize, out: Option<&[Carried]>) -> Vec<Call> {
 }
 
 /// The pipeline ops a stage's calls name: `pp.put.<dtype>` and
-/// `pp.take.<dtype>` per carried dtype, the waits, posts and stamps.
+/// `pp.take.<dtype>` per carried dtype, the waits and the posts.
 fn pp_op(name: &str) -> Op {
     let single = |entry: &str, params: serde_json::Value| {
         json!({"params": params, "impl": {"launches": [
             {"module": MODULE, "entry": entry, "block": [1, 1, 1], "grid": [1, 1, 1]}]}})
     };
     let wait = |entry: &str, first: &str| {
-        json!({"params": [first, "out buffer<i64>"], "impl": {"launches": [
+        json!({"params": [first], "impl": {"launches": [
             {"module": MODULE, "entry": entry, "block": [1, 1, 1], "grid": [1, 1, 1],
-             "params": [first, "out buffer<i64>", "i64"],
-             "args": [{"param": 0}, {"param": 1}, {"i64": TIMEOUT_NS}]}]}})
+             "params": [first, "i64"], "args": [{"param": 0}, {"i64": TIMEOUT_NS}]}]}})
     };
     let copy = |entry: &str, params: serde_json::Value| {
         json!({"params": params, "impl": {"launches": [
@@ -284,8 +275,6 @@ fn pp_op(name: &str) -> Op {
         ["pp", "wait_full"] => wait("kern_pp_wait_full", "in buffer<u8>"),
         ["pp", "post_full"] => single("kern_pp_post_full", json!(["in buffer<u64>"])),
         ["pp", "post_empty"] => single("kern_pp_post_empty", json!(["inout buffer<u8>"])),
-        ["pp", "stamp_first"] => single("kern_pp_stamp_first", json!(["in buffer<u64>", "out buffer<i64>"])),
-        ["pp", "stamp_last"] => single("kern_pp_stamp_last", json!(["in buffer<u8>", "out buffer<i64>"])),
         ["pp", "put", dt] => copy("kern_pp_put", json!(["in buffer<u64>", format!("in buffer<{dt}>"), "i64", "i64"])),
         ["pp", "take", dt] => copy("kern_pp_take", json!(["in buffer<u8>", format!("out buffer<{dt}>"), "i64", "i64"])),
         _ => unreachable!("the cut names only the pipeline ops above"),
@@ -325,11 +314,6 @@ fn stage(
     let u8_box = |bytes: u64, kind: &str| -> Buffer {
         serde_json::from_value(json!({"dtype": "u8", "shape": [bytes], "kind": kind, "export": true})).expect("a box")
     };
-    buffers.insert(
-        CLOCK.to_string(),
-        serde_json::from_value(json!({"dtype": "i64", "shape": [RING * 5], "kind": "output", "fill": "clock"}))
-            .expect("a clock"),
-    );
     if s > 0 {
         buffers.insert(box_name(s - 1), u8_box(boxes[s - 1], "carry"));
     }

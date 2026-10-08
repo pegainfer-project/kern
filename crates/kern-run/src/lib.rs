@@ -169,7 +169,7 @@ pub fn fills<'p, L: Borrow<Lease>>(
                 (Fill::SeqLen, _) => spans().map(|r| r.end as i64).collect(),
                 (Fill::CuSeqlens, _) => starts.iter().chain([&rows]).map(|&s| s as i64).collect(),
                 (Fill::SpanAt, _) => vec![0],
-                (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock, _) => return None,
+                (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error, _) => return None,
             };
             Some((f, v))
         })

@@ -252,7 +252,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
         let ctx = format!("buffer `{name}`");
         // 9b. fill
         if let Some(fill) = b.fill {
-            let output = matches!(fill, Fill::Tokens | Fill::Count | Fill::Error | Fill::Clock);
+            let output = matches!(fill, Fill::Tokens | Fill::Count | Fill::Error);
             match (b.kind, output) {
                 (BufferKind::Input, false) | (BufferKind::Output, true) => {}
                 (BufferKind::Input | BufferKind::Output, _) => errs.push(format!(
