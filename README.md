@@ -82,7 +82,7 @@ The loop runs unattended. The engine goes back to being an engine.
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh   # Linux x86_64 / aarch64, one binary
-kern --version                                          # kern 0.2.3 (<commit>, cuda 13.0)
+kern --version                                          # kern 0.2.3 (<commit>, cuda 13.0, runtime <id>)
 ```
 
 Then the [quick start](https://kern-baa.pages.dev/docs/getting-started/):
@@ -116,7 +116,9 @@ cargo build --release
 Serve a configured target with the independent HTTP server:
 
 ```bash
-cargo build --release -p kern-serve   # or use the kern-serve the release installs
+# kern-serve is a workspace of its own (the vLLM front end and its pinned git
+# dependencies); it builds into the same target/ and needs protoc and libssl-dev
+cargo build --release --manifest-path crates/kern-serve/Cargo.toml
 KERN_SERVE_BIN="$PWD/target/release/kern-serve" \
   ./target/release/kern server qwen3-4b --port 8000
 ```

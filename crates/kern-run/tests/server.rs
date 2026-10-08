@@ -17,7 +17,11 @@ impl Fixture {
         )
         .unwrap();
         let server = dir.join("mock-server");
-        std::fs::write(&server, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$KERN_TEST_ARGV\"\nif [ \"$KERN_TEST_SIGNAL\" = yes ]; then kill -TERM $$; fi\nexit 37\n").unwrap();
+        std::fs::write(
+            &server,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$KERN_TEST_ARGV\"\nprintf '%s\\n' \"$KERN_RUNTIME_ID\" > \"$KERN_TEST_ID\"\nif [ \"$KERN_TEST_SIGNAL\" = yes ]; then kill -TERM $$; fi\nexit 37\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self(dir)
     }
@@ -26,7 +30,8 @@ impl Fixture {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_kern"));
         cmd.current_dir(self.0.join("child"))
             .env("KERN_SERVE_BIN", self.0.join("mock-server"))
-            .env("KERN_TEST_ARGV", self.0.join("args"));
+            .env("KERN_TEST_ARGV", self.0.join("args"))
+            .env("KERN_TEST_ID", self.0.join("id"));
         cmd
     }
 }
@@ -51,6 +56,9 @@ fn server_forwards_target_args_status_and_signal() {
         f.0.join("base weights").display(), f.0.join("draft").display()
     );
     assert_eq!(actual, expected);
+    // The handover carries the runtime this launcher was built with, which is
+    // what kern-serve checks before it serves (docs/lessons.md).
+    assert_eq!(std::fs::read_to_string(f.0.join("id")).unwrap().trim(), kern_runtime::ID);
     let status =
         f.command().env("KERN_TEST_SIGNAL", "yes").args(["server", "demo", "--", "--port=8124"]).status().unwrap();
     assert_eq!(status.signal(), Some(15));

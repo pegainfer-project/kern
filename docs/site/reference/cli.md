@@ -37,6 +37,9 @@ takes precedence over the built-in default.
   protocol checks pass. Failures are logged at ERROR level; both go to stderr.
   The serving protocol summary goes to stdout on success.
 - `kern test` exits with `0` for PASS, `1` for FAIL, and `2` for INCONCLUSIVE.
+- `kern server` hands the runtime it was built with to the `kern-serve` it
+  starts; a server built from another one fails with the rebuild command
+  instead of serving an older runtime.
 
 ## Environment
 

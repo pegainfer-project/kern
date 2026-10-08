@@ -11,7 +11,7 @@ kern 的 release 是两个 binary：`kern` 与 `kern-serve`，Linux x86_64 与 a
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
-kern --version          # kern 0.2.0 (<commit>, cuda 13.0)
+kern --version          # kern 0.2.0 (<commit>, cuda 13.0, runtime <id>)
 ```
 
 - 网站的 `/install.sh` 是一条 302，指向最新 release 里的 `install.sh`；
@@ -37,10 +37,12 @@ kern --version          # kern 0.2.0 (<commit>, cuda 13.0)
 1. **触发**：push 一个 `v*` tag。改到 workflow 或 `scripts/` 的 PR 也跑 build 与
    打包（不 publish），所以流水线本身的改动在合并前就被 CI 验过。
 2. **构建**：两个 target 各自在 Ubuntu 24.04 runner 上原生编（aarch64 用
-   GitHub 的 arm runner，不交叉），apt 装 protoc 与 libssl-dev，`--locked` 一次编出
-   kern-run 与 kern-serve。cudarc 绑定的 CUDA 版本由 Cargo.toml 的
+   GitHub 的 arm runner，不交叉），apt 装 protoc 与 libssl-dev，`--locked` 编出
+   kern-run 与 kern-serve——两条命令，两个 workspace，一个 target 目录。
+   cudarc 绑定的 CUDA 版本由 Cargo.toml 的
    `cuda-13000` feature 钉死，构建机不装 toolkit；`KERN_COMMIT` 传 tag 的 commit。
-   tag 名必须等于 workspace version（`v` + `cargo pkgid`），不等就停。
+   tag 名必须等于 workspace version（`v` + `cargo pkgid`），不等就停；CI 有一条检查
+   保证 kern-serve 的版本与它一致。
 3. **自检**（`package_release.sh`，在 runner 上跑）：两个 binary `--version` 报的版本 =
    tag；`NEEDED` 里没有任何 CUDA 库；`kern verify examples/qwen3-4b.json` 与
    `kern-serve --help` 跑通（无 GPU，证明 loader 满足）。
@@ -69,7 +71,7 @@ GitHub runner 没有 GPU，流水线只能证明 binary 起得来。release 发�
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
-kern --version                  # commit 与 tag 一致，cuda 13.0
+kern --version                  # commit 与 tag 一致，cuda 13.0，runtime 与 kern-serve 的相同
 cd ~/kern-1 && kern test qwen3-4b   # 最后一行 PASS
 ```
 

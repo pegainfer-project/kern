@@ -1,0 +1,6 @@
+# Kern-serve is a workspace of its own (crates/kern-serve/Cargo.toml) and would
+# otherwise build into `crates/kern-serve/target/`. Both workspaces share this
+# one, which is where the binaries have always been: `target/release/kern` and
+# `target/release/kern-serve`, the paths scripts/package_release.sh reads.
+[build]
+target-dir = "target"

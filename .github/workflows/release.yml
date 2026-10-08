@@ -58,7 +58,8 @@ jobs:
 
       - name: Build
         run: |
-          KERN_COMMIT=${GITHUB_SHA::7} cargo build --release --locked -p kern-run -p kern-serve
+          KERN_COMMIT=${GITHUB_SHA::7} cargo build --release --locked -p kern-run
+          KERN_COMMIT=${GITHUB_SHA::7} cargo build --release --locked --manifest-path crates/kern-serve/Cargo.toml
 
       - name: Package and check
         run: scripts/package_release.sh "${{ steps.version.outputs.version }}" "${{ matrix.target }}" dist

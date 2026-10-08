@@ -38,20 +38,78 @@ jobs:
           components: rustfmt, clippy
 
       - name: Format check
-        run: cargo fmt --check
+        # Both workspaces: `cargo fmt` walks the one it runs in, and kern-serve
+        # is a workspace of its own.
+        run: |
+          cargo fmt --check
+          cargo fmt --check --manifest-path crates/kern-serve/Cargo.toml
+
+      - name: One version for both binaries
+        # kern-serve cannot inherit `[workspace.package]` any more, so this is
+        # what keeps the two in step; a release tag is compared against the
+        # runtime's version alone.
+        run: |
+          set -euo pipefail
+          root=$(cargo pkgid -p kern-run | sed 's/.*[@#]//')
+          serve=$(cargo metadata --no-deps --format-version 1 --manifest-path crates/kern-serve/Cargo.toml \
+                  | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          if [ "$root" != "$serve" ]; then
+            echo "::error::kern is $root and kern-serve is $serve; one release tags both"
+            exit 1
+          fi
+
+      - name: The runtime resolves without a git source
+        # The serving stack's pinned git dependencies live in its own
+        # workspace; a git source here would make every build of the runtime
+        # fetch them.
+        run: |
+          if grep -q 'source = "git+' Cargo.lock; then
+            echo "::error::Cargo.lock names a git source; the runtime resolves against crates.io alone"
+            exit 1
+          fi
+
+      - name: Both workspaces resolve the runtime at the same versions
+        # Two locks, one runtime: a dependency bumped in one of them alone
+        # would give the two binaries of a release different versions of the
+        # same crate, which the runtime id cannot see.
+        run: cargo test -p kern-run --test locks
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Clippy
-        # The workspace's default members: the runtime compiles anywhere,
-        # cudarc loads libcuda at run time. kern-serve needs protoc and
-        # libssl-dev and is built by the release pipeline.
+        # The runtime's default members: they compile anywhere, cudarc loads
+        # libcuda at run time. kern-serve is its own workspace and needs protoc
+        # and libssl-dev; the serve job builds and tests it.
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
-        # The runtime's tests are host-side (Pool, Prefix, Host, values); the
-        # GPU gate is `kern test`.
-        run: cargo test -p kern-manifest -p kern-pool -p kern-runtime -p kern-test
+        # The runtime's tests are host-side (Pool, Prefix, Host, values, the
+        # launcher's handover to kern-serve); the tests that want a GPU are
+        # `#[ignore]`d and the GPU gate is `kern test`.
+        run: cargo test -p kern-manifest -p kern-pool -p kern-runtime -p kern-test -p kern-run
+
+      - name: The runtime id follows every compile input
+        # A digest that skipped a file would wave a stale binary through, so
+        # change a PTX the runtime compiles in and check that the id moves —
+        # and that it comes back once the file does.
+        run: |
+          set -euo pipefail
+          id() { cargo run -q -p kern-run --bin kern -- --version | sed 's/.*runtime //'; }
+          ptx=crates/kern-runtime/src/profile.ptx
+          mkdir -p target
+          cp "$ptx" target/profile.ptx.bak
+          before=$(id)
+          printf '\n// id probe\n' >>"$ptx"
+          after=$(id)
+          mv target/profile.ptx.bak "$ptx"
+          if [ "$before" = "$after" ]; then
+            echo "::error::$ptx is not part of the runtime id"
+            exit 1
+          fi
+          if [ "$before" != "$(id)" ]; then
+            echo "::error::the runtime id did not come back after restoring $ptx"
+            exit 1
+          fi
 
       - name: Performance evidence regression tests
         run: python3 -m unittest discover -s tools -p test_profile.py
@@ -97,9 +155,10 @@ jobs:
     # is enforced: a `pub(crate)` cannot cross a crate boundary, so that class
     # is exact. `dead_public` and `unnecessary_public` stay an audit tool until
     # the public surface is trimmed; see the `hawk` skill. Hawk is built
-    # against one exact rustc; bump both together. Hawk compiles the whole
-    # workspace, kern-serve included, so the job needs the serving stack's
-    # build dependencies and keeps its target directory between runs.
+    # against one exact rustc; bump both together. Hawk compiles a whole
+    # workspace, so it runs once for the runtime's and once for kern-serve's,
+    # which is why the job needs the serving stack's build dependencies and
+    # keeps one target directory between runs.
     runs-on: ubuntu-latest
     env:
       HAWK_VERSION: "0.1.14"
@@ -135,3 +194,28 @@ jobs:
           cargo +"$HAWK_RUST" hawk check --color always --target-dir target/hawk \
             -A hawk::dead_public -A hawk::unnecessary_public \
             -D hawk::unnecessary_restricted_visibility
+          ( cd crates/kern-serve
+            cargo +"$HAWK_RUST" hawk check --color always --target-dir ../../target/hawk \
+              -A hawk::dead_public -A hawk::unnecessary_public \
+              -D hawk::unnecessary_restricted_visibility )
+
+  serve:
+    # kern-serve is a workspace of its own, and its tests are about the two
+    # contracts that only appear at the boundary: the renderers against vLLM's
+    # own chat renderers, and the handover `kern server` makes to a server it
+    # did not build. Both need the serving stack's build dependencies.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Test
+        run: cargo test --locked --manifest-path crates/kern-serve/Cargo.toml

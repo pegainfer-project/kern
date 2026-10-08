@@ -17,7 +17,8 @@ verifies before running.
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh      # kern: run, test, bench, verify
 ```
 
-`kern-serve` is built from source for now: `cargo build --release -p kern-serve`
+`kern-serve` is built from source for now:
+`cargo build --release --manifest-path crates/kern-serve/Cargo.toml`
 (details in [Install](/getting-started/install)).
 
 ## Get the model

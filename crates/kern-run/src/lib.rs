@@ -33,11 +33,17 @@ use kern_pool::Lease;
 use kern_runtime::{connect_nccl, GroupRank, PeerHandle, Runtime, Topology};
 
 /// What `kern --version` prints: the crate version, the commit it was built
-/// from, and the CUDA API the runtime binds; the three facts a bug report
-/// needs. The commit comes from `build.rs`.
+/// from, the CUDA API the runtime binds, and the runtime itself; the four
+/// facts a bug report needs. The commit comes from `build.rs`, the runtime id
+/// from `kern-runtime`'s — the two binaries of a release print the same one.
 pub static VERSION: LazyLock<String> = LazyLock::new(|| {
     let (major, minor) = (kern_runtime::CUDA_API / 1000, kern_runtime::CUDA_API % 1000 / 10);
-    format!("{} ({}, cuda {major}.{minor})", env!("CARGO_PKG_VERSION"), env!("KERN_COMMIT"))
+    format!(
+        "{} ({}, cuda {major}.{minor}, runtime {})",
+        env!("CARGO_PKG_VERSION"),
+        env!("KERN_COMMIT"),
+        kern_runtime::ID
+    )
 });
 
 /// What a checkpoint directory says besides its tensors: `tokenizer.json`

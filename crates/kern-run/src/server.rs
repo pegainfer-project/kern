@@ -29,6 +29,9 @@ pub fn run(target: &Target, args: &[OsString]) -> Result<()> {
     };
     let mut command = Command::new(&executable);
     command.args(arguments(target, args));
+    // The runtime this launcher was built with: kern-serve refuses to serve if
+    // it was built from a different one.
+    command.env(kern_runtime::ID_VAR, kern_runtime::ID);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

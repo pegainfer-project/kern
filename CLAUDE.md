@@ -32,8 +32,8 @@ the schema golden, lints) belongs in CI, not here.
 - `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
   `kern.toml`, the real `Side` over `Runtime`.
 - `crates/kern-serve` — the pegainfer/vLLM front end plus `KernScheduler`.
-  A workspace member outside `default-members`: builds where protoc and
-  libssl-dev are (the kernel-lab container, the release runner), by name.
+  Its own workspace (the repository's only git dependencies): built by name
+  where protoc and libssl-dev are, into the same `target/`.
 - `tools/dsv41/**/Cargo.toml` — GPU harnesses over the runtime's public API;
   workspace members, built by name.
 - `tools/` — capture, extract, export, manifest generators. Model knowledge

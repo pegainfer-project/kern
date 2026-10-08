@@ -73,6 +73,16 @@ pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
 /// libraries rather than at a random symbol later.
 pub const CUDA_API: u32 = sys::CUDA_VERSION;
 
+/// The sources this runtime was built from, as [`build.rs`](../build.rs)
+/// digests them: two binaries of one checkout carry the same id, and a
+/// launcher compares them before it hands over to another binary, because a
+/// server left behind by a runtime change serves the older runtime.
+pub const ID: &str = env!("KERN_RUNTIME_ID");
+
+/// The variable a launcher sets to [`ID`]: the runtime it was built with,
+/// which the binary it launches has to match. One name, both sides.
+pub const ID_VAR: &str = "KERN_RUNTIME_ID";
+
 /// What the caller will hold in the pooled states at once: pages for
 /// `tokens` tokens of every paged state and `seqs` sequences' slots of every
 /// per-sequence state (plus the null slot and a spare). A number the caller
