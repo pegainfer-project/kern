@@ -128,28 +128,6 @@ impl Runtime {
         Ok(lease)
     }
 
-    /// Zero sequence slot `slot` of every per-sequence state on the
-    /// stream, the way a lease zeroes its own: for a runtime whose slots
-    /// another runtime's pool hands out (a pipeline stage holds the head's
-    /// slot ids for its own layers' recurrent state).
-    pub fn zero_slot(&mut self, slot: i32) -> Result<()> {
-        self.ctx.bind_to_thread()?;
-        let live = self.pool.slots();
-        if slot < 1 || slot as usize >= live {
-            bail!(Api, "slot {slot}: this runtime has slots 1..{live}");
-        }
-        for (name, st) in &self.manifest.states {
-            if !st.is_per_seq() {
-                continue;
-            }
-            let b = st.bytes_per_seq as usize;
-            let s = slot as usize;
-            let mut view = self.states.get_mut(name).unwrap().view(s * b..(s + 1) * b)?;
-            self.stream.memset_zeros(&mut view)?;
-        }
-        Ok(())
-    }
-
     /// The first `len` tokens of `lease` as a [`Checkpoint`] its
     /// sequence keeps running past: pages shared, the per-sequence state
     /// copied into a fresh slot ([`Error::Denied`] when none is free).
