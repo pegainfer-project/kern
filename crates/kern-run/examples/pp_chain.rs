@@ -5,15 +5,14 @@
 //!            --weights dir --gpus 0,1,2 --prompts ids.txt [--chunk 512]
 //!            [--steps 8] [--capacity 65536]
 //!
-//! The first GPU runs the whole manifest, the rest one stage each, the
-//! stages wired through their mailboxes as a pipeline is (here with
-//! in-process handles). Each line of `--prompts` is one prompt's token
-//! ids. A prompt but its last token goes through the chunk program in
-//! `--chunk` pieces, then `--steps` one-row steps feed back what they
-//! pick. After every step the input of the call writing the tokens (the
-//! logits) and the tokens themselves must be equal on the whole and on the
-//! last stage. All stages are issued before any is waited on: a stage's
-//! device waits for its predecessor's mailbox on its own.
+//! The first GPU runs the whole manifest, the rest one stage each, each
+//! stage's arriving buffers mapped into the stage before it as a pipeline
+//! does (here with in-process handles) and pushed after every call. Each
+//! line of `--prompts` is one prompt's token ids. A prompt but its last
+//! token goes through the chunk program in `--chunk` pieces, then
+//! `--steps` one-row steps feed back what they pick. After every step the
+//! input of the call writing the tokens (the logits) and the tokens
+//! themselves must be equal on the whole and on the last stage.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -23,8 +22,8 @@ use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::types::Arg;
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
-use kern_run::{fills, run_once, write_named, Vars};
-use kern_runtime::{Capacity, GroupRank, PeerHandle, Runtime, Topology};
+use kern_run::{arrivals, fills, run_once, write_named, Vars};
+use kern_runtime::{Capacity, Mapped, Runtime};
 
 struct Opts {
     manifest: PathBuf,
@@ -72,11 +71,8 @@ fn opts() -> Result<Opts> {
 
 fn load(path: &PathBuf, o: &Opts, gpu: usize, weights: &kern_run::Weights) -> Result<(Runtime, Protocol)> {
     let m = Verified::from_json(&std::fs::read_to_string(path)?).with_context(|| format!("{}", path.display()))?;
-    let topology = m.topology.as_ref().map(|t| Topology {
-        groups: t.groups.iter().map(|(g, &size)| (g.clone(), GroupRank { index: 0, size })).collect(),
-    });
     let capacity = Capacity { tokens: Some(o.capacity), seqs: 2 };
-    let mut rt = Runtime::load(&m, Some(&o.kernels), gpu, Some(capacity), topology.as_ref())?;
+    let mut rt = Runtime::load(&m, Some(&o.kernels), gpu, Some(capacity), None)?;
     weights.bind(&mut rt)?;
     let p = Protocol::check_unsampled(&rt.manifest)?;
     Ok((rt, p))
@@ -121,6 +117,33 @@ fn issue(rt: &mut Runtime, p: &Protocol, program: &str, vars: &Vars, rows: &BTre
     Ok(rt.issue(program, &vars)?)
 }
 
+/// One call on every stage in order, each pushing what the next takes
+/// in once the next is done with the call before, and landing before
+/// the next issues: the pipeline's rule, with the host between every
+/// pair.
+fn chain(
+    stages: &mut [(Runtime, Protocol)],
+    boxes: &[Vec<(String, Mapped)>],
+    program: &str,
+    vars: &Vars,
+    rows: &BTreeMap<String, Vec<i64>>,
+) -> Result<()> {
+    for s in 0..stages.len() {
+        let (rt, p) = &mut stages[s];
+        issue(rt, p, program, vars, rows)?;
+        let Some(b) = boxes.get(s) else { continue };
+        let vars: Vars =
+            vars.iter().filter(|(k, _)| rt.manifest.vars.contains_key(*k)).map(|(k, v)| (k.clone(), *v)).collect();
+        stages[s + 1].0.synchronize()?;
+        let (rt, _) = &stages[s];
+        for (name, to) in b {
+            rt.push(name, &vars, to)?;
+        }
+        rt.synchronize()?;
+    }
+    Ok(())
+}
+
 fn forwards(p: &Protocol) -> Result<(Forward, Forward)> {
     Ok((
         p.chunk().cloned().context("no chunk program")?,
@@ -135,13 +158,15 @@ fn main() -> Result<()> {
     let (mut whole, pw) = load(&o.manifest, &o, o.gpus[0], &weights)?;
     let mut stages: Vec<(Runtime, Protocol)> =
         o.stages.iter().zip(&o.gpus[1..]).map(|(s, &g)| load(s, &o, g, &weights)).collect::<Result<_>>()?;
-    let exports: Vec<BTreeMap<String, PeerHandle>> =
-        stages.iter().map(|(rt, _)| rt.export_handles()).collect::<Result<_, _>>()?;
-    for (s, (rt, _)) in stages.iter_mut().enumerate() {
-        let groups: Vec<String> = rt.manifest.topology.iter().flat_map(|t| t.groups.keys().cloned()).collect();
-        for g in groups {
-            rt.import_peers(&g, &[exports[s].clone(), exports[s + 1].clone()])?;
-        }
+    let mut boxes: Vec<Vec<(String, Mapped)>> = Vec::new();
+    for s in 0..stages.len() - 1 {
+        let (next, np) = &stages[s + 1];
+        let handles = next.export_handles()?;
+        let b = arrivals(&next.manifest, np)
+            .into_iter()
+            .map(|n| Ok((n.clone(), stages[s].0.map(&handles[&n], &format!("stage {} `{n}`", s + 1))?)))
+            .collect::<Result<Vec<_>>>()?;
+        boxes.push(b);
     }
     run_once(&whole, &pw)?;
     for (rt, p) in &stages {
@@ -183,9 +208,7 @@ fn main() -> Result<()> {
             let (vars, rows) = item(&pw, &wlease, *pos, ids)?;
             issue(&mut whole, &pw, program, &vars, &rows)?;
             let (vars, rows) = item(&stages[0].1, &slease, *pos, ids)?;
-            for (rt, p) in &mut stages {
-                issue(rt, p, program, &vars, &rows)?;
-            }
+            chain(&mut stages, &boxes, program, &vars, &rows)?;
         }
         let mut tok = *prompt.last().unwrap();
         let mut picked = Vec::new();
@@ -195,12 +218,8 @@ fn main() -> Result<()> {
             let (vars, rows) = item(&pw, &wlease, at, &[tok])?;
             issue(&mut whole, &pw, &wstep.name, &vars, &rows)?;
             let (vars, rows) = item(&stages[0].1, &slease, at, &[tok])?;
-            for (rt, p) in &mut stages {
-                issue(rt, p, &sstep.name, &vars, &rows)?;
-            }
-            for (rt, _) in &stages {
-                rt.synchronize()?;
-            }
+            chain(&mut stages, &boxes, &sstep.name, &vars, &rows)?;
+            stages.last().unwrap().0.synchronize()?;
             let (last, _) = stages.last().unwrap();
             let wt = tokens.decode(&whole.read_output(&tokens.name)?)[0];
             let st = ltokens.decode(&last.read_output(&ltokens.name)?)[0];

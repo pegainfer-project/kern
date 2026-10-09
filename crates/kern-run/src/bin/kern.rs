@@ -80,10 +80,6 @@ enum Cmd {
         /// Call indices to cut before, increasing
         #[arg(long, value_delimiter = ',', required = true)]
         at: Vec<usize>,
-        /// The mailbox kernels' cubin (`tools/kernels-src/pp_mailbox.cu`),
-        /// pinned by its sha256; it goes into each stage's kernels dir
-        #[arg(long)]
-        module: PathBuf,
         /// Directory the stages are written to
         #[arg(long)]
         out: PathBuf,
@@ -135,32 +131,33 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Cut { manifest, at, module, out } => cut(&manifest, &at, &module, &out),
+        Cmd::Cut { manifest, at, out } => cut(&manifest, &at, &out),
     }
 }
 
 /// `kern cut`: the stages of a manifest cut before `at`, written as
 /// `stage<s>.json`.
-fn cut(manifest: &Path, at: &[usize], module: &Path, out: &Path) -> Result<()> {
-    use sha2::Digest;
+fn cut(manifest: &Path, at: &[usize], out: &Path) -> Result<()> {
     let json = std::fs::read_to_string(manifest).with_context(|| format!("reading {}", manifest.display()))?;
     let m = kern_manifest::Verified::from_json(&json)?;
-    let bytes = std::fs::read(module).with_context(|| format!("reading {}", module.display()))?;
-    let pp = kern_manifest::types::Module {
-        source: module.file_name().context("--module names a file")?.to_string_lossy().into_owned(),
-        sha256: hex::encode(sha2::Sha256::digest(&bytes)),
-    };
-    let stages = kern_manifest::cut::cut(&m, at, &pp)?;
+    let stages = kern_manifest::cut::cut(&m, at)?;
     std::fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     for (s, st) in stages.iter().enumerate() {
         let path = out.join(format!("stage{s}.json"));
         std::fs::write(&path, st.to_json()).with_context(|| format!("writing {}", path.display()))?;
         let calls: Vec<String> = st.programs.iter().map(|(n, p)| format!("{n} {}", p.calls.len())).collect();
+        let crossing: Vec<String> = st
+            .buffers
+            .iter()
+            .filter(|(_, b)| b.export || b.kind == kern_manifest::types::BufferKind::Output)
+            .map(|(n, b)| format!("{n} {}", b.kind))
+            .collect();
         tracing::info!(
-            "stage {s}: {} ({} weights; calls: {})",
+            "stage {s}: {} ({} weights; calls: {}; crossing: {})",
             path.display(),
             st.buffers.values().filter(|b| b.kind == kern_manifest::types::BufferKind::Weight).count(),
-            calls.join(", ")
+            calls.join(", "),
+            crossing.join(", ")
         );
         let (whole, part): (Vec<_>, Vec<_>) =
             kern_manifest::cut::state_use(&m, st).into_iter().partition(|(_, a, b)| a == b);

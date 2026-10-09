@@ -570,12 +570,23 @@ toy 不测 kernel 数值和性能，也没有 tray（EP4 的 toy 要一个走 pe
 ## 流水线（prefill-only PP v1，2026-10-07，tray07 GB300）
 
 一段一个进程：`kern cut` 切出的 stage 0 是 head（`--pp-listen host:port`：HTTP、scheduler、唯一的
-`Pool`），其余段 `--pp-head host:port`。握手：每段连上 head 发 `Hello { stage, cut, pages, mailbox }`
-（export handle 的 hex），head 收齐 S−1 个、按最少的页数装自己的池，回 `Table { downstream_mailbox,
-pages }`；之后同一条 TCP（tokio-util `LengthDelimitedCodec` + JSON）上 head 按发射顺序给每段发
-`Item { program, vars, rows }`（fill 与页表的值，页号全流水共用），末段对吐 token 的 item 回 token。
-激活不走 TCP，走 GPU 上的邮箱（manifest.md「流水线切分」），各段设备自己等上游。没有序号、
-stop、fault 消息：任何错误进程退出，连接断了对端退出；设备上的邮箱等待 60 s 超时 trap。
+`Pool`），其余段 `--pp-head host:port`。握手：每段连上 head 发 `Hello { stage, cut, pages, port, arrivals }`
+（`arrivals` = 本段 host 不填的 input / inout，即上一段要拷进来的，export handle 的 hex；`port` 是上一段
+连本段的端口），head 收齐 S−1 个、按最少的页数装自己的池，回 `Table { pages, next }`（下一段的地址
+与 arrivals）；之后同一条 TCP（u32 长度 + JSON）上 head 按发射顺序给每段发 `Item { program, vars, rows }`
+（fill 与页表的值，页号全流水共用），末段对吐 token 的 item 回 token。
+激活走 NVLink，信号走 host：每段把下一段的 arrivals 映射进来（`Runtime::map`），issue 完 item k 后等
+下一段报告 k−1 已取走，再在 compute stream 上 `Runtime::push` 同名 buffer、打 `Runtime::mark`；mark 落地
+时 watch 线程告诉下一段"k 到了"、上一段"k 取走了"。下一段的 host 不等这句话：它先在 compute stream 上
+放一个"到达数 ≥ k+1"的门（`Runtime::hold`：一个在 pinned 计数上自旋的 kernel，runtime 自带的几行
+PTX），接着就把 k 的 launch 全发出去，收到"到了"时写计数（`Gate::open`）放行——等数据的是设备，host 的
+launch 不在关键路径上（qwen3 的 prefill 不走图，218 个 launch 要 0.6 ms，等到了再发会让 conc4 慢
+3–30%；cuBLAS 的 eager launch 排在没开的门后面时会在调用里自旋到门开，所以 host 最多领先一个
+item）。mark 也不走 driver：设备在 mark 处用一个 kernel 把序号写进 pinned 内存，watch 线程只读内存；
+末段的 token 同样 issue 完就 `Runtime::fetch`（stream 上拷进 pinned），watch 线程在 mark 落地后读出来
+答给 head；fault 由发射线程每个 item `Runtime::fault`（`cuStreamQuery`，不阻塞）问一次。为什么等待
+设备的线程一个 driver 调用都不能做，见 lessons.md 2026-10-08。这换掉了设备上的邮箱核与 `pp.*` op：manifest 里只剩 stage 的签名。没有序号、stop、fault
+消息：任何错误进程退出，连接断了对端退出；下一段 60 s 不报"取走"视为死，上一段死了表现为 head 退出。
 只做 prefill：prompt 除末 token 按 chunk 走 chunk program，末 token 走一行的 step，首 token 即结束
 （`max_tokens` 视为 1）。item 的编号是它在 TCP 上的次序，各段数得一样。每段 issue 完一个 item 就打一个
 `Runtime::mark`（event），旁边一个线程等它，落地时记一行 `pp item`：stage、item、rows、`issued_us`、
@@ -583,14 +594,14 @@ stop、fault 消息：任何错误进程退出，连接断了对端退出；设�
 item k = max(本段 issue k、本段 done k−1、上游 done k)，于是每段每 item 的空等与占用都有了
 （`tools/pp_timeline.py`，带 `--gantt`；跨 tray 的段用 `--skew` 扣两台机器的时钟差）。占用里含等下游取走的
 时间，要拆出纯计算就拿该段单独跑这个形状的时间（`kern bench` 段 manifest）去比。
-设备上的 fault（邮箱等待超时 trap）在该 item 的 mark 上冒出来，进程退出。下表的 busy / wait 列是当时
+设备上的 fault 在该 item 的 mark 上冒出来，进程退出。下表的 busy / wait 列是当时
 设备上 globaltimer 打点量的（`clock` fill，已删：它让输出不再是 forward 的纯函数）。
 
 门禁（qwen3-4b，切在 `l18.qkv_proj` 前，2 段）：
 - 只切不分进程：`pp_chain` 各段依次跑 vs 整份，7 条 prompt（1–2049 token），chunk 512 × 8 步、
   chunk 64 × 16 步（2049 token 32 个 chunk），每步 logits 与 token **逐位同**。
 - 两进程 serve：7 条 gate prompt 首 token 与单卡 kern-serve 全同；杀末段 → head 立即退出；冻住末段
-  （SIGSTOP）→ head 61 s 后 trap 退出，恢复的末段 61 s 后同样退出。
+  （SIGSTOP）→ head 60 s 后退出（等"取走"超时），恢复的末段随后退出。
 
 扫描（chunk 512，`--max-seqs 16`，每格 conc1 4 条 / conc4 16 条不同 prompt；TTFT = max_tokens=1 的
 请求延迟；busy/wait 是每 item 均值）：
@@ -616,6 +627,14 @@ item k = max(本段 issue k、本段 done k−1、上游 done k)，于是每段�
 18 层：不给 `--capacity` 时每段 122,993 → 245,760 页（2.0×）；切点、gate、扫描数字与上表一致
 （`~/bench_results/2026-10-07-kern-pp-v1/perlayer/`）。v1 的限制：只认纯 paged 的 manifest；
 chunk program 自己吐 token 的模型拒切；上游那份 box 是不用的占位。
+
+传输搬到外壳之后（2026-10-08，`~/bench_results/2026-10-08-pp-inout/`）：门禁同上（tray08：8 条 gate
+prompt 首 token 与单卡全同、498 item 两侧一致、杀 / 冻末段同前，head 退出后末段也退出）；K3 PP8
+容量（tray12+17，c16、rate inf、200 条 2k–32k）44.3k tok/s、2.47 req/s（邮箱 44.9–46.8k），每段
+period 175–179 ms 由算力定，host 不在关键路径上。qwen3 扫描中位 TTFT ms（邮箱 → 现在）：conc1
+8.3 / 25.2 / 172.6 → 8.7 / 25.3 / 172.4，conc4 17.6 / 79.6 / 664.7 → 22.7 / 90.1 / 677.4——conc4 还差
+5–13 ms：host 等下一段"取走"再 push 是一次 TCP 往返，而 cuBLAS 的 launch 排在没开的门后会阻塞，门一开
+host 还得把剩下的 launch 发完，设备追上 host 就空转；要关上这段得弄清 cuBLAS 在 launch 里等什么。
 
 ## 没做（按需要加）
 

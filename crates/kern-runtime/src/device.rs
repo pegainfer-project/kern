@@ -408,8 +408,38 @@ impl Pinned {
         Ok(Pinned { ptr, bytes })
     }
 
+    /// `bytes` of pinned memory the device can address too, for words the
+    /// host and a kernel share.
+    pub(crate) fn alloc_mapped(bytes: u64, dev: i32) -> Result<Pinned> {
+        let node = numa_node(dev);
+        if let Some(n) = node {
+            mempolicy(libc::MPOL_BIND, Some(n));
+        }
+        let mut ptr: *mut c_void = std::ptr::null_mut();
+        let flags = sys::CU_MEMHOSTALLOC_DEVICEMAP;
+        let r = cuda_check(
+            unsafe { sys::cuMemHostAlloc(&mut ptr, bytes.max(1) as usize, flags) },
+            "cuMemHostAlloc(mapped)",
+        );
+        if node.is_some() {
+            mempolicy(libc::MPOL_DEFAULT, None);
+        }
+        r?;
+        Ok(Pinned { ptr, bytes })
+    }
+
     pub(crate) fn ptr(&self) -> u64 {
         self.ptr as u64
+    }
+
+    /// The address a kernel reads this memory at (an `alloc_mapped` one).
+    pub(crate) fn device(&self) -> Result<u64> {
+        let mut device = 0;
+        cuda_check(
+            unsafe { sys::cuMemHostGetDevicePointer_v2(&mut device, self.ptr, 0) },
+            "cuMemHostGetDevicePointer",
+        )?;
+        Ok(device)
     }
 
     pub(crate) fn bytes(&self) -> u64 {

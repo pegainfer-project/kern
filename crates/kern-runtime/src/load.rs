@@ -194,7 +194,7 @@ impl Runtime {
         }
         let mut staging = BTreeMap::new();
         for (name, b) in &manifest.buffers {
-            if b.kind == BufferKind::Input {
+            if matches!(b.kind, BufferKind::Input | BufferKind::Inout) {
                 let mut pinned = unsafe { ctx.alloc_pinned::<u8>(buffers[name].bytes.max(1) as usize)? };
                 pinned.as_mut_slice()?.fill(0);
                 staging.insert(name.clone(), pinned);
@@ -300,6 +300,7 @@ impl Runtime {
         let remaps = Remaps::spawn(Arc::clone(&ctx), mapper)?;
         let mut rt = Runtime {
             host_weights_ready: !manifest.buffers.values().any(|b| b.placement == Placement::Host),
+            signals: crate::exec::Signals::load(&ctx, gpu)?,
             manifest,
             filled,
             kept,

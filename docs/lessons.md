@@ -3,6 +3,42 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-10-08，流水线段的 host 提前 launch：四个死锁
+
+段的 host 想在数据到达前就把 item 的 launch 发出去，让设备自己等。独立的 C 程序里每一种写法都
+能醒，kern 进程里每一种都在前几个 item 就死掉，一共踩了四次，规则在最后。
+
+**`cuStreamWaitValue` 卡的是硬件 channel，不是 stream。** 第一版用流内存操作等 pinned 内存里的
+到达计数。它在 channel 上是一个 semaphore acquire，多路复用到同一 channel 的其他 stream 全排在
+它后面（`CUDA_DEVICE_MAX_CONNECTIONS=1` 的 C 程序就复现：旁路 stream 的 8 字节拷贝永远不完成），
+kern 进程里 cuBLAS 自己的 stream 和下一个 hold 就这样绕成了环。设备侧的等待改成一个自旋 kernel
+（占一个 SM，channel 照常往下走）。
+
+**往 pageable 内存的拷贝在 API 调用里阻塞，并且攥着 context 锁。** 末段主线程 `read_output` 走
+`cuMemcpyDtoHAsync` 到 `Vec`，driver 在调用内部等 DMA 完成，这段等待不像 `cuStreamSynchronize`
+那样放锁，watch 线程的 `cuEventSynchronize` 于是在 futex 里睡死，"k 取走了"发不出去，上游不推
+k+1，主线程等的 DMA 永远排在 hold 后面。线程表一看就明白：主线程 90% CPU、watch 线程 0% 在
+futex_wait。输出改走 `Runtime::fetch`（stream 上拷进 pinned，watch 线程在 mark 落地后读）。
+
+**cuBLAS 的 eager launch 自己也会这样阻塞。** 连发两个 chunk，第二个 prefill 的第一条
+cublasLt GEMM 在调用里自旋，直到前一个 item 的 hold 打开（driver 给 pageable 参数拷贝的 staging
+池用完了，猜测，但自测可复现：hold 后面的第一条 GEMM 等 300 ms 直到门开），同样攥着锁；
+watch 线程此时只要碰 driver（哪怕是 mark 落地之后查 fault 的 `cuEventSynchronize`、或 drop
+event）就进同一个环。于是 mark 不再带 event：设备在 mark 处用一个 kernel 把序号写进 pinned
+内存，watch 线程只读内存；fault 由发射线程自己每个 item 用 `cuStreamQuery`（不阻塞）问一次。
+
+**释放 pinned 内存也是同步。** 改完之后 qwen3 的 2 段流水能跑 18 个 item，K3 的 8 段在末段的第一个
+item 上又死了：watch 线程记完 "pp item" 就没了下文，socket 上一个字节没发出去，线程 100% CPU。
+日志行和 tell 之间只剩 `Answer` 的 drop——`Fetch` 里那块 pinned 内存的 `cuMemFreeHost`，它要等设备上
+所有在飞的工作结束（含下一个 item 没开的 hold），而且是自旋等。qwen3 没踩中只是时序：2 段的 hop 短，
+free 的时候下一个 hold 多半还没发出去。`Fetch` 的内存现在回收进 runtime 的池子，下次 fetch 复用，
+runtime 没了才还给 driver。
+
+规则：**提前 launch 之后，等待设备的线程一个 driver 调用都不许做**——到达用 `Runtime::hold`
+（自旋 kernel）、完成用 `Runtime::mark`（设备写 pinned 字）、输出用 `Runtime::fetch`、fault 用
+发射线程的 `Runtime::fault`；`read_output` 与 `cuStreamWaitValue` 只给没人提前跑的调用方。
+主线程被 cuBLAS 卡住本身无害（门一开就走），但它决定了 host 最多只能领先一个 item。"一个 driver 调用都不许做"包括 drop：任何带 CUDA 资源的类型都不能在这种线程上析构。
+
 ## 2026-09-22，cuBLASLt fp8 在图捕获里报 "green context"
 
 **capture 里的错误往往出在报错的前一条。** `extern:cublaslt_fp8_tn` eager 全对，`capture` 一进

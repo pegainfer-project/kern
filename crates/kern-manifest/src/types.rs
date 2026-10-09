@@ -71,7 +71,7 @@ pub struct Manifest {
     pub schema_version: u32,
     /// Free-form model label, e.g. `"qwen3-4b"`.
     pub model: String,
-    /// Rank groups of a multi-GPU manifest, e.g. `{"groups": {"ep": 4}}`: every rank of an SPMD group loads the same manifest; the two stages a cut's group joins load their own, agreeing only on the peer's `of` buffer.
+    /// Rank groups a multi-GPU manifest is SPMD over, e.g. `{"groups": {"ep": 4}}`; every rank loads the same manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology: Option<Topology>,
     /// The pipeline stage this manifest is, when it is one piece of a cut manifest, e.g. `{"id": "9f2c…", "stage": 1, "stages": 2}`.
@@ -620,6 +620,8 @@ pub enum BufferKind {
     Input,
     /// Read back by the runtime after each run, e.g. `next_token`.
     Output,
+    /// Both: holds a value before the run, which the programs may rewrite in place, and is read back after, e.g. the `hidden` a pipeline stage takes from the stage before it and hands to the next.
+    Inout,
     /// Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.
     Weight,
     /// Checkpoint tensors bound like a weight but alive only while a `derive` program reads them during load: device memory holds what is derived from them, never both at once, e.g. an expert stack before its shuffle.
@@ -637,6 +639,7 @@ impl fmt::Display for BufferKind {
         f.write_str(match self {
             BufferKind::Input => "input",
             BufferKind::Output => "output",
+            BufferKind::Inout => "inout",
             BufferKind::Weight => "weight",
             BufferKind::Source => "source",
             BufferKind::Workspace => "workspace",

@@ -2292,9 +2292,7 @@ name = "kern-serve"
 version = "0.2.3"
 dependencies = [
  "anyhow",
- "bytes",
  "clap",
- "futures-util",
  "hex",
  "kern-manifest",
  "kern-pool",
@@ -2304,7 +2302,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "vllm-chat",

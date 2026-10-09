@@ -58,7 +58,7 @@ use device::{alloc, DeviceBuf, Pinned};
 pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
-pub use exec::Mark;
+pub use exec::{Fetch, Gate, Mark};
 pub use harness::Scratch;
 pub use host::HostRegion;
 pub use host_weights::HostWeights;
@@ -135,6 +135,7 @@ pub struct Runtime {
     buffers: BTreeMap<String, DeviceBuf>,
     /// No kernels may read mapped host bytes before checkpoint binding completes.
     host_weights_ready: bool,
+    signals: exec::Signals,
     /// Weight buffers holding their checkpoint bytes: taken from a
     /// [`Resident`] at load, or copied by `load_weights`.
     filled: BTreeSet<String>,
@@ -269,7 +270,7 @@ impl Runtime {
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if b.kind != BufferKind::Input {
+        if !matches!(b.kind, BufferKind::Input | BufferKind::Inout) {
             bail!(Api, "buffer `{name}` is {}, not input", b.kind);
         }
         if data.len() as u64 > self.buffers[name].bytes {
@@ -292,7 +293,7 @@ impl Runtime {
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if b.kind != BufferKind::Output {
+        if !matches!(b.kind, BufferKind::Output | BufferKind::Inout) {
             bail!(Api, "buffer `{name}` is {}, not output", b.kind);
         }
         Ok(self.stream.clone_dtoh(&self.buffers[name])?)

@@ -26,7 +26,8 @@
 //!      against the interface, var ranges fit scalar params
 //!   8. dataflow per program: no read-before-write, no writes to input,
 //!      weight, source or peer buffers, every output / carry buffer written
-//!      by some program; a program is `once` or has a `batch`, not both; a
+//!      by some program (an inout holds a value before the run and need
+//!      not be); a program is `once` or has a `batch`, not both; a
 //!      batch has `groups >= 1` and constant `rows >= 1` or a declared var;
 //!      a source is read only by `derive` programs, which run inside weight
 //!      loading and so touch no state, input, output, peer or collective
@@ -784,7 +785,12 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             // handles are imported, before any program runs.
             matches!(
                 b.kind,
-                BufferKind::Input | BufferKind::Weight | BufferKind::Source | BufferKind::Carry | BufferKind::Peer
+                BufferKind::Input
+                    | BufferKind::Inout
+                    | BufferKind::Weight
+                    | BufferKind::Source
+                    | BufferKind::Carry
+                    | BufferKind::Peer
             )
         })
         .map(|(n, _)| n.as_str())
@@ -907,7 +913,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             (false, BufferKind::Source) => errs.push(format!(
                                 "{actx}: source buffer `{buf}` is read only by a `derive` program; it is gone after load"
                             )),
-                            (true, BufferKind::Input | BufferKind::Output | BufferKind::Peer) => errs.push(format!(
+                            (true, BufferKind::Input | BufferKind::Output | BufferKind::Inout | BufferKind::Peer) => errs.push(format!(
                                 "{actx}: a `derive` program runs inside weight loading, before any {} buffer such as `{buf}` means anything",
                                 b.kind
                             )),

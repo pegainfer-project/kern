@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use kern_manifest::protocol::{Axis, Filled, Forward, LineTable, PageTable, Rows};
-use kern_manifest::types::Fill;
+use kern_manifest::types::{BufferKind, Fill};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::{connect_nccl, GroupRank, PeerHandle, Runtime, Topology};
@@ -194,6 +194,22 @@ pub fn write_named(rt: &mut Runtime, p: &Protocol, name: &str, values: &[i64], v
     };
     rt.write_input_at(name, &bytes, vars)?;
     Ok(true)
+}
+
+/// The inputs of `m` nobody on the host stages: no fill, no table. On a
+/// pipeline stage they are what the stage before it holds under the
+/// same names and copies in ([`kern_runtime::Runtime::push`]).
+pub fn arrivals(m: &kern_manifest::types::Manifest, p: &Protocol) -> Vec<String> {
+    let staged = |n: &str| {
+        p.fills.iter().any(|f| f.name == n)
+            || p.page_tables.iter().any(|t| t.name == n)
+            || p.line_tables.iter().any(|t| t.name == n)
+    };
+    m.buffers
+        .iter()
+        .filter(|(n, b)| matches!(b.kind, BufferKind::Input | BufferKind::Inout) && !staged(n))
+        .map(|(n, _)| n.clone())
+        .collect()
 }
 
 /// Stage one call (see [`fills`]). Returns the call's vars.

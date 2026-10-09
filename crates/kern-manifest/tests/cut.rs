@@ -1,18 +1,16 @@
-//! A cut changes transport, never arithmetic: run symbolically, the stages
-//! of any cut that verifies compute what the whole manifest computes.
+//! A cut changes a stage's signature, never arithmetic: run symbolically,
+//! the stages of any cut that verifies, each fed what the one before it
+//! holds under the names it takes in, compute what the whole manifest
+//! computes.
 
 use std::collections::BTreeMap;
 
 use kern_manifest::cut::{cut, state_use};
-use kern_manifest::types::{Arg, Dir, Manifest, Module, ParamType};
+use kern_manifest::types::{Arg, BufferKind, Dir, Manifest, ParamType};
 use kern_manifest::{verify, Protocol, Verified};
 use serde_json::{json, Value};
 
 const QWEN3: &str = include_str!("../../../examples/qwen3-4b.json");
-
-fn pp() -> Module {
-    Module { source: "pp_mailbox.cubin".into(), sha256: "ab".repeat(32) }
-}
 
 struct Rand(u64);
 
@@ -123,36 +121,12 @@ struct Machine {
     states: BTreeMap<(String, u64), u64>,
 }
 
-/// The edge a pipeline buffer belongs to: `pp.<e>.box` / `pp.<e>.peer`.
-fn edge(name: &str) -> u64 {
-    name.split('.').nth(1).unwrap().parse().unwrap()
-}
-
 impl Machine {
     /// Run `program` of `m`: every op a hash of what it reads into what it
-    /// writes; the pipeline ops move values through `mail`.
-    fn run(&mut self, m: &Manifest, program: &str, mail: &mut BTreeMap<(u64, i64), u64>) {
+    /// writes.
+    fn run(&mut self, m: &Manifest, program: &str) {
         for c in &m.programs[program].calls {
             let label = c.label.clone().unwrap();
-            let buf = |a: &Arg| match a {
-                Arg::Buf { buf, .. } => buf.clone(),
-                _ => unreachable!(),
-            };
-            let off = |a: &Arg| match a {
-                Arg::I64 { i64: v } => *v,
-                _ => unreachable!(),
-            };
-            if c.op.starts_with("pp.put.") {
-                mail.insert((edge(&buf(&c.args[0])), off(&c.args[3])), self.bufs[&buf(&c.args[1])]);
-                continue;
-            }
-            if c.op.starts_with("pp.take.") {
-                self.bufs.insert(buf(&c.args[1]), mail[&(edge(&buf(&c.args[0])), off(&c.args[3]))]);
-                continue;
-            }
-            if c.op.starts_with("pp.") {
-                continue;
-            }
             let params = &m.ops[&c.op].params;
             let mut read = vec![name_hash(&c.op), name_hash(&label)];
             for (a, p) in c.args.iter().zip(params) {
@@ -186,7 +160,7 @@ impl Machine {
         let mut me = Machine::default();
         me.bufs.insert("x".into(), name_hash("x"));
         if m.programs.contains_key("init") {
-            me.run(m, "init", &mut BTreeMap::new());
+            me.run(m, "init");
         }
         me
     }
@@ -203,29 +177,41 @@ fn every_cut_that_verifies_computes_the_whole() {
         let at = if a + 1 < n && r.next(2) == 0 { vec![a, a + 1 + r.next(n - a - 1)] } else { vec![a] };
 
         let mut whole = Machine::start(&m);
-        whole.run(&m, "p", &mut BTreeMap::new());
+        whole.run(&m, "p");
 
-        let stages = match cut(&m, &at, &pp()) {
+        let stages = match cut(&m, &at) {
             Ok(s) => s,
             Err(e) => {
-                assert!(e.0.iter().all(|d| d.contains("touched by stages")), "seed {seed} at {at:?}: {e}");
+                let known = |d: &String| d.contains("touched by stages") || d.contains("passes through untouched");
+                assert!(e.0.iter().all(known), "seed {seed} at {at:?}: {e}");
                 refused += 1;
                 continue;
             }
         };
         cuts += 1;
         assert_eq!(stages.len(), at.len() + 1);
-        let mut mail = BTreeMap::new();
+        let mut held: BTreeMap<String, u64> = BTreeMap::new();
         let mut states = BTreeMap::new();
         let mut y = None;
         for (s, st) in stages.iter().enumerate() {
             assert_eq!(st.cut.as_ref().map(|c| (c.stage, c.stages)), Some((s as u64, stages.len() as u64)));
+            assert!(st.topology.is_none() && st.ops.keys().all(|o| m.ops.contains_key(o)), "seed {seed}: a cut adds");
             let mut me = Machine::start(st);
-            me.run(st, "p", &mut mail);
+            // The shell's wiring: what a stage takes in, the stage before holds by name.
+            for (n, b) in &st.buffers {
+                if matches!(b.kind, BufferKind::Input | BufferKind::Inout) {
+                    assert!(n == "x" || (b.export && held.contains_key(n)), "seed {seed}: `{n}` arrives from nowhere");
+                    if let Some(&v) = held.get(n) {
+                        me.bufs.insert(n.clone(), v);
+                    }
+                }
+            }
+            me.run(st, "p");
             for (k, v) in me.states {
                 assert!(states.insert(k, v).is_none(), "seed {seed}: a state region written by two stages");
             }
             y = me.bufs.get("y").copied();
+            held = me.bufs;
         }
         assert_eq!((y, states), (whole.bufs.get("y").copied(), whole.states), "seed {seed} at {at:?}");
     }
@@ -236,17 +222,9 @@ fn qwen3() -> Verified {
     verify(Manifest::from_json(QWEN3).unwrap()).unwrap()
 }
 
-/// The buffers stage `s`'s program puts into its outgoing box.
-fn carried(st: &Manifest, program: &str) -> Vec<String> {
-    st.programs[program]
-        .calls
-        .iter()
-        .filter(|c| c.op.starts_with("pp.put."))
-        .map(|c| match &c.args[1] {
-            Arg::Buf { buf, .. } => buf.clone(),
-            _ => unreachable!(),
-        })
-        .collect()
+/// The buffers of `st` of one kind.
+fn of_kind(st: &Manifest, kind: BufferKind) -> Vec<&str> {
+    st.buffers.iter().filter(|(_, b)| b.kind == kind).map(|(n, _)| n.as_str()).collect()
 }
 
 #[test]
@@ -254,13 +232,15 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
     // l18.qkv_proj: embed, l0 norm, 18 layers of 12 calls.
     let at = 2 + 18 * 12;
     assert_eq!(qwen3().programs["prefill"].calls[at].label.as_deref(), Some("l18.qkv_proj"));
-    let stages = cut(&qwen3(), &[at], &pp()).unwrap_or_else(|e| panic!("{e}"));
+    let stages = cut(&qwen3(), &[at]).unwrap_or_else(|e| panic!("{e}"));
     let (head, tail) = (&stages[0], &stages[1]);
-    // The residual stream and the normed input are all that crosses, in
-    // every program.
-    for p in ["prefill", "decode", "decode_batch"] {
-        assert_eq!(carried(head, p), ["residual", "x"]);
-    }
+    // The residual stream and the normed input are all that crosses: the
+    // head's outputs, rewritten in place on the tail, which exports them
+    // for the head to copy into.
+    assert_eq!((of_kind(head, BufferKind::Output), of_kind(head, BufferKind::Inout)), (vec!["residual", "x"], vec![]));
+    let exported: Vec<&str> = tail.buffers.iter().filter(|(_, b)| b.export).map(|(n, _)| n.as_str()).collect();
+    assert_eq!((of_kind(tail, BufferKind::Inout), exported), (vec!["residual", "x"], vec!["residual", "x"]));
+    assert!(!head.buffers["x"].export);
     // Each stage holds its own weights and its own calls of the KV.
     assert!(
         head.buffers.contains_key("model.embed_tokens.weight")
@@ -284,10 +264,10 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
     assert_eq!(pt.forward(1, kern_manifest::protocol::Rows::Const(1)).map(|f| f.emits.is_some()), Some(true));
     assert_eq!(head.cut.as_ref().map(|c| &c.id), tail.cut.as_ref().map(|c| &c.id));
     // The same cut is the same bytes.
-    let again = cut(&qwen3(), &[at], &pp()).unwrap();
+    let again = cut(&qwen3(), &[at]).unwrap();
     assert_eq!(again[1].to_json(), tail.to_json());
 
-    let three = cut(&qwen3(), &[2 + 12 * 12, 2 + 24 * 12], &pp()).unwrap_or_else(|e| panic!("{e}"));
+    let three = cut(&qwen3(), &[2 + 12 * 12, 2 + 24 * 12]).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(three.len(), 3);
     Protocol::check_unsampled(&three[1]).unwrap_or_else(|e| panic!("{e}"));
     assert_ne!(three[0].cut.as_ref().map(|c| &c.id), head.cut.as_ref().map(|c| &c.id));
@@ -297,6 +277,6 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
 fn a_cut_says_why_it_cannot_be_made() {
     let n = qwen3().programs["prefill"].calls.len();
     for at in [vec![], vec![0], vec![5, 5], vec![n]] {
-        assert!(cut(&qwen3(), &at, &pp()).is_err(), "{at:?}");
+        assert!(cut(&qwen3(), &at).is_err(), "{at:?}");
     }
 }

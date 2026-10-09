@@ -25,53 +25,274 @@
 //! another thread.
 
 use std::collections::BTreeMap;
+use std::ffi::CStr;
 use std::os::raw::c_void;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cudarc::driver::{sys, CudaContext};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
 use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn};
+use crate::device::Pinned;
 use crate::error::{bail, cuda_check};
 use crate::{Error, Result, Runtime};
+use kern_manifest::types::BufferKind;
 
 /// A point on the compute stream: everything issued before
-/// [`Runtime::mark`]. [`Mark::wait`] sleeps until the device has passed it,
-/// on any thread, and returns the fault of any launch before it.
+/// [`Runtime::mark`]. [`Mark::wait`] blocks until the device has passed
+/// it, on any thread.
+///
+/// Passing is read off a word in page-locked memory that a kernel at the
+/// mark writes, never off the driver: the thread that waits on a mark may
+/// be one the issuing thread is waiting for (it reports items done to the
+/// stage before, which pushes the next item, which opens the hold the
+/// issuing thread's launches sit behind), and any driver call it made
+/// could block on the context lock that thread holds inside a blocking
+/// launch (lessons.md, 2026-10-08). So a mark carries no event and says
+/// nothing about faults; the issuing thread asks [`Runtime::fault`].
 pub struct Mark {
-    ctx: Arc<CudaContext>,
-    event: sys::CUevent,
+    seq: u64,
+    passed: Arc<Pinned>,
 }
 
-// The event is a handle into the context the mark carries; waiting binds
-// that context, so the mark may be waited on from any thread.
-unsafe impl Send for Mark {}
+/// How long a mark is waited for before the device is given up on.
+const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Mark {
+    /// Whether the device has passed the mark.
+    pub fn passed(&self) -> bool {
+        unsafe { &*(self.passed.ptr() as *const AtomicU64) }.load(Ordering::Acquire) >= self.seq
+    }
+
+    /// Spins for the first moments, then sleeps in short steps.
     pub fn wait(self) -> Result<()> {
-        self.ctx.bind_to_thread()?;
-        cuda_check(unsafe { sys::cuEventSynchronize(self.event) }, "cuEventSynchronize")
+        let t = std::time::Instant::now();
+        while !self.passed() {
+            if t.elapsed() > TIMEOUT {
+                bail!(Cuda, "the device has not passed mark {} in {TIMEOUT:?}", self.seq);
+            }
+            if t.elapsed() > std::time::Duration::from_millis(2) {
+                std::thread::sleep(std::time::Duration::from_micros(20));
+            } else {
+                std::hint::spin_loop();
+            }
+        }
+        Ok(())
     }
 }
 
-impl Drop for Mark {
+/// A count in page-locked host memory the compute stream can wait on
+/// ([`Runtime::hold`]) and any thread can raise ([`Gate::open`]): the
+/// mirror of a [`Mark`]. With it a caller issues work before the data it
+/// reads is there and the device, not the host, holds the launches back.
+pub struct Gate {
+    host: Pinned,
+    device: u64,
+}
+
+impl Gate {
+    /// Raise the count to `n`; every hold for at most `n` lets go.
+    pub fn open(&self, n: u64) {
+        unsafe { &*(self.host.ptr() as *const AtomicU64) }.store(n, Ordering::Release);
+    }
+}
+
+/// The two kernels the runtime signals with, a few lines of PTX loaded
+/// once: `hold` spins on a gate's count, `flag` writes a mark's number.
+/// The hold is a kernel and not a stream memory operation because
+/// `cuStreamWaitValue` stalls the hardware channel its stream is
+/// multiplexed onto, and cuBLAS's own streams share those channels: a
+/// GEMM issued behind one deadlocked against the next hold (tray08,
+/// 2026-10-08). A spinning kernel holds one SM and nothing else.
+pub(crate) struct Signals {
+    module: sys::CUmodule,
+    hold: sys::CUfunction,
+    flag: sys::CUfunction,
+    passed: Arc<Pinned>,
+    passed_device: u64,
+    seq: AtomicU64,
+    fetches: Arc<Mutex<Vec<Pinned>>>,
+}
+
+unsafe impl Send for Signals {}
+unsafe impl Sync for Signals {}
+
+const SIGNALS_PTX: &CStr = c"
+.version 8.0
+.target sm_90
+.address_size 64
+.visible .entry hold(.param .u64 gate, .param .u64 count)
+{
+    .reg .b64 %g, %c, %v;
+    .reg .pred %p;
+    ld.param.u64 %g, [gate];
+    ld.param.u64 %c, [count];
+    cvta.to.global.u64 %g, %g;
+L:
+    ld.acquire.sys.global.u64 %v, [%g];
+    setp.ge.u64 %p, %v, %c;
+    @%p bra D;
+    nanosleep.u32 256;
+    bra L;
+D:
+    ret;
+}
+.visible .entry flag(.param .u64 word, .param .u64 value)
+{
+    .reg .b64 %w, %v;
+    ld.param.u64 %w, [word];
+    ld.param.u64 %v, [value];
+    cvta.to.global.u64 %w, %w;
+    st.release.sys.global.u64 [%w], %v;
+    ret;
+}
+";
+
+impl Signals {
+    pub(crate) fn load(ctx: &Arc<CudaContext>, gpu: usize) -> Result<Signals> {
+        ctx.bind_to_thread()?;
+        let mut module: sys::CUmodule = std::ptr::null_mut();
+        cuda_check(
+            unsafe { sys::cuModuleLoadData(&mut module, SIGNALS_PTX.as_ptr() as *const c_void) },
+            "cuModuleLoadData(signals)",
+        )?;
+        let function = |name: &CStr| {
+            let mut f: sys::CUfunction = std::ptr::null_mut();
+            cuda_check(
+                unsafe { sys::cuModuleGetFunction(&mut f, module, name.as_ptr()) },
+                "cuModuleGetFunction(signals)",
+            )
+            .map(|()| f)
+        };
+        let loaded = function(c"hold").and_then(|hold| Ok((hold, function(c"flag")?)));
+        let (hold, flag) = match loaded {
+            Ok(fs) => fs,
+            Err(e) => {
+                unsafe { sys::cuModuleUnload(module) };
+                return Err(e);
+            }
+        };
+        let passed = Arc::new(Pinned::alloc_mapped(8, gpu as i32)?);
+        unsafe { &*(passed.ptr() as *const AtomicU64) }.store(0, Ordering::Release);
+        let passed_device = passed.device()?;
+        Ok(Signals { module, hold, flag, passed, passed_device, seq: AtomicU64::new(0), fetches: Arc::default() })
+    }
+}
+
+impl Drop for Signals {
     fn drop(&mut self) {
-        unsafe { sys::cuEventDestroy_v2(self.event) };
+        unsafe { sys::cuModuleUnload(self.module) };
+    }
+}
+
+/// An output's bytes on their way to the host: a copy the compute stream
+/// makes into page-locked memory, complete once a [`Mark`] taken after it
+/// has passed. The thread that issues never waits for it. Dropped, the
+/// memory goes back to the runtime for the next fetch rather than to the
+/// driver: freeing page-locked memory synchronizes the device, and the
+/// thread reading a fetch is one that must not (lessons.md, 2026-10-08).
+pub struct Fetch {
+    pinned: Option<Pinned>,
+    len: usize,
+    pool: Arc<Mutex<Vec<Pinned>>>,
+}
+
+impl Fetch {
+    /// The bytes; meaningful only after a mark taken after the fetch passed.
+    pub fn bytes(&self) -> &[u8] {
+        let p = self.pinned.as_ref().expect("taken only on drop");
+        unsafe { std::slice::from_raw_parts(p.ptr() as *const u8, self.len) }
+    }
+}
+
+impl Drop for Fetch {
+    fn drop(&mut self) {
+        if let Some(p) = self.pinned.take() {
+            self.pool.lock().unwrap_or_else(|e| e.into_inner()).push(p);
+        }
     }
 }
 
 impl Runtime {
-    /// Mark the compute stream where it is now. The event blocks rather
-    /// than spins, so a thread waiting on it costs no core.
-    pub fn mark(&self) -> Result<Mark> {
+    fn signal(&self, f: sys::CUfunction, word: u64, value: u64, what: &str) -> Result<()> {
         self.ctx.bind_to_thread()?;
-        let mut event: sys::CUevent = std::ptr::null_mut();
-        let flags =
-            sys::CUevent_flags::CU_EVENT_DISABLE_TIMING as u32 | sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC as u32;
-        cuda_check(unsafe { sys::cuEventCreate(&mut event, flags) }, "cuEventCreate")?;
-        let mark = Mark { ctx: self.ctx.clone(), event };
-        cuda_check(unsafe { sys::cuEventRecord(mark.event, self.stream.cu_stream()) }, "cuEventRecord")?;
-        Ok(mark)
+        let mut params = [&word as *const u64 as *mut c_void, &value as *const u64 as *mut c_void];
+        let r = unsafe {
+            sys::cuLaunchKernel(
+                f,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                self.stream.cu_stream(),
+                params.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+        cuda_check(r, what)
+    }
+
+    /// Start fetching `name`, an output buffer, as it is after everything
+    /// issued so far.
+    pub fn fetch(&self, name: &str) -> Result<Fetch> {
+        self.ctx.bind_to_thread()?;
+        let Some(b) = self.manifest.buffers.get(name) else {
+            bail!(Api, "no buffer `{name}`");
+        };
+        if !matches!(b.kind, BufferKind::Output | BufferKind::Inout) {
+            bail!(Api, "buffer `{name}` is {}, not output", b.kind);
+        }
+        let src = &self.buffers[name];
+        let pool = &self.signals.fetches;
+        let spare = {
+            let mut v = pool.lock().unwrap_or_else(|e| e.into_inner());
+            v.iter().position(|p| p.bytes() >= src.bytes).map(|i| v.swap_remove(i))
+        };
+        let pinned = match spare {
+            Some(p) => p,
+            None => Pinned::alloc(src.bytes, self.gpu as i32)?,
+        };
+        let r = unsafe {
+            sys::cuMemcpyDtoHAsync_v2(pinned.ptr() as *mut c_void, src.ptr, src.bytes as usize, self.stream.cu_stream())
+        };
+        cuda_check(r, "cuMemcpyDtoHAsync")?;
+        Ok(Fetch { pinned: Some(pinned), len: src.bytes as usize, pool: pool.clone() })
+    }
+
+    /// Mark the compute stream where it is now.
+    pub fn mark(&self) -> Result<Mark> {
+        let seq = self.signals.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        self.signal(self.signals.flag, self.signals.passed_device, seq, "cuLaunchKernel(flag)")?;
+        Ok(Mark { seq, passed: self.signals.passed.clone() })
+    }
+
+    /// The fault of any launch so far, without waiting for the rest: the
+    /// issuing thread's way of hearing what a mark it never waits on would
+    /// have said.
+    pub fn fault(&self) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        match unsafe { sys::cuStreamQuery(self.stream.cu_stream()) } {
+            sys::CUresult::CUDA_SUCCESS | sys::CUresult::CUDA_ERROR_NOT_READY => Ok(()),
+            r => cuda_check(r, "cuStreamQuery"),
+        }
+    }
+
+    /// A gate at count zero.
+    pub fn gate(&self) -> Result<Gate> {
+        let host = Pinned::alloc_mapped(8, self.gpu as i32)?;
+        let device = host.device()?;
+        let gate = Gate { host, device };
+        gate.open(0);
+        Ok(gate)
+    }
+
+    /// Hold the compute stream where it is now until `gate` reaches `n`.
+    pub fn hold(&self, gate: &Gate, n: u64) -> Result<()> {
+        self.signal(self.signals.hold, gate.device, n, "cuLaunchKernel(hold)")
     }
 
     fn require_ready(&self) -> Result<()> {

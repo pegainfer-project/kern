@@ -10,15 +10,16 @@
 //! takes the admitted prompts' next rows packed back to back ([`pack`]).
 //!
 //! Each item is sent to every stage before the head stages and issues it
-//! itself, so a stage waiting on its device for an item always has it on
-//! the way. The last stage answers every item, so the head knows how many
-//! are in the pipeline: a full item (all its rows or all its sequences)
-//! goes out at once, a partial one only
-//! while fewer items than stages are in flight, so packing waits for rows
-//! only when the stages have work. The first token finishes the request.
-//! Nothing waits on the head's device; its [`Watch`] logs each item.
+//! itself, so a stage waiting for an item always has it on the way. The
+//! last stage answers every item, so the head knows how many are in the
+//! pipeline: a full item (all its rows or all its sequences) goes out at
+//! once, a partial one only while fewer items than stages are in flight,
+//! so packing waits for rows only when the stages have work. The first
+//! token finishes the request. The head's own device is waited on only
+//! by its [`Flow`], to push each item to stage 1.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 
 use anyhow::{bail, ensure, Context, Result};
@@ -30,11 +31,10 @@ use kern_runtime::{Capacity, Error, Runtime};
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
 };
-use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use super::pack::{pack, Bounds, Waiting};
-use super::{connect_downstream, recv, send, topology, wire, Handles, Hello, Item, Reader, Table, Watch, Writer};
+use super::{recv, send, Flow, Hello, Item, Next, Table};
 use crate::scheduler::Facts;
 
 /// How the head loads and what it may run at once.
@@ -77,29 +77,27 @@ pub struct PpHead {
     depth: usize,
     max_seqs: usize,
     stop_tokens: Vec<u32>,
-    io: tokio::runtime::Runtime,
-    stages: Vec<Writer>,
+    stages: Vec<TcpStream>,
     replies: mpsc::Receiver<Vec<i64>>,
     waiting: VecDeque<QueuedRequest>,
     active: VecDeque<Active>,
     /// Per item in flight, oldest first, the prompts its reply finishes.
     due: VecDeque<Vec<Finish>>,
-    watch: Watch,
+    flow: Flow,
 }
 
 /// Wait for every other stage, load stage 0 at the pages they all have,
-/// map stage 1's mailbox and answer each stage with its table.
+/// answer each stage with its table and join stage 1.
 pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
     let cut = m.cut.clone().context("the head serves a cut manifest")?;
     ensure!(cut.stage == 0, "`--pp-listen` serves stage 0; this manifest is stage {} of {}", cut.stage, cut.stages);
-    let io = super::io()?;
-    let listener = io.block_on(TcpListener::bind(&h.listen)).with_context(|| format!("binding {}", h.listen))?;
+    let listener = TcpListener::bind(&h.listen).with_context(|| format!("binding {}", h.listen))?;
     info!(listen = %h.listen, stages = cut.stages, cut = %cut.id, "waiting for the stages");
-    let mut hellos: BTreeMap<u64, (Hello, Reader, Writer)> = BTreeMap::new();
+    let mut hellos: BTreeMap<u64, (Hello, TcpStream, String)> = BTreeMap::new();
     while (hellos.len() as u64) < cut.stages - 1 {
-        let (s, addr) = io.block_on(listener.accept())?;
-        let (mut r, w) = wire(s);
-        let hello: Hello = io.block_on(recv(&mut r))?.with_context(|| format!("{addr} closed before its hello"))?;
+        let (mut s, addr) = listener.accept()?;
+        let _ = s.set_nodelay(true);
+        let hello: Hello = recv(&mut s)?.with_context(|| format!("{addr} closed before its hello"))?;
         ensure!(
             hello.cut == cut.id,
             "{addr}: stage {} is of cut `{}`, the head of `{}`",
@@ -114,22 +112,16 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
             cut.stages
         );
         info!(stage = hello.stage, %addr, pages = hello.pages, "stage joined");
-        hellos.insert(hello.stage, (hello, r, w));
+        let reach = format!("{}:{}", addr.ip(), hello.port);
+        hellos.insert(hello.stage, (hello, s, reach));
     }
     let unit = kern_pool::page_unit(&m);
     let fewest = hellos.values().map(|(x, ..)| x.pages).min().expect("at least one other stage");
     let tokens = h.capacity.map_or(fewest * unit, |c| c.min(fewest * unit));
     let seqs = (h.max_seqs + 1) as u64;
-    let mut rt = Runtime::load(
-        &m,
-        h.kernels.as_deref(),
-        h.gpu,
-        Some(Capacity { tokens: Some(tokens), seqs }),
-        topology(&m).as_ref(),
-    )?;
+    let mut rt = Runtime::load(&m, h.kernels.as_deref(), h.gpu, Some(Capacity { tokens: Some(tokens), seqs }), None)?;
     rt.set_eager(h.eager);
     weights.bind(&mut rt)?;
-    connect_downstream(&mut rt, &hellos[&1].0.mailbox)?;
     let p = Protocol::check_unsampled(&rt.manifest)?;
     kern_run::run_once(&rt, &p)?;
     let pages = rt.pages_total() as u64;
@@ -147,16 +139,21 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
     };
     let context = p.context.as_ref().map_or(usize::MAX, |c| c.max as usize);
     let bounds = Bounds { rows: chunk, seqs: prefill.groups as usize, context };
-    let downstream: Vec<Option<Handles>> =
-        (1..cut.stages).map(|s| hellos.get(&(s + 1)).map(|(x, ..)| x.mailbox.clone())).collect();
+    let next_of = |s: u64| hellos.get(&(s + 1)).map(|(x, _, reach)| (reach.clone(), x.arrivals.clone()));
+    let tables: Vec<Table> = (1..cut.stages).map(|s| Table { pages, next: next_of(s) }).collect();
+    let first = next_of(0).expect("stage 1 said hello");
     let (tx, replies) = mpsc::channel();
     let mut stages = Vec::new();
-    for ((s, (_, r, mut w)), down) in hellos.into_iter().zip(downstream) {
-        io.block_on(send(&mut w, &Table { downstream_mailbox: down, pages }))?;
+    for ((s, (_, mut w, _)), table) in hellos.into_iter().zip(tables) {
+        send(&mut w, &table)?;
         let tx = (s == cut.stages - 1).then(|| tx.clone());
-        io.spawn(listen(s, r, tx));
+        std::thread::spawn({
+            let r = w.try_clone()?;
+            move || listen(s, r, tx)
+        });
         stages.push(w);
     }
+    let next = Next::connect(&rt, &first.0, &first.1)?;
 
     let step_name = step.as_ref().map_or("-", |f| f.name.as_str()).to_string();
     info!(pages, page = rt.page(), chunk, seqs = bounds.seqs, prefill = %prefill.name, step = %step_name,
@@ -170,21 +167,20 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
         depth: cut.stages as usize,
         max_seqs: h.max_seqs,
         stop_tokens: h.stop_tokens,
-        io,
         stages,
         replies,
         waiting: VecDeque::new(),
         active: VecDeque::new(),
         due: VecDeque::new(),
-        watch: Watch::new(0),
+        flow: Flow::new(0, None, Some(next), None),
     })
 }
 
 /// Read one stage's connection to its end: the last stage's answers go to
 /// the scheduler; anything closing ends the head.
-async fn listen(stage: u64, mut r: Reader, tokens: Option<mpsc::Sender<Vec<i64>>>) {
+fn listen(stage: u64, mut r: TcpStream, tokens: Option<mpsc::Sender<Vec<i64>>>) {
     let why = loop {
-        match (recv::<Vec<i64>>(&mut r).await, &tokens) {
+        match (recv::<Vec<i64>>(&mut r), &tokens) {
             (Ok(Some(t)), Some(tx)) => {
                 if tx.send(t).is_err() {
                     return;
@@ -342,13 +338,13 @@ impl PpHead {
         }
         let item = Item { program: f.name.clone(), vars, rows };
         for w in &mut self.stages {
-            self.io.block_on(send(w, &item))?;
+            send(w, &item)?;
         }
         for (name, v) in &item.rows {
             kern_run::write_named(&mut self.rt, &self.p, name, v, &item.vars)?;
         }
         self.rt.issue(&item.program, &item.vars).with_context(|| format!("`{}`", item.program))?;
-        self.watch.issued(&self.rt, ids.len() as u64)?;
+        self.flow.issued(&self.rt, &item.vars, ids.len() as u64, None)?;
         Ok(())
     }
 

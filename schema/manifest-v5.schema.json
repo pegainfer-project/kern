@@ -369,6 +369,11 @@
           "type": "string"
         },
         {
+          "const": "inout",
+          "description": "Both: holds a value before the run, which the programs may rewrite in place, and is read back after, e.g. the `hidden` a pipeline stage takes from the stage before it and hands to the next.",
+          "type": "string"
+        },
+        {
           "const": "weight",
           "description": "Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.",
           "type": "string"
@@ -2300,7 +2305,7 @@
           "type": "null"
         }
       ],
-      "description": "Rank groups of a multi-GPU manifest, e.g. `{\"groups\": {\"ep\": 4}}`: every rank of an SPMD group loads the same manifest; the two stages a cut's group joins load their own, agreeing only on the peer's `of` buffer."
+      "description": "Rank groups a multi-GPU manifest is SPMD over, e.g. `{\"groups\": {\"ep\": 4}}`; every rank loads the same manifest."
     },
     "vars": {
       "additionalProperties": {

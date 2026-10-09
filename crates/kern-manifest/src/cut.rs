@@ -1,23 +1,28 @@
 //! Cutting a manifest into a pipeline: stage `s` runs the calls between
-//! two cut points of every program a serving loop drives, and the
-//! activations live across a cut travel through a mailbox.
+//! two cut points of every program a serving loop drives, and what it
+//! needs from the stage before it, or leaves for the stage after it, is
+//! an input or an output of its own like any other.
 //!
 //! A forward is a pure function of its inputs and its states, so a cut
 //! changes no arithmetic: the stages run the same calls in the same order
 //! on the same values, and the pipeline's outputs are the unsplit
-//! manifest's byte for byte. What a cut adds is transport. At a cut point
-//! the buffers live across it are the ones the calls after it read before
-//! they write them whole (an `out` at offset 0 is taken to write the whole
-//! buffer, as every generator writes a view at its base) and that the
-//! calls before it wrote; each must be a workspace, since an output is read
-//! from the last stage and a carry would cross programs. The upstream stage
-//! ends every program by putting them into a box on the downstream GPU
-//! (`tools/kernels-src/pp_mailbox.cu`): wait until the box is empty, put,
-//! post. The downstream stage starts by waiting for the post, taking them
-//! out and freeing the box. One box per edge, laid out per program at the
-//! bounds of its vars; the box sits on the downstream GPU and the upstream
-//! reaches it through a `peer` buffer of a two-member topology group
-//! `pp.<edge>`, its own copy of the box unused.
+//! manifest's byte for byte. What a cut adds is a signature per stage. At
+//! a cut point the buffers live across it are the ones the calls after it
+//! read before they write them whole (an `out` at offset 0 is taken to
+//! write the whole buffer, as every generator writes a view at its base)
+//! and that the calls before it wrote; each must be a workspace, since an
+//! output is read from the last stage and a carry would cross programs.
+//! On the stage before the cut such a buffer is an `output`; on the stage
+//! after it an `input` when that stage only reads it (on its way to a
+//! later stage or not), an `inout` when the stage rewrites it in place.
+//! A buffer that arrives is exported, so the stage before can map it and
+//! copy into it. How the value travels (a memcpy over NVLink, RDMA, a
+//! copy within a process) and when (the stage before has finished the
+//! item, the stage after is done with the one before it) is the serving
+//! shell's, which wires the stages by name: every arriving buffer of a
+//! stage is one its predecessor holds under the same name. A value a
+//! stage neither reads nor writes on its way to a later stage is
+//! refused: a stage carries only what it uses.
 //!
 //! A state never travels. Every region of a state (a state and a call's
 //! offset into it) belongs to the one stage whose calls touch it, which is
@@ -30,30 +35,20 @@
 //!
 //! The prompt reaches its first token the way it does unsplit, from the
 //! step or from a chunk program that hands one back; either way the last
-//! stage writes it, since only the last stage writes an output. Everything a stage
-//! does not use is dropped, and every stage verifies. A state is kept whole
-//! or not at all, so a state laid out over the whole model (one KV state
-//! for every layer) is carried whole by every stage that touches a piece of
-//! it; [`state_use`] says how much of each one a stage uses, and a
-//! generator that gives each piece its own state (one per layer) lets a
-//! stage carry only its own. A table whose state a stage dropped indexes a
-//! kept state of the same kind: a pool hands every paged state the same ids.
+//! stage writes it, since only the last stage writes an output. Everything
+//! a stage does not use is dropped, and every stage verifies. A state is
+//! kept whole or not at all, so a state laid out over the whole model (one
+//! KV state for every layer) is carried whole by every stage that touches
+//! a piece of it; [`state_use`] says how much of each one a stage uses,
+//! and a generator that gives each piece its own state (one per layer)
+//! lets a stage carry only its own. A table whose state a stage dropped
+//! indexes a kept state of the same kind: a pool hands every paged state
+//! the same ids.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::json;
-
 use crate::types::*;
 use crate::verify::{verify, Verified};
-
-/// How long a mailbox wait spins before the stage gives up and traps.
-pub const TIMEOUT_NS: i64 = 60_000_000_000;
-/// Bytes of a box before its data: the two counters, a cache line each.
-const HEADER: u64 = 256;
-/// Each carried buffer starts at a multiple of this in the box.
-const ALIGN: u64 = 256;
-/// The module name the pipeline kernels go under in every stage.
-const MODULE: &str = "pp";
 
 /// Every reason a manifest cannot be cut where asked, reported together.
 #[derive(Debug)]
@@ -71,21 +66,10 @@ impl std::fmt::Display for CutErrors {
 
 impl std::error::Error for CutErrors {}
 
-/// A buffer an edge carries in one program: where in the box, and how
-/// many bytes per call.
-#[derive(Debug, Clone)]
-struct Carried {
-    buffer: String,
-    dtype: DType,
-    offset: u64,
-    bytes: Expr,
-}
-
 /// Cut `m` before each call index in `at` of every program with a
-/// `batch` (all of them must be longer than the last point), wiring in
-/// the mailbox kernels of `pp`. Returns the stages in order, each
-/// verified.
-pub fn cut(m: &Verified, at: &[usize], pp: &Module) -> Result<Vec<Verified>, CutErrors> {
+/// `batch` (all of them must be longer than the last point). Returns the
+/// stages in order, each verified.
+pub fn cut(m: &Verified, at: &[usize]) -> Result<Vec<Verified>, CutErrors> {
     let mut errs = Vec::new();
     if m.topology.is_some() {
         errs.push("the manifest has a topology; a cut takes a single-rank manifest".to_string());
@@ -114,37 +98,21 @@ pub fn cut(m: &Verified, at: &[usize], pp: &Module) -> Result<Vec<Verified>, Cut
     let stages = at.len() + 1;
     let bounds: Vec<usize> = std::iter::once(0).chain(at.iter().copied()).collect();
     let span = |p: &Program, s: usize| bounds[s]..bounds.get(s + 1).copied().unwrap_or(p.calls.len());
-    let max: BTreeMap<String, u64> = m.vars.iter().map(|(k, v)| (k.clone(), v.max)).collect();
 
-    // What each edge carries in each program, and each box's size.
-    let mut carried: BTreeMap<(&str, usize), Vec<Carried>> = BTreeMap::new();
+    // What crosses each edge: live after it, written before it.
+    let mut crossing: Vec<BTreeSet<&str>> = vec![BTreeSet::new(); at.len()];
     for (name, p) in &driven {
         for (e, &a) in at.iter().enumerate() {
             let before = writes(m, &p.calls[..a]);
-            let mut offset = 0;
-            let mut list = Vec::new();
             for b in live_in(m, &p.calls[a..]).into_iter().filter(|b| before.contains(b)) {
-                let buf = &m.buffers[b];
-                if buf.kind != BufferKind::Workspace {
+                if m.buffers[b].kind != BufferKind::Workspace {
                     errs.push(format!(
                         "program `{name}`: {} buffer `{b}` is live across the cut before call {a}; only a workspace travels",
-                        buf.kind
+                        m.buffers[b].kind
                     ));
-                    continue;
                 }
-                match bytes_of(buf) {
-                    Some(bytes) => {
-                        let at_max = bytes.eval(&max).unwrap_or(u64::MAX);
-                        list.push(Carried { buffer: b.to_string(), dtype: buf.dtype, offset, bytes });
-                        offset += at_max.div_ceil(ALIGN) * ALIGN;
-                    }
-                    None => errs.push(format!(
-                        "program `{name}`: buffer `{b}` is shaped {:?}; a carried buffer has at most one var dim",
-                        buf.shape
-                    )),
-                }
+                crossing[e].insert(b);
             }
-            carried.insert((name.as_str(), e), list);
         }
         for (i, c) in p.calls.iter().enumerate().take(bounds[stages - 1]) {
             for (b, _, dir) in accesses(m, c) {
@@ -156,6 +124,33 @@ pub fn cut(m: &Verified, at: &[usize], pp: &Module) -> Result<Vec<Verified>, Cut
                 }
             }
         }
+    }
+    // Each stage's signature: what arrives, what it writes, what leaves.
+    let mut kinds: Vec<BTreeMap<&str, BufferKind>> = Vec::with_capacity(stages);
+    for s in 0..stages {
+        let arriving = if s > 0 { crossing[s - 1].clone() } else { BTreeSet::new() };
+        let leaving = crossing.get(s).cloned().unwrap_or_default();
+        let (mut touched, mut written) = (BTreeSet::new(), BTreeSet::new());
+        for (_, p) in &driven {
+            let calls = &p.calls[span(p, s)];
+            touched.extend(calls.iter().flat_map(|c| accesses(m, c)).map(|(b, ..)| b));
+            written.extend(writes(m, calls));
+        }
+        let mut k = BTreeMap::new();
+        for &b in arriving.union(&leaving) {
+            k.insert(
+                b,
+                match (arriving.contains(b), written.contains(b)) {
+                    (true, true) => BufferKind::Inout,
+                    (true, false) => BufferKind::Input,
+                    (false, _) => BufferKind::Output,
+                },
+            );
+            if !touched.contains(b) {
+                errs.push(format!("stage {s}: `{b}` passes through untouched; a stage carries only what it uses"));
+            }
+        }
+        kinds.push(k);
     }
     let mut owner: BTreeMap<(String, u64), usize> = BTreeMap::new();
     for (name, p) in &driven {
@@ -175,124 +170,30 @@ pub fn cut(m: &Verified, at: &[usize], pp: &Module) -> Result<Vec<Verified>, Cut
     if !errs.is_empty() {
         return Err(CutErrors(errs));
     }
-    let boxes: Vec<u64> = (0..at.len())
-        .map(|e| {
-            let data = carried
-                .iter()
-                .filter(|((_, ee), _)| *ee == e)
-                .map(|(_, list)| list.last().map_or(0, |c| c.offset + c.bytes.eval(&max).unwrap_or(0)))
-                .max()
-                .unwrap_or(0);
-            HEADER + data.max(1).div_ceil(ALIGN) * ALIGN
-        })
-        .collect();
 
     let id = id_of(m, at);
-    let built: Vec<Manifest> = (0..stages)
+    (0..stages)
         .map(|s| {
-            let programs: BTreeMap<String, Program> = driven
+            let programs = driven
                 .iter()
-                .map(|(name, p)| {
-                    let into = (s > 0).then(|| &carried[&(name.as_str(), s - 1)][..]);
-                    let out = (s + 1 < stages).then(|| &carried[&(name.as_str(), s)][..]);
-                    let calls =
-                        receive(s, into).into_iter().chain(p.calls[span(p, s)].iter().cloned()).chain(send(s, out));
-                    ((*name).clone(), Program { calls: calls.collect(), ..(*p).clone() })
-                })
+                .map(|(name, p)| ((*name).clone(), Program { calls: p.calls[span(p, s)].to_vec(), ..(*p).clone() }))
                 .collect();
-            stage(m, programs, s, stages, &boxes, &id, pp)
+            let st = stage(m, programs, &kinds[s], s, stages, &id);
+            verify(st).map_err(|e| CutErrors(e.0.into_iter().map(|d| format!("stage {s}: {d}")).collect()))
         })
-        .collect();
-    built
-        .into_iter()
-        .enumerate()
-        .map(|(s, st)| verify(st).map_err(|e| CutErrors(e.0.into_iter().map(|d| format!("stage {s}: {d}")).collect())))
         .collect()
 }
 
-fn box_name(e: usize) -> String {
-    format!("pp.{e}.box")
-}
-
-fn peer_name(e: usize) -> String {
-    format!("pp.{e}.peer")
-}
-
-fn call(op: &str, args: serde_json::Value) -> Call {
-    serde_json::from_value(json!({"label": op, "op": op, "args": args})).expect("a well-formed call")
-}
-
-/// The calls that start stage `s`: take what the edge into it carries
-/// (none on a first stage).
-fn receive(s: usize, into: Option<&[Carried]>) -> Vec<Call> {
-    let Some(list) = into else { return Vec::new() };
-    let b = box_name(s - 1);
-    std::iter::once(call("pp.wait_full", json!([{"buf": b}])))
-        .chain(list.iter().map(|c| {
-            call(
-                &format!("pp.take.{}", c.dtype),
-                json!([{"buf": b}, {"buf": c.buffer}, {"expr": c.bytes}, {"i64": c.offset}]),
-            )
-        }))
-        .chain(std::iter::once(call("pp.post_empty", json!([{"buf": b}]))))
-        .collect()
-}
-
-/// The calls that end stage `s`: put what the edge out of it carries
-/// (none on a last stage).
-fn send(s: usize, out: Option<&[Carried]>) -> Vec<Call> {
-    let Some(list) = out else { return Vec::new() };
-    let p = peer_name(s);
-    std::iter::once(call("pp.wait_empty", json!([{"buf": p}])))
-        .chain(list.iter().map(|c| {
-            call(
-                &format!("pp.put.{}", c.dtype),
-                json!([{"buf": p}, {"buf": c.buffer}, {"expr": c.bytes}, {"i64": c.offset}]),
-            )
-        }))
-        .chain(std::iter::once(call("pp.post_full", json!([{"buf": p}]))))
-        .collect()
-}
-
-/// The pipeline ops a stage's calls name: `pp.put.<dtype>` and
-/// `pp.take.<dtype>` per carried dtype, the waits and the posts.
-fn pp_op(name: &str) -> Op {
-    let single = |entry: &str, params: serde_json::Value| {
-        json!({"params": params, "impl": {"launches": [
-            {"module": MODULE, "entry": entry, "block": [1, 1, 1], "grid": [1, 1, 1]}]}})
-    };
-    let wait = |entry: &str, first: &str| {
-        json!({"params": [first], "impl": {"launches": [
-            {"module": MODULE, "entry": entry, "block": [1, 1, 1], "grid": [1, 1, 1],
-             "params": [first, "i64"], "args": [{"param": 0}, {"i64": TIMEOUT_NS}]}]}})
-    };
-    let copy = |entry: &str, params: serde_json::Value| {
-        json!({"params": params, "impl": {"launches": [
-            {"module": MODULE, "entry": entry, "block": [256, 1, 1], "grid": [264, 1, 1]}]}})
-    };
-    let v = match name.split('.').collect::<Vec<_>>().as_slice() {
-        ["pp", "wait_empty"] => wait("kern_pp_wait_empty", "in buffer<u64>"),
-        ["pp", "wait_full"] => wait("kern_pp_wait_full", "in buffer<u8>"),
-        ["pp", "post_full"] => single("kern_pp_post_full", json!(["in buffer<u64>"])),
-        ["pp", "post_empty"] => single("kern_pp_post_empty", json!(["inout buffer<u8>"])),
-        ["pp", "put", dt] => copy("kern_pp_put", json!(["in buffer<u64>", format!("in buffer<{dt}>"), "i64", "i64"])),
-        ["pp", "take", dt] => copy("kern_pp_take", json!(["in buffer<u8>", format!("out buffer<{dt}>"), "i64", "i64"])),
-        _ => unreachable!("the cut names only the pipeline ops above"),
-    };
-    serde_json::from_value(v).expect("a well-formed pipeline op")
-}
-
-/// Stage `s` of `stages`: `programs` (already cut and wired), the once
-/// and derive programs sliced to what they need, and every declaration
-/// they use.
+/// Stage `s` of `stages`: `programs` (already cut), the once and derive
+/// programs sliced to what they need, and every declaration they use,
+/// the buffers crossing its edges re-declared as `kinds` says.
 fn stage(
     m: &Manifest,
     mut programs: BTreeMap<String, Program>,
+    kinds: &BTreeMap<&str, BufferKind>,
     s: usize,
     stages: usize,
-    boxes: &[u64],
     id: &str,
-    pp: &Module,
 ) -> Manifest {
     let mut needed: BTreeSet<String> =
         programs.values().flat_map(|p| &p.calls).flat_map(|c| reads(m, c)).map(str::to_string).collect();
@@ -310,26 +211,8 @@ fn stage(
         }
     }
 
-    let mut buffers: BTreeMap<String, Buffer> = BTreeMap::new();
-    let u8_box = |bytes: u64, kind: &str| -> Buffer {
-        serde_json::from_value(json!({"dtype": "u8", "shape": [bytes], "kind": kind, "export": true})).expect("a box")
-    };
-    if s > 0 {
-        buffers.insert(box_name(s - 1), u8_box(boxes[s - 1], "carry"));
-    }
-    let mut topology = None;
-    if s + 1 < stages {
-        buffers.insert(box_name(s), u8_box(boxes[s], "workspace"));
-        buffers.insert(
-            peer_name(s),
-            serde_json::from_value(
-                json!({"dtype": "u64", "shape": [2], "kind": "peer", "of": box_name(s), "group": format!("pp.{s}")}),
-            )
-            .expect("a peer"),
-        );
-        topology = Some(Topology { groups: BTreeMap::from([(format!("pp.{s}"), 2)]) });
-    }
     let calls: Vec<&Call> = programs.values().flat_map(|p| &p.calls).collect();
+    let mut buffers: BTreeMap<String, Buffer> = BTreeMap::new();
     for c in &calls {
         for a in &c.args {
             if let Arg::Buf { buf, .. } = a {
@@ -338,6 +221,11 @@ fn stage(
                 }
             }
         }
+    }
+    for (name, &kind) in kinds {
+        let b = buffers.get_mut(*name).expect("a crossing buffer is one the stage's calls touch");
+        b.kind = kind;
+        b.export = kind != BufferKind::Output;
     }
     let states: BTreeMap<String, State> =
         calls.iter().flat_map(|c| state_args(c)).map(|(st, _)| (st.to_string(), m.states[st].clone())).collect();
@@ -355,16 +243,13 @@ fn stage(
             _ => b.domain = None,
         }
     }
-    let ops: BTreeMap<String, Op> =
-        calls.iter().map(|c| (c.op.clone(), m.ops.get(&c.op).cloned().unwrap_or_else(|| pp_op(&c.op)))).collect();
-    let mut modules: BTreeMap<String, Module> = ops
+    let ops: BTreeMap<String, Op> = calls.iter().map(|c| (c.op.clone(), m.ops[&c.op].clone())).collect();
+    let modules: BTreeMap<String, Module> = ops
         .values()
         .flat_map(|o| &o.imp.launches)
         .filter_map(Launch::module)
-        .filter(|n| *n != MODULE)
         .map(|n| (n.to_string(), m.modules[n].clone()))
         .collect();
-    modules.insert(MODULE.to_string(), pp.clone());
     // A var stays when some kept declaration names it: shapes, grids,
     // call args, batches and domains all spell a var as a bare string.
     let mut strings = BTreeSet::new();
@@ -375,7 +260,7 @@ fn stage(
     Manifest {
         schema_version: m.schema_version,
         model: m.model.clone(),
-        topology,
+        topology: None,
         cut: Some(Cut { id: id.to_string(), stage: s as u64, stages: stages as u64 }),
         vars,
         states,
@@ -397,19 +282,6 @@ fn collect_strings(v: &serde_json::Value, out: &mut BTreeSet<String>) {
     }
 }
 
-/// Bytes one call moves of `b`: its size at the call's vars, when at most
-/// one dim is a var.
-fn bytes_of(b: &Buffer) -> Option<Expr> {
-    let constant: u64 = b.shape.iter().filter_map(|d| if let Dim::Const(c) = d { Some(*c) } else { None }).product();
-    let vars: Vec<&String> = b.shape.iter().filter_map(|d| if let Dim::Var(v) = d { Some(v) } else { None }).collect();
-    let c = constant * b.dtype.bytes();
-    match vars.as_slice() {
-        [] => Some(Expr::Const(c)),
-        [v] => Some(Expr::Mul { mul: (Box::new(Expr::Var((*v).clone())), c) }),
-        _ => None,
-    }
-}
-
 /// Every buffer argument of `c`: name, offset and the direction its op
 /// declares.
 fn accesses<'a>(m: &'a Manifest, c: &'a Call) -> Vec<(&'a str, u64, Dir)> {
@@ -424,16 +296,9 @@ fn accesses<'a>(m: &'a Manifest, c: &'a Call) -> Vec<(&'a str, u64, Dir)> {
         .collect()
 }
 
-/// The buffers `c` reads, by name; a pipeline call reads its buffers too.
+/// The buffers `c` reads, by name.
 fn reads<'a>(m: &'a Manifest, c: &'a Call) -> impl Iterator<Item = &'a str> {
-    let known = m.ops.contains_key(&c.op);
-    let acc = accesses(m, c);
-    let pipeline: Vec<&str> = if known {
-        Vec::new()
-    } else {
-        c.args.iter().filter_map(|a| if let Arg::Buf { buf, .. } = a { Some(buf.as_str()) } else { None }).collect()
-    };
-    acc.into_iter().filter(|(_, _, d)| *d != Dir::Out).map(|(b, _, _)| b).chain(pipeline)
+    accesses(m, c).into_iter().filter(|(_, _, d)| *d != Dir::Out).map(|(b, _, _)| b)
 }
 
 /// The buffers `calls` write.

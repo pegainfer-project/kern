@@ -14,7 +14,7 @@ ops.<name>.impl.launches[]   launch   起一次 module 入口 {"module": "argmax
 modules.<name>               module   launch 钉住的工件  {"source": "argmax.cubin", "sha256": "…"}
 vars.<name>                  var      caller 每次调用供应的标量，有上界
 states.<name>                state    不透明持久内存，runtime 按字节供应
-buffers.<name>               buffer   有类型的张量：input / output / weight / source / workspace / carry / peer
+buffers.<name>               buffer   有类型的张量：input / output / inout / weight / source / workspace / carry / peer
 topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和大小
 cut                          cut      流水线的一段：id、第几段、共几段
 ```
@@ -411,16 +411,23 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
 
 ## 流水线切分：`kern cut`
 
-`kern cut <manifest> --at <call>[,<call>…] --module pp_mailbox.cubin --out
-<dir>` 把一份单卡 manifest 在 call 下标处切成 S 段（`tools/kernels-src/pp_mailbox.cu`
-是邮箱核，与模型无关；`kern_manifest::cut::cut` 是纯函数，不碰 GPU）：
+`kern cut <manifest> --at <call>[,<call>…] --out <dir>` 把一份单卡 manifest
+在 call 下标处切成 S 段（`kern_manifest::cut::cut` 是纯函数，不碰 GPU）。
+**一段就是一个函数**：从上一段来的值是它的 input，给下一段的值是它的
+output，manifest 里没有任何流水线专有的东西；怎么传、何时传是 serving
+外壳的事（serve.md「流水线」）。
 
 - 每个 batch program 在同一下标处切开（下标须小于每个 batch program 的
-  长度）；once program 在每段按"本段读到的东西"往回切片。活跃性分析找出
-  切点两侧都活着的 buffer：只许是 workspace、至多一个 var 维（字节数
-  `var × 常数`）；output / carry 只许在末段写；一个 (state, offset) 区域
-  只许一段碰（按层切 KV 时各段各持自己那些层）。做不到的切点报错并说明
-  哪条不满足，不会静默切出错的东西。
+  长度）；once / derive program 在每段按"本段读到的东西"往回切片。活跃性
+  分析找出切点两侧都活着的 buffer：只许是 workspace；output / carry 只许在
+  末段写；一个 (state, offset) 区域只许一段碰（按层切 KV 时各段各持自己
+  那些层）。做不到的切点报错并说明哪条不满足，不会静默切出错的东西。
+- 跨切点的 buffer 在上游段是 `output`，在下游段是 `input`（本段只读它，
+  无论是不是还要传给再下一段）或 `inout`（本段原地改写它：中间段的
+  `hidden`）。`inout` 是一般概念，不是流水线概念——运行前有值、可写、不
+  要求必写、运行后可读回。到达的 buffer（input / inout）带 `export: true`，
+  上游段映射它、往里拷。一段既不读也不写、只是路过的值被拒：一段只携带
+  它用到的东西。
 - state 整个留或整个丢：一段只要碰到一个 state 的一块就分配整个。`kern cut`
   逐段打印每个 state 被本段碰到的区域数 / 整份碰到的区域数（区域 = 不同的
   call offset，按等大估字节），不满的就是给别段占着的内存（报告，不拒）。
@@ -428,26 +435,18 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
   自己那些层；生成器不知道流水线。页表 / slot 的 `index_into` 指向一个本段
   丢掉的 state 时改指本段留下的同类 state（pool 给所有 paged state 同一套
   页号）。
-- 边界处插一对 send / recv：上游段末尾 `pp.wait_empty → pp.put.<dtype>…
-  → pp.post_full`，下游段开头 `pp.wait_full → pp.take.<dtype>… →
-  pp.post_empty`；邮箱 `pp.<e>.box`（`u8[256 + 最大载荷]`）在下游 GPU 上，
-  `full` / `empty` 两个计数在头里，上游经 `pp.<e>.peer` 远程写。等待在设备
-  上自旋，超时（60 s）`__trap`——进程死于 launch failure，不会挂住。
-- 切分只加传输，不加观测：首段没有 recv、末段没有 send，各段的输出都是
-  forward 的纯函数。一个 item 什么时候离开设备是 serving 外壳的事（host 上
-  等 event，见 serve.md「流水线」）。
-- 非末段声明拓扑组 `pp.<e>`（大小 2，本段是 0 号）。**这里放宽了 SPMD**：
-  组两端装的是不同的 manifest，只在 `of` buffer（同名同字节数的
-  `pp.<e>.box`，上游那份是不用的 workspace + export）上对上——
-  `import_peers` 本来就只按名字和字节数匹配，runtime 不用改。
-- 首段之外的段没有 `token` fill，也常常没有 `seq_len`（长度随激活从邮箱来），
-  `Protocol` 对它们没有特判：轴写在 var 上，角色有就用。
-  一个 chunk program 若自己吐 token（hybrid GDN）则拒切：prefill-only 的
-  流水线约定首个 token 从一行的 step program 出。
+- 切分只改签名，不加 op、不加观测：各段的输出都是 forward 的纯函数。一个
+  item 什么时候离开设备是 serving 外壳的事（host 上等 event）。每段带
+  `cut {id, stage, stages}`，只用于握手核对同一次切分。
+- 首段之外的段没有 `token` fill，也常常没有 `seq_len`（长度随激活来），
+  `Protocol` 对它们没有特判：轴写在 var 上，角色有就用。首 token 从一行
+  的 step program 出，或从自己吐 token 的 chunk program 出（K3）；两者都
+  只在末段写 output。
 
 门禁：`crates/kern-manifest/tests/cut.rs` 用随机 manifest（400 个种子）
 + 符号解释器验证"能切的切点，各段依次跑 == 整份跑"，且确实有切点被拒；
-GPU 上 `crates/kern-run/examples/pp_chain.rs` 把各段在同一进程里串起来，
+GPU 上 `crates/kern-run/examples/pp_chain.rs` 把各段在同一进程里串起来（下一段
+到达的 buffer 映射进上一段、每个 call 后 `Runtime::push`），
 logits 与 token 与整份逐位同（serve.md「流水线」）。
 
 ## Verifier（`kern-manifest`）
