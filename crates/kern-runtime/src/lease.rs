@@ -254,6 +254,26 @@ impl Runtime {
         Ok(())
     }
 
+    /// Land every remap, blocking until the thread has run the one in
+    /// flight and whatever the pool plans after it: the ask a
+    /// [`Denied::Remapping`] refused is answered on the next call.
+    pub fn settle(&mut self) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        self.poll()?;
+        while self.pool.remapping() {
+            match self.remaps.done.recv() {
+                Ok(Ok(plan)) => {
+                    self.zero_fresh(&plan)?;
+                    self.pool.complete(plan);
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => bail!(Cuda, "the remap thread is gone"),
+            }
+            self.poll()?;
+        }
+        Ok(())
+    }
+
     /// Zero every chunk `plan` mapped.
     pub(crate) fn zero_fresh(&mut self, plan: &Remap) -> Result<()> {
         let chunk = self.pool.chunk() as usize;

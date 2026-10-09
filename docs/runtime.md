@@ -43,7 +43,8 @@ per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`kern-pool`�
 才 unmap）。计划由 runtime 的后台线程执行：先等 stream 上记的事件（此前入队的
 kernel 都过了才 unmap），完成后主线程在下一次 `lease` / `checkpoint` /
 `lease_from` 里收下、把新 map 的块在 stream 上清零，新页 / 新 slot 才可租。同一
-时刻最多一个计划在飞。租不到时三种拒绝分工明确：`Remapping`（计划已定，落地后再
+时刻最多一个计划在飞；`Runtime::settle` 阻塞到在飞的和随后计划的都落地，给过不了
+这一刻的调用方（history 末尾的 checkpoint）用。租不到时三种拒绝分工明确：`Remapping`（计划已定，落地后再
 问，别淘汰）、`Busy`（有被持有的对象挡路，淘汰点什么）、`ExceedsPool`（怎么摆都
 放不下）。`seqs.max` 只限一步 batch 的行数；slot 从 `seqs.max + 2` 个起按需长
 （session 睡着时它的 checkpoint 拿着 slot，活跃请求再要就从空闲页拆），
