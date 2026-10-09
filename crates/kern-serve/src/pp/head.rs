@@ -23,7 +23,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::{Forward, Rows};
+use kern_manifest::protocol::{Axis, Forward, Rows};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::{Denied, Lease};
 use kern_run::Weights;
@@ -83,6 +83,8 @@ pub struct PpHead {
     active: VecDeque<Active>,
     /// Per item in flight, oldest first, the prompts its reply finishes.
     due: VecDeque<Vec<Finish>>,
+    /// The line tables as the stages last had them written.
+    lines: BTreeMap<String, Vec<i64>>,
     flow: Flow,
 }
 
@@ -171,6 +173,7 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
         waiting: VecDeque::new(),
         active: VecDeque::new(),
         due: VecDeque::new(),
+        lines: BTreeMap::new(),
         flow: Flow::new(0, None, Some(next), None),
     })
 }
@@ -321,7 +324,9 @@ impl PpHead {
     }
 
     /// Stage one item of `parts` (a lease, its position, its rows) on every
-    /// stage and on the head.
+    /// stage and on the head. A sequence's first item zeroes its slot on the
+    /// stages (the head's own lease zeroed it already); a line table goes
+    /// out only when the item's sequences change it.
     fn send_item(&mut self, f: &Forward, parts: &[(&Lease, usize, &[i64])]) -> Result<()> {
         let leases: Vec<&Lease> = parts.iter().map(|&(l, ..)| l).collect();
         let positions: Vec<usize> = parts.iter().map(|&(_, pos, _)| pos).collect();
@@ -336,7 +341,19 @@ impl PpHead {
             }
             rows.insert(t.name.clone(), v.into_iter().map(i64::from).collect());
         }
-        let item = Item { program: f.name.clone(), vars, rows };
+        for t in &self.p.line_tables {
+            let cols = match t.axis {
+                Axis::Tray => self.p.tray.as_ref().map_or(1, |b| b.max),
+                _ => self.p.groups.max,
+            };
+            let v: Vec<i64> = kern_run::line_rows(t, &leases, cols as usize)?.into_iter().map(i64::from).collect();
+            if self.lines.get(&t.name) != Some(&v) {
+                self.lines.insert(t.name.clone(), v.clone());
+                rows.insert(t.name.clone(), v);
+            }
+        }
+        let zero_slots = leases.iter().zip(&positions).filter(|(_, &pos)| pos == 0).filter_map(|(l, _)| l.seq_slot());
+        let item = Item { program: f.name.clone(), vars, rows, zero_slots: zero_slots.collect() };
         for w in &mut self.stages {
             send(w, &item)?;
         }

@@ -242,11 +242,11 @@ fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
 /// line in entry 0 and zeros through the rest of a wide cell (a program
 /// that moves along one does so on the device). Columns past the leases
 /// given repeat the last.
-fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
+pub fn line_rows<L: Borrow<Lease>>(t: &LineTable, leases: &[L], cols: usize) -> Result<Vec<i32>> {
     let mut v = Vec::with_capacity(t.lines * cols * t.width);
     for line in 0..t.lines {
         for c in 0..cols {
-            v.push(leases[c.min(leases.len() - 1)].seq_line(&t.name, line)?);
+            v.push(leases[c.min(leases.len() - 1)].borrow().seq_line(&t.name, line)?);
             v.extend(std::iter::repeat_n(0, t.width - 1));
         }
     }

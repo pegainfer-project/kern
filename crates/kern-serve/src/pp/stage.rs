@@ -1,10 +1,9 @@
 //! A downstream stage: loads its slice of the model, says hello to the
 //! head, joins the stage after it and the one before from the table it
 //! gets back, then replays the head's items in order as they arrive. It
-//! keeps no accounting: the page ids and positions of every item are the
-//! head's. A stage serves paged state only; a per-sequence state (its
-//! slot zeroed on a sequence's first item) waits for a model that needs
-//! it. The last stage answers every item with its tokens.
+//! keeps no accounting: the page ids, positions and slots of every item
+//! are the head's, and so is the zeroing of a fresh sequence's slot. The
+//! last stage answers every item with its tokens.
 
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -108,6 +107,9 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         let vars: Vars = item.vars.into_iter().filter(|(k, _)| rt.manifest.vars.contains_key(k)).collect();
         // The fills and tables are stream-ordered behind the item before,
         // so they go over while the activations are still on their way.
+        for &slot in &item.zero_slots {
+            rt.zero_slot(slot)?;
+        }
         for (name, v) in &item.rows {
             kern_run::write_named(&mut rt, &p, name, v, &vars)?;
         }

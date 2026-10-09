@@ -83,8 +83,12 @@ pub struct Table {
 pub struct Item {
     pub program: String,
     pub vars: BTreeMap<String, u64>,
-    /// Each input's values by name: the fills and the page tables.
+    /// Each input's values by name: the fills, the page tables and the
+    /// line tables when the item's sequences change them.
     pub rows: BTreeMap<String, Vec<i64>>,
+    /// The sequence slots to zero before the call, the ones of sequences
+    /// on their first item: the recurrent state a fresh lease starts from.
+    pub zero_slots: Vec<i32>,
 }
 
 pub type Handles = BTreeMap<String, String>;
