@@ -29,7 +29,7 @@ use kern_pool::{Denied, Lease};
 use kern_run::Weights;
 use kern_runtime::{Capacity, Error, Runtime};
 use pegainfer_frontend::engine::{
-    FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
+    FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics, StopPolicy,
 };
 use tracing::{error, info};
 
@@ -46,7 +46,6 @@ pub struct Head {
     pub chunk: Option<u64>,
     pub max_seqs: usize,
     pub eager: bool,
-    pub stop_tokens: Vec<u32>,
 }
 
 /// An admitted prompt with rows still to send.
@@ -55,6 +54,7 @@ struct Active {
     lease: Lease,
     ids: Vec<i64>,
     pos: usize,
+    stop: StopPolicy,
 }
 
 /// A prompt whose last rows are out: its token is entry `at` of the reply
@@ -63,6 +63,7 @@ struct Finish {
     at: usize,
     id: RequestId,
     _lease: Lease,
+    stop: StopPolicy,
 }
 
 pub struct PpHead {
@@ -76,7 +77,6 @@ pub struct PpHead {
     /// Items in flight below which a partial item goes out: the stages.
     depth: usize,
     max_seqs: usize,
-    stop_tokens: Vec<u32>,
     stages: Vec<TcpStream>,
     replies: mpsc::Receiver<Vec<i64>>,
     waiting: VecDeque<QueuedRequest>,
@@ -166,7 +166,6 @@ pub fn load(m: Verified, weights: &Weights, h: Head) -> Result<PpHead> {
         bounds,
         depth: cut.stages as usize,
         max_seqs: h.max_seqs,
-        stop_tokens: h.stop_tokens,
         stages,
         replies,
         waiting: VecDeque::new(),
@@ -232,7 +231,8 @@ impl PpHead {
                     ledger.admit(id);
                     ledger.set_cached_tokens(id, 0);
                     let ids = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
-                    self.active.push_back(Active { id, lease, ids, pos: 0 });
+                    let stop = q.request.stop_policy.clone();
+                    self.active.push_back(Active { id, lease, ids, pos: 0, stop });
                     continue;
                 }
                 Err(Error::Denied(Denied::Busy | Denied::Remapping)) => break,
@@ -276,7 +276,7 @@ impl PpHead {
             let a = self.active.remove(i).expect("found");
             let f = self.step.clone().expect("checked");
             let pos = a.pos;
-            let finish = Finish { at: 0, id: a.id, _lease: a.lease };
+            let finish = Finish { at: 0, id: a.id, _lease: a.lease, stop: a.stop };
             self.send_item(&f, &[(&finish._lease, pos, &a.ids[pos..])])?;
             self.due.push_back(vec![finish]);
         }
@@ -312,7 +312,7 @@ impl PpHead {
             .into_iter()
             .map(|(at, i)| {
                 let a = self.active.remove(i).expect("planned");
-                Finish { at, id: a.id, _lease: a.lease }
+                Finish { at, id: a.id, _lease: a.lease, stop: a.stop }
             })
             .collect();
         due.reverse();
@@ -374,7 +374,8 @@ impl PpHead {
                 }
                 let tok = tok as u32;
                 ledger.push_tokens(r.id, &[tok], &[]);
-                let why = if self.stop_tokens.contains(&tok) { FinishReason::Stop } else { FinishReason::Length };
+                let why =
+                    if r.stop.classify(tok, |_| false).is_some() { FinishReason::Stop } else { FinishReason::Length };
                 ledger.finish(r.id, why);
             }
         }

@@ -158,9 +158,10 @@ parked}}` 说明动了谁——scheduler 与 `agentx_replay` 之前各写一份�
 
 三条规则贯穿全部操作：**整页共享、半页拷给新持有者、写者只有 lease。** `restore` 和
 `fork` 本来就这样，`checkpoint` 是唯一的例外，改成一致。半页拷贝只在页中间
-checkpoint 时发生；scheduler 只在页边界（纯 KV）或请求结束（`retire`）留快照，所以生
-产路径零拷贝不变。K1c 的显式断点（system prompt 末尾，带 state 的模型）正是需要页中
-间 checkpoint 的地方，付一次页拷贝。
+checkpoint 时发生；scheduler 在页边界（纯 KV，零拷贝）、请求结束（`retire`，零拷贝）和带
+state 模型的 history 末尾（`Request::history_tokens`，前端量出的 prompt 与 generation prompt
+的分界）留快照——最后这个付一次半页拷贝加一份 state 拷贝，换来回放别人回复的下一轮（AgentX）
+也能命中上一轮的 prompt。K1c 的显式断点（system prompt 末尾）是同一种页中间 checkpoint。
 
 **wake 直接醒进请求的租约。** 2026-09-14 的版本让 wake 得到一个 `Checkpoint`，scheduler
 把它插回索引、请求回到队首再按 resident 命中 `restore`：两次分配、两次"够不够"的判断，

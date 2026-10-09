@@ -25,7 +25,7 @@ use kern_runtime::{Capacity, Runtime, Topology};
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler, Scheduler,
 };
-use pegainfer_frontend::vllm;
+use pegainfer_frontend::vllm::{self, ParserSelection};
 use tracing::info;
 
 use scheduler::{KernScheduler, Policy};
@@ -81,10 +81,6 @@ pub struct ServeOpts {
     #[arg(long)]
     pub rows: Option<u64>,
 
-    /// Extra stop token ids (generation_config.json's eos ids always apply)
-    #[arg(long, value_delimiter = ',')]
-    pub stop_tokens: Vec<u32>,
-
     /// Pinned host memory (GiB) per rank for snapshots parked off the
     /// device: a lease short of pages or slots parks the coldest snapshot
     /// there instead of dropping it, and a prompt hitting one wakes it
@@ -133,16 +129,6 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     }
 
     let model_path = weights.dirs().remove(0);
-    let mut stop_tokens: Vec<u32> = kern_run::eos_ids(&model_path).into_iter().map(|x| x as u32).collect();
-    stop_tokens.extend(&o.stop_tokens);
-    stop_tokens.sort_unstable();
-    stop_tokens.dedup();
-    anyhow::ensure!(
-        !stop_tokens.is_empty(),
-        "no stop tokens: none in {}/generation_config.json or config.json and no --stop-tokens",
-        model_path.display()
-    );
-    info!(ids = ?stop_tokens, "stop tokens");
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
 
     if let Some(listen) = o.pp_listen.clone() {
@@ -154,7 +140,6 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             chunk: o.chunk,
             max_seqs: o.max_seqs,
             eager: o.eager,
-            stop_tokens,
         };
         let load = move || -> Result<(pp::head::PpHead, scheduler::Facts)> {
             let h = pp::head::load(manifest, &weights, head)?;
@@ -169,8 +154,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let t = manifest.group_size("tp").unwrap_or(1) as usize;
     let capacity = Capacity { tokens: o.capacity, seqs: ((o.max_seqs + 1) * t) as u64 };
     let host_bytes = (o.host_gib * (1u64 << 30) as f64) as u64;
-    let policy =
-        Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, stop_tokens, rows: o.rows, host_bytes };
+    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes };
     let (kernels, eager) = (art.kernels.clone(), o.eager);
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
         let t0 = Instant::now();
@@ -232,6 +216,16 @@ where
     rt.block_on(async move {
         // Needs the runtime: it spawns the signal listener.
         let shutdown = vllm::shutdown_token_from_ctrl_c();
-        vllm::serve_with_engine_count(engine, &model_path, vec![served_name], port, None, 1, shutdown).await
+        vllm::serve_with_engine_count(
+            engine,
+            &model_path,
+            vec![served_name],
+            ParserSelection::default(),
+            port,
+            None,
+            1,
+            shutdown,
+        )
+        .await
     })
 }
