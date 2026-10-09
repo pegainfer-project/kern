@@ -156,8 +156,9 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
   请求结束时 `Runtime::retire`——结束序列的 state slot 原样成为 checkpoint 的，不拷。"续着上一轮
   整段上下文"的 prompt 命中后者；回放录下来的回复而不是我们生成的回复的下一轮（AgentX、改过历史
   的对话）命中前者，只付上一轮 prompt 之后的部分；同一 prompt 重发也命中前者，只付尾巴。history
-  末尾的快照拿不到 slot 时按租约的规则腾地方，腾不出（或 remap 在途）就不留，请求照跑（stats 行
-  的 `prompt_checkpoints` / `prompt_skips`）。
+  末尾的快照拿不到 slot 时按租约的规则腾地方，remap 在途就等它落地（`Tray::settle`，唯一一处
+  阻塞等 remap：这个 state 过了这一刻就留不下了，而 prefill 刚读回输出、stream 已空，等的只是
+  remap 本身的几毫秒），腾不出就不留，请求照跑（stats 行的 `prompt_checkpoints` / `prompt_skips`）。
   slot 从 manifest 的 `seqs.max + 2` 个起，与 KV 页共用一份显存预算按需互换（K1b）：
   睡着的 session 的 checkpoint 拿着 slot，活跃请求再要 slot 就从空闲页拆，页不够
   再从空闲 slot 拆回来；租约 `Busy` 时按最久未命中淘汰，`Remapping` 时等它落地

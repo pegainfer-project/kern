@@ -76,8 +76,11 @@
 //!   accepted past `max_tokens` or the stop leaves a state no next turn
 //!   continues, which is not kept. The prompt's snapshot is an
 //!   optimization, never a reason to fail its request: `Busy` makes room
-//!   as a lease does, and when nothing is left to make room with it is
-//!   skipped. A `Busy` lease makes room and retries until it fits or
+//!   as a lease does, `Remapping` waits for the slot being carved (this
+//!   is the one place that waits: the state cannot be snapshotted later,
+//!   and the wait is the remap's own milliseconds), and when nothing is
+//!   left to make room with it is skipped. A `Busy` lease makes room and
+//!   retries until it fits or
 //!   nothing is left: the least recently hit snapshot is parked into the
 //!   host tier (`--host-gib`: pinned DRAM per rank, `Tray::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
@@ -720,9 +723,11 @@ impl KernScheduler {
     }
 
     /// The `key.len()` tokens `row` holds, which `key` names, as a snapshot
-    /// of its recurrent state. `Busy` makes room and retries; with nothing
-    /// left to make room with, a remap in flight (it lands between steps,
-    /// not here) or any other denial, the request runs on without it.
+    /// of its recurrent state. `Busy` makes room and retries, `Remapping`
+    /// waits for the slot on its way (the prefill just read its output
+    /// back, so the stream the remap waits on is drained; what is left is
+    /// the remap's own milliseconds); with nothing left to make room with
+    /// or any other denial, the request runs on without it.
     fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId) -> Result<()> {
         loop {
             match self.tray.checkpoint(row, key.len()) {
@@ -732,6 +737,7 @@ impl KernScheduler {
                     return Ok(());
                 }
                 Err(Error::Denied(Denied::Busy)) if self.make_room()? => {}
+                Err(Error::Denied(Denied::Remapping)) => self.tray.settle()?,
                 Err(Error::Denied(d)) => {
                     debug!(request = %id, tokens = key.len(), denied = %d, "history not kept");
                     self.stats.prompt_skips += 1;

@@ -552,6 +552,13 @@ impl Pool {
         lock(&self.inner).remapped
     }
 
+    /// Whether a remap is planned or in flight: what [`Denied::Remapping`]
+    /// told the last caller to wait for.
+    pub fn remapping(&self) -> bool {
+        let g = lock(&self.inner);
+        g.pending.is_some() || g.in_flight
+    }
+
     /// The remap waiting to be executed, if any; from here until
     /// [`Pool::complete`] one is in flight and no other is planned.
     pub fn take_pending(&self) -> Option<Remap> {

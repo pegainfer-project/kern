@@ -685,6 +685,12 @@ impl Tray {
         self.each(row.by_mut(), |rt, _, l| rt.checkpoint(l, len))
     }
 
+    /// Every rank's remaps landed, blocking until they are: a lease or a
+    /// checkpoint denied `Remapping` is asked again after this.
+    pub fn settle(&mut self) -> Result<(), Error> {
+        self.ranks.iter_mut().try_for_each(Runtime::settle)
+    }
+
     /// The first `len` tokens of a finished row as a snapshot; nothing is copied.
     pub fn retire(&mut self, row: Row, len: usize) -> Snapshot {
         let base = self.groups.members(row.owner.0).start;
