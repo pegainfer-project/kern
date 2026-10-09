@@ -74,6 +74,9 @@ pub struct Manifest {
     /// Rank groups a multi-GPU manifest is SPMD over, e.g. `{"groups": {"ep": 4}}`; every rank loads the same manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology: Option<Topology>,
+    /// The pipeline stage this manifest is, when it is one piece of a cut manifest, e.g. `{"id": "9f2c…", "stage": 1, "stages": 2}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<Cut>,
     /// Per-call scalars the caller supplies, e.g. `{"tokens": {"max": 2048}}`.
     #[serde(default, deserialize_with = "unique_map", skip_serializing_if = "BTreeMap::is_empty")]
     pub vars: BTreeMap<String, Var>,
@@ -148,6 +151,9 @@ pub struct Program {
     /// Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.
     #[serde(default, skip_serializing_if = "is_false")]
     pub once: bool,
+    /// Run by the runtime inside weight loading, call by call, to turn `source` buffers into the `carry` buffers the other programs read (a shuffle into a kernel's layout, a dtype cast). Reads no state, peer, input or output; nothing else may run it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub derive: bool,
     /// Driven through a CUDA graph: the runtime captures the call list at each var assignment the program is called with and replays it with one launch. For a program of fixed shape per call whose launches are many and short (a decode step, a speculative round); a program whose rows vary per call (a prefill chunk) runs launch by launch.
     #[serde(default, skip_serializing_if = "is_false")]
     pub graph: bool,
@@ -226,12 +232,49 @@ pub struct Topology {
     pub groups: BTreeMap<String, u64>,
 }
 
+/// One stage of a manifest cut into a pipeline (`kern cut`): every stage of one cut carries the same `id`; stage `stage` of `stages` receives its predecessor's activations and sends its own to the next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Cut {
+    /// Names the cut: a hash of the manifest it was cut from and where.
+    pub id: String,
+    /// This stage's place in the pipeline, from 0.
+    pub stage: u64,
+    /// Stages in the pipeline, at least 2.
+    pub stages: u64,
+}
+
 /// A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Var {
     /// Upper bound, e.g. `2048` for the token count of a prefill chunk.
     pub max: u64,
+    /// The axis of a call this var counts, for the serving loop: every buffer shaped over it has one entry per element of that axis, e.g. `"rows"`. At most one var per axis; a manifest with a `batch` names a `rows` var and a `groups` var. Absent for a var that sizes something else (a run's length, a context).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<VarAxis>,
+}
+
+/// What a var counts in one call of a program: this rank's rows, its sequences, or the rows of the whole tray batch. The runtime never reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VarAxis {
+    /// One per row of this rank's call, e.g. `tokens`.
+    Rows,
+    /// One per sequence of this rank's call, e.g. `seqs`.
+    Groups,
+    /// One per row of the whole tray batch, this rank's rows first, e.g. a `tp` manifest's `rows`.
+    Tray,
+}
+
+impl fmt::Display for VarAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            VarAxis::Rows => "rows",
+            VarAxis::Groups => "groups",
+            VarAxis::Tray => "tray",
+        })
+    }
 }
 
 impl Var {
@@ -353,7 +396,7 @@ pub struct Buffer {
     /// `peer` buffers only: the topology group the addresses are indexed by, e.g. `"ep"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// `weight` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{"tensor": "q_proj.weight"}, {"tensor": "k_proj.weight"}]`.
+    /// `weight` and `source` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{"tensor": "q_proj.weight"}, {"tensor": "k_proj.weight"}]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bind: Vec<Segment>,
 }
@@ -577,8 +620,12 @@ pub enum BufferKind {
     Input,
     /// Read back by the runtime after each run, e.g. `next_token`.
     Output,
+    /// Both: holds a value before the run, which the programs may rewrite in place, and is read back after, e.g. the `hidden` a pipeline stage takes from the stage before it and hands to the next.
+    Inout,
     /// Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.
     Weight,
+    /// Checkpoint tensors bound like a weight but alive only while a `derive` program reads them during load: device memory holds what is derived from them, never both at once, e.g. an expert stack before its shuffle.
+    Source,
     /// Runtime-owned scratch, dead between runs, e.g. `hidden`.
     Workspace,
     /// Written by one program and read by another, kept between runs, e.g. the `fc_out` hidden states a draft reads.
@@ -592,7 +639,9 @@ impl fmt::Display for BufferKind {
         f.write_str(match self {
             BufferKind::Input => "input",
             BufferKind::Output => "output",
+            BufferKind::Inout => "inout",
             BufferKind::Weight => "weight",
+            BufferKind::Source => "source",
             BufferKind::Workspace => "workspace",
             BufferKind::Carry => "carry",
             BufferKind::Peer => "peer",

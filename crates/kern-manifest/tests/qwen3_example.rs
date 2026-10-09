@@ -24,8 +24,10 @@ fn qwen3_decode_mined_verifies() {
     // prefill: same forward minus the final_norm/lm_head/sample tail — the
     // last prompt token goes through `decode` instead.
     assert_eq!(m.programs["prefill"].calls.len(), 2 + 36 * 12 - 1);
-    // The runtime's entire knowledge of the KV cache: a byte count.
-    assert_eq!(m.states["kv"].bytes_per_token, 36 * 2 * 1024 * 2);
+    // The runtime's entire knowledge of the KV cache: a byte count per
+    // layer's state, every one paged under the same ids.
+    assert_eq!(m.states.len(), 36);
+    assert!(m.states.values().all(|s| s.bytes_per_token == 2 * 1024 * 2));
 
     let again = Manifest::from_json(&m.to_json()).expect("reparse");
     assert_eq!(m.to_json(), again.to_json());

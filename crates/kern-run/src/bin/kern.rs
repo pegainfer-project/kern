@@ -71,6 +71,19 @@ enum Cmd {
         /// Manifest JSON to verify (does not read kern.toml)
         manifest: PathBuf,
     },
+    /// Cut a manifest into pipeline stages before the given call indices
+    /// of every program a serving loop drives; writes `stage<s>.json`
+    /// into `--out`, each verified. No GPU
+    Cut {
+        /// Manifest JSON to cut (does not read kern.toml)
+        manifest: PathBuf,
+        /// Call indices to cut before, increasing
+        #[arg(long, value_delimiter = ',', required = true)]
+        at: Vec<usize>,
+        /// Directory the stages are written to
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -85,7 +98,7 @@ fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     let cfg = match &cli.cmd {
-        Cmd::Verify { .. } => None,
+        Cmd::Verify { .. } | Cmd::Cut { .. } => None,
         _ => Config::find(cli.config.as_deref())?,
     };
     match cli.cmd {
@@ -118,7 +131,46 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Cut { manifest, at, out } => cut(&manifest, &at, &out),
     }
+}
+
+/// `kern cut`: the stages of a manifest cut before `at`, written as
+/// `stage<s>.json`.
+fn cut(manifest: &Path, at: &[usize], out: &Path) -> Result<()> {
+    let json = std::fs::read_to_string(manifest).with_context(|| format!("reading {}", manifest.display()))?;
+    let m = kern_manifest::Verified::from_json(&json)?;
+    let stages = kern_manifest::cut::cut(&m, at)?;
+    std::fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    for (s, st) in stages.iter().enumerate() {
+        let path = out.join(format!("stage{s}.json"));
+        std::fs::write(&path, st.to_json()).with_context(|| format!("writing {}", path.display()))?;
+        let calls: Vec<String> = st.programs.iter().map(|(n, p)| format!("{n} {}", p.calls.len())).collect();
+        let crossing: Vec<String> = st
+            .buffers
+            .iter()
+            .filter(|(_, b)| b.export || b.kind == kern_manifest::types::BufferKind::Output)
+            .map(|(n, b)| format!("{n} {}", b.kind))
+            .collect();
+        tracing::info!(
+            "stage {s}: {} ({} weights; calls: {}; crossing: {})",
+            path.display(),
+            st.buffers.values().filter(|b| b.kind == kern_manifest::types::BufferKind::Weight).count(),
+            calls.join(", "),
+            crossing.join(", ")
+        );
+        let (whole, part): (Vec<_>, Vec<_>) =
+            kern_manifest::cut::state_use(&m, st).into_iter().partition(|(_, a, b)| a == b);
+        tracing::info!("stage {s}: {} of {} states used whole", whole.len(), whole.len() + part.len());
+        for (name, a, b) in part {
+            tracing::warn!(
+                "stage {s}: state `{name}` is allocated whole and its calls touch {a} of its {b} regions (~{:.0}% of its bytes)",
+                100.0 * a as f64 / b as f64
+            );
+        }
+    }
+    tracing::info!("cut `{}` into {} stages", stages[0].cut.as_ref().map_or("", |c| c.id.as_str()), stages.len());
+    Ok(())
 }
 
 /// The target a command runs on: the named one, else the only one, else

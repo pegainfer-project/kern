@@ -21,13 +21,14 @@ pub mod weights;
 pub use inputs::{Given, Inputs};
 pub use weights::Weights;
 
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::{Axis, Forward, LineTable, PageTable, Rows};
-use kern_manifest::types::Fill;
+use kern_manifest::protocol::{Axis, Filled, Forward, LineTable, PageTable, Rows};
+use kern_manifest::types::{BufferKind, Fill};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::{connect_nccl, GroupRank, PeerHandle, Runtime, Topology};
@@ -94,8 +95,8 @@ pub fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-/// The var vars of one call.
-pub(crate) type Vars = BTreeMap<String, u64>;
+/// The var values of one call.
+pub type Vars = BTreeMap<String, u64>;
 
 /// The safetensors a `--weights` entry stands for: the file itself, or
 /// every `*.safetensors` under a directory (a checkpoint's shards) in
@@ -134,11 +135,84 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
     unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("mapping weights {}", f.display()))
 }
 
-/// Stage one call: `rows` rows for each lease, at that sequence's
-/// position, `ids` in row order. Returns the call's vars.
+/// What one call writes into each fill: `lens[i]` rows for lease `i`, at
+/// that sequence's position, `ids` in row order (the sequences back to
+/// back); and the call's vars.
 ///
-/// Every fill a caller of one rank produces is written; `blocks` is the
+/// Every fill a caller of one rank produces is there; `blocks` is the
 /// tray batch's and only a caller that spans a rank group can fill it.
+pub fn fills<'p, L: Borrow<Lease>>(
+    p: &'p Protocol,
+    leases: &[L],
+    positions: &[usize],
+    lens: &[usize],
+    ids: &[i64],
+) -> (Vars, Vec<(&'p Filled, Vec<i64>)>) {
+    let b = leases.len();
+    let rows: usize = lens.iter().sum();
+    let context: usize = positions.iter().zip(lens).map(|(pos, n)| pos + n).sum();
+    let vars = p.vars(b as u64, rows as u64, rows as u64, context as u64);
+    let starts: Vec<usize> = lens.iter().scan(0, |at, n| Some(std::mem::replace(at, *at + n))).collect();
+    let spans = || positions.iter().zip(lens).map(|(&pos, &n)| pos..pos + n);
+    let values = p
+        .fills
+        .iter()
+        .filter_map(|f| {
+            let v: Vec<i64> = match (f.fill, f.axis) {
+                // Each sequence's first token: the anchor a drafting program
+                // splices its own rows from.
+                (Fill::Token, Axis::Groups) => starts.iter().map(|&s| ids[s]).collect(),
+                (Fill::Token, _) => ids.to_vec(),
+                (Fill::Valid, _) => vec![1; rows],
+                (Fill::Position, _) => spans().flat_map(|r| r.map(|v| v as i64)).collect(),
+                (Fill::Slot, _) => leases.iter().zip(spans()).flat_map(|(l, r)| l.borrow().slots(r)).collect(),
+                (Fill::SeqLen, _) => spans().map(|r| r.end as i64).collect(),
+                (Fill::CuSeqlens, _) => starts.iter().chain([&rows]).map(|&s| s as i64).collect(),
+                (Fill::SpanAt, _) => vec![0],
+                (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error, _) => return None,
+            };
+            Some((f, v))
+        })
+        .collect();
+    (vars, values)
+}
+
+/// Write `values` into input `name` of `rt` the way `p` reads it: a fill
+/// in its dtype, a page table as i32, a line table as i32 and whole (its
+/// rows sit at the bound of their var, see [`line_rows`]). `false` when the
+/// manifest has no such input (a pipeline stage that never reads it).
+pub fn write_named(rt: &mut Runtime, p: &Protocol, name: &str, values: &[i64], vars: &Vars) -> Result<bool> {
+    let i32s = |v: &[i64]| -> Vec<u8> { v.iter().flat_map(|&x| (x as i32).to_le_bytes()).collect() };
+    if p.line_tables.iter().any(|t| t.name == name) {
+        rt.write_input(name, &i32s(values))?;
+        return Ok(true);
+    }
+    let bytes = match (p.fills.iter().find(|f| f.name == name), p.page_tables.iter().any(|t| t.name == name)) {
+        (Some(f), _) => f.encode(values),
+        (None, true) => i32s(values),
+        (None, false) => return Ok(false),
+    };
+    rt.write_input_at(name, &bytes, vars)?;
+    Ok(true)
+}
+
+/// The inputs of `m` nobody on the host stages: no fill, no table. On a
+/// pipeline stage they are what the stage before it holds under the
+/// same names and copies in ([`kern_runtime::Runtime::push`]).
+pub fn arrivals(m: &kern_manifest::types::Manifest, p: &Protocol) -> Vec<String> {
+    let staged = |n: &str| {
+        p.fills.iter().any(|f| f.name == n)
+            || p.page_tables.iter().any(|t| t.name == n)
+            || p.line_tables.iter().any(|t| t.name == n)
+    };
+    m.buffers
+        .iter()
+        .filter(|(n, b)| matches!(b.kind, BufferKind::Input | BufferKind::Inout) && !staged(n))
+        .map(|(n, _)| n.clone())
+        .collect()
+}
+
+/// Stage one call (see [`fills`]). Returns the call's vars.
 fn stage(
     rt: &mut Runtime,
     p: &Protocol,
@@ -147,23 +221,8 @@ fn stage(
     rows: usize,
     ids: &[i64],
 ) -> Result<Vars> {
-    let b = leases.len();
-    let longest = positions.iter().map(|&pos| pos + rows).max().unwrap_or(rows);
-    let vars = p.vars(b as u64, rows as u64, (b * rows) as u64, longest as u64);
-    for f in &p.fills {
-        let v: Vec<i64> = match (f.fill, f.axis) {
-            // Each sequence's first token: the anchor a drafting program
-            // splices its own rows from.
-            (Fill::Token, Axis::Groups) => ids.chunks(rows).map(|x| x[0]).collect(),
-            (Fill::Token, _) => ids.to_vec(),
-            (Fill::Valid, _) => vec![1; b * rows],
-            (Fill::Position, _) => positions.iter().flat_map(|&pos| (pos..pos + rows).map(|v| v as i64)).collect(),
-            (Fill::Slot, _) => leases.iter().zip(positions).flat_map(|(l, &pos)| l.slots(pos..pos + rows)).collect(),
-            (Fill::SeqLen, _) => positions.iter().map(|&pos| (pos + rows) as i64).collect(),
-            (Fill::CuSeqlens, _) => (0..=b).map(|i| (i * rows) as i64).collect(),
-            (Fill::SpanAt, _) => vec![0],
-            (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error, _) => continue,
-        };
+    let (vars, values) = fills(p, leases, positions, &vec![rows; leases.len()], ids);
+    for (f, v) in values {
         rt.write_input_at(&f.name, &f.encode(&v), &vars)?;
     }
     Ok(vars)
@@ -197,7 +256,7 @@ fn line_rows(t: &LineTable, leases: &[Lease], cols: usize) -> Result<Vec<i32>> {
 /// What the manifest runs once after load (the derived tables a weight
 /// prep program computes), with every var at 1: a once program takes no
 /// call shape.
-fn run_once(rt: &Runtime, p: &Protocol) -> Result<()> {
+pub fn run_once(rt: &Runtime, p: &Protocol) -> Result<()> {
     let vars: Vars = rt.manifest.vars.keys().map(|v| (v.clone(), 1)).collect();
     p.once.iter().try_for_each(|name| rt.run(name, &vars).with_context(|| format!("`{name}`")))
 }
@@ -420,9 +479,9 @@ impl Caller {
     /// Vocabulary size as declared by the token fill's domain (1000 if none).
     fn vocab(&self) -> u64 {
         let m = &self.rt.manifest;
-        m.buffers[&self.protocol.token_rows().name]
-            .domain
-            .as_ref()
+        self.protocol
+            .token_rows()
+            .and_then(|t| m.buffers[&t.name].domain.as_ref())
             .and_then(|d| d.resolve(m, &self.protocol.vars(1, 1, 1, 1), &self.rt.provision()).ok())
             .and_then(|r| r.hi)
             .map_or(1000, |hi| hi as u64 + 1)

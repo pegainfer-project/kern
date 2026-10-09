@@ -282,7 +282,7 @@
       "description": "A typed tensor, e.g. `{\"dtype\": \"bf16\", \"shape\": [\"tokens\", 2560], \"kind\": \"workspace\"}`.",
       "properties": {
         "bind": {
-          "description": "`weight` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{\"tensor\": \"q_proj.weight\"}, {\"tensor\": \"k_proj.weight\"}]`.",
+          "description": "`weight` and `source` buffers only: the checkpoint tensors laid end to end into this buffer, in order, e.g. `[{\"tensor\": \"q_proj.weight\"}, {\"tensor\": \"k_proj.weight\"}]`.",
           "items": {
             "$ref": "#/$defs/Segment"
           },
@@ -369,8 +369,18 @@
           "type": "string"
         },
         {
+          "const": "inout",
+          "description": "Both: holds a value before the run, which the programs may rewrite in place, and is read back after, e.g. the `hidden` a pipeline stage takes from the stage before it and hands to the next.",
+          "type": "string"
+        },
+        {
           "const": "weight",
           "description": "Assembled at load time from the checkpoint tensors its `bind` names, e.g. `model.embed_tokens.weight`.",
+          "type": "string"
+        },
+        {
+          "const": "source",
+          "description": "Checkpoint tensors bound like a weight but alive only while a `derive` program reads them during load: device memory holds what is derived from them, never both at once, e.g. an expert stack before its shuffle.",
           "type": "string"
         },
         {
@@ -416,6 +426,54 @@
       "required": [
         "op",
         "args"
+      ],
+      "type": "object"
+    },
+    "Cut": {
+      "additionalProperties": false,
+      "description": "One stage of a manifest cut into a pipeline (`kern cut`): every stage of one cut carries the same `id`; stage `stage` of `stages` receives its predecessor's activations and sends its own to the next.",
+      "properties": {
+        "id": {
+          "description": "Names the cut: a hash of the manifest it was cut from and where.",
+          "type": "string"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "description": "This stage's place in the pipeline, from 0.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "This stage's place in the pipeline, from 0."
+        },
+        "stages": {
+          "anyOf": [
+            {
+              "description": "Stages in the pipeline, at least 2.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Stages in the pipeline, at least 2."
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "stages"
       ],
       "type": "object"
     },
@@ -1633,6 +1691,10 @@
           },
           "type": "array"
         },
+        "derive": {
+          "description": "Run by the runtime inside weight loading, call by call, to turn `source` buffers into the `carry` buffers the other programs read (a shuffle into a kernel's layout, a dtype cast). Reads no state, peer, input or output; nothing else may run it.",
+          "type": "boolean"
+        },
         "graph": {
           "description": "Driven through a CUDA graph: the runtime captures the call list at each var assignment the program is called with and replays it with one launch. For a program of fixed shape per call whose launches are many and short (a decode step, a speculative round); a program whose rows vary per call (a prefill chunk) runs launch by launch.",
           "type": "boolean"
@@ -2061,6 +2123,17 @@
       "additionalProperties": false,
       "description": "A per-call scalar the caller supplies, bounded `1..=max`; the only kind of number that may size a shape or a grid.",
       "properties": {
+        "axis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VarAxis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The axis of a call this var counts, for the serving loop: every buffer shaped over it has one entry per element of that axis, e.g. `\"rows\"`. At most one var per axis; a manifest with a `batch` names a `rows` var and a `groups` var. Absent for a var that sizes something else (a run's length, a context)."
+        },
         "max": {
           "anyOf": [
             {
@@ -2082,6 +2155,26 @@
         "max"
       ],
       "type": "object"
+    },
+    "VarAxis": {
+      "description": "What a var counts in one call of a program: this rank's rows, its sequences, or the rows of the whole tray batch. The runtime never reads it.",
+      "oneOf": [
+        {
+          "const": "rows",
+          "description": "One per row of this rank's call, e.g. `tokens`.",
+          "type": "string"
+        },
+        {
+          "const": "groups",
+          "description": "One per sequence of this rank's call, e.g. `seqs`.",
+          "type": "string"
+        },
+        {
+          "const": "tray",
+          "description": "One per row of the whole tray batch, this rank's rows first, e.g. a `tp` manifest's `rows`.",
+          "type": "string"
+        }
+      ]
     },
     "When": {
       "additionalProperties": false,
@@ -2153,6 +2246,17 @@
         "minLength": 1
       },
       "type": "object"
+    },
+    "cut": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Cut"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The pipeline stage this manifest is, when it is one piece of a cut manifest, e.g. `{\"id\": \"9f2c…\", \"stage\": 1, \"stages\": 2}`."
     },
     "model": {
       "description": "Free-form model label, e.g. `\"qwen3-4b\"`.",

@@ -28,6 +28,7 @@ mod compare;
 mod compile;
 mod cubin;
 mod cublas;
+mod derive;
 mod device;
 mod error;
 mod exec;
@@ -57,6 +58,7 @@ use device::{alloc, DeviceBuf, Pinned};
 pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
+pub use exec::{Fetch, Gate, Mark};
 pub use harness::Scratch;
 pub use host::HostRegion;
 pub use host_weights::HostWeights;
@@ -133,6 +135,7 @@ pub struct Runtime {
     buffers: BTreeMap<String, DeviceBuf>,
     /// No kernels may read mapped host bytes before checkpoint binding completes.
     host_weights_ready: bool,
+    signals: exec::Signals,
     /// Weight buffers holding their checkpoint bytes: taken from a
     /// [`Resident`] at load, or copied by `load_weights`.
     filled: BTreeSet<String>,
@@ -179,6 +182,8 @@ pub struct Runtime {
     /// ([`Runtime::enqueue_after`]): host work before the program, the
     /// program before host work after it.
     joins: [sys::CUevent; 2],
+    /// The derive programs and their staging, until `load_weights` runs them.
+    derivation: Option<derive::Derivation>,
 }
 
 impl Drop for Runtime {
@@ -208,9 +213,14 @@ impl Runtime {
         self.n_modules
     }
 
-    /// (name, class, allocated bytes) for every buffer.
+    /// (name, class, allocated bytes) for every buffer device memory
+    /// holds: the sources only until `load_weights` has derived from them.
     pub fn buffer_sizes(&self) -> Vec<(&str, BufferKind, u64)> {
-        self.manifest.buffers.iter().map(|(n, b)| (n.as_str(), b.kind, self.buffers[n].bytes)).collect()
+        self.manifest
+            .buffers
+            .iter()
+            .filter_map(|(n, b)| Some((n.as_str(), b.kind, self.buffers.get(n)?.bytes)))
+            .collect()
     }
 
     /// (name, declaration, allocated bytes) for every state.
@@ -260,7 +270,7 @@ impl Runtime {
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if b.kind != BufferKind::Input {
+        if !matches!(b.kind, BufferKind::Input | BufferKind::Inout) {
             bail!(Api, "buffer `{name}` is {}, not input", b.kind);
         }
         if data.len() as u64 > self.buffers[name].bytes {
@@ -283,7 +293,7 @@ impl Runtime {
         let Some(b) = self.manifest.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if b.kind != BufferKind::Output {
+        if !matches!(b.kind, BufferKind::Output | BufferKind::Inout) {
             bail!(Api, "buffer `{name}` is {}, not output", b.kind);
         }
         Ok(self.stream.clone_dtoh(&self.buffers[name])?)

@@ -14,8 +14,9 @@ ops.<name>.impl.launches[]   launch   起一次 module 入口 {"module": "argmax
 modules.<name>               module   launch 钉住的工件  {"source": "argmax.cubin", "sha256": "…"}
 vars.<name>                  var      caller 每次调用供应的标量，有上界
 states.<name>                state    不透明持久内存，runtime 按字节供应
-buffers.<name>               buffer   有类型的张量：input / output / weight / workspace / carry / peer
+buffers.<name>               buffer   有类型的张量：input / output / inout / weight / source / workspace / carry / peer
 topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和大小
+cut                          cut      流水线的一段：id、第几段、共几段
 ```
 
 `call` 调 `op`，`op` 由若干 `launch` 实现，`launch` 起 `module` 里的
@@ -37,7 +38,9 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
 - `vars`：caller 每次调用时提供的标量（如 `tokens`），声明 `max`，下界
   恒为 1；所有静态校验在界上进行，运行时拒绝越界值。**会改变内存尺寸或
   launch 几何的标量才是 var**；别的标量（temperature 之类）是数据，走
-  `[1]` 形状的 input buffer。
+  `[1]` 形状的 input buffer。可选的 `axis`（`rows` / `groups` / `tray`）
+  说这个 var 数的是一次调用的哪根轴——本卡的行、本卡的序列、整个 tray
+  batch 的行——每根轴至多一个 var；runtime 不读它（见「Serving 协议」）。
 - `states`：不透明持久内存。**runtime 只知道字节数**——`bytes_per_token`
   （按 token 容量伸缩：paged KV）、`bytes_per_seq`（每个活跃序列一个
   slot：GDN 的 conv + SSM 递归状态；runtime 供应 `seqs.max + 2` 个 slot，
@@ -50,7 +53,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
 - `buffers`：`dtype + shape + kind`，可选 `domain`（内容的先验，见下）与
   `fill`（在 serving 循环里的角色，见「Serving 协议」）。shape 维度是常量或 var 名；kind 说
   的是"谁供应、活多久"：`input`（runtime 写入）/ `output`（runtime 读回）
-  / `weight`（load 时从 checkpoint 的张量拼出来，`bind` 说是哪些，见「权重」）/ `workspace`（runtime 规划，跨次执行
+  / `weight`（load 时从 checkpoint 的张量拼出来，`bind` 说是哪些，见「权重」）/ `source`（同样 `bind`
+  checkpoint 张量，但只活在 load 里、只给 `derive` program 读，见「权重」）/ `workspace`（runtime 规划，跨次执行
   不保留）/ `carry`（一个 program 写、另一个 program 读的交接棒，跨次
   执行保留；谁先跑是 caller 契约，verifier 只要求它被某个 program 写到
   ——投机解码的 aux 隐状态逼出来的）/ `peer`（runtime 填的地址数组，见
@@ -68,6 +72,10 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     / TRT-LLM / DeepEP intranode 都是这个形状）。
   - `{"rank": "ep"}`：call 或 launch 的标量实参来源，本 rank 在组里的
     下标，load 时烧成常量，只能接 `i32`/`i64` 参。
+- `cut`（可选，`kern cut` 写的）：`{"id": "6a23…", "stage": 1, "stages":
+  2}`——这份 manifest 是一份整 manifest 在某些 call 下标处切开后的第
+  `stage` 段，同一刀切出的各段 `id` 相同（整 manifest 的 JSON 与切点的
+  hash）。见「流水线切分」。
 - `modules`：manifest 的依赖清单（必填）——每个 kernel launch 钉住的代码工件：
   `source`（本地文件名 `argmax.cubin`，或 registry ref
   `hf:<org>/<repo>/<path>[@revision]`）+ `sha256`。**身份是 sha256，
@@ -134,8 +142,8 @@ topology.groups.<name>       group    多卡 SPMD 的 rank 组：只有名字和
     vLLM attention（unified + reduce_segments）这类"一个逻辑算子 = 多次
     launch + 私有中间缓冲"整体折叠成一个 impl，不向调用方泄漏。
 - `programs`：每个 program（如 `prefill`/`decode`）是
-  `{"batch"?, "once"?, "calls": [...]}`——`batch` / `once` 说它怎么被
-  serving 循环调（见「Serving 协议」），`calls` 是一段顺序 call 列表：
+  `{"batch"?, "once"?, "derive"?, "calls": [...]}`——`batch` / `once` /
+  `derive` 说它怎么被 serving 循环或 load 调（见「Serving 协议」），`calls` 是一段顺序 call 列表：
   `op` 名 + 接口实参（buffer/state 实参可带字节 `offset`，默认 0：kernel
   收到 base+offset——provider 用它寻址融合 buffer 里的视图如 qkv 的
   q/k/v 切片、state 里的逐层区域，offset 是 provider 布局算术的字面量，
@@ -316,6 +324,17 @@ cos / sin 表、全 1 的 kv scale、chunk 索引表——不是权重，是 `ca
 `tools/kernels-src/weight_prep.cu` 的几个 elementwise 核）。拼接方式与派生
 表都是模型知识，住在生成器（`tools/qwen_weights.py`），不住在 runtime。
 
+checkpoint 张量要先变换才能用（K3 的 mxfp4 专家按 GEMM 布局 shuffle），而原样
+那份没人再读时，原样的张量声明成 `source`，变换写成 `derive` program：
+runtime 在 `load_weights` 里逐 call 跑它，每个 source 只在第一个读它的 call
+之前上传、最后一个读它的 call 之后让出——所有 source 共用一块暂存，同一
+call 上活着的 source 互不重叠（`kern-runtime/src/derive.rs` 的 `layout`）。
+显存峰值是派生结果加上同时活着的最宽一组 source（K3 全量一层的 w13 ≈ 10
+GB），不是整份 checkpoint 两遍。跑完暂存释放、derive program 一起丢掉，
+不能再跑；同一个 runtime 不能第二次 `load_weights`。derive program 不碰
+state / input / output / peer、不调 collective（它跑在这些都还没意义的时候），
+与 `once` / `batch` / `graph` 互斥。
+
 ## Serving 协议：`fill`、`batch`、`once`
 
 runtime 之上还有一层契约：一个 serving 循环（`kern run`、kern-serve 的
@@ -350,6 +369,8 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   测试）。
 - **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
   allreduce 的 poison 值）。与 `batch` 互斥。
+- **program 上的 `derive`**：runtime 自己在 `load_weights` 里跑，caller
+  不跑（见「权重」）。
 - **program 上的 `graph`**：runtime 按调用形状（这次调用的 var 值）首次
   capture 成一张 CUDA graph、之后 replay，一步一次 launch。给形状固定、
   launch 多而短的 program（decode 步、投机 round）；行数随调用变的
@@ -360,11 +381,14 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   值一张图是 manifest 作者量过才知道、runtime 猜不到的事，所以写在这里；
   `--eager` 只是调试开关，全部按 launch 跑。要求有 `batch`。
 
-轴全部从 fill 派生：行轴的 var 是 `slot` fill 的维（`tokens`），组轴的
-var 是 `seq_len` fill 的维（`seqs`），fill 或 line 表跨过的第三个 var 是
-tray 轴（k3 的 `rows`）；manifest 里没有一个名字是 caller 认得的。派生
-这层的是 `kern_manifest::Protocol::check(&Manifest)`（纯函数，不碰 GPU，
-verify 之后的第二遍）：每个 fill 至多一个 buffer、形状与角色相符、
+轴是 var 自己声明的（`axis: rows` 的 `tokens`、`axis: groups` 的 `seqs`、
+`axis: tray` 的 k3 `rows`），fill 只说角色，不定轴：一份不读 `seq_len`
+的 manifest 照样有序列轴，流水线首段之外的段根本不吃 token（v5 之前轴从
+`slot` / `seq_len` fill 所在的维反推，于是每个 forward 都"必须"有这两个
+角色——把 scheduler 的习惯写成了函数的类型）。manifest 里没有一个名字是
+caller 认得的。读这层的是 `kern_manifest::Protocol::check(&Manifest)`
+（纯函数，不碰 GPU，verify 之后的第二遍）：有 `batch` 就得有 rows 与
+groups 两根轴的 var、每个 fill 至多一个 buffer、形状与角色相符、
 `[seqs, r]` 的 `tokens` 的 r 是某个 `batch` 的 `rows`、`count` 只在有它时
 合法、两个 program 不得同形状（span 算形状的一部分）、`groups × rows ≤
 tokens.max`、`span` 只落在 `rows: 1` 的 program 上、全 manifest 一个 span
@@ -384,6 +408,46 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
 是"b 组 r 行、每组取 `count` 个"，span 是"b 组 1 行、其中一组 c 行"——同一
 段代码，`--rows` 选每组行数（缺省取 manifest 声明的最宽）。设计与取舍见
 [v4-design.md](v4-design.md)。
+
+## 流水线切分：`kern cut`
+
+`kern cut <manifest> --at <call>[,<call>…] --out <dir>` 把一份单卡 manifest
+在 call 下标处切成 S 段（`kern_manifest::cut::cut` 是纯函数，不碰 GPU）。
+**一段就是一个函数**：从上一段来的值是它的 input，给下一段的值是它的
+output，manifest 里没有任何流水线专有的东西；怎么传、何时传是 serving
+外壳的事（serve.md「流水线」）。
+
+- 每个 batch program 在同一下标处切开（下标须小于每个 batch program 的
+  长度）；once / derive program 在每段按"本段读到的东西"往回切片。活跃性
+  分析找出切点两侧都活着的 buffer：只许是 workspace；output / carry 只许在
+  末段写；一个 (state, offset) 区域只许一段碰（按层切 KV 时各段各持自己
+  那些层）。做不到的切点报错并说明哪条不满足，不会静默切出错的东西。
+- 跨切点的 buffer 在上游段是 `output`，在下游段是 `input`（本段只读它，
+  无论是不是还要传给再下一段）或 `inout`（本段原地改写它：中间段的
+  `hidden`）。`inout` 是一般概念，不是流水线概念——运行前有值、可写、不
+  要求必写、运行后可读回。到达的 buffer（input / inout）带 `export: true`，
+  上游段映射它、往里拷。一段既不读也不写、只是路过的值被拒：一段只携带
+  它用到的东西。
+- state 整个留或整个丢：一段只要碰到一个 state 的一块就分配整个。`kern cut`
+  逐段打印每个 state 被本段碰到的区域数 / 整份碰到的区域数（区域 = 不同的
+  call offset，按等大估字节），不满的就是给别段占着的内存（报告，不拒）。
+  所以生成器把 KV 写成每层一个 state（qwen3-4b：`kv.0`…`kv.35`），各段只带
+  自己那些层；生成器不知道流水线。页表 / slot 的 `index_into` 指向一个本段
+  丢掉的 state 时改指本段留下的同类 state（pool 给所有 paged state 同一套
+  页号）。
+- 切分只改签名，不加 op、不加观测：各段的输出都是 forward 的纯函数。一个
+  item 什么时候离开设备是 serving 外壳的事（host 上等 event）。每段带
+  `cut {id, stage, stages}`，只用于握手核对同一次切分。
+- 首段之外的段没有 `token` fill，也常常没有 `seq_len`（长度随激活来），
+  `Protocol` 对它们没有特判：轴写在 var 上，角色有就用。首 token 从一行
+  的 step program 出，或从自己吐 token 的 chunk program 出（K3）；两者都
+  只在末段写 output。
+
+门禁：`crates/kern-manifest/tests/cut.rs` 用随机 manifest（400 个种子）
++ 符号解释器验证"能切的切点，各段依次跑 == 整份跑"，且确实有切点被拒；
+GPU 上 `crates/kern-run/examples/pp_chain.rs` 把各段在同一进程里串起来（下一段
+到达的 buffer 映射进上一段、每个 call 后 `Runtime::push`），
+logits 与 token 与整份逐位同（serve.md「流水线」）。
 
 ## Verifier（`kern-manifest`）
 
@@ -410,7 +474,8 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
    能接 `state`、var/表达式的取值范围必须装进标量参数类型、offset 对齐
    且在界内）；
 9. 逐 program 数据流：禁止读未写（read-before-write）、禁止写 input/
-   weight；output / carry 必须被**某个** program 写到（prefill 这类只落
+   weight/source；source 只许 `derive` program 读，`derive` program 不碰
+   state / input / output / peer、不调 collective；output / carry 必须被**某个** program 写到（prefill 这类只落
    state 的 program 合法地不写任何 output；carry 在每个 program 内视为
    已写——它的生产者是另一个 program）；program 的 `once` 与 `batch`
    互斥，`batch.groups ≥ 1`、`rows` 是 ≥ 1 的常量或已声明的 var（fill 之间
@@ -423,7 +488,7 @@ kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证�
     `export`；`of`/`group` 只许出现在 peer 上；peer 对 op 只读且视为初始
     已写；`{"rank": g}` 只接 `i32`/`i64` 参且 g 已声明；**带 extern launch
     的 op 不得收到 peer buffer**——runtime 内置（cublasLt）永远不碰 peer
-    内存；
+    内存；`cut` 有 id、`stages ≥ 2`、`stage < stages`；
 12. pack / tensormap / cluster：`bytes<n>` 只许作 launch 参（不进 extern）、
     只接 `{"pack"}` 实参且 `size == n`，字段都在 image 内、互不重叠，引用的
     接口参 / scratch / var / group 都存在；引用 `out` 接口参的指针字段算

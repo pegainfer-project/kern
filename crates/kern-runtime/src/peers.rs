@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::compile;
 use crate::device::{self, Mapped, PeerHandle};
 use crate::error::bail;
 use crate::{Error, Result, Runtime};
@@ -41,6 +42,23 @@ impl Runtime {
     pub fn map(&self, handle: &PeerHandle, what: &str) -> Result<Mapped> {
         self.ctx.bind_to_thread()?;
         Ok(Mapped::new(device::import(&self.stream, self.gpu as i32, handle, what)?))
+    }
+
+    /// Copy buffer `name`, as long as its shape is at `vars`, into `to`:
+    /// another runtime's buffer of the same shape, mapped. On the compute
+    /// stream, so it follows every launch issued before it and precedes
+    /// every one issued after; a [`Mark`](crate::Mark) taken next says
+    /// when it has landed.
+    pub fn push(&self, name: &str, vars: &BTreeMap<String, u64>, to: &Mapped) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        let Some(b) = self.manifest.buffers.get(name) else {
+            bail!(Api, "no buffer `{name}`");
+        };
+        let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), vars)?;
+        if bytes > to.bytes() {
+            bail!(Api, "buffer `{name}` is {bytes} bytes at these vars; the mapping it goes to holds {}", to.bytes());
+        }
+        device::copy_1d(self.stream.cu_stream(), to.ptr(), self.buffers[name].ptr, bytes)
     }
 
     /// A handle for every `export` buffer and every state, by name: what

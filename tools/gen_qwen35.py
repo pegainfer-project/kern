@@ -1517,7 +1517,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     return normalize(head | {
         # bs=1; prefill per chunk (tokens <= CHUNK_MAX) over *all* prompt
         # tokens (it emits next_token), decode at tokens=1
-        "vars": {"tokens": {"max": CHUNK_MAX}, "seqs": {"max": MAX_SEQS}},
+        "vars": {"tokens": {"max": CHUNK_MAX, "axis": "rows"}, "seqs": {"max": MAX_SEQS, "axis": "groups"}},
         "states": states,
         "buffers": buffers,
         "ops": kernels,

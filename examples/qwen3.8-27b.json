@@ -35,10 +35,10 @@
  },
  "vars": {
   "tokens": {
-   "max": "MAX_TOKENS"
+   "max": "MAX_TOKENS", "axis": "rows"
   },
   "seqs": {
-   "max": "MAX_SEQS"
+   "max": "MAX_SEQS", "axis": "groups"
   }
  },
  "states": {

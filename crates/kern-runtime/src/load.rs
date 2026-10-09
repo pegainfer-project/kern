@@ -21,15 +21,16 @@ use kern_manifest::types::{Buffer, BufferKind, DType, Dim, Manifest, Placement, 
 use kern_manifest::Verified;
 
 use crate::cublas::Blas;
+use crate::derive::Derivation;
 use crate::device::{
-    alloc, alloc_host, alloc_vmm, chunk_granularity, copy_1d, copy_2d, record, Arena, DeviceBuf, Mapper, Physical,
-    Pinned, Space,
+    alloc, alloc_host, alloc_uninit, alloc_vmm, chunk_granularity, copy_1d, copy_2d, record, Arena, DeviceBuf, Mapper,
+    Physical, Pinned, Space,
 };
 use crate::error::{bail, cuda_check};
 use crate::lease::Remaps;
 use crate::peers::PeerSlot;
 use crate::weights::{Blob, Tensors};
-use crate::{compile, cubin, weights, Capacity, Error, Result, Runtime, Topology, HEADROOM};
+use crate::{compile, cubin, derive, weights, Capacity, Error, Result, Runtime, Topology, HEADROOM};
 use kern_pool::{chunks_for, page_unit, Kind, Pool};
 
 impl Runtime {
@@ -153,8 +154,13 @@ impl Runtime {
         let mut buffers = BTreeMap::new();
         let mut peers = BTreeMap::new();
         let (mut filled, mut kept) = (BTreeSet::new(), 0u64);
+        let mut sources = BTreeMap::new();
         for (name, b) in &manifest.buffers {
             let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), &vars_max)?;
+            if b.kind == BufferKind::Source {
+                sources.insert(name.clone(), bytes);
+                continue;
+            }
             let buf = if let Some(r) = resident.as_mut().and_then(|r| r.take(name, b, bytes)) {
                 filled.insert(name.clone());
                 kept += bytes;
@@ -179,9 +185,16 @@ impl Runtime {
             }
             buffers.insert(name.clone(), buf);
         }
+        // Sources are windows of one staging allocation (`derive`); their
+        // views are names for the compiler, the staging owns the bytes.
+        let plan = derive::plan(&manifest, &sources);
+        let stage = alloc_uninit(&stream, plan.bytes)?;
+        for (name, at) in &plan.at {
+            buffers.insert(name.clone(), DeviceBuf::borrowed(&stream, stage.ptr + at, sources[name]));
+        }
         let mut staging = BTreeMap::new();
         for (name, b) in &manifest.buffers {
-            if b.kind == BufferKind::Input {
+            if matches!(b.kind, BufferKind::Input | BufferKind::Inout) {
                 let mut pinned = unsafe { ctx.alloc_pinned::<u8>(buffers[name].bytes.max(1) as usize)? };
                 pinned.as_mut_slice()?.fill(0);
                 staging.insert(name.clone(), pinned);
@@ -276,11 +289,18 @@ impl Runtime {
         } else {
             compile::compile(&manifest, &resolved, &buffers, &states, &ranks, &peers, &blt)?
         };
+        let mut derived = compile::compile_derive(&manifest, &resolved, &buffers, &ranks, &blt)?;
+        let derivation = Derivation {
+            programs: derive::programs(&manifest).iter().filter_map(|p| derived.remove(*p)).collect(),
+            arrivals: plan.arrivals,
+            stage,
+        };
 
         let provision = Provision { tokens: pool.pages_max() as u64 * page, seq_slots: pool.slots_max() as u64 };
         let remaps = Remaps::spawn(Arc::clone(&ctx), mapper)?;
         let mut rt = Runtime {
             host_weights_ready: !manifest.buffers.values().any(|b| b.placement == Placement::Host),
+            signals: crate::exec::Signals::load(&ctx, gpu)?,
             manifest,
             filled,
             kept,
@@ -311,6 +331,7 @@ impl Runtime {
             imports: Vec::new(),
             compare: Default::default(),
             joins: [join_event()?, join_event()?],
+            derivation: Some(derivation),
         };
         rt.zero_fresh(&initial)?;
         rt.stream.synchronize()?;
@@ -322,14 +343,23 @@ impl Runtime {
     /// bytes, wherever [`Tensors`] says they are: this process's memory
     /// (safetensors blobs) or memory this device reads from another
     /// process (a weight cache's buckets, mapped with [`Runtime::map`]).
+    ///
+    /// Then the derive programs run, call by call, over the `source`
+    /// tensors (see `derive`): a runtime with derive programs loads its
+    /// weights once, since the sources are gone after.
     pub fn load_weights(&mut self, tensors: &dyn Tensors) -> Result<()> {
         if self.host_weights_ready && self.buffers.values().any(|b| b.host_weight().is_some()) {
             bail!(Api, "host weights are an immutable snapshot; use a new runtime and scope to reload");
+        }
+        let derivation = self.derivation.take();
+        if derivation.is_none() && !derive::programs(&self.manifest).is_empty() {
+            bail!(Api, "weights are derived once per runtime; load a new runtime to reload");
         }
         self.ctx.bind_to_thread()?;
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
         // Copies of a few MiB each are launch-latency bound on one stream.
         let lanes = (0..LOAD_LANES).map(|_| self.ctx.new_stream()).collect::<std::result::Result<Vec<_>, _>>()?;
+        let stage = Lanes::new(&self.ctx, self.gpu as i32)?;
         let mut planned = Vec::new();
         for (name, b) in &self.manifest.buffers {
             if b.kind != BufferKind::Weight || self.filled.contains(name) {
@@ -356,7 +386,7 @@ impl Runtime {
             device.0 += dst.bytes;
         }
         let t = std::time::Instant::now();
-        let up = (upload(&self.ctx, self.gpu as i32, &staged)?, t.elapsed().as_secs_f64());
+        let up = (upload(&self.ctx, &stage, &staged)?, t.elapsed().as_secs_f64());
         for (dst, copies) in planned.iter() {
             let Some(h) = dst.host_weight() else { continue };
             let t = std::time::Instant::now();
@@ -369,8 +399,11 @@ impl Runtime {
         }
         lanes.iter().try_for_each(|s| s.synchronize())?;
         self.stream.synchronize()?;
+        let t = std::time::Instant::now();
+        let derived = derivation.map(|d| self.derive(d, tensors, &stage)).transpose()?;
+        let sources = (derived.unwrap_or(0), t.elapsed().as_secs_f64());
         tracing::info!(
-            "gpu {} weights: device {:.1} GiB in {} copies ({:.1} GiB resident already; {:.1} GiB staged from host memory in {:.1}s, {:.0} GiB/s), host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s); {:.1}s in all",
+            "gpu {} weights: device {:.1} GiB in {} copies ({:.1} GiB resident already; {:.1} GiB staged from host memory in {:.1}s, {:.0} GiB/s), host {:.1} GiB in {} copies of which this rank filled {:.1} GiB in {:.1}s ({:.0} GiB/s), {:.1} GiB of sources derived from in {:.1}s; {:.1}s in all",
             self.gpu,
             gib(device.0),
             device.1,
@@ -383,6 +416,8 @@ impl Runtime {
             gib(filled.0),
             filled.1,
             gib(filled.0) / filled.1.max(1e-9),
+            gib(sources.0),
+            sources.1,
             t0.elapsed().as_secs_f64(),
         );
         self.host_weights_ready = true;
@@ -468,13 +503,26 @@ const STAGE: u64 = 16 << 20;
 /// Threads staging host and file bytes, each on its own stream.
 const STAGE_LANES: usize = 16;
 
-/// Host and file bytes go up through page-locked staging: [`STAGE_LANES`]
-/// threads, each with two blocks and a stream, gather a piece of a copy
-/// into one block while the DMA out of the other is in flight, and share
-/// the pieces through a counter. A pageable `cuMemcpyHtoD` stages the
-/// same way inside the driver, on the calling thread alone. Returns the
-/// bytes uploaded.
-fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) -> Result<u64> {
+/// The page-locked staging host and file bytes go up through: a stream
+/// and two blocks per lane, made once per `load_weights` and reused by
+/// every upload in it (the derive programs upload once per call).
+pub(crate) struct Lanes(Vec<(Arc<CudaStream>, [Pinned; 2])>);
+
+impl Lanes {
+    fn new(ctx: &Arc<CudaContext>, dev: i32) -> Result<Lanes> {
+        ctx.bind_to_thread()?;
+        let lane = |_| Ok((ctx.new_stream()?, [Pinned::alloc(STAGE, dev)?, Pinned::alloc(STAGE, dev)?]));
+        (0..STAGE_LANES).map(lane).collect::<Result<_>>().map(Lanes)
+    }
+}
+
+/// Host and file bytes go up through the [`Lanes`]: one thread per lane
+/// gathers a piece of a copy into one block while the DMA out of the
+/// other is in flight, and the threads share the pieces through a
+/// counter. A pageable `cuMemcpyHtoD` stages the same way inside the
+/// driver, on the calling thread alone. Returns the bytes uploaded, all
+/// landed.
+fn upload(ctx: &Arc<CudaContext>, lanes: &Lanes, copies: &[(u64, &weights::Copy)]) -> Result<u64> {
     // A copy landing with a stride goes up row by row, so its pieces end
     // on row boundaries.
     let pieces: Vec<(usize, u64, u64)> = copies
@@ -487,10 +535,8 @@ fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) ->
         })
         .collect();
     let next = AtomicUsize::new(0);
-    let lane = || -> Result<()> {
+    let lane = |(stream, blocks): &(Arc<CudaStream>, [Pinned; 2])| -> Result<()> {
         ctx.bind_to_thread()?;
-        let stream = ctx.new_stream()?;
-        let blocks = [Pinned::alloc(STAGE, dev)?, Pinned::alloc(STAGE, dev)?];
         let mut landed: [Option<sys::CUevent>; 2] = [None, None];
         let mut i = 0;
         let mut run = || -> Result<()> {
@@ -518,12 +564,13 @@ fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) ->
                         (hi - lo) / copy.width,
                     )?;
                 }
-                landed[i] = Some(record(&stream)?);
+                landed[i] = Some(record(stream)?);
                 i ^= 1;
             }
             Ok(())
         };
-        // Nothing may be in flight out of a block when it is freed.
+        // Nothing may be in flight out of a block when the next upload
+        // reuses it, and the bytes have landed when this returns.
         let r = run();
         stream.synchronize()?;
         for ev in landed.into_iter().flatten() {
@@ -532,8 +579,8 @@ fn upload(ctx: &Arc<CudaContext>, dev: i32, copies: &[(u64, &weights::Copy)]) ->
         r
     };
     std::thread::scope(|s| {
-        let lanes: Vec<_> = (0..STAGE_LANES).map(|_| s.spawn(lane)).collect();
-        lanes.into_iter().try_for_each(|h| h.join().expect("an upload lane panicked"))
+        let running: Vec<_> = lanes.0.iter().map(|l| s.spawn(move || lane(l))).collect();
+        running.into_iter().try_for_each(|h| h.join().expect("an upload lane panicked"))
     })?;
     Ok(copies.iter().map(|(_, c)| c.width * c.rows).sum())
 }
@@ -553,6 +600,32 @@ fn gather(c: &weights::Copy, lo: u64, hi: u64, out: &mut [u8]) -> Result<()> {
         o += n;
     }
     Ok(())
+}
+
+impl Runtime {
+    /// Sources' tensors into their staging windows, landed when this
+    /// returns. Returns their bytes.
+    pub(crate) fn fill_sources(&self, names: &[String], tensors: &dyn Tensors, stage: &Lanes) -> Result<u64> {
+        let mut planned = Vec::new();
+        for n in names {
+            let dst = &self.buffers[n];
+            let plan = |t: &str| tensors.find(t);
+            let copies = weights::plan(n, &self.manifest.buffers[n], dst.bytes, plan, |g| self.ranks.get(g).copied())?;
+            planned.push((dst, copies));
+        }
+        let mut staged = Vec::new();
+        for (dst, copies) in &planned {
+            for c in copies {
+                match c.src {
+                    Blob::Host(_) | Blob::File { .. } => staged.push((dst.ptr, c)),
+                    Blob::Device { ptr, .. } => copy_device(&self.stream, dst, c, ptr)?,
+                }
+            }
+        }
+        upload(&self.ctx, stage, &staged)?;
+        self.stream.synchronize()?;
+        Ok(planned.iter().map(|(d, _)| d.bytes).sum())
+    }
 }
 
 /// One planned copy of device bytes at `ptr` (another process's

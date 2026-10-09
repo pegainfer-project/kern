@@ -50,7 +50,9 @@ pub fn sample(o: &Options, m: &Manifest, pr: &Protocol, p: Provision, page: u64)
     let capacity = p.tokens;
     let mut rng = Rng(o.seed ^ 0x776f_726b_6c6f_6164);
     let tmax = pr.rows.max.max(1);
-    let tokens = &pr.token_rows().name;
+    let Some(tokens) = pr.token_rows().map(|t| &t.name) else {
+        anyhow::bail!("the manifest takes no tokens; a workload feeds some")
+    };
     let vocab = m.buffers[tokens]
         .domain
         .as_ref()

@@ -2293,11 +2293,13 @@ version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
+ "hex",
  "kern-manifest",
  "kern-pool",
  "kern-run",
  "kern-runtime",
  "pegainfer-frontend",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

@@ -248,7 +248,7 @@ def rope_name(compress_ratio, *, split=False):
 
 def build(cubin: Path, layout=Layout(), peers=None):
     """Return concrete definitions and lowering helpers (weights supplied outside)."""
-    variables = {"tokens": {"max": layout.max_tokens}, "seqs": {"max": layout.max_seqs}}
+    variables = {"tokens": {"max": layout.max_tokens, "axis": "rows"}, "seqs": {"max": layout.max_seqs, "axis": "groups"}}
     buffers = {
         "input_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token"},
         "anchor_token": {"kind": "input", "dtype": "i64", "shape": ["seqs"], "fill": "token"},

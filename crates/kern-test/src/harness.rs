@@ -233,7 +233,7 @@ pub struct Recording<B> {
     pub(crate) ranks: usize,
     pub(crate) chunk: Option<Forward>,
     steps: Vec<Forward>,
-    /// Programs either side runs once after load: their spans are each
+    /// Programs either side runs at load (`once`, `derive`): their spans are each
     /// side's own setup, not something the workload drives.
     once: Vec<String>,
     pub(crate) runs: Vec<Run<B>>,
@@ -582,9 +582,9 @@ pub fn record<S: Side>(
     };
     let shared = rec.shared_states();
     let pb = Protocol::check(mb).context("B does not fit the serving protocol")?;
-    let mut fixed = constants(&ma, &pa.once);
-    fixed.extend(constants(mb, &pb.once));
-    rec.once = pa.once.iter().chain(&pb.once).cloned().collect();
+    let mut fixed = constants(&ma, &[&pa.once[..], &pa.derive].concat());
+    fixed.extend(constants(mb, &[&pb.once[..], &pb.derive].concat()));
+    rec.once = [&pa.once[..], &pa.derive, &pb.once, &pb.derive].concat();
     let mb: &Manifest = mb;
     let chunk_name = chunk_f.as_ref().map_or("", |f| f.name.as_str());
 

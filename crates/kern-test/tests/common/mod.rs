@@ -228,7 +228,7 @@ impl Fixture {
         }
         let mut m = serde_json::json!({
             "schema_version": 5, "model": "fake",
-            "vars": {"tokens": {"max": 8}, "seqs": {"max": 1}},
+            "vars": {"tokens": {"max": 8, "axis": "rows"}, "seqs": {"max": 1, "axis": "groups"}},
             "states": {"kv": {"bytes_per_token": LAYERS * D * 4}},
             "buffers": {
                 "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token",
@@ -495,9 +495,9 @@ impl Side for Fake {
                 r.bufs.get_mut(&f.name).unwrap()[..b.len()].copy_from_slice(&b);
             }
         };
-        put(p.token_rows(), ids);
-        put(p.slots(), &(pos..pos + c as i64).collect::<Vec<_>>());
-        put(p.seq_lens(), &[pos + c as i64]);
+        put(p.token_rows().expect("the fixture takes tokens"), ids);
+        put(p.any(Fill::Slot).expect("the fixture takes slots"), &(pos..pos + c as i64).collect::<Vec<_>>());
+        put(p.any(Fill::SeqLen).expect("the fixture takes lengths"), &[pos + c as i64]);
         if let Some(f) = p.filled(Fill::Position, Axis::Rows) {
             put(f, &(pos..pos + c as i64).collect::<Vec<_>>());
         }

@@ -16,14 +16,17 @@
 //! it hands out is typed.
 //!
 //! The axes. A call has `groups` sequences of `rows` rows each on this
-//! rank. The var the rows go in is the one the `slot` fill's buffer is
-//! over ([`Axis::Rows`]); the var the sequences go in is the `seq_len`
-//! buffer's ([`Axis::Groups`]). A manifest whose tray batch spans several
-//! ranks (a `tp` group) lays some buffers out over a third var, the whole
-//! tray's rows with this rank's first ([`Axis::Tray`]); any fill or line
-//! table over a var that is neither of the first two names it. Fixed
-//! lengths ([`Axis::Fixed`]) are for what is declared at its bound: the
-//! `cu_seqlens` buffer, the collectives' one-word `error` flag.
+//! rank, and the vars that count them are declared as such: the var with
+//! `axis: rows` ([`Axis::Rows`]), the var with `axis: groups`
+//! ([`Axis::Groups`]). A manifest whose tray batch spans several ranks (a
+//! `tp` group) lays some buffers out over a third var, the whole tray's
+//! rows with this rank's first, declared `axis: tray` ([`Axis::Tray`]).
+//! A fill or a line table is over one of these three; fixed lengths
+//! ([`Axis::Fixed`]) are for what is declared at its bound: the
+//! `cu_seqlens` buffer, the collectives' one-word `error` flag. The roles
+//! say nothing about the axes: a manifest that reads no sequence length
+//! still has a sequence axis, and a pipeline stage past the first takes
+//! no tokens at all.
 //!
 //! A program with a `batch` is a [`Forward`]. Which tokens it hands back is
 //! not a role but dataflow: the `tokens` output it writes (one per
@@ -45,9 +48,10 @@
 //!
 //! A kernel sized by the context rather than by the call (a prefill that
 //! expands every cached row of its sequence) runs over a var the program's
-//! `batch` names as `context`: the length of the call's longest sequence
-//! once its rows are in, which the driver already knows from the lengths
-//! it stages. One var bounds every context in a manifest.
+//! `batch` names as `context`: the call's sequences' lengths once their
+//! rows are in, summed (a call of several sequences expands them all), which
+//! the driver already knows from the lengths it stages. One var bounds every
+//! context in a manifest.
 
 use crate::types::*;
 use crate::Verified;
@@ -127,7 +131,8 @@ pub struct LineTable {
 pub enum Rows {
     /// Exactly this many, the layout the program's kernels expect.
     Const(u64),
-    /// As many as the call feeds: one sequence, the rows var set per call.
+    /// As many as the call feeds, the rows var set per call: one
+    /// sequence's, or several back to back split by the `cu_seqlens` fill.
     Var,
 }
 
@@ -203,6 +208,9 @@ pub struct Protocol {
     pub forwards: Vec<Forward>,
     /// Programs run once after load, in name order.
     pub once: Vec<String>,
+    /// Programs the runtime runs inside weight loading, in name order: no
+    /// caller runs them.
+    pub derive: Vec<String>,
 }
 
 impl Protocol {
@@ -223,10 +231,6 @@ impl Protocol {
     fn check_with(m: &Verified, sampled: bool) -> Result<Protocol, ProtocolErrors> {
         let mut errs = Vec::new();
         let var_max = |v: &str| m.vars.get(v).map(|v| v.max);
-        let axis_var = |b: &Buffer| match b.shape.first() {
-            Some(Dim::Var(v)) => Some(v.clone()),
-            _ => None,
-        };
         let one = |fill: Fill| -> Option<(&String, &Buffer)> {
             let mut it = m.buffers.iter().filter(|(_, b)| b.fill == Some(fill));
             let first = it.next();
@@ -237,76 +241,47 @@ impl Protocol {
             }
         };
 
-        // The axes come from the two fills every call needs.
-        let axis_of = |fill: Fill, errs: &mut Vec<String>| -> Option<Bound> {
-            let all: Vec<&String> = m.buffers.iter().filter(|(_, b)| b.fill == Some(fill)).map(|(n, _)| n).collect();
-            match all.as_slice() {
-                [] => {
-                    errs.push(format!("no input has fill `{fill}`"));
-                    None
-                }
-                [name] => {
-                    let b = &m.buffers[*name];
-                    match (b.shape.as_slice(), axis_var(b).and_then(|v| var_max(&v).map(|max| Bound { var: v, max }))) {
-                        ([Dim::Var(_)], Some(bound)) => Some(bound),
-                        _ => {
-                            errs.push(format!("`{name}` (fill `{fill}`) is shaped {:?}, expected [<var>]", b.shape));
-                            None
-                        }
-                    }
-                }
-                _ => {
-                    errs.push(format!("fill `{fill}` is on {} buffers ({all:?}), expected one", all.len()));
-                    None
-                }
-            }
+        // The axes are the vars declared to count them (verified: one each).
+        let axis_var = |axis: VarAxis| -> Option<Bound> {
+            m.vars.iter().find(|(_, v)| v.axis == Some(axis)).map(|(n, v)| Bound { var: n.clone(), max: v.max })
         };
-        let rows = axis_of(Fill::Slot, &mut errs);
-        let groups = axis_of(Fill::SeqLen, &mut errs);
-        if let (Some(r), Some(g)) = (&rows, &groups) {
-            if r.var == g.var {
-                errs.push(format!(
-                    "`slot` and `seq_len` are both over var `{}`; rows and sequences need their own",
-                    r.var
-                ));
+        let (rows, groups, tray) = (axis_var(VarAxis::Rows), axis_var(VarAxis::Groups), axis_var(VarAxis::Tray));
+        for (axis, found) in [(VarAxis::Rows, &rows), (VarAxis::Groups, &groups)] {
+            if found.is_none() {
+                errs.push(format!("no var has `axis: {axis}`: nothing counts a call's {axis}"));
             }
         }
         let (Some(rows), Some(groups)) = (rows, groups) else {
             return Err(ProtocolErrors(errs));
         };
-
-        // A third var, over which something spans the tray batch.
-        let mut tray_vars: BTreeSet<String> = BTreeSet::new();
-        for b in m.buffers.values().filter(|b| b.fill.is_some() || is_line_table(m, b)) {
-            let col = if is_line_table(m, b) { b.shape.get(1) } else { b.shape.first() };
-            if let Some(Dim::Var(v)) = col {
-                if *v != rows.var && *v != groups.var {
-                    tray_vars.insert(v.clone());
-                }
-            }
-        }
-        if tray_vars.len() > 1 {
-            errs.push(format!("fills and line tables span {} vars besides rows and sequences ({tray_vars:?}), at most one names the tray batch", tray_vars.len()));
-        }
-        let tray = tray_vars.first().and_then(|v| var_max(v).map(|max| Bound { var: v.clone(), max }));
-        let classify = |v: &str| -> Axis {
+        let classify = |v: &str| -> Option<Axis> {
             if v == rows.var {
-                Axis::Rows
+                Some(Axis::Rows)
             } else if v == groups.var {
-                Axis::Groups
+                Some(Axis::Groups)
+            } else if tray.as_ref().is_some_and(|t| t.var == v) {
+                Some(Axis::Tray)
             } else {
-                Axis::Tray
+                None
             }
+        };
+        let axis_of = |name: &str, what: &str, v: &str, errs: &mut Vec<String>| -> Option<Axis> {
+            let axis = classify(v);
+            if axis.is_none() {
+                errs.push(format!("{what} `{name}` is over var `{v}`, which counts no axis of a call"));
+            }
+            axis
         };
 
         // Fills.
         let mut fills: Vec<Filled> = Vec::new();
         for (name, b) in &m.buffers {
             let Some(fill) = b.fill else { continue };
+            let what = format!("fill `{fill}`");
             let (axis, width) = match b.shape.as_slice() {
-                [Dim::Var(v)] => (classify(v), 1),
-                [Dim::Const(c)] => (Axis::Fixed(*c), 1),
-                [Dim::Var(v), Dim::Const(w)] => (classify(v), *w),
+                [Dim::Var(v)] => (axis_of(name, &what, v, &mut errs), 1),
+                [Dim::Const(c)] => (Some(Axis::Fixed(*c)), 1),
+                [Dim::Var(v), Dim::Const(w)] => (axis_of(name, &what, v, &mut errs), *w),
                 s => {
                     errs.push(format!(
                         "`{name}` (fill `{fill}`) is shaped {s:?}, expected [<axis>], [<n>] or [<axis>, w]"
@@ -314,6 +289,7 @@ impl Protocol {
                     continue;
                 }
             };
+            let Some(axis) = axis else { continue };
             let ok = match fill {
                 Fill::Token => width == 1 && matches!(axis, Axis::Rows | Axis::Tray | Axis::Groups),
                 Fill::Position | Fill::Valid | Fill::Slot => width == 1 && axis == Axis::Rows,
@@ -346,9 +322,6 @@ impl Protocol {
             if n > 1 {
                 errs.push(format!("fill `{fill}` over {axis:?} is on {n} buffers, expected one"));
             }
-        }
-        if !fills.iter().any(|f| f.fill == Fill::Token && f.axis != Axis::Groups) {
-            errs.push("no input has fill `token` over the rows: nothing carries the tokens a call feeds".into());
         }
         if fills.iter().filter(|f| f.fill == Fill::Token && f.axis == Axis::Groups).count() > 1 {
             errs.push("fill `token` over the sequences is on more than one buffer".into());
@@ -390,7 +363,7 @@ impl Protocol {
                         continue;
                     }
                 };
-                let axis = classify(cols);
+                let Some(axis) = axis_of(name, "line table", cols, &mut errs) else { continue };
                 if axis == Axis::Rows {
                     errs.push(format!("line table `{name}` has a column per row (`{cols}`); lines are per sequence"));
                     continue;
@@ -409,6 +382,7 @@ impl Protocol {
         // Forwards: the shape, and by dataflow what each hands back.
         let mut forwards: Vec<Forward> = Vec::new();
         let mut once = Vec::new();
+        let derive = m.programs.iter().filter(|(_, p)| p.derive).map(|(n, _)| n.clone()).collect();
         let mut span_var: Option<Bound> = None;
         let mut context_var: Option<Bound> = None;
         for (pname, p) in &m.programs {
@@ -434,8 +408,11 @@ impl Protocol {
                             rows.var
                         ));
                     }
-                    if batch.groups != 1 {
-                        errs.push(format!("{ctx}: rows set per call means one sequence, not {} groups", batch.groups));
+                    if batch.groups != 1 && one(Fill::CuSeqlens).is_none() {
+                        errs.push(format!(
+                            "{ctx}: rows set per call over {} groups needs a `cu_seqlens` fill to split them",
+                            batch.groups
+                        ));
                     }
                     Rows::Var
                 }
@@ -599,6 +576,7 @@ impl Protocol {
                 line_tables,
                 forwards,
                 once,
+                derive,
             })
         } else {
             Err(ProtocolErrors(errs))
@@ -641,18 +619,18 @@ impl Protocol {
         self.forwards.iter().filter(|f| !f.span && f.rows == rows).map(|f| f.groups).max().unwrap_or(0)
     }
 
-    /// The var vars of a call: `b` sequences of `per` rows on this rank,
-    /// `tray` rows in the whole tray batch (the sum of its members' blocks;
-    /// this rank's `b * per` when it is alone), `longest` the length of
-    /// the call's longest sequence once its rows are in (only read into a
+    /// The var vars of a call: `b` sequences of `rows` rows in all on this
+    /// rank, `tray` rows in the whole tray batch (the sum of its members'
+    /// blocks; this rank's `rows` when it is alone), `context` the call's
+    /// sequences' lengths once their rows are in, summed (only read into a
     /// context var).
-    pub fn vars(&self, b: u64, per: u64, tray: u64, longest: u64) -> BTreeMap<String, u64> {
-        let mut vars = BTreeMap::from([(self.rows.var.clone(), b * per), (self.groups.var.clone(), b)]);
+    pub fn vars(&self, b: u64, rows: u64, tray: u64, context: u64) -> BTreeMap<String, u64> {
+        let mut vars = BTreeMap::from([(self.rows.var.clone(), rows), (self.groups.var.clone(), b)]);
         if let Some(t) = &self.tray {
             vars.insert(t.var.clone(), tray);
         }
         if let Some(c) = &self.context {
-            vars.insert(c.var.clone(), longest);
+            vars.insert(c.var.clone(), context);
         }
         vars
     }
@@ -668,26 +646,9 @@ impl Protocol {
         self.fills.iter().find(|f| f.fill == fill)
     }
 
-    /// The tokens fed, one per row: over this rank's rows or the tray's.
-    pub fn token_rows(&self) -> &Filled {
-        self.filled(Fill::Token, Axis::Rows).or_else(|| self.filled(Fill::Token, Axis::Tray)).expect("checked")
+    /// The tokens fed, one per row (over this rank's rows or the tray's),
+    /// when the manifest takes any: a pipeline stage past the first does not.
+    pub fn token_rows(&self) -> Option<&Filled> {
+        self.filled(Fill::Token, Axis::Rows).or_else(|| self.filled(Fill::Token, Axis::Tray))
     }
-
-    pub fn slots(&self) -> &Filled {
-        self.filled(Fill::Slot, Axis::Rows).expect("checked")
-    }
-
-    pub fn seq_lens(&self) -> &Filled {
-        self.filled(Fill::SeqLen, Axis::Groups).expect("checked")
-    }
-}
-
-/// An input indexing a per-sequence state.
-fn is_line_table(m: &Manifest, b: &Buffer) -> bool {
-    b.kind == BufferKind::Input
-        && b.domain
-            .as_ref()
-            .and_then(|d| d.index_into.as_deref())
-            .and_then(|s| m.states.get(s))
-            .is_some_and(State::is_per_seq)
 }

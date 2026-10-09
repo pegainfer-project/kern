@@ -4,7 +4,7 @@
 //!
 //! Checks:
 //!   1. schema_version
-//!   2. vars: max > 0
+//!   2. vars: max > 0, at most one var per axis
 //!   3. states: exactly one of bytes_per_token / bytes / bytes_per_seq is non-zero,
 //!      or none of them and a well-formed `host` layout; a host state is never
 //!      exported (`of`); a domain may index it, declaring the host's ids
@@ -25,9 +25,12 @@
 //!   7. calls: op refs resolve, arg/param arity and per-position type match
 //!      against the interface, var ranges fit scalar params
 //!   8. dataflow per program: no read-before-write, no writes to input,
-//!      weight or peer buffers, every output / carry buffer written by some
-//!      program; a program is `once` or has a `batch`, not both; a batch
-//!      has `groups >= 1` and constant `rows >= 1` or a declared var
+//!      weight, source or peer buffers, every output / carry buffer written
+//!      by some program (an inout holds a value before the run and need
+//!      not be); a program is `once` or has a `batch`, not both; a
+//!      batch has `groups >= 1` and constant `rows >= 1` or a declared var;
+//!      a source is read only by `derive` programs, which run inside weight
+//!      loading and so touch no state, input, output, peer or collective
 //!   9. no unused declarations; a `fill` sits on an input or output of an
 //!      integer dtype, input roles on inputs and output roles on outputs
 //!      (whether the fills add up to a serving contract is
@@ -37,6 +40,7 @@
 //!      `of` and `group` only where they mean something; `{"rank": g}`
 //!      binds only to i32/i64 params; an op with an extern launch never
 //!      receives a peer buffer (runtime built-ins may not touch peer memory)
+//!  11. cut: at least two stages, the stage below their count, an id
 //!
 //! What this deliberately cannot check: kernel *behavior*, and the
 //! *semantics* of interface params (that a replacement implementation
@@ -184,6 +188,12 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             errs.push(format!("var `{name}`: max must be >= {}", Var::MIN));
         }
     }
+    for axis in [VarAxis::Rows, VarAxis::Groups, VarAxis::Tray] {
+        let named: Vec<&String> = m.vars.iter().filter(|(_, v)| v.axis == Some(axis)).map(|(n, _)| n).collect();
+        if named.len() > 1 {
+            errs.push(format!("vars {named:?} all count the `{axis}` axis; one var does"));
+        }
+    }
     let vars_max: BTreeMap<String, u64> = m.vars.iter().map(|(k, v)| (k.clone(), v.max)).collect();
     let vars_min: BTreeMap<String, u64> = m.vars.keys().map(|k| (k.clone(), Var::MIN)).collect();
 
@@ -193,6 +203,14 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             if *size == 0 {
                 errs.push(format!("topology group `{name}`: size must be > 0"));
             }
+        }
+    }
+    if let Some(c) = &m.cut {
+        if c.id.is_empty() || c.stages < 2 || c.stage >= c.stages {
+            errs.push(format!(
+                "cut: stage {} of {} with id `{}`; a cut has at least 2 stages, a stage below their count and an id",
+                c.stage, c.stages, c.id
+            ));
         }
     }
     let group_ctx = |g: &str, errs: &mut Vec<String>, used_groups: &mut BTreeSet<String>, ctx: &str| -> Option<u64> {
@@ -270,12 +288,15 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 errs.push(format!("{ctx}: shared host weights cannot select tensors, rows or columns by rank"));
             }
         }
-        // 9c. bind: a weight is its segments, nothing else has any
+        // 9c. bind: a weight or a source is its segments, nothing else has any
+        if b.kind == BufferKind::Source && b.export {
+            errs.push(format!("{ctx}: a source lives only while weights load; it cannot be exported"));
+        }
         match (b.kind, b.bind.is_empty()) {
-            (BufferKind::Weight, true) => {
-                errs.push(format!("{ctx}: a weight buffer binds at least one checkpoint tensor (`bind`)"))
+            (BufferKind::Weight | BufferKind::Source, true) => {
+                errs.push(format!("{ctx}: a {} buffer binds at least one checkpoint tensor (`bind`)", b.kind))
             }
-            (BufferKind::Weight, false) => {
+            (BufferKind::Weight | BufferKind::Source, false) => {
                 for (i, s) in b.bind.iter().enumerate() {
                     let sctx = format!("{ctx}: bind[{i}]");
                     let source = |t: &TensorSource, errs: &mut Vec<String>, used_groups: &mut BTreeSet<String>| match t
@@ -340,9 +361,8 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                     }
                 }
             }
-            (kind, false) => {
-                errs.push(format!("{ctx}: `bind` names checkpoint tensors for a weight, not a {kind} buffer"))
-            }
+            (kind, false) => errs
+                .push(format!("{ctx}: `bind` names checkpoint tensors for a weight or a source, not a {kind} buffer")),
             (_, true) => {}
         }
         // 10b. export / peer
@@ -763,7 +783,15 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             // per-program dataflow treats them as initially written.
             // Peer buffers are filled by the runtime when the group's
             // handles are imported, before any program runs.
-            matches!(b.kind, BufferKind::Input | BufferKind::Weight | BufferKind::Carry | BufferKind::Peer)
+            matches!(
+                b.kind,
+                BufferKind::Input
+                    | BufferKind::Inout
+                    | BufferKind::Weight
+                    | BufferKind::Source
+                    | BufferKind::Carry
+                    | BufferKind::Peer
+            )
         })
         .map(|(n, _)| n.as_str())
         .collect();
@@ -773,6 +801,11 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
         if p.once && p.batch.is_some() {
             errs.push(format!(
                 "program `{pname}`: `once` (run after load) and `batch` (driven per step) are exclusive"
+            ));
+        }
+        if p.derive && (p.once || p.batch.is_some() || p.graph) {
+            errs.push(format!(
+                "program `{pname}`: `derive` (run inside weight loading) excludes `once`, `batch` and `graph`"
             ));
         }
         if p.graph && p.batch.is_none() {
@@ -820,6 +853,12 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             };
             used_ops.insert(c.op.clone());
             let has_extern = op.imp.launches.iter().any(|l| l.is_extern());
+            if p.derive && op.imp.launches.iter().any(|l| l.entry().starts_with("extern:nccl")) {
+                errs.push(format!(
+                    "{ctx}: a `derive` program runs before any group is joined; op `{}` is a collective",
+                    c.op
+                ));
+            }
 
             if c.args.len() != op.params.len() {
                 errs.push(format!("{ctx}: op `{}` takes {} params, got {} args", c.op, op.params.len(), c.args.len()));
@@ -870,6 +909,16 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                                 }
                             }
                         }
+                        match (p.derive, b.kind) {
+                            (false, BufferKind::Source) => errs.push(format!(
+                                "{actx}: source buffer `{buf}` is read only by a `derive` program; it is gone after load"
+                            )),
+                            (true, BufferKind::Input | BufferKind::Output | BufferKind::Inout | BufferKind::Peer) => errs.push(format!(
+                                "{actx}: a `derive` program runs inside weight loading, before any {} buffer such as `{buf}` means anything",
+                                b.kind
+                            )),
+                            _ => {}
+                        }
                         if b.kind == BufferKind::Peer && has_extern {
                             errs.push(format!(
                                 "{actx}: peer buffer `{buf}` passed to op `{}`, which has an extern launch; runtime built-ins never receive peer memory",
@@ -877,7 +926,10 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                             ));
                         }
                         if matches!(dir, Dir::Out | Dir::InOut) {
-                            if matches!(b.kind, BufferKind::Input | BufferKind::Weight | BufferKind::Peer) {
+                            if matches!(
+                                b.kind,
+                                BufferKind::Input | BufferKind::Weight | BufferKind::Source | BufferKind::Peer
+                            ) {
                                 errs.push(format!("{actx}: op writes to read-only {} buffer `{buf}`", b.kind));
                             }
                             written.insert(buf.as_str());
@@ -889,6 +941,11 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                         // runtime-scaled pool; there is no static bound to
                         // check them against.
                         used_states.insert(state.clone());
+                        if p.derive {
+                            errs.push(format!(
+                                "{actx}: a `derive` program runs inside weight loading, before state `{state}` holds anything"
+                            ));
+                        }
                         if !m.states.contains_key(state) {
                             errs.push(format!("{actx}: unknown state `{state}`"));
                         }

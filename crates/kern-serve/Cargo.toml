@@ -13,6 +13,8 @@ pegainfer-frontend.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true
+hex.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
