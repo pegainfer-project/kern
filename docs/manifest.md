@@ -542,3 +542,17 @@ const，也不是 shape 意义上的 dim）、`kernels`→`ops`、`steps`→`lau
 kern test 的 c10 假阴性就是它咬的）；`Program` 单字段包装拆掉；launch 的 `params`/`args` 有缺省；`extern:` 不写几何；ABI 常量折进
 impl。删掉从没被读过的字段：`states.*.align`、`symbols.*.min`、scratch
 实参的 `offset`、`u32` 标量。
+
+## 命名常量（`constants`）
+
+可选的 `constants` 表给模型维度起可读的名字，用 C 风格的 `UPPER_SNAKE_CASE`：
+
+```json
+"constants": {"VOCAB_SIZE": 151936, "HIDDEN_SIZE": 2560}
+```
+
+写 `"shape": ["seqs", "VOCAB_SIZE"]` 或 `{"i32": "HIDDEN_SIZE"}`。名字可以出现在任何数值字段里
+（`i64`、`f32`、表达式、容量、字节偏移），`schema_version` 除外。值只能是数值字面量，不支持别名和
+常量表达式；名字不能与 `vars` 重名。loader 在类型校验之前展开引用，所以目标字段的类型与范围照常
+检查；`buf` 这类纯字符串字段不受影响。序列化输出展开后的字面量。公开的 wire schema 由
+`kern_manifest::json_schema()` 从字面量 Rust 类型加这些引用分支生成。

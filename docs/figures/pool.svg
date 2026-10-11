@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 476" width="960" height="476" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect width="960" height="476" fill="#ffffff"/>
+<text x="32" y="42" font-size="19" font-weight="700" fill="#0f172a" text-anchor="start">A and B share a prompt prefix</text>
+<text x="32" y="64" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">What kern-pool does with their KV memory, in three steps.</text>
+<rect x="32" y="84" width="16" height="16" rx="4" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="54" y="97" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">written by its lease</text>
+<rect x="214" y="84" width="16" height="16" rx="4" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="236" y="97" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">frozen: read-only, shareable</text>
+<rect x="452" y="84" width="16" height="16" rx="4" fill="#ffffff" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="474" y="97" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">leased, still empty</text>
+<text x="32" y="184" font-size="38" font-weight="700" fill="#94a3b8" text-anchor="start">1</text>
+<text x="76" y="161" font-size="15" font-weight="700" fill="#0f172a" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">lease</text>
+<text x="76" y="181" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">A takes pages for its worst case</text>
+<text x="76" y="198" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">plus one slot, all or nothing.</text>
+<text x="428" y="173" font-size="11.5" font-weight="700" fill="#64748b" text-anchor="end" letter-spacing="1.2">LEASE A</text>
+<text x="32" y="292" font-size="38" font-weight="700" fill="#94a3b8" text-anchor="start">2</text>
+<text x="76" y="269" font-size="15" font-weight="700" fill="#0f172a" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">retire</text>
+<text x="76" y="289" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">A ends inside p3. Nothing moves:</text>
+<text x="76" y="306" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">its pages freeze where they are.</text>
+<text x="428" y="281" font-size="11.5" font-weight="700" fill="#64748b" text-anchor="end" letter-spacing="1.2">CHECKPOINT</text>
+<text x="32" y="400" font-size="38" font-weight="700" fill="#94a3b8" text-anchor="start">3</text>
+<text x="76" y="377" font-size="15" font-weight="700" fill="#0f172a" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">restore</text>
+<text x="76" y="397" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">B starts at the end of A's prefix</text>
+<text x="76" y="414" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">and keeps writing after it.</text>
+<text x="428" y="389" font-size="11.5" font-weight="700" fill="#64748b" text-anchor="end" letter-spacing="1.2">LEASE B</text>
+<path d="M444,140 V136 H504 V140" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="444" y="128" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">a page = 784 tokens of KV</text>
+<path d="M820,140 V136 H928 V140" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="928" y="128" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">a slot = one sequence's state</text>
+<rect x="436" y="248" width="220" height="164" rx="12" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+<path d="M474.0,192 V252" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M546.0,192 V252" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M618.0,192 V252" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M690.0,192 V252" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M874.0,192 V252" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<rect x="479.5" y="212.0" width="205" height="20" rx="10" fill="#ffffff" stroke="#ffffff" stroke-width="0"/>
+<text x="582.0" y="226.0" font-size="11.5" font-weight="600" fill="#64748b" text-anchor="middle">same pages, frozen in place</text>
+<rect x="827.5" y="212.0" width="93" height="20" rx="10" fill="#ffffff" stroke="#ffffff" stroke-width="0"/>
+<text x="874.0" y="226.0" font-size="11.5" font-weight="600" fill="#64748b" text-anchor="middle">handed over</text>
+<rect x="715.5" y="212.0" width="93" height="20" rx="10" fill="#ffffff" stroke="#ffffff" stroke-width="0"/>
+<text x="762.0" y="226.0" font-size="11.5" font-weight="600" fill="#64748b" text-anchor="middle">to the pool</text>
+<path d="M474.0,300 V360" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M546.0,300 V360" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M618.0,300 V360" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<rect x="478.5" y="320.0" width="135" height="20" rx="10" fill="#f1f5f9" stroke="#f1f5f9" stroke-width="0"/>
+<text x="546.0" y="334.0" font-size="11.5" font-weight="600" fill="#0f172a" text-anchor="middle">shared, zero copy</text>
+<path d="M690.0,301 V359" fill="none" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M684.0,350 L690.0,359 L696.0,350" fill="none" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="700.0" y="334.0" font-size="12.5" font-weight="700" fill="#9a3412" text-anchor="start">copy</text>
+<path d="M874.0,301 V359" fill="none" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M868.0,350 L874.0,359 L880.0,350" fill="none" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="884.0" y="334.0" font-size="12.5" font-weight="700" fill="#9a3412" text-anchor="start">copy</text>
+<rect x="444" y="148" width="60" height="40" rx="6" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="474.0" y="173" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p0</text>
+<rect x="516" y="148" width="60" height="40" rx="6" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="546.0" y="173" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p1</text>
+<rect x="588" y="148" width="60" height="40" rx="6" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="618.0" y="173" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p2</text>
+<rect x="660" y="148" width="60" height="40" rx="6" fill="#ffffff" stroke="#ea580c" stroke-width="1.5"/>
+<path d="M666,148 H690.0 V188 H666 A6,6 0 0 1 660,182 V154 A6,6 0 0 1 666,148 Z" fill="#fed7aa"/>
+<rect x="660" y="148" width="60" height="40" rx="6" fill="none" stroke="#ea580c" stroke-width="1.5"/>
+<text x="675.0" y="173" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p3</text>
+<rect x="732" y="148" width="60" height="40" rx="6" fill="#ffffff" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="4 4"/>
+<text x="762.0" y="173" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p4</text>
+<rect x="820" y="148" width="108" height="40" rx="6" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="874.0" y="173" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">slot s1</text>
+<rect x="444" y="256" width="60" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="474.0" y="281" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p0</text>
+<rect x="516" y="256" width="60" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="546.0" y="281" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p1</text>
+<rect x="588" y="256" width="60" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="618.0" y="281" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p2</text>
+<rect x="660" y="256" width="60" height="40" rx="6" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+<path d="M666,256 H690.0 V296 H666 A6,6 0 0 1 660,290 V262 A6,6 0 0 1 666,256 Z" fill="#1e293b"/>
+<rect x="660" y="256" width="60" height="40" rx="6" fill="none" stroke="#1e293b" stroke-width="1.5"/>
+<text x="675.0" y="281" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p3</text>
+<rect x="732" y="256" width="60" height="40" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+<text x="762.0" y="281" font-size="12.5" font-weight="400" fill="#64748b" text-anchor="middle">freed</text>
+<rect x="820" y="256" width="108" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="874.0" y="281" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">slot s1</text>
+<rect x="444" y="364" width="60" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="474.0" y="389" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p0</text>
+<rect x="516" y="364" width="60" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="546.0" y="389" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p1</text>
+<rect x="588" y="364" width="60" height="40" rx="6" fill="#1e293b" stroke="#1e293b" stroke-width="1.5"/>
+<text x="618.0" y="389" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">p2</text>
+<rect x="660" y="364" width="60" height="40" rx="6" fill="#ffffff" stroke="#ea580c" stroke-width="1.5"/>
+<path d="M666,364 H690.0 V404 H666 A6,6 0 0 1 660,398 V370 A6,6 0 0 1 666,364 Z" fill="#fed7aa"/>
+<rect x="660" y="364" width="60" height="40" rx="6" fill="none" stroke="#ea580c" stroke-width="1.5"/>
+<text x="675.0" y="389" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p5</text>
+<rect x="732" y="364" width="60" height="40" rx="6" fill="#ffffff" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="4 4"/>
+<text x="762.0" y="389" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">p6</text>
+<rect x="820" y="364" width="108" height="40" rx="6" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="874.0" y="389" font-size="12.5" font-weight="600" fill="#9a3412" text-anchor="middle">slot s2</text>
+<path d="M32,436 H928" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="32" y="466" font-size="11.5" font-weight="700" fill="#9a3412" text-anchor="start" letter-spacing="1.2">THE RULE</text>
+<text x="116" y="466" font-size="14.5" font-weight="600" fill="#0f172a" text-anchor="start">Whole pages are shared, the partial page is copied, and only a live lease writes.</text>
+</svg>
