@@ -1,8 +1,10 @@
-//! The kern scheduler: one tray, many sequences.
+//! The kern scheduler: every rank, many sequences.
 //!
 //! Implements the pegainfer frontend's [`Scheduler`] contract — `submit`,
-//! `step`, `metrics` — over a kern manifest driven by a [`Tray`] (one
-//! runtime per GPU, in lockstep; `tray.rs` is the design). What the
+//! `step`, `metrics` — over a kern manifest whose every rank's accounting
+//! is a [`Ranks`] (`ranks.rs` is the design: lockstep, owners, staging)
+//! and whose ranks run what it decides through [`Executors`] (one process
+//! per GPU, `executor.rs`). What the
 //! manifest must speak is its [`Protocol`]: fills naming which buffer
 //! carries the tokens, positions, slots and lengths of a call and which
 //! output hands tokens back, and a `batch` on every program a step may
@@ -26,14 +28,14 @@
 //!   step over every running sequence;
 //! - a request leases every KV page its worst case (`prompt + max_tokens`,
 //!   plus `rows - 1` for the last step's rows past the end) needs at
-//!   admission (`Tray::lease`, on the rank with the fewest rows, then
+//!   admission (`Ranks::lease`, on the rank with the fewest rows, then
 //!   pages),
 //!   so a step never runs out of pages and nothing is ever preempted; the
 //!   row drops with the sequence;
 //! - batches are padded up to a bucket size — the same bucket on every
-//!   rank of the tray, from the most loaded one — and each bucket's
-//!   forward is CUDA-graph-captured once; padding rows write into a page
-//!   the tray leases for them and nobody reads;
+//!   rank, from the most loaded one — and each bucket's forward is
+//!   CUDA-graph-captured once; padding rows write into a page leased for
+//!   them on each rank that nobody reads;
 //! - greedy only: the manifest's `argmax` is the sampler. Non-greedy
 //!   sampling params are logged once and served greedily;
 //! - a speculative round is a forward of several rows per sequence whose
@@ -44,9 +46,9 @@
 //!   at a given batch size is the operator's call (`--rows`), not the
 //!   scheduler's;
 //! - prefix reuse: a finished sequence's KV lives on as snapshots
-//!   (`Tray::checkpoint` / `retire`, indexed by their tokens in a `Prefix`
-//!   tree over the whole tray), and a new prompt starts from the
-//!   longest snapshot holding a proper prefix of it (`Tray::lease_from`;
+//!   (`Ranks::checkpoint` / `retire`, indexed by their tokens in a `Prefix`
+//!   tree over every rank), and a new prompt starts from the
+//!   longest snapshot holding a proper prefix of it (`Ranks::lease_from`;
 //!   prefill covers the rest). A paged-only manifest checkpoints every
 //!   whole page as a sequence fills it — free, a shared page — so any
 //!   earlier prompt or output is reusable at page granularity. A recurrent
@@ -57,12 +59,14 @@
 //!   and the template's generation prompt begins, since the next turn
 //!   renders the reply as history and the generation prompt anew; the
 //!   prefill stops there for it, and the page it ends inside and the
-//!   state slots are copied into the snapshot's own. And once where the
-//!   request ends (the finished sequence's state slots become the
-//!   snapshot's, nothing is copied). A next turn that continues the whole
-//!   context hits the second; one that replays a reply other than ours
-//!   (an agent trace, an edited history) still hits the first, and pays
-//!   only for the reply and what follows it. A speculative round that
+//!   state slots are copied into the snapshot's own. That is the turn's
+//!   one snapshot: the next turn renders a reply after it (ours or a
+//!   recorded one, as an agent trace replays) and pays for the reply and
+//!   what follows it. Only a request with no such point is kept where it
+//!   ends (the finished sequence's state slots become the snapshot's,
+//!   nothing is copied), which a next turn continuing the whole context
+//!   hits. The turns a conversation moved past stay until room is needed
+//!   and go first (`Prefix`). A speculative round that
 //!   accepted past `max_tokens` or the stop leaves a state no next turn
 //!   continues, which is not kept. The prompt's snapshot is an
 //!   optimization, never a reason to fail its request: `Busy` makes room
@@ -72,17 +76,22 @@
 //!   left to make room with it is skipped. A `Busy` lease makes room and
 //!   retries until it fits or
 //!   nothing is left: the least recently hit snapshot is parked into the
-//!   host tier (`--host-gib`: pinned DRAM per rank, `Tray::park`, all of
+//!   host tier (`--host-gib`: pinned DRAM per rank, `Ranks::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
-//!   it is full) or, without one, dropped. A prompt hitting a parked
-//!   snapshot wakes it (`Tray::wake`) straight into its own row: one
+//!   it is full) or, without one, dropped; a lease still short while a
+//!   park's pages are on their way back waits for them rather than parking
+//!   more. A prompt hitting a parked
+//!   snapshot wakes it (`Ranks::wake`) straight into its own row: one
 //!   lease sized for the request, the prefix's pages copied in over the
 //!   transfer streams, so room is decided once (waking the prefix and then
 //!   leasing from it would ask twice, and the second ask could park what
 //!   the first woke, without end). The request waits in `waking` until
-//!   `Tray::awake` hands the row back and starts from it; no step queues
-//!   behind them. The parked snapshot stays parked; the request's own
-//!   finish indexes the longer context resident.
+//!   `Ranks::awake` hands the row back and starts from it; no step queues
+//!   behind them. With nothing running, a step only polls the ranks for
+//!   what landed, and only while something is in flight. The parked snapshot stays parked; the request's own
+//!   finish indexes the longer context resident. A replicated group
+//!   (positions dealt over its members) keeps nothing: its checkpoints
+//!   and retires answer `None` and the prefix tree stays empty.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -91,21 +100,21 @@ use anyhow::{bail, Result};
 use kern_manifest::protocol::{Forward, Rows};
 use kern_manifest::Protocol;
 use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
-use kern_runtime::Error;
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
     SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
 use tracing::{debug, info, warn};
 
+use crate::executor::Executors;
 use crate::logline;
-use crate::tray::{Cell, Rising, Row, Sleeping, Snapshot, Tray};
+use crate::ranks::{Cell, Ranks, Rising, Row, Sleeping, Snapshot, Staged};
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
 /// fits and each bucket owns one captured graph.
 const BUCKETS: [usize; 18] = [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 640, 768, 1024];
 
-fn bucket(n: usize) -> usize {
+pub(crate) fn bucket(n: usize) -> usize {
     BUCKETS.iter().copied().find(|&b| b >= n).unwrap_or(n)
 }
 
@@ -125,7 +134,7 @@ pub struct Policy {
 
 /// How this process drives the manifest: the forwards a step and a
 /// prompt go through and the batch they allow. Pure over the protocol and
-/// the tray's size, so a synthetic manifest exercises every rejection.
+/// the ranks' size, so a synthetic manifest exercises every rejection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Plan {
     /// Rows per sequence of a step.
@@ -140,7 +149,7 @@ struct Plan {
 }
 
 impl Plan {
-    /// `page` is the tray's page in tokens (the pad page a step's rows
+    /// `page` is the ranks' page in tokens (the pad page a step's rows
     /// must fit), `seqs_max` its sequences per rank, `want_rows` and
     /// `want_seqs` the operator's asks.
     fn check(p: &Protocol, page: usize, seqs_max: usize, want_rows: Option<u64>, want_seqs: usize) -> Result<Plan> {
@@ -197,7 +206,7 @@ struct Seq {
     /// The request's EOS and explicit stop ids, as the frontend lowered
     /// them (`ignore_eos` arrives as a policy without an EOS).
     stop: StopPolicy,
-    /// Its KV pages and state slots across the tray; returned when the
+    /// Its KV pages and state slots across its group; returned when the
     /// sequence drops.
     row: Row,
     prompt_len: usize,
@@ -206,6 +215,8 @@ struct Seq {
     history: Vec<i64>,
     /// Tokens already checkpointed, a whole number of pages.
     checkpointed: usize,
+    /// Its history ends before its prompt does, so its end is not kept.
+    parts: bool,
     admitted: Instant,
 }
 
@@ -282,7 +293,8 @@ fn cut(toks: &[u32], generated: usize, max_tokens: usize, stop: &StopPolicy) -> 
 }
 
 pub struct KernScheduler {
-    tray: Tray,
+    ranks: Ranks,
+    exec: Executors,
     policy: Policy,
     /// Tokens per `prefill` call, within the manifest's bound.
     chunk: usize,
@@ -382,11 +394,11 @@ enum Got {
 }
 
 impl KernScheduler {
-    /// Wrap a loaded tray (weights bound, peers connected, pads leased):
-    /// settle how this process drives the manifest, within its bounds.
-    pub fn new(tray: Tray, policy: Policy) -> Result<KernScheduler> {
-        let plan = Plan::check(tray.protocol(), tray.page(), tray.seqs_max(), policy.rows, policy.max_seqs)?;
-        let max = tray.protocol().rows.max as usize;
+    /// Wrap the loaded ranks (weights bound, peers connected, pads
+    /// leased): settle how the head drives the manifest, within its bounds.
+    pub fn new(ranks: Ranks, exec: Executors, policy: Policy) -> Result<KernScheduler> {
+        let plan = Plan::check(ranks.protocol(), ranks.page(), ranks.seqs_max(), policy.rows, policy.max_seqs)?;
+        let max = ranks.protocol().rows.max as usize;
         let chunk = match policy.chunk {
             None => max,
             Some(c) if (1..=max).contains(&c) => c,
@@ -395,10 +407,11 @@ impl KernScheduler {
         let policy = Policy { max_seqs: plan.max_seqs, ..policy };
         let counters = plan.counters();
         let stats = Stats::new(&counters);
-        let every_page = !tray.has_seq_state();
-        let prefix = Prefix::new(tray.page());
+        let every_page = !ranks.has_seq_state();
+        let prefix = Prefix::new(ranks.page());
         let s = KernScheduler {
-            tray,
+            ranks,
+            exec,
             policy,
             chunk,
             plan,
@@ -422,9 +435,9 @@ impl KernScheduler {
         // `max_tokens` to something admissible instead of the scheduler
         // bouncing it (the wire turns a scheduler reject into a 500).
         Facts {
-            total_blocks: self.tray.pages_total(),
-            block_size: self.tray.page(),
-            max_request_tokens: self.tray.max_seq_tokens() - self.headroom(),
+            total_blocks: self.ranks.pages_total(),
+            block_size: self.ranks.page(),
+            max_request_tokens: self.ranks.max_seq_tokens() - self.headroom(),
         }
     }
 
@@ -433,14 +446,14 @@ impl KernScheduler {
     }
 
     fn log_ready(&self) {
-        let (tray, policy, plan, facts) = (&self.tray, &self.policy, &self.plan, self.facts());
-        let (slots, _) = tray.seq_slots();
+        let (ranks, policy, plan, facts) = (&self.ranks, &self.policy, &self.plan, self.facts());
+        let (slots, _) = ranks.seq_slots();
         // Pages: what requests can lease (one more per rank holds the
         // padding rows). Graphs are captured per bucket on first use
         // unless `eager`.
         info!(
-            ranks = tray.len(),
-            tray = tray.group_size(),
+            ranks = ranks.groups().ranks(),
+            group = ranks.groups().size(),
             pages = facts.total_blocks,
             page = facts.block_size,
             seq_slots = (slots > 0).then_some(slots),
@@ -450,7 +463,7 @@ impl KernScheduler {
             buckets = ?BUCKETS.iter().filter(|&&b| b <= policy.max_seqs).collect::<Vec<_>>(),
             rows = plan.rows,
             step = %plan.step.name,
-            steps = ?tray.protocol().forwards.iter().filter(|f| f.rows == plan.step.rows).map(|f| (f.name.as_str(), f.groups)).collect::<Vec<_>>(),
+            steps = ?ranks.protocol().forwards.iter().filter(|f| f.rows == plan.step.rows).map(|f| (f.name.as_str(), f.groups)).collect::<Vec<_>>(),
             prefill = match plan.chunk.emits {
                 Some(_) => format!("`{}`, emits the first token", plan.chunk.name),
                 None => format!("`{}`, state only", plan.chunk.name),
@@ -463,7 +476,7 @@ impl KernScheduler {
 
     /// Rows each rank has (running, and woken ones on the way in).
     fn rows_per_rank(&self) -> Vec<usize> {
-        let mut rows = vec![0usize; self.tray.len()];
+        let mut rows = vec![0usize; self.ranks.groups().ranks()];
         for s in &self.running {
             rows[s.row.owner().index()] += 1;
         }
@@ -479,7 +492,7 @@ impl KernScheduler {
         // Wakes land in order: the first still in flight stops the scan;
         // a landed one starts from its row ahead of the line.
         while let Some((q, r)) = self.waking.pop_front() {
-            match self.tray.awake(r)? {
+            match self.ranks.awake(r) {
                 Ok(row) => {
                     self.stats.wakes += 1;
                     self.stats.wake_tokens += row.prefix() as u64;
@@ -510,7 +523,7 @@ impl KernScheduler {
             let prompt = q.request.prompt_tokens.len();
             let max_tokens = q.request.max_tokens;
             let worst = prompt + max_tokens + self.headroom();
-            let limit = self.tray.max_seq_tokens();
+            let limit = self.ranks.max_seq_tokens();
             if prompt == 0 || worst > limit {
                 ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
                 self.waiting.pop_front();
@@ -528,16 +541,17 @@ impl KernScheduler {
             // Room made for a retry may have parked or dropped the
             // snapshot hit above: look it up again where it is now.
             let got = loop {
-                let tray = &mut self.tray;
+                let ranks = &mut self.ranks;
                 let attempt = match self.prefix.lookup(&ids) {
                     Some(h) => match h.found {
-                        Found::Resident(snap) => tray.lease_from(&snap, h.len, worst).map(Got::Row),
-                        Found::Parked(p) => tray.wake(&p, h.len, worst).map(Got::Rising),
+                        Found::Resident(snap) => ranks.lease_from(&snap, h.len, worst).map(Got::Row),
+                        Found::Parked(p) => ranks.wake(&p, h.len, worst).map(Got::Rising),
                     },
-                    None => tray.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(Got::Row),
+                    None => ranks.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(Got::Row),
                 };
                 match attempt {
-                    Err(Error::Denied(Denied::Busy)) if self.make_room()? => {}
+                    Err(Denied::Busy) if self.ranks.parking() => self.settle()?,
+                    Err(Denied::Busy) if self.make_room()? => {}
                     r => break r,
                 }
             };
@@ -549,19 +563,19 @@ impl KernScheduler {
                     self.waking.push_back((q, r));
                     continue;
                 }
-                Err(Error::Denied(Denied::Busy)) => break, // wait for pages / a slot
-                Err(Error::Denied(Denied::Remapping)) => break, // pages or a slot are on their way
-                Err(Error::Denied(Denied::ExceedsRow { limit })) => {
+                Err(Denied::Busy) => break,      // wait for pages / a slot
+                Err(Denied::Remapping) => break, // pages or a slot are on their way
+                Err(Denied::ExceedsRow { limit }) => {
                     ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
                     self.waiting.pop_front();
                     continue;
                 }
-                Err(Error::Denied(Denied::ExceedsPool)) => {
+                Err(Denied::ExceedsPool) => {
                     ledger.reject(id, RejectReason::KvBudget { prompt_tokens: prompt, worst_case_tokens: worst });
                     self.waiting.pop_front();
                     continue;
                 }
-                Err(e) => return Err(e.into()),
+                Err(d @ Denied::HostFull) => bail!("a lease denied {d}"),
             };
             let q = self.waiting.pop_front().unwrap();
             self.admit_one(q, row, false, ledger)?;
@@ -600,6 +614,7 @@ impl KernScheduler {
         // its tokens (never the last one). A recurrent state is kept where
         // the frontend says the next turn parts from this prompt, so the
         // prefill stops there once.
+        let parts = !self.every_page && q.request.history_tokens.is_some_and(|m| m < prompt);
         let f = self.plan.chunk.clone();
         let n_pre = if f.emits.is_some() { prompt } else { prompt - 1 };
         let mark =
@@ -635,7 +650,7 @@ impl KernScheduler {
             prefill_ms = logline::ms(t0.elapsed()),
             "admitted"
         );
-        let page = self.tray.page();
+        let page = self.ranks.page();
         let mut seq = Seq {
             id,
             pos: n_pre,
@@ -648,6 +663,7 @@ impl KernScheduler {
             prompt_len: prompt,
             history: ids[..n_pre].to_vec(),
             checkpointed: start / page * page,
+            parts,
             admitted: t0,
         };
         self.checkpoint(&mut seq)?;
@@ -664,38 +680,64 @@ impl KernScheduler {
     }
 
     /// The `key.len()` tokens `row` holds, which `key` names, as a snapshot
-    /// of its recurrent state. `Busy` makes room and retries, `Remapping`
-    /// waits for the slot on its way (the prefill's run synchronized every
-    /// rank, so the stream the remap waits on is drained; what is left is
-    /// the remap's own milliseconds); with nothing left to make room with
-    /// or any other denial, the request runs on without it.
+    /// of its recurrent state. `Busy` waits for a park's pages or makes
+    /// room and retries, `Remapping` waits for the slot on its way (the
+    /// prefill just read its output back, so the stream the remap waits on
+    /// is drained; what is left is the remap's own milliseconds); with
+    /// nothing left to make room with or any other denial, the request runs
+    /// on without it.
     fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId) -> Result<()> {
         loop {
-            match self.tray.checkpoint(row, key.len()) {
-                Ok(snap) => {
+            match self.ranks.checkpoint(row, key.len()) {
+                Ok(Some(snap)) => {
                     self.prefix.insert(key, snap);
                     self.stats.prompt_checkpoints += 1;
                     return Ok(());
                 }
-                Err(Error::Denied(Denied::Busy)) if self.make_room()? => {}
-                Err(Error::Denied(Denied::Remapping)) => self.tray.settle()?,
-                Err(Error::Denied(d)) => {
+                Ok(None) => return Ok(()),
+                Err(Denied::Busy) if self.ranks.parking() => self.settle()?,
+                Err(Denied::Busy) if self.make_room()? => {}
+                Err(Denied::Remapping) => self.settle()?,
+                Err(d) => {
                     debug!(request = %id, tokens = key.len(), denied = %d, "history not kept");
                     self.stats.prompt_skips += 1;
                     return Ok(());
                 }
-                Err(e) => return Err(e.into()),
             }
         }
+    }
+
+    /// Hand every rank what is queued for it, hear what landed; `wait`
+    /// blocks each rank with something in flight until it has.
+    fn poll(&mut self, wait: bool) -> Result<()> {
+        let orders = self.ranks.orders(None, wait);
+        let answers = self.exec.run(orders)?;
+        self.ranks.heard(&answers)
+    }
+
+    /// Every remap and host transfer landed, on every rank.
+    fn settle(&mut self) -> Result<()> {
+        while self.ranks.busy() {
+            self.poll(true)?;
+        }
+        Ok(())
+    }
+
+    /// Run `f` over a staged step on every rank: what it handed each cell.
+    fn run(&mut self, st: &mut Staged, f: &Forward) -> Result<Vec<Vec<i64>>> {
+        let orders = self.ranks.orders(Some(st.items(f)), false);
+        let answers = self.exec.run(orders)?;
+        self.ranks.heard(&answers)?;
+        st.emitted(self.ranks.protocol(), f, &answers)
     }
 
     /// Room for a `Busy` lease: the coldest resident snapshot goes to
     /// the host tier when there is one (the coldest parked ones dropped
     /// until it fits), else is dropped. `false` when nothing is resident.
     fn make_room(&mut self) -> Result<bool> {
-        let tray = &mut self.tray;
-        let park = (self.policy.host_bytes > 0).then_some(|snap| tray.park(snap));
-        let dropped = match self.prefix.evict(park)? {
+        let ranks = &mut self.ranks;
+        let park = (self.policy.host_bytes > 0).then_some(|snap| Ok::<_, std::convert::Infallible>(ranks.park(snap)));
+        let dropped = match self.prefix.evict(park).unwrap_or_else(|e| match e {}) {
             Some(Evicted::Parked { key, dropped }) => {
                 debug!(tokens = key.len(), dropped, "parked");
                 self.stats.parks += 1;
@@ -718,23 +760,24 @@ impl KernScheduler {
         if !self.every_page {
             return Ok(());
         }
-        let unit = self.tray.page();
+        let unit = self.ranks.page();
         while s.checkpointed + unit <= s.pos {
             let len = s.checkpointed + unit;
-            let snap = self.tray.checkpoint(&mut s.row, len)?;
+            let Some(snap) = self.ranks.checkpoint(&mut s.row, len)? else { return Ok(()) };
             self.prefix.insert(&s.history[..len], snap);
             s.checkpointed = len;
         }
         Ok(())
     }
 
-    /// A sequence is done: with a recurrent state, its whole context
-    /// becomes a snapshot (the slots move, nothing is copied); without
-    /// one, every whole page already is. A state holding tokens the client
+    /// A sequence is done: with a recurrent state and no history point
+    /// kept before its end, its whole context becomes a snapshot (the
+    /// slots move, nothing is copied); without one, every whole page
+    /// already is. A state holding tokens the client
     /// never got (a speculative round accepted past `max_tokens` or the
     /// stop) is a key no next turn can send: it returns to the pool.
     fn finish(&mut self, s: Seq) {
-        if self.every_page || s.pos == 0 {
+        if self.every_page || s.pos == 0 || s.parts {
             return;
         }
         // The last token is normally the next input, not in the state
@@ -746,8 +789,9 @@ impl KernScheduler {
             debug!(request = %s.id, tokens = s.pos, visible, "not kept");
             return;
         }
-        let snap = self.tray.retire(s.row, s.pos);
-        self.prefix.insert(&s.history, snap);
+        if let Some(snap) = self.ranks.retire(s.row, s.pos) {
+            self.prefix.insert(&s.history, snap);
+        }
     }
 
     /// Drop aborted sequences before a step so they neither pad nor compute.
@@ -773,11 +817,11 @@ impl KernScheduler {
         while pos < ids.len() {
             let c = (ids.len() - pos).min(chunk);
             let cells = [Cell { row, ids: ids[pos..pos + c].to_vec(), pos }];
-            let mut st = self.tray.stage(&cells, c, |_| 1)?;
-            st.run(f)?;
+            let mut st = self.ranks.stage(&cells, c, |_| 1)?;
+            let out = self.run(&mut st, f)?;
             pos += c;
             if pos == ids.len() {
-                first = st.emitted(f)?[0].first().map(|&t| t as u32);
+                first = out[0].first().map(|&t| t as u32);
             }
         }
         Ok(first)
@@ -801,11 +845,10 @@ impl KernScheduler {
             .iter()
             .map(|s| Cell { row: &s.row, ids: vec![s.next as i64; rows as usize], pos: s.pos })
             .collect();
-        let mut st = self.tray.stage(&cells, rows as usize, |k| bucket(k).min(max_seqs))?;
-        let f = st.forward(rows).expect("planned: every bucket up to max_seqs has a forward");
-        st.run(&f)?;
-        let out = st.emitted(&f)?;
-        drop(st);
+        let mut st = self.ranks.stage(&cells, rows as usize, |k| bucket(k).min(max_seqs))?;
+        drop(cells);
+        let f = st.forward(self.ranks.protocol(), rows).expect("planned: every bucket up to max_seqs has a forward");
+        let out = self.run(&mut st, &f)?;
         self.stats.step_ns += t0.elapsed().as_nanos();
         self.stats.steps += 1;
 
@@ -850,8 +893,8 @@ impl KernScheduler {
         }
         if st.tokens > 0 || st.prefill_tokens > 0 {
             let round = |x: f64, d: f64| (x * d).round() / d;
-            let host = self.tray.host_tier();
-            let (slots, slots_used) = self.tray.seq_slots();
+            let host = self.ranks.host_tier();
+            let (slots, slots_used) = self.ranks.seq_slots();
             let (drafts, draft_tokens, accepted) = self.counters.as_ref().map_or((0, 0, 0), |c| {
                 (c.num_drafts - st.spec_at.0, c.num_draft_tokens - st.spec_at.1, c.num_accepted_tokens - st.spec_at.2)
             });
@@ -859,7 +902,7 @@ impl KernScheduler {
                 running = self.running.len(),
                 rows_per_rank = ?self.rows_per_rank(),
                 waiting = self.waiting.len() + self.waking.len(),
-                kv_pct = round(self.tray.pages_used() as f64 * 100.0 / self.tray.pages_total().max(1) as f64, 10.0),
+                kv_pct = round(self.ranks.pages_used() as f64 * 100.0 / self.ranks.pages_total().max(1) as f64, 10.0),
                 steps = st.steps,
                 step_ms = round(st.step_ns as f64 / 1e6 / st.steps.max(1) as f64, 100.0),
                 tok_s = round(st.tokens as f64 / dt.as_secs_f64(), 1.0),
@@ -876,14 +919,14 @@ impl KernScheduler {
                 prompt_skips = (!self.every_page).then_some(st.prompt_skips),
                 evictions = st.evictions,
                 parked = host.map(|_| self.prefix.count(Tier::Parked)),
-                host_gib = host.map(|(u, _)| round(u as f64 / (1u64 << 30) as f64, 10.0)),
+                host_pct = host.map(|(u, n)| round(u as f64 * 100.0 / n.max(1) as f64, 10.0)),
                 parks = host.map(|_| st.parks),
                 host_evictions = host.map(|_| st.host_evictions),
                 wakes = host.map(|_| st.wakes),
                 wake_tokens = host.map(|_| st.wake_tokens),
-                slots_used = self.tray.has_seq_state().then_some(slots_used),
-                slots = self.tray.has_seq_state().then_some(slots),
-                remaps = self.tray.remaps(),
+                slots_used = self.ranks.has_seq_state().then_some(slots_used),
+                slots = self.ranks.has_seq_state().then_some(slots),
+                remaps = self.ranks.remaps(),
                 accepted = self.counters.as_ref().map(|_| round((accepted + drafts) as f64 / drafts.max(1) as f64, 100.0)),
                 accept_pct =
                     self.counters.as_ref().map(|_| round(accepted as f64 * 100.0 / draft_tokens.max(1) as f64, 1.0)),
@@ -901,6 +944,9 @@ impl Scheduler for KernScheduler {
 
     fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         self.admit(ledger)?;
+        if self.running.is_empty() && self.ranks.outstanding() {
+            self.poll(false)?;
+        }
         self.step(ledger)?;
         self.log_stats();
         Ok(())
@@ -908,8 +954,8 @@ impl Scheduler for KernScheduler {
 
     fn metrics(&self) -> SchedulerMetrics {
         SchedulerMetrics {
-            kv_used_blocks: self.tray.pages_used() as u64,
-            kv_total_blocks: self.tray.pages_total() as u64,
+            kv_used_blocks: self.ranks.pages_used() as u64,
+            kv_total_blocks: self.ranks.pages_total() as u64,
             num_running_reqs: self.running.len() as u64,
             num_waiting_reqs: self.waiting.len() as u64,
             spec_decode: self.counters,

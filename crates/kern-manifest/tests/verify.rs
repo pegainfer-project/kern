@@ -9,7 +9,7 @@ use kern_manifest::{verify, Manifest, Verified, VerifyErrors};
 /// is the minimal single-launch op (ABI = interface, wiring defaulted);
 /// `attn` is a two-launch implementation with a private scratch buffer.
 const BASE: &str = r#"{
-  "schema_version": 5, "model": "toy",
+  "schema_version": 7, "model": "toy",
   "vars": { "tokens": { "max": 128 } },
   "states": { "kv": { "bytes_per_token": 4096 } },
   "buffers": {
@@ -1144,4 +1144,112 @@ fn a_derive_program_touches_nothing_serving_owns() {
         { "op": "attn", "args": [{ "buf": "ws" }, { "state": "kv" }, { "buf": "h" }, { "i32": 1 }, { "i64": 0 }] }
     ));
     assert_err(v, "before state `kv` holds anything");
+}
+
+/// Decode context parallelism over a `tp` group of 4: two paged states
+/// dealt by position, a per-sequence state split by heads.
+fn dealt() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/dealt.json")).unwrap()
+}
+
+/// Every diagnostic of `v`, which must fail.
+fn errors(v: serde_json::Value) -> Vec<String> {
+    check(v).expect_err("expected verification failure").0
+}
+
+fn has(errs: &[String], needle: &str) -> bool {
+    errs.iter().any(|e| e.contains(needle))
+}
+
+#[test]
+fn a_shard_names_a_declared_group_and_fits_its_state() {
+    let v = check(dealt()).unwrap();
+    assert_eq!(
+        (v.states["kv.0"].shard.clone(), v.states["kda"].shard.as_ref().map(|s| s.group())),
+        (Some(Shard::Position { group: "tp".into() }), Some("tp"))
+    );
+    let mut v = dealt();
+    v["states"]["kda"]["shard"]["group"] = "dp".into();
+    assert_err(v, "state `kda`: shard: unknown topology group `dp`");
+    let mut v = dealt();
+    v.as_object_mut().unwrap().remove("topology");
+    let errs = errors(v);
+    assert!(has(&errs, "state `kv.0`: shard: group `tp` but the manifest declares no topology"), "{errs:#?}");
+    assert!(has(&errs, "state `kda`: shard: group `tp` but the manifest declares no topology"), "{errs:#?}");
+    let mut v = dealt();
+    v["states"]["kda"]["shard"] = serde_json::json!({ "group": "tp", "by": "position" });
+    assert_err(v, "state `kda`: shard: `by: position` deals a paged state, got a per-sequence one");
+    let mut v = dealt();
+    v["states"]["kv.1"]["shard"] = serde_json::json!({ "group": "tp", "by": "heads", "segments": [[1, 64]] });
+    assert_err(v, "state `kv.1`: shard: `by: heads` splits a per-sequence state, got a paged one");
+}
+
+#[test]
+fn a_shard_is_parsed_strictly() {
+    let mut v = dealt();
+    v["states"]["kv.0"]["shard"]["segments"] = serde_json::json!([[1, 64]]);
+    assert_err(v, "unknown field `segments`");
+    let mut v = dealt();
+    v["states"]["kda"]["shard"].as_object_mut().unwrap().remove("segments");
+    assert_err(v, "missing field `segments`");
+    let mut v = dealt();
+    v["states"]["kv.0"]["shard"]["by"] = "rows".into();
+    assert_err(v, "unknown variant `rows`");
+    let mut v = dealt();
+    v["constants"] = serde_json::json!({ "LINE": 64 });
+    v["states"]["kda"]["shard"]["segments"][0][1] = "LINE".into();
+    assert_eq!(
+        check(v).unwrap().states["kda"].shard,
+        Some(Shard::Heads { group: "tp".into(), segments: vec![(1, 64), (2, 16)] })
+    );
+}
+
+#[test]
+fn every_paged_state_is_dealt_over_one_group() {
+    let mut v = dealt();
+    v["states"]["kv.1"].as_object_mut().unwrap().remove("shard");
+    assert_err(v, "state `kv.1`: not dealt by position, but `kv.0` is dealt over `tp`");
+    let mut v = dealt();
+    v["topology"]["groups"]["dp"] = 2.into();
+    v["states"]["kv.1"]["shard"]["group"] = "dp".into();
+    assert_err(v, "state `kv.1`: shard deals positions over `dp`, but `kv.0` deals them over `tp`");
+}
+
+#[test]
+fn a_group_dealing_positions_runs_one_replicated_batch() {
+    let mut v = dealt();
+    v["vars"]["rows"] = serde_json::json!({ "max": 32, "axis": "ranks" });
+    v["buffers"]["tp_blocks"] = serde_json::json!({ "kind": "input", "dtype": "i32", "shape": [5], "fill": "blocks" });
+    let errs = errors(v);
+    let replicated = "state `kv.0` deals positions over `tp`, so the group runs one replicated batch";
+    for needle in [
+        format!("var `rows`: `axis: ranks` counts every member's rows with this rank's first, but {replicated}"),
+        format!("buffer `tp_blocks`: fill `blocks` splits the group's batch into members' blocks, but {replicated}"),
+    ] {
+        assert!(has(&errs, &needle), "no `{needle}` in {errs:#?}");
+    }
+}
+
+#[test]
+fn heads_segments_split_over_the_members_and_span_their_slots() {
+    let segments = |s: serde_json::Value| {
+        let mut v = dealt();
+        v["states"]["kda"]["shard"]["segments"] = s;
+        v
+    };
+    let ctx = "state `kda`: shard";
+    assert_err(segments(serde_json::json!([])), &format!("{ctx}: `by: heads` needs at least one segment"));
+    let errs = errors(segments(serde_json::json!([[0, 64], [2, 18], [3, 4]])));
+    for needle in [
+        format!("{ctx}: segment #0 is 0 rows of 64 bytes, expected neither 0"),
+        format!("{ctx}: segment #1 rows are 18 bytes, expected a multiple of the 4 members of `tp`"),
+        format!("{ctx}: segments span 48 bytes, expected the 4 members of `tp` times bytes_per_seq 24 = 96"),
+    ] {
+        assert!(has(&errs, &needle), "no `{needle}` in {errs:#?}");
+    }
+    assert_err(
+        segments(serde_json::json!([[2, 9223372036854775808u64]])),
+        &format!("{ctx}: segments span more than 2^64 bytes"),
+    );
+    check(segments(serde_json::json!([[3, 32]]))).unwrap();
 }

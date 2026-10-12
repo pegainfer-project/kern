@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import schemaRaw from "../../../schema/manifest-v5.schema.json?raw";
+import schemaRaw from "../../../schema/manifest-v7.schema.json?raw";
 import minimalRaw from "../../../examples/minimal.json?raw";
 
 const schema: any = JSON.parse(schemaRaw);
@@ -540,7 +540,7 @@ function Protocol() {
 
 /* ------------------------------------------------------------------ page */
 
-const RAW_URL = "/schema/manifest-v5.schema.json";
+const RAW_URL = "/schema/manifest-v7.schema.json";
 const TYPES_URL =
   "https://github.com/pegainfer-project/kern/blob/master/crates/kern-manifest/src/types.rs";
 
@@ -632,7 +632,7 @@ export default function SchemaPage() {
             references and the destination type and range. Constants contain numbers,
             not aliases or expressions, and must not share names with <code>vars</code>.
             String references such as <code>buf</code> keep their meaning.
-            <code> schema_version</code> stays the literal <code>4</code>.
+            <code> schema_version</code> stays the literal <code>6</code>.
             Serialization writes the resolved numbers.
           </p>
         </section>

@@ -988,7 +988,7 @@
         },
         {
           "const": "blocks",
-          "description": "Input: the tray batch's blocks — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the tray's rows.",
+          "description": "Input: the members' blocks of the group's batch — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the batch's rows.",
           "type": "string"
         },
         {
@@ -1688,7 +1688,7 @@
           "type": "boolean"
         },
         "once": {
-          "description": "Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.",
+          "description": "Run once after load (after every peer is imported), never per step: a rank group's collective setup. Takes no per-call input.",
           "type": "boolean"
         }
       },
@@ -1825,6 +1825,89 @@
       ],
       "type": "object"
     },
+    "Shard": {
+      "description": "How a rank group splits a state among its members: the paged states by token position, a per-sequence state by heads. What a member holds is a state like any other; the declaration is for the serving loop that stages the members and the push that fills them.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A paged state dealt over the group by position: position `p` of a sequence lives on member `p mod w` at its local position `p / w`, so a member's pages, slots and lengths are local ones. The group runs one replicated batch: every member takes the same rows in the same order, e.g. `{\"group\": \"tp\", \"by\": \"position\"}`.",
+          "properties": {
+            "by": {
+              "const": "position",
+              "type": "string"
+            },
+            "group": {
+              "description": "The topology group dealt over, e.g. `\"tp\"`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "by",
+            "group"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A per-sequence state split by heads: the whole sequence's state is `segments` laid end to end, each `[rows, width]` rows of `width` bytes with the head outermost in a row, and a member's slot is its `1/w` of every row, e.g. `{\"group\": \"tp\", \"by\": \"heads\", \"segments\": [[1, 6291456], [9, 24576]]}`.",
+          "properties": {
+            "by": {
+              "const": "heads",
+              "type": "string"
+            },
+            "group": {
+              "description": "The topology group split over, e.g. `\"tp\"`.",
+              "type": "string"
+            },
+            "segments": {
+              "description": "`[rows, width bytes]` per segment, in order; every width a multiple of the group size, the rows times widths summing to the group size times `bytes_per_seq`.",
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "anyOf": [
+                      {
+                        "format": "uint64",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "description": "Name of a numeric constant declared in constants.",
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "format": "uint64",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "description": "Name of a numeric constant declared in constants.",
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    ]
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "by",
+            "group",
+            "segments"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "State": {
       "additionalProperties": false,
       "description": "Opaque persistent memory; the runtime provisions the bytes and hands the base pointer to `inout state` params. Exactly one of the three sizes is non-zero. States are always allocated through the driver's virtual-memory API with a fabric-shareable handle when the device has one, so a `peer` buffer may be `of` a state.",
@@ -1887,6 +1970,17 @@
             }
           ],
           "description": "Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{\"dtype\": \"bf16\", \"shape\": [0, 64, 4, 512], \"strides\": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set. Inputs whose domain `index_into`s it declare the host's ids: a page table (`stride` tokens per block) or a line table (`stride` bytes per line, one line per block), shared by every host state of the same layout."
+        },
+        "shard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shard"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a rank group splits the state among its members, e.g. `{\"group\": \"tp\", \"by\": \"position\"}`. Each member provisions and indexes its own share like any state; the runtime never reads it."
         }
       },
       "type": "object"
@@ -2145,7 +2239,7 @@
       "type": "object"
     },
     "VarAxis": {
-      "description": "What a var counts in one call of a program: this rank's rows, its sequences, or the rows of the whole tray batch. The runtime never reads it.",
+      "description": "What a var counts in one call of a program: this rank's rows, its sequences, or the rows of every rank of its group. The runtime never reads it.",
       "oneOf": [
         {
           "const": "rows",
@@ -2158,8 +2252,8 @@
           "type": "string"
         },
         {
-          "const": "tray",
-          "description": "One per row of the whole tray batch, this rank's rows first, e.g. a `tp` manifest's `rows`.",
+          "const": "ranks",
+          "description": "One per row of every rank of the group, this rank's rows first, e.g. a `tp` manifest's `rows`.",
           "type": "string"
         }
       ]
@@ -2213,7 +2307,7 @@
       "type": "object"
     }
   },
-  "$id": "https://kern-baa.pages.dev/schema/manifest-v5.schema.json",
+  "$id": "https://kern-baa.pages.dev/schema/manifest-v7.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The resolved contract: vars, states, buffers, modules, ops and programs.\nThe wire format also accepts optional `constants`, expanded during\ndeserialization. Use [`crate::json_schema`] for the complete wire schema;\nthis type's derived schema describes the resolved numeric form.",
@@ -2272,7 +2366,7 @@
       "type": "object"
     },
     "schema_version": {
-      "description": "Wire-format version; must be `5`.",
+      "description": "Wire-format version; must be `7`.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
@@ -2311,6 +2405,6 @@
     "ops",
     "programs"
   ],
-  "title": "kern manifest v5",
+  "title": "kern manifest v7",
   "type": "object"
 }

@@ -27,7 +27,7 @@ fn e4m3(v: f32) -> u8 {
 #[ignore = "requires a CUDA GPU"]
 fn e4m3_operands_land_the_product_scaled_by_both_device_scales() {
     let manifest = serde_json::json!({
-        "schema_version": 5, "model": "fp8-gemm-test", "vars": {}, "states": {},
+        "schema_version": 7, "model": "fp8-gemm-test", "vars": {}, "states": {},
         "buffers": {
             "a": {"kind": "input", "dtype": "fp8e4m3", "shape": [M, K]},
             "w": {"kind": "input", "dtype": "fp8e4m3", "shape": [N, K]},
@@ -47,7 +47,8 @@ fn e4m3_operands_land_the_product_scaled_by_both_device_scales() {
         ]}]}}
     });
     let verified = Verified::from_json(&manifest.to_string()).unwrap();
-    let mut rt = Runtime::load(&verified, None, 0, Some(Capacity { tokens: Some(1), seqs: 1 }), None).unwrap();
+    let mut rt =
+        Runtime::load(&verified, None, 0, Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }), None).unwrap();
     // a is a permutation (one 1.0 per row at column 7i mod K), w cycles through -2..=2
     let a: Vec<u8> = (0..M * K).map(|i| e4m3(if i % K == (i / K * 7) % K { 1.0 } else { 0.0 })).collect();
     let wv = |n: usize, k: usize| ((n + k) % 5) as f32 - 2.0;

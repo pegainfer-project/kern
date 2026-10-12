@@ -71,7 +71,7 @@ fn opts() -> Result<Opts> {
 
 fn load(path: &PathBuf, o: &Opts, gpu: usize, weights: &kern_run::Weights) -> Result<(Runtime, Protocol)> {
     let m = Verified::from_json(&std::fs::read_to_string(path)?).with_context(|| format!("{}", path.display()))?;
-    let capacity = Capacity { tokens: Some(o.capacity), seqs: 2 };
+    let capacity = Capacity { tokens: Some(o.capacity), seqs: 2, landings: 0 };
     let mut rt = Runtime::load(&m, Some(&o.kernels), gpu, Some(capacity), None)?;
     weights.bind(&mut rt)?;
     let p = Protocol::check_unsampled(&rt.manifest)?;

@@ -25,10 +25,19 @@ toml and a scenario reads like a client:
   rows1             a speculative manifest served with `--rows 1` equals
                     `kern run --rows 1`
 
+A target whose paged states are dealt by position over its `tp` group
+(decode context parallelism: one replicated batch, nothing kept) runs its
+own scenarios instead (`session_dealt`): short sequences (fewer positions
+than members), page-crossing and chunked prompts, a burst of many rows,
+the twelve prompts at once, nothing kept, an abort, every answer held to
+the target's twin: the single-rank target of the config with the same
+`model`, answering through `kern run` before the server takes the GPUs
+(itself held to `--reference` when given).
+
 A target is skipped, not failed, when its artifacts are not on this
-machine. `kern run` is the oracle for single-rank targets; a tray target
-(EP4) has no `kern run`, its cold conc1 answers are the oracle for the
-warm ones; a single-rank target without one (no spare GPU) fails, it
+machine. `kern run` is the oracle for single-rank targets; a multi-rank
+target (EP4, one process per GPU) has no `kern run`, its cold conc1
+answers are the oracle for the warm ones; a single-rank target without one (no spare GPU) fails, it
 does not report. Byte identity of greedy token ids is the gate
 everywhere; a divergence is excused only as a near-tie the logits show at
 that token, never assumed, and the answer goes on being compared from the
@@ -38,9 +47,13 @@ server's choice. With `--reference`, a Python module whose
 whatever its ranks, no divergence is excused, and `kern run` itself is
 held to the reference on a spare GPU.
 
-Runs on the machine with the GPUs:
+Runs on the machine with the GPUs; a GPU written `host:i` is another
+node's, its rank started over ssh (a shared filesystem holds the
+binaries, the config and `--out`):
   python3 tools/e2e/e2e.py --gpus 0,1,2,3 --out results/ [--config kern.toml] [--targets a b]
   python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py --gpus 0 --out results/
+  python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py --targets toy-dcp8 \
+      --gpus 0,1,2,3,node2:0,node2:1,node2:2,node2:3 --out results/
 """
 from __future__ import annotations
 
@@ -51,7 +64,9 @@ import json
 import math
 import os
 import re
+import shlex
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -91,6 +106,9 @@ class Target:
     reference: Path | None
     ranks: int
     stateful: bool
+    model: str = ""
+    # Positions dealt over the `tp` group: one replicated batch, nothing kept.
+    dealt: bool = False
 
     def missing(self) -> list[str]:
         """Artifacts not on this machine (a weights glob is checked by its fixed prefix)."""
@@ -105,6 +123,25 @@ class Target:
         return out
 
 
+def dealt(m: dict) -> bool:
+    """Whether a manifest deals its paged states' positions over a group."""
+    return any((s.get("shard") or {}).get("by") == "position" for s in m.get("states", {}).values())
+
+
+def page_of(m: dict) -> int:
+    """Rows per page of a manifest's paged states: the stride of the page table indexing one."""
+    paged = {n for n, s in m.get("states", {}).items() if s.get("bytes_per_token")}
+    return next(int(b["domain"]["stride"]) for b in m["buffers"].values() if (b.get("domain") or {}).get("index_into") in paged and "stride" in b["domain"])
+
+
+def world(m: dict) -> int:
+    """Ranks a manifest runs as, one process each: the size its groups
+    other than `tp` share, or `tp`'s alone; 1 without a topology."""
+    groups = (m.get("topology") or {}).get("groups", {})
+    others = {int(n) for g, n in groups.items() if g != "tp"}
+    return others.pop() if others else int(groups.get("tp", 1))
+
+
 def load_targets(config: Path) -> list[Target]:
     doc = tomllib.loads(config.read_text())
     base = config.parent
@@ -116,11 +153,10 @@ def load_targets(config: Path) -> list[Target]:
     out = []
     for name, t in doc.get("targets", {}).items():
         manifest = path(t["manifest"])
-        ranks, stateful = 1, False
+        ranks, stateful, model, split = 1, False, name, False
         if manifest.exists():
             m = json.loads(manifest.read_text())
-            for n in (m.get("topology") or {}).get("groups", {}).values():
-                ranks *= int(n)
+            ranks, model, split = world(m), m["model"], dealt(m)
             # A value may be a named constant; a per-sequence state names one either way.
             stateful = any(s.get("bytes_per_seq") not in (None, 0) for s in m.get("states", {}).values())
         out.append(
@@ -133,9 +169,32 @@ def load_targets(config: Path) -> list[Target]:
                 reference=path(t["reference"]) if t.get("reference") else None,
                 ranks=ranks,
                 stateful=stateful,
+                model=model,
+                dealt=split,
             )
         )
     return out
+
+
+def twin_of(t: Target, targets: list[Target]) -> Target | None:
+    """A dealt target's twin: the config's single-rank target of the same model."""
+    return next((u for u in targets if t.dealt and u.ranks == 1 and not u.dealt and u.model == t.model and u.manifest.exists()), None)
+
+
+@dataclass(frozen=True)
+class Gpu:
+    """A device ordinal, on this node or on `host`."""
+
+    index: int
+    host: str | None = None
+
+    def __str__(self) -> str:
+        return f"{self.host}:{self.index}" if self.host else str(self.index)
+
+
+def gpus_of(spec: str) -> list[Gpu]:
+    """`0,1,node2:0`: this node's ordinals and other nodes', in rank order."""
+    return [Gpu(int(i), h or None) for h, _, i in (g.rpartition(":") for g in spec.split(","))]
 
 
 @dataclass
@@ -179,22 +238,45 @@ def kv(line: str) -> dict:
 
 
 class Server:
-    """One kern-serve over a target, started through `kern server` and read through its log."""
+    """One kern-serve over a target, started through `kern server` and read
+    through its log: one process per GPU, the head (rank 0, HTTP) waiting at
+    a port beside the session's for ranks 1.., each logging beside it."""
 
-    def __init__(self, a, target: Target, gpus: list[int], port: int, flags: dict[str, str], log: Path):
+    def __init__(self, a, target: Target, gpus: list[Gpu], port: int, flags: dict[str, str], log: Path):
         self.a, self.target, self.gpus, self.port, self.log = a, target, gpus, port, log
         self.flags = {**a.server_flags, **flags}
-        self.proc = None
+        self.procs: list[subprocess.Popen] = []
         self.url = f"http://127.0.0.1:{port}"
         self.facts = {}
         self.sent, self.lock = 0, threading.Lock()
 
+    def rank_log(self, q: int) -> Path:
+        return self.log if q == 0 else self.log.with_suffix(f".rank{q}.log")
+
+    def pidfile(self, q: int) -> Path:
+        return self.log.with_suffix(f".rank{q}.pid")
+
+    def remote(self, q: int, host: str, cmd: list[str], env: dict[str, str]) -> list[str]:
+        """Rank `q`'s command over ssh: this node's cwd and the environment
+        the binaries read, its pid left where `__exit__` finds it."""
+        keep = {k: v for k, v in env.items() if k in ("PATH", "LD_LIBRARY_PATH", "KERN_SERVE_BIN", "RUST_LOG") or k.startswith(("NCCL_", "CUDA_"))}
+        line = f"cd {shlex.quote(os.getcwd())} && echo $$ > {shlex.quote(str(self.pidfile(q)))} && exec env " + " ".join(shlex.quote(f"{k}={v}") for k, v in keep.items()) + " " + shlex.join(cmd)
+        return ["ssh", "-o", "BatchMode=yes", host, line]
+
     def __enter__(self):
-        cmd = [str(self.a.kern), "--config", str(self.target.config), "server", self.target.name, "--port", str(self.port)]
-        cmd += ["--gpus", ",".join(map(str, self.gpus))] + [x for k, v in self.flags.items() for x in (k, v)]
+        base = [str(self.a.kern), "--config", str(self.target.config), "server", self.target.name]
+        flags = [x for k, v in self.flags.items() for x in (k, v)]
+        # The head is this node's; a rank on another node reaches it by name.
+        far = any(g.host for g in self.gpus)
+        listen, head = (f"0.0.0.0:{self.port + 100}", f"{socket.gethostname()}:{self.port + 100}") if far else ((f"127.0.0.1:{self.port + 100}",) * 2)
+        cmds = [base + ["--port", str(self.port), "--gpu", str(self.gpus[0].index)] + (["--listen", listen] if len(self.gpus) > 1 else []) + flags]
+        cmds += [base + ["--gpu", str(g.index), "--head", head, "--rank", str(q)] + flags for q, g in enumerate(self.gpus[1:], 1)]
         env = dict(os.environ, KERN_SERVE_BIN=str(self.a.kern_serve), RUST_LOG=LOG_FILTER)
+        cmds = [self.remote(q, g.host, c, env) if g.host else c for q, (g, c) in enumerate(zip(self.gpus, cmds))]
         self.log.parent.mkdir(parents=True, exist_ok=True)
-        self.proc = subprocess.Popen(cmd, stdout=open(self.log, "wb"), stderr=subprocess.STDOUT, env=env)
+        for q in range(len(cmds)):
+            self.pidfile(q).unlink(missing_ok=True)
+        self.procs = [subprocess.Popen(c, stdout=open(self.rank_log(q), "wb"), stderr=subprocess.STDOUT, env=env) for q, c in enumerate(cmds)]
         t0 = time.monotonic()
         while True:
             text = self.log.read_text(errors="replace")
@@ -205,10 +287,13 @@ class Server:
                 self.facts = kv(ready)
                 self.facts["load_s"] = round(time.monotonic() - t0, 1)
                 return self
-            if self.proc.poll() is not None:
-                raise RuntimeError(f"kern-serve exited {self.proc.returncode} while loading; tail:\n" + "\n".join(text.splitlines()[-8:]))
+            gone = next((q for q, p in enumerate(self.procs) if p.poll() is not None), None)
+            if gone is not None:
+                tail = self.rank_log(gone).read_text(errors="replace").splitlines()[-8:]
+                self.__exit__()
+                raise RuntimeError(f"kern-serve rank {gone} exited {self.procs[gone].returncode} while loading; tail:\n" + "\n".join(tail))
             if time.monotonic() - t0 > self.a.load_timeout:
-                self.proc.kill()
+                self.__exit__()
                 raise RuntimeError("kern-serve did not come up in time")
             time.sleep(1)
 
@@ -222,12 +307,21 @@ class Server:
             return False
 
     def __exit__(self, *_):
-        if self.proc and self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGTERM)
+        live = [p for p in self.procs if p.poll() is None]
+        # A remote rank's ssh dies with SIGTERM and leaves the rank running: signal it where it runs.
+        for q, g in enumerate(self.gpus[: len(self.procs)]):
+            if g.host and self.pidfile(q).exists():
+                subprocess.run(["ssh", "-o", "BatchMode=yes", g.host, f"kill -TERM {self.pidfile(q).read_text().strip()}"], capture_output=True, timeout=60)
+        for p in live:
+            p.send_signal(signal.SIGTERM)
+        for p in live:
             try:
-                self.proc.wait(60)
+                p.wait(60)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
+                p.kill()
+        for q, g in enumerate(self.gpus[: len(self.procs)]):
+            if g.host and self.pidfile(q).exists():
+                subprocess.run(["ssh", "-o", "BatchMode=yes", g.host, f"kill -KILL {self.pidfile(q).read_text().strip()} 2>/dev/null"], capture_output=True, timeout=60)
 
     def lines(self, tag: str) -> list[dict]:
         return [kv(l) for l in self.log.read_text(errors="replace").splitlines() if f" {tag} " in l]
@@ -371,7 +465,7 @@ def ulp_of(x: float) -> float:
 def oracle_gate(ranks: int, available: bool) -> bool | None:
     """What an identity check is without an oracle: a single-rank target
     has one to give (a spare GPU or `--reference`), so missing it fails; a
-    tray has none, so its cold answers are reported, not gated."""
+    multi-rank one has none, so its cold answers are reported, not gated."""
     return True if available else (None if ranks > 1 else False)
 
 
@@ -526,8 +620,8 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
     with Server(a, t, gpus, port, {}, out / "server-default.log") as s:
         rep.facts = s.facts
         page, rows = s.facts["page"], s.facts["rows"]
-        t.stateful = s.facts.get("checkpoints") == "at request end"
-        print(f"  facts: {', '.join(f'{k}={v}' for k, v in s.facts.items() if k in ('ranks', 'tray', 'pages', 'page', 'rows', 'checkpoints', 'seq_slots', 'load_s'))}")
+        t.stateful = s.facts.get("checkpoints") != "every page"
+        print(f"  facts: {', '.join(f'{k}={v}' for k, v in s.facts.items() if k in ('ranks', 'group', 'pages', 'page', 'rows', 'checkpoints', 'seq_slots', 'load_s'))}")
         # conc1: one request at a time, against the oracle.
         same, wants = Same(oracle, rows), {}
         for i, p in enumerate(PROMPTS):
@@ -717,7 +811,7 @@ def session_slots(a, t: Target, gpus: list[int], port: int, rep: Report, oracle:
         return
     cold, turn2, rows = prev["cold"], prev["turn2"], prev["rows"]
     with Server(a, t, gpus, port, {"--max-seqs": "2"}, out / "server-slots.log") as s:
-        # `seq_slots` is the tray's sum: twice as many finished requests
+        # `seq_slots` is every rank's sum: twice as many finished requests
         # outgrow every rank's share however they are placed.
         first = s.facts.get("seq_slots", 0)
         same = Same(oracle, rows)
@@ -758,7 +852,105 @@ def session_rows1(a, t: Target, gpus: list[int], port: int, rep: Report, oracle:
         rep.add("rows1_vs_spec", None, f"{same_spec}/4 identical to the {prev['rows']}-row answers (a near-tie may flip under a draft)")
 
 
-def run_target(a, t: Target, gpus: list[int], out: Path) -> Report:
+@dataclass(frozen=True)
+class Case:
+    scenario: str
+    label: str
+    ids: tuple[int, ...]
+    max_tokens: int
+
+
+def prose(n: int, at: int = 0) -> tuple[int, ...]:
+    """`n` ids of varied prose from offset `at`: the prompts' bytes, cycled (ids, not a tokenizer's)."""
+    text = " ".join(PROMPTS).encode()
+    return tuple(text[(at + i) % len(text)] for i in range(n))
+
+
+def dealt_cases(w: int, page: int, chunk: int, max_tokens: int) -> list[Case]:
+    """What a group of `w` members, each paging `page` local rows, is asked:
+    the prompts; sequences of fewer positions than members (some hold
+    none), ending at the first token or running on; prompts ending around
+    the group's page boundary (`page * w` positions) so a step crosses it,
+    several pages and a prompt longer than a `chunk`; and a burst of many
+    rows of every length up to three boundaries."""
+    span = page * w
+    out = [Case("conc1", f"prompt {i}", tuple(p.encode()), max_tokens) for i, p in enumerate(PROMPTS)]
+    out += [Case("short", f"L={n} max_tokens={k}", prose(n, 7 * n), k) for n in range(1, w + 2) for k in sorted({1, 2, max_tokens})]
+    lengths = sorted({span - 1, span, span + 1, 2 * span + w // 2, 12 * span + 3, chunk + span + 1})
+    out += [Case("pages", f"L={n}", prose(n, n), max_tokens) for n in lengths]
+    out += [Case("many_rows", f"row {i}", prose(1 + i * 37 % (3 * span), 13 * i), (1, 3, max_tokens)[i % 3]) for i in range(64)]
+    return out
+
+
+def exact(pairs: list[tuple[str, list[int], list[int]]]) -> tuple[bool, str]:
+    """Answers against the oracle's, token for token: the verdict and its note."""
+    bad = [f"{label}: {divergence(got, want)}" for label, got, want in pairs if got != want]
+    return not bad, f"{len(pairs) - len(bad)}/{len(pairs)} identical" + ("; " + "; ".join(bad[:4]) if bad else "")
+
+
+def session_dealt(a, t: Target, gpus: list[Gpu], port: int, rep: Report, twin: Target | None, reference: Reference | None, out: Path) -> None:
+    """A dealt target, held to its twin. The twin answers every case through
+    `kern run` on the head's GPU before the server takes it (and is held to
+    the reference when there is one); then the server is asked each case
+    the way its scenario says, every answer against the twin's."""
+    m = json.loads(t.manifest.read_text())
+    chunk = int(m["vars"]["tokens"]["max"])
+    cases = dealt_cases(t.ranks, page_of(m), chunk, a.max_tokens)
+    runner = Oracle(a, twin, gpus[0].index, out / "twin.json") if twin else None
+    if runner:
+        t0 = time.monotonic()
+        want = {c: runner.run(list(c.ids), c.max_tokens, 1) for c in cases}
+        if reference:
+            ok, note = exact([(f"{c.scenario} {c.label}", want[c], reference.run(list(c.ids), c.max_tokens, 1)) for c in cases])
+            rep.add("twin_equals_reference", ok, f"`kern run {twin.name}` vs the reference: {note} ({time.monotonic() - t0:.0f}s)")
+    elif reference:
+        want = {c: reference.run(list(c.ids), c.max_tokens, 1) for c in cases}
+        rep.add("twin_equals_reference", None, "no single-rank target of the same model in the config: the reference alone is the oracle")
+    else:
+        rep.add("oracle", False, "a dealt target needs its twin in the config or --reference")
+        return
+    of = lambda scenario: [c for c in cases if c.scenario == scenario]
+    # The default pool leaves 1 GiB of the device, where an NCCL
+    # communicator does not fit (ncclUnhandledCudaError at join).
+    with Server(a, t, gpus, port, {"--capacity": "262144"}, out / "server-dealt.log") as s:
+        rep.facts = s.facts
+        print(f"  facts: {', '.join(f'{k}={v}' for k, v in s.facts.items() if k in ('ranks', 'group', 'pages', 'page', 'rows', 'seq_slots', 'load_s'))}")
+        got: dict[Case, dict] = {}
+        for scenario in ("conc1", "short", "pages"):
+            for c in of(scenario):
+                got[c] = s.complete(list(c.ids), c.max_tokens)
+            ok, note = exact([(c.label, got[c]["ids"], want[c]) for c in of(scenario)])
+            rep.add(scenario, ok, note)
+
+        def burst(cs: list[Case]) -> tuple[dict[Case, dict], float]:
+            res: dict[Case, dict] = {}
+            threads = [threading.Thread(target=lambda c=c: res.__setitem__(c, s.complete(list(c.ids), c.max_tokens))) for c in cs]
+            t0 = time.monotonic()
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+            return res, time.monotonic() - t0
+
+        for scenario, cs in (("concurrent", of("conc1")), ("many_rows", of("many_rows"))):
+            res, dt = burst(cs)
+            ok, note = exact([(c.label, res[c]["ids"] if c in res else [], want[c]) for c in cs])
+            rep.add(scenario, ok and len(res) == len(cs), f"{len(res)}/{len(cs)} finished in {dt:.1f}s; {note}")
+        # A replicated group keeps nothing: the same prompt again is a miss with the same answer.
+        again = [(c, s.complete(list(c.ids), c.max_tokens)) for c in of("conc1")[:4]]
+        ok, note = exact([(c.label, r["ids"], want[c]) for c, r in again])
+        cached = [r["cached"] for _, r in again]
+        rep.add("kept_nothing", ok and not any(cached), f"cached {cached}; {note}")
+        n = s.hang_up(PROMPTS[5], 3)
+        time.sleep(1)
+        c = of("conc1")[0]
+        ok, note = exact([("after the abort", s.complete(list(c.ids), c.max_tokens)["ids"], want[c])])
+        rep.add("abort", n == 3 and ok, f"{n} chunks read before hanging up; {note}")
+        s.flush_stats()
+        rep.counters["dealt"] = s.counters()
+
+
+def run_target(a, t: Target, gpus: list[Gpu], out: Path, twin: Target | None = None) -> Report:
     rep = Report(target=t.name)
     print(f"== {t.name} ({t.ranks} rank{'s' if t.ranks > 1 else ''}, {'stateful' if t.stateful else 'paged'})", flush=True)
     missing = t.missing()
@@ -772,11 +964,21 @@ def run_target(a, t: Target, gpus: list[int], out: Path) -> Report:
         return rep
     out.mkdir(parents=True, exist_ok=True)
     use = gpus[: t.ranks]
-    spare = gpus[t.ranks] if len(gpus) > t.ranks else None
+    if use[0].host:
+        rep.add("error", False, f"rank 0 is the head and runs here, not on {use[0]}")
+        return rep
+    if t.dealt:
+        try:
+            session_dealt(a, t, use, a.port, rep, twin, Reference(a.reference, t) if a.reference else None, out)
+        except Exception as e:  # noqa: BLE001
+            rep.add("error", False, f"{type(e).__name__}: {e}")
+        return rep
+    # `kern run` beside the server takes a GPU of this node.
+    spare = next((g.index for g in gpus[t.ranks :] if not g.host), None)
     runner = Oracle(a, t, spare, out / "oracle.json")
     oracle = Reference(a.reference, t) if a.reference else runner
     try:
-        kern_test(a, t, use[0], rep, out)
+        kern_test(a, t, use[0].index, rep, out)
         prev = session_default(a, t, use, a.port, rep, oracle, runner if a.reference else None, out)
         session_host(a, t, use, a.port + 1, rep, oracle, out, prev)
         session_wake(a, t, use, a.port + 2, rep, oracle, out, prev)
@@ -792,7 +994,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=Path("kern.toml"))
     ap.add_argument("--targets", nargs="*", default=None, help="targets to run (default: every one in the config)")
-    ap.add_argument("--gpus", default="0", help="device ordinals a target may use, in rank order")
+    ap.add_argument("--gpus", default="0", help="device ordinals a target may use, in rank order; `host:i` is another node's")
     ap.add_argument("--out", type=Path, required=True, help="results directory (one subdir per target)")
     ap.add_argument("--kern", type=Path, default=Path("target/host/release/kern"))
     ap.add_argument("--kern-serve", type=Path, default=Path("target/release/kern-serve"))
@@ -806,14 +1008,13 @@ def main() -> int:
     a.server_flags = dict(zip(words[::2], words[1::2]))
     a.kern, a.kern_serve = a.kern.resolve(), a.kern_serve.resolve()
     a.reference = a.reference.resolve() if a.reference else None
-    gpus = [int(g) for g in a.gpus.split(",")]
-    targets = load_targets(a.config.resolve())
-    if a.targets:
-        targets = [t for t in targets if t.name in a.targets]
+    gpus = gpus_of(a.gpus)
+    every = load_targets(a.config.resolve())
+    targets = [t for t in every if t.name in a.targets] if a.targets else every
     reports = []
     for t in targets:
-        MODEL = json.loads(t.manifest.read_text())["model"] if t.manifest.exists() else t.name
-        rep = run_target(a, t, gpus, a.out / t.name)
+        MODEL = t.model
+        rep = run_target(a, t, gpus, a.out / t.name, twin_of(t, every))
         reports.append(rep)
         (a.out / t.name / "report.json").parent.mkdir(parents=True, exist_ok=True)
         (a.out / t.name / "report.json").write_text(

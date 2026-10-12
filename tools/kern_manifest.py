@@ -30,7 +30,7 @@ import pathlib
 import re
 import subprocess
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 SCALARS = ("i32", "i64", "f32", "u8")
 
 _TOP = ["schema_version", "model", "constants", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
@@ -269,7 +269,7 @@ def resolve_constants(manifest):
     if not constants:
         return m
     schema = json.loads((pathlib.Path(__file__).resolve().parent.parent /
-                         "schema/manifest-v5.schema.json").read_text())
+                         "schema/manifest-v7.schema.json").read_text())
 
     def alternatives(s):
         if "$ref" in s:

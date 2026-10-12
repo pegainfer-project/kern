@@ -7,10 +7,12 @@
 //! checkpoint of it shares (`pages`: [`Pool`], [`Lease`], [`Checkpoint`]),
 //! what a checkpoint's bytes are in a tier and how they are held
 //! (`store`: [`Store`], [`Copies`]), which of them are parked in host
-//! memory (`host`: [`Host`], [`Parked`]), and which prefix a new prompt
-//! can start from (`prefix`: [`Prefix`]). Every decision comes back as
-//! data — a [`Remap`], a [`Copies`] — that the runtime executes on its
-//! streams; every handle owns what it names and returns it when dropped.
+//! memory (`host`: [`Host`], [`Parked`]), which prefix a new prompt can
+//! start from (`prefix`: [`Prefix`]), and which rows of a sequence go to
+//! which member of a group that deals positions (`deal`: [`Interleave`],
+//! [`deal`]). Every decision comes back as data — a [`Remap`], a
+//! [`Copies`], a [`Deal`] — that the runtime executes on its streams;
+//! every handle owns what it names and returns it when dropped.
 //!
 //! Pure by construction: no clock, no randomness, no hash, no iteration
 //! over an unordered map, so the same calls in the same order lease the
@@ -18,13 +20,15 @@
 //! and need no GPU.
 
 mod chunks;
+mod deal;
 mod error;
 mod host;
 mod pages;
 mod prefix;
 mod store;
 
-pub use chunks::{Kind, Remap};
+pub use chunks::{Kind, Placement, Remap};
+pub use deal::{deal, Deal, Interleave, Pages, RowRun};
 pub use error::{Error, Result};
 pub use host::{runs, Host, Parked};
 pub use pages::{chunks_for, page_unit, row_tokens, Checkpoint, Denied, Lease, Pool, Pooled};

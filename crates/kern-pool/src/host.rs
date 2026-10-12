@@ -14,33 +14,61 @@
 //! twinned with the host ones, so the sequence's next checkpoint parks
 //! them for free. The parked checkpoint stays where it is.
 //!
-//! A page on the host is every paged state's page back to back, in arena
-//! order; a slot every per-sequence state's slot likewise. [`Host`] is the
-//! allocator, pure host code over byte offsets in `grain` units: pages
-//! taken from the low end, slots from the high end, first fit, free runs
-//! coalesced. The runtime owns the pinned block and runs the copies a plan
-//! names ([`Host::park`] says what to copy out, [`Host::restore`] what to
-//! copy back in); [`runs`] folds consecutive pages into one copy each.
+//! [`Host`] counts host pages and host slots, two fixed budgets of
+//! numbered units, and knows no bytes. What a unit holds is the shell's
+//! business (every paged state's page back to back, every per-sequence
+//! state's slot likewise), so one accounting can stand for several
+//! processes that each hold different layers of the model and multiply
+//! the same unit numbers by their own sizes. Each budget hands out its
+//! lowest free unit. The runtime owns the pinned block and runs the
+//! copies a plan names ([`Host::park`] says what to copy out,
+//! [`Host::restore`] what to copy back in); [`runs`] folds consecutive
+//! pages into one copy each.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use crate::pages::{Checkpoint, Denied, Lease, Pool};
 use crate::store::{chain_nodes, chain_pages, lock, sealed, Copies, Node, SlotOwn, Storage, Store};
 
-struct Inner {
-    /// Free runs: start → length, in grain units, never adjacent.
-    free: BTreeMap<u64, u64>,
+/// One budget of `n` numbered units. The ones never handed out are
+/// `next..n` and the ones handed back are `free`, all below `next`, so
+/// the lowest free unit is `free`'s first or else `next`.
+struct Units {
+    n: u64,
+    next: u64,
+    free: BTreeSet<u64>,
 }
 
-/// The pinned block's accounting: `bytes` in all, handed out in `grain`
-/// units, a page `page_bytes` and a slot `slot_bytes` of them.
+impl Units {
+    fn new(n: u64) -> Units {
+        Units { n, next: 0, free: BTreeSet::new() }
+    }
+
+    fn used(&self) -> u64 {
+        self.next - self.free.len() as u64
+    }
+
+    fn take(&mut self) -> Option<u64> {
+        self.free.pop_first().or_else(|| {
+            let u = self.next;
+            (u < self.n).then(|| {
+                self.next += 1;
+                u
+            })
+        })
+    }
+
+    fn give(&mut self, u: u64) {
+        assert!(u < self.next && self.free.insert(u), "host unit {u} handed back but not out");
+    }
+}
+
+/// The host block's accounting: `pages` host pages and `slots` host
+/// slots, each numbered from 0.
 pub struct Host {
-    grain: u64,
-    units: u64,
-    page_bytes: u64,
-    slot_bytes: u64,
-    inner: Mutex<Inner>,
+    pages: Mutex<Units>,
+    slots: Mutex<Units>,
 }
 
 /// A checkpoint on the host: the first `len` tokens of a sequence, as
@@ -55,75 +83,33 @@ impl Storage for Host {
     type Twin = ();
 
     fn give_page(&self, page: u64) {
-        let mut g = lock(&self.inner);
-        self.give(&mut g, page, self.page_bytes);
+        lock(&self.pages).give(page);
     }
 
     fn give_slot(&self, slot: u64) {
-        let mut g = lock(&self.inner);
-        self.give(&mut g, slot, self.slot_bytes);
+        lock(&self.slots).give(slot);
     }
 }
 
 impl Host {
-    /// A block of `bytes`, handed out in `grain` units, for pages of
-    /// `page_bytes` and slots of `slot_bytes`.
-    pub fn new(bytes: u64, grain: u64, page_bytes: u64, slot_bytes: u64) -> Host {
-        assert!(grain >= 1);
-        let units = bytes / grain;
-        let free = if units > 0 { BTreeMap::from([(0, units)]) } else { BTreeMap::new() };
-        Host { grain, units, page_bytes, slot_bytes, inner: Mutex::new(Inner { free }) }
+    /// A block of `pages` host pages and `slots` host slots.
+    pub fn new(pages: u64, slots: u64) -> Host {
+        Host { pages: Mutex::new(Units::new(pages)), slots: Mutex::new(Units::new(slots)) }
     }
 
-    /// Bytes handed out.
+    /// Host pages held by a parked checkpoint.
     pub fn used(&self) -> u64 {
-        let g = lock(&self.inner);
-        (self.units - g.free.values().sum::<u64>()) * self.grain
+        lock(&self.pages).used()
     }
 
-    fn grains(&self, bytes: u64) -> u64 {
-        bytes.div_ceil(self.grain).max(1)
+    /// Host slots held by a parked checkpoint.
+    pub fn slots_used(&self) -> u64 {
+        lock(&self.slots).used()
     }
 
-    /// A run of `bytes`, first fit from the low end (`high` false) or the
-    /// high end.
-    fn take(&self, g: &mut Inner, bytes: u64, high: bool) -> Option<u64> {
-        let n = self.grains(bytes);
-        let (start, len) = if high {
-            g.free.iter().rev().find(|(_, &l)| l >= n).map(|(&s, &l)| (s, l))?
-        } else {
-            g.free.iter().find(|(_, &l)| l >= n).map(|(&s, &l)| (s, l))?
-        };
-        g.free.remove(&start);
-        let at = if high { start + len - n } else { start };
-        if high && len > n {
-            g.free.insert(start, len - n);
-        } else if len > n {
-            g.free.insert(start + n, len - n);
-        }
-        Some(at * self.grain)
-    }
-
-    /// Return the run of `bytes` at `offset`, merging with its neighbours.
-    fn give(&self, g: &mut Inner, offset: u64, bytes: u64) {
-        let (mut start, mut len) = (offset / self.grain, self.grains(bytes));
-        if let Some((&s, &l)) = g.free.range(..start).next_back() {
-            if s + l == start {
-                g.free.remove(&s);
-                start = s;
-                len += l;
-            }
-        }
-        if let Some(&l) = g.free.get(&(start + len)) {
-            g.free.remove(&(start + len));
-            len += l;
-        }
-        g.free.insert(start, len);
-    }
-
-    /// Park `cp`: a host node per device node not parked already, a run
-    /// for the slot, and the copies (device page, host offset) that fill
-    /// them, root first. `HostFull` when the block cannot hold it; nothing
+    /// Park `cp`: a host node per device node not parked already, a host
+    /// slot for its state, and the copies (device page, host page) and
+    /// (device slot, host slot) that fill them, root first. `HostFull` when the block cannot hold it; nothing
     /// is kept then.
     pub fn park(self: &Arc<Host>, cp: &Checkpoint) -> std::result::Result<(Parked, Copies<i32, u64>), Denied> {
         let mut plan = Copies::default();
@@ -133,9 +119,7 @@ impl Host {
             let node = match twin {
                 Some(n) => n,
                 None => {
-                    let mut g = lock(&self.inner);
-                    let Some(at) = self.take(&mut g, self.page_bytes, false) else { return Err(Denied::HostFull) };
-                    drop(g);
+                    let Some(at) = lock(&self.pages).take() else { return Err(Denied::HostFull) };
                     plan.pages.push((dev.page, at));
                     let n = Node::new(at, chain.take(), self, ());
                     *lock(&dev.twin) = Arc::downgrade(&n);
@@ -146,8 +130,7 @@ impl Host {
         }
         let slot = match cp.seq_slot() {
             Some(s) => {
-                let mut g = lock(&self.inner);
-                let Some(at) = self.take(&mut g, self.slot_bytes, true) else { return Err(Denied::HostFull) };
+                let Some(at) = lock(&self.slots).take() else { return Err(Denied::HostFull) };
                 plan.slot = Some((s, at));
                 Some(SlotOwn::new(at, self))
             }
@@ -162,8 +145,8 @@ impl Host {
     /// ones sealed and twinned with their host pages — and a fresh slot
     /// with the state when `len` is the whole checkpoint (a parked state
     /// is usable at its length only; a shorter `len` is a whole number of
-    /// pages of a stateless one). The copies are (host offset, device
-    /// page). The lease names positions from `len` on. A slot-only
+    /// pages of a stateless one). The copies are (host page, device
+    /// page) and (host slot, device slot). The lease names positions from `len` on. A slot-only
     /// checkpoint restores to a slot-only lease at its own length;
     /// `tokens` is not its business.
     pub fn restore(
@@ -188,7 +171,7 @@ impl Host {
         };
         let (fresh, slot) = pool.take(need)?;
         let hosts = chain_nodes(&p.chain);
-        let full = len / unit;
+        let full = if p.paged() { len / unit } else { 0 };
         let chain = hosts[..full]
             .iter()
             .zip(&fresh)
@@ -202,21 +185,21 @@ impl Host {
 }
 
 impl Parked {
-    /// The host offset of each page, root first (a test reading the
-    /// block back; the runtime moves bytes by the plans).
-    pub fn offsets(&self) -> Vec<u64> {
+    /// The host page of each page, root first (a test reading the block
+    /// back; the runtime moves bytes by the plans).
+    pub fn page_ids(&self) -> Vec<u64> {
         chain_pages(&self.chain)
     }
 }
 
-/// Consecutive (device page, host offset) pairs — page `p + 1` at host
-/// offset `o + page_bytes` — folded into (first page, host offset, count)
-/// runs, in order.
-pub fn runs(pairs: &[(i32, u64)], page_bytes: u64) -> Vec<(i32, u64, usize)> {
+/// Consecutive (device page, host page) pairs — page `p + 1` at host page
+/// `o + 1` — folded into (first page, first host page, count) runs, in
+/// order.
+pub fn runs(pairs: &[(i32, u64)]) -> Vec<(i32, u64, usize)> {
     let mut out: Vec<(i32, u64, usize)> = Vec::new();
     for &(p, o) in pairs {
         match out.last_mut() {
-            Some((p0, o0, n)) if *p0 as i64 + *n as i64 == p as i64 && *o0 + *n as u64 * page_bytes == o => *n += 1,
+            Some((p0, o0, n)) if *p0 as i64 + *n as i64 == p as i64 && *o0 + *n as u64 == o => *n += 1,
             _ => out.push((p, o, 1)),
         }
     }

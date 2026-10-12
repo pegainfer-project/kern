@@ -36,6 +36,12 @@ pub fn ms(d: Duration) -> f64 {
     (d.as_secs_f64() * 1e4).round() / 10.0
 }
 
+/// Wall-clock microseconds since the epoch, the stamp that lines up one
+/// item's log lines across processes and hosts.
+pub fn now_us() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as u64)
+}
+
 /// Seconds with one decimal, for a `_s` field.
 pub fn secs(d: Duration) -> f64 {
     (d.as_secs_f64() * 10.0).round() / 10.0

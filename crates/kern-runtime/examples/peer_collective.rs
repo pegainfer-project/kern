@@ -99,7 +99,7 @@ fn main() {
         "i64",
     ];
     let manifest = serde_json::json!({
-        "schema_version": 5,
+        "schema_version": 7,
         "model": "peer-collective",
         "vars": { "tokens": { "max": B_MAX }, "rows": { "max": n * B_MAX }, "rb": { "max": RB_MAX } },
         "topology": { "groups": { "tp": n } },
@@ -183,7 +183,7 @@ fn main() {
                 let topo = Topology::one("tp", rank as u64, n as u64);
                 let e = |e: kern_runtime::Error| e.to_string();
                 let mut rt =
-                    Runtime::load(&verified, Some(&kernels), gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }), Some(&topo)).map_err(e)?;
+                    Runtime::load(&verified, Some(&kernels), gpu, Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1, landings: 0 }), Some(&topo)).map_err(e)?;
                 let mine = rt.export_handles().map_err(e)?;
                 posted.lock().unwrap()[rank] = Some(mine);
                 gate.wait();

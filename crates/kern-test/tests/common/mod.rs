@@ -188,7 +188,7 @@ impl Fixture {
                 {"op": "gather", "args": [{"buf": "hidden"}, {"buf": "hidden_peers"}, {"buf": "act"}]}]});
         }
         let mut m = serde_json::json!({
-            "schema_version": 5, "model": "fake",
+            "schema_version": 7, "model": "fake",
             "vars": {"tokens": {"max": 8, "axis": "rows"}, "seqs": {"max": 1, "axis": "groups"}},
             "states": {"kv": {"bytes_per_token": LAYERS * D * 4}},
             "buffers": {

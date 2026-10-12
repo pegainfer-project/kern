@@ -31,7 +31,7 @@ fn first_stage_feeds_a_chunk_and_hands_back_no_token() {
     assert_eq!(refused.0, ["no program with a `batch` writes a `tokens` output: no call hands a token back"]);
     let p = Protocol::check_unsampled(&m).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
-        (&p.rows, &p.groups, &p.tray, &p.context),
+        (&p.rows, &p.groups, &p.ranks, &p.context),
         (&bound("tokens", 8192), &bound("seqs", 1), &Some(bound("rows", 8192)), &Some(bound("ctx", 16384)))
     );
     assert_eq!(p.forwards, chunk(None));
@@ -40,11 +40,11 @@ fn first_stage_feeds_a_chunk_and_hands_back_no_token() {
         [
             ("seq_lens", Fill::SeqLen, Axis::Groups),
             ("slot_mapping", Fill::Slot, Axis::Rows),
-            ("token_ids", Fill::Token, Axis::Tray)
+            ("token_ids", Fill::Token, Axis::Ranks)
         ]
     );
     assert_eq!(p.page_tables, [PageTable { name: "block_table".into(), width: 256 }]);
-    assert_eq!(p.line_tables, [LineTable { name: "kda.line_index".into(), lines: 18, width: 1, axis: Axis::Tray }]);
+    assert_eq!(p.line_tables, [LineTable { name: "kda.line_index".into(), lines: 18, width: 1, axis: Axis::Ranks }]);
     assert_eq!((p.once, p.derive, m.group_size("ep")), (vec!["load".into()], vec!["derive".into()], Some(1)));
 }
 
@@ -62,5 +62,5 @@ fn last_stage_takes_hidden_states_and_hands_back_a_token() {
         ]
     );
     assert_eq!(p.context, Some(bound("ctx", 16384)));
-    assert_eq!(p.line_tables, [LineTable { name: "kda.line_index".into(), lines: 17, width: 1, axis: Axis::Tray }]);
+    assert_eq!(p.line_tables, [LineTable { name: "kda.line_index".into(), lines: 17, width: 1, axis: Axis::Ranks }]);
 }

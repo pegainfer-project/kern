@@ -68,6 +68,9 @@ jobs:
       - name: e2e driver verdicts
         run: python3 -m unittest discover -s tools/e2e -p test_e2e.py
 
+      - name: toy reference
+        run: python3 -m unittest discover -s tools/toy -p test_model.py
+
       - name: Protocol names stay in the manifest
         run: |
           # kern-run, kern-test and kern-serve drive the runtime through `Protocol`; a
@@ -86,9 +89,9 @@ jobs:
 
       - name: Schema golden check
         run: |
-          cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v5.schema.json
-          if ! diff -u schema/manifest-v5.schema.json /tmp/manifest-v5.schema.json; then
-            echo "::error::schema/manifest-v5.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v5.schema.json"
+          cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v7.schema.json
+          if ! diff -u schema/manifest-v7.schema.json /tmp/manifest-v7.schema.json; then
+            echo "::error::schema/manifest-v7.schema.json is stale — regenerate with: cargo run -p kern-manifest --example gen_schema > schema/manifest-v7.schema.json"
             exit 1
           fi
 

@@ -80,7 +80,7 @@ logits 退化，`kern bench` 则在图捕获里撞上懒连接的 `cudaDeviceEna
 Simple 全错；而 `all_reduce_perf -g 4` 同模式同尺寸 Simple 全对——毛病在 kern 的进程和 Simple
 的核相遇的地方，至今没找到（roadmap "K3 prefill 线" P-open）。规则：**第三方原语进 runtime，门禁必须覆盖它换路径
 的尺寸**（NCCL 按消息大小换协议和算法，小消息门禁只验了 LL）；runtime 拿不准的库行为就由
-runtime 钉住（`join_nccl` 钉 `NCCL_PROTO=LL128`、`NCCL_RUNTIME_CONNECT=0`，调用者设了优先），
+runtime 钉住（`join_nccl` 钉 `NCCL_PROTO=LL,LL128`、`NCCL_RUNTIME_CONNECT=0`，调用者设了优先），
 不写在脚本的环境变量里让下一个人再踩。另外 `NCCL_P2P_USE_CUDA_MEMCPY=1` 会挂死不报错，
 二分链要有超时。
 

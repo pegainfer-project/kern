@@ -30,8 +30,8 @@ MambaRadixCache 和它的 Rust 内核（`rust/sglang-radix-tree`）。
 
 ```rust
 pub trait Storage: sealed::Sealed + Send + Sync + 'static {
-    type Page: Copy + Ord;                 // Pool: 页号 i32；Host: 字节偏移 u64
-    type Slot: Copy + Ord;
+    type Page: Copy + Ord;                 // Pool: 页号 i32；Host: host 页号 u64
+    type Slot: Copy + Ord;                 // Pool: slot 号 i32；Host: host slot 号 u64
     type Twin: Default + Send + Sync;      // 节点对另一 tier 副本的了解
     fn give_page(&self, page: Self::Page);
     fn give_slot(&self, slot: Self::Slot);
@@ -39,12 +39,55 @@ pub trait Storage: sealed::Sealed + Send + Sync + 'static {
 ```
 
 trait 只管归还：分配留在各自的类型里，因为 `Pool::take` 的三态拒绝（`Busy` /
-`Remapping` / `ExceedsPool`）和 `Host` 的按字节 first-fit 没有共同的签名可抽。`Pool`
-（chunk、remap、manifest 的表）和 `Host`（pinned 块，页从低端、slot 从高端）实现它，
-trait 是 sealed 的，别处不能。页号和偏移是裸 `i32` / `u64`，但只出现在两处：交给
+`Remapping` / `ExceedsPool`）和 `Host` 的"取最小空闲号"没有共同的签名可抽。`Pool`
+（chunk、remap、manifest 的表）和 `Host`（host 页、host slot 两段定长预算）实现它，
+trait 是 sealed 的，别处不能。页号是裸 `i32` / `u64`，但只出现在两处：交给
 runtime 执行的 `Copies`，和只读的观测（`Lease::page_ids()`、`Checkpoint::page_ids()`、
-`Parked::offsets()` / `slot_offset()`，harness 与测试读字节用）——没有任何接口按它们
-找东西。
+`Parked::page_ids()`，harness 与测试读字节用）——没有任何接口按它们找东西。
+
+### Host：按单元记账，不知道字节（2026-10-09）
+
+`Host::new(pages, slots)` 是两段定长预算：host 页 `0..pages`、host slot `0..slots`，
+各取最小的空闲号（没发出过的号是一个水位，还回来的在水位下面的一个有序集合里）。
+`Parked` 的页、`Host::park` / `Host::restore` 的 `Copies<i32, u64>` / `Copies<u64, i32>`
+的 host 一侧、`runs` 折叠的连续页，都是单元号。一个单元多少字节是 shell 的事：runtime
+（`park.rs`）的 pinned 块前段是 host 页（每页是所有分页 state 的该页首尾相接），后段是
+host slot（每个是所有 per-seq state 的 slot 首尾相接），偏移 = 单元号 × 单元字节 +
+state 在单元里的偏移；`Runtime::reserve_host(pages, slots)` 收的也是单元。
+
+为什么不按字节：流水线头（`kern-serve/src/pp/head.rs`）用一份记账代表 S 个 stage
+进程，每个 stage 持有模型的不同层，同一页、同一 slot 在各 stage 上字节数不同（没有
+per-seq state 的 stage，slot 是 0 字节），页号却全流水共用。host 层同理：头上一份
+`Host` 发 host 页号和 host slot 号，每个 stage 用自己的单元字节去乘。按字节的 first-fit
+只对一个进程成立。
+
+代价是两段在 reserve 时定死：之前页从低端、slot 从高端共用同一块字节，谁用谁占。
+切分是 `kern_runtime::host_split(bytes, page_bytes, slot_bytes, turn)`：**每 `turn` 页配一个 slot**，
+即一个 parked 条目的样子——自己一个 slot，加上它在同一 session 前几轮共享的前缀之后新增的那一轮的页；
+manifest 只有一种单元时全给它。`turn` 来自 `--host-turn`（token，默认 8192，按 page unit 向上取整成页），
+`--host-gib`（每张卡 `Runtime::host_units`，流水线 head 按段）和 `agentx_replay --host-turn` 都走它。
+这样 slot 的字节占比由单元字节数推出来：qwen3.8（784 token/页、49 MiB 页、147 MiB slot）是 11 页一个 slot，
+slot 占 21%；full K3 PP8 段（64 token/页、216 KiB 页、55.9 MiB slot）是 128 页一个 slot，占 67%。
+
+依据是 AgentX 回放（2026-10-09，`~/bench_results/2026-10-09-pd-agentx/x3-agentx/results/replay/`）按 `--host-turn` 扫，
+命中率（%）：
+
+| `--host-turn` | qwen3.8 每 slot 页数 / slot 占比 / c32 | K3 slot 占比 | K3 c24 | K3 c32 | K3 c64 |
+|---:|---|---:|---:|---:|---:|
+| 2048 | — | 89% | 97.3 | 97.0 | 96.3 |
+| 4096 | 6 / 33% / 95.7 | 81% | 97.5 | 97.4 | 97.0 |
+| **8192** | **11 / 21% / 96.0** | **67%** | **97.6** | **97.4** | **97.2** |
+| 9408 | 12 / 20%（旧的五分之一）/ 96.0 | — | — | — | — |
+| 12544 / 12288 | 16 / 16% / 95.8 | 58% | 97.5 | 97.4 | 97.1 |
+| 16384 | — | 51% | 97.5 | 97.4 | 97.0 |
+| 18816 / 32768 | 24 / 11% / 95.4 | 34% | 97.4 | 97.2 | 96.8 |
+| 65536 | — | 21%（≈ 旧的五分之一） | 97.2 | 97.0 | 96.5 |
+
+qwen3.8：device 250 GiB、host 512 GiB；K3：PP8 head 的段形状，131 slot、13.86M token、host 128 GiB/段，
+不带 host 时 c24 95.0%。同一个 8192 在两个模型上都在最好值上；之前固定五分之一给 slot（在 qwen3.8 上量的）
+到了 K3 是 slot 先用光，128 GiB 只用到 52 GiB。c128 的 K3 反过来要更多页（8192 是 89.9%，五分之一 90.7%，
+slot 35–50% 91.6–91.8%）：并发高了，每个 parked 条目被续上之前要撑更久，旧轮更多被丢，新增页的比例跟着变。
+8192 是这份轨迹的量，不是推出来的：一轮新增 token 明显不同的负载要重扫。
 
 ### Node<T>：一页，冻结
 
@@ -137,12 +180,36 @@ pub struct Hit<R, P> {
 条目持有 `R` / `P`，`Hit` 持有它们的 clone（`Kept: Clone`，`Store<T>` 和 tray 的
 `Group<X>` 都是）。`make_room` 把条目 park 掉或删掉都不影响手里的 `Hit`（lessons.md
 2026-09-04"make_room 之后旧的命中不能再用"这类错误从类型上消失）。条目按 token 键
-操作：`insert(&key, r)`、`lookup(&tokens)`，腾地方只有一个动作 `evict(park)`：最久未命中
-的 resident 条目经调用方的拷贝 `park` 进 host（host 满了先丢最冷的 parked 条目再试，
+操作：`insert(&key, r)`、`lookup(&tokens)`，腾地方只有一个动作 `evict(park)`：最不值钱
+的 resident 条目（次序见下文"带 state 的条目分档"）经调用方的拷贝 `park` 进 host（host 满了先丢最冷的 parked 条目再试，
 丢光了还放不下、或没有 host 层，就丢它），返回 `Evicted::{Parked(key), Dropped {key,
 parked}}` 说明动了谁——scheduler 与 `agentx_replay` 之前各写一份同样的循环，现在
 是表的。哪个条目最冷是表自己的事，外面看不到 LRU。TP 下 `R` / `P`
 是 tray 的 `Group<Checkpoint>` / `Group<Parked>`，索引仍然是 tray 一棵，不变。
+
+### Interleave / Deal：按位置分发给一个组（2026-10-09）
+
+```rust
+pub struct Interleave { w }                    // new(w) 拒 0；owner(p) = p % w，local(p) = p / w，
+                                               // len(n, m) = 前 n 个位置里成员 m 持有几个
+pub struct Pages<'a> { pub ids: &'a [i32], pub unit: u64 }
+pub struct RowRun { pub src_row, pub src_stride, pub dst_row, pub rows }
+pub fn deal(src: Pages, dst: Pages, il: Interleave, m: u64, len: u64) -> Result<Deal>
+```
+
+manifest 里 paged state 写 `shard: {by: position}` 时（decode 的 DCP），组里每个成员
+一个 `Pool`，各自按**本地位置**记账：一条 n 个位置的序列在成员 m 上租 `len(n, m)`，
+对称地租 `len(n, 0) = ⌈n/w⌉`，最多浪费一个位置。`Pool` 本身不变。
+
+`deal` 是 P→D 交接的纯计划：P 的整序列页表（每页 `unit` 行，一行 = 一个 token 槽）
+里属于成员 m 的行，折成按本地位置排序的最长 run——目标连续、源每隔 w 行一行。
+run 只在两侧的页物理相邻时跨页：64 行一页、8 个成员时，P 的第 k 页给成员 m 的是
+第 m, m+8, …, m+56 行，落在本地第 ⌊k/8⌋ 页的第 8(k mod 8) 到 8(k mod 8)+7 行；两侧
+都连续的页合成一个 run。所有 paged state 共用页号，一个 `Deal` 管全部层，runtime 按
+各 state 的行字节放大。`Deal` 只能由 `deal` 造出：它命名的行都在给它的页里（成员号、
+页数、负页号都在构造时拒掉）。门禁（`tests/deal.rs`）：3000 个随机 (w, 两侧页大小,
+长度, 页表) 对逐行参考模型——每个源位置 p 恰好落在成员 `p % w` 的本地位置 `p / w`，
+各成员行数之和 = 长度，run 不可再合并。
 
 ## 3. 操作
 
@@ -158,10 +225,10 @@ parked}}` 说明动了谁——scheduler 与 `agentx_replay` 之前各写一份�
 
 三条规则贯穿全部操作：**整页共享、半页拷给新持有者、写者只有 lease。** `restore` 和
 `fork` 本来就这样，`checkpoint` 是唯一的例外，改成一致。半页拷贝只在页中间
-checkpoint 时发生；scheduler 在页边界（纯 KV，零拷贝）、请求结束（`retire`，零拷贝）和带
-state 模型的 history 末尾（`Request::history_tokens`，前端量出的 prompt 与 generation prompt
-的分界）留快照——最后这个付一次半页拷贝加一份 state 拷贝，换来回放别人回复的下一轮（AgentX）
-也能命中上一轮的 prompt。K1c 的显式断点（system prompt 末尾）是同一种页中间 checkpoint。
+checkpoint 时发生；scheduler 在页边界（纯 KV，零拷贝）和带 state 模型的 history 末尾
+（`Request::history_tokens`，前端量出的 prompt 与 generation prompt 的分界）留快照，没有
+history 末尾的请求才在结束时留（`retire`，零拷贝）——history 末尾那次付一次半页拷贝加一份
+state 拷贝，换来回放别人回复的下一轮（AgentX）也能命中上一轮的 prompt，每轮只留这一份。K1c 的显式断点（system prompt 末尾）是同一种页中间 checkpoint。
 
 **wake 直接醒进请求的租约。** 2026-09-14 的版本让 wake 得到一个 `Checkpoint`，scheduler
 把它插回索引、请求回到队首再按 resident 命中 `restore`：两次分配、两次"够不够"的判断，
@@ -194,7 +261,17 @@ store 让树可以在任意 token 位置分叉而不碰任何一页。
 - 取最长，同长 resident 优先。
 
 命中触碰路径上的每个条目，根最新、叶最旧，同一条链一起老化、叶先走；`evict` 取的
-最冷条目来自各 tier 一张按 tick 的 `BTreeMap`。不带 slot 的 resident 条目比同路径上一个
+最冷条目来自各 tier 一张按 tick 的 `BTreeMap`。
+
+带 state 的条目分档（2026-10-09）：带 state 的条目只服务精确续上它的 prompt，所以它们
+自成一棵对话 trie。按它下面最近的带 state 条目数分三种：0 个是某个会话的最新一轮，1 个是
+会话已经走过去的一轮（superseded），≥2 个是几段对话共用的前缀。腾地方先拿 superseded，
+内部按 LRU——有空间时它们留着，客户端把对话改回第 k 轮还能命中；拿走它只还 slot 和
+它结尾那半页，别的页是后继的前缀，留着。superseded 拿光了才轮到会话：闲得最久的会话交出
+它的最新一轮。共享前缀不属于任何一个会话，下面只剩一段对话时才按那一段的身份参与。
+叶先走的老规则对带 state 的链正好反了：K3 PP8 上一轮的 K/R 条目不断占 slot，链里最新
+的一条反而最冷（serve.md「流水线」）。分档每次 `evict` 扫一遍树（只在有带 state 条目时），
+树的大小是 slot 数量级。不带 slot 的 resident 条目比同路径上一个
 不带 slot、只在 device 的条目深一页时替换它：纯 KV 序列每页 checkpoint 一次，
 索引里只留一条会长的。
 
@@ -229,11 +306,11 @@ dynamo router 按 block hash。kern 的 `restore` 会拷半页，所以在带 st
 `Host::park(&[(u64, i32)], page_bytes, slot, len)` 的四元组签名、`Park` 类型、
 `Pool::wake` / `wake_slot`、`Prefix::resident(id)` / `parked(id)` 的 id 查询、`Chain`。
 留下的：`Kept`（tray 的 `Group<X>` 要靠它回答 `tokens()` / `has_slot()`）、
-`Lease::page_ids()` / `Checkpoint::page_ids()` / `Parked::offsets()`（只读观测）。
+`Lease::page_ids()` / `Checkpoint::page_ids()` / `Parked::offsets()`（只读观测；2026-10-09 起是 `Parked::page_ids()`，host 页号）。
 
 修掉的已知问题：review 的 P1（半页 checkpoint 后 host 副本过期）由不变量消失；
 "醒来再睡拷第二份"由 wake 带 twin 消失；"make_room 后旧 hit 失效"由 `Hit` 持有 clone
-消失；`Host` 层 `page_bytes` / `slot_bytes` 改在 `Host::new` 给一次，不再每次 park 传；
+消失；`Host` 层 `page_bytes` / `slot_bytes` 改在 `Host::new` 给一次，不再每次 park 传（2026-10-09 起 `Host` 不再知道字节，见第 2 节）；
 分叉在条目中间时同长的 resident 条目优先于 parked 的（之前按 id 取第一个）。
 
 不动的部分：`Pool` 内部的 chunk / remap / `Denied` 三态、`Lease` 的表接口、runtime 的
@@ -249,8 +326,9 @@ review 的 P2（`rebalance` 对共享 chunk 重复计费导致误报 `ExceedsPoo
   fork / retire / drop 序列，每个位置由它的 lease 写上唯一戳，对着"位置 → 戳"的
   参考模型比对每个句柄能看到的每个位置和 slot，池的占用等于句柄命名的页与 slot。
   纯 KV 与带 state 各跑一遍。旧的 `checkpoint` 在这个测试上直接复现 P1。
-- **park / wake 字节 property test**（`host.rs`）：加上 park / wake，host 上的字节按
-  偏移比对，parked 句柄命名的偏移两两不交、恰好是 `Host::used()`。
+- **park / wake property test**（`host.rs`）：加上 park / wake，host 上的字节按
+  host 页号比对，parked 句柄命名的 host 页恰好是 `Host::used()`，每个 parked state 一个
+  host slot、合起来恰好是 `Host::slots_used()`；纯 KV 与带 state 各跑一遍（2026-10-09）。
 - **索引 property test**（`prefix.rs`）：随机 token 序列的插入 / 查询 / park / 淘汰
   对着"所有条目线性扫描取最长、同长 resident 优先"的参考模型；同一操作序列跑两遍
   trace 相同。

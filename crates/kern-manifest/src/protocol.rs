@@ -18,9 +18,10 @@
 //! The axes. A call has `groups` sequences of `rows` rows each on this
 //! rank, and the vars that count them are declared as such: the var with
 //! `axis: rows` ([`Axis::Rows`]), the var with `axis: groups`
-//! ([`Axis::Groups`]). A manifest whose tray batch spans several ranks (a
-//! `tp` group) lays some buffers out over a third var, the whole tray's
-//! rows with this rank's first, declared `axis: tray` ([`Axis::Tray`]).
+//! ([`Axis::Groups`]). A manifest whose batch spans several ranks (a
+//! `tp` group) lays some buffers out over a third var, the rows of every
+//! rank of the group with this rank's first, declared `axis: ranks`
+//! ([`Axis::Ranks`]).
 //! A fill or a line table is over one of these three; fixed lengths
 //! ([`Axis::Fixed`]) are for what is declared at its bound: the
 //! `cu_seqlens` buffer, the collectives' one-word `error` flag. The roles
@@ -43,6 +44,15 @@
 //! rows are in, summed (a call of several sequences expands them all), which
 //! the driver already knows from the lengths it stages. One var bounds every
 //! context in a manifest.
+//!
+//! A rank group may split the states rather than the rows ([`Shards`]).
+//! Paged states dealt by position over a group (decode context
+//! parallelism) make the group's batch a replicated one: every member
+//! takes the same rows in the same order, so the rows and groups axes are
+//! the group's and there is no ranks axis; what differs per member is only
+//! what addresses its own positions (its slots, local lengths, page and
+//! line tables). A per-sequence state split by heads is each member's
+//! part of every row of the state, whatever the batch.
 
 use crate::types::*;
 use crate::Verified;
@@ -55,9 +65,9 @@ pub enum Axis {
     Rows,
     /// One entry per sequence of this rank's call.
     Groups,
-    /// One entry per row of the whole tray batch: this rank's rows first,
-    /// then the other members' in group order from it.
-    Tray,
+    /// One entry per row of every rank of the group: this rank's rows
+    /// first, then the other members' in group order from it.
+    Ranks,
     /// A fixed length declared at the bound.
     Fixed(u64),
 }
@@ -108,7 +118,7 @@ pub struct PageTable {
 
 /// A line table: an `i32 [lines, cols]` or `[lines, cols, width]` input
 /// indexing a per-sequence state, its columns the sequences of this rank
-/// ([`Axis::Groups`]) or of the whole tray ([`Axis::Tray`]).
+/// ([`Axis::Groups`]) or of every rank of the group ([`Axis::Ranks`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineTable {
     pub name: String,
@@ -179,9 +189,9 @@ pub struct Protocol {
     pub rows: Bound,
     /// The var a call's sequences go in.
     pub groups: Bound,
-    /// The var the tray batch's rows go in, for a manifest whose batch
-    /// spans a rank group.
-    pub tray: Option<Bound>,
+    /// The var the rows of every rank of the group go in, for a manifest
+    /// whose batch spans a rank group.
+    pub ranks: Option<Bound>,
     /// The var the call's longest sequence length goes in, when some
     /// program is sized by its context.
     pub context: Option<Bound>,
@@ -196,6 +206,62 @@ pub struct Protocol {
     /// Programs the runtime runs inside weight loading, in name order: no
     /// caller runs them.
     pub derive: Vec<String>,
+    /// How a rank group splits the states among its members.
+    pub shards: Shards,
+}
+
+/// The states' shard declarations, read once: a serving loop stages the
+/// members by them and a push fills the members' shares by them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Shards {
+    /// The group the paged states deal their positions over, when they do.
+    /// Set, it is the declaration that the group runs one replicated batch:
+    /// every member takes the same rows in the same order, and only the
+    /// fills that address a member's own positions differ.
+    pub positions: Option<Positions>,
+    /// Every per-sequence state split by heads, by name.
+    pub heads: BTreeMap<String, Heads>,
+}
+
+/// Positions dealt round-robin over a group: position `p` on member
+/// `p mod members`, at its local position `p / members`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Positions {
+    pub group: String,
+    pub members: u64,
+}
+
+/// A per-sequence state split by heads over a group's members: the whole
+/// state of a sequence is `segments` (`(rows, width bytes)`) end to end,
+/// and each member's slot its `1 / members` of every row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heads {
+    pub group: String,
+    pub members: u64,
+    pub segments: Vec<(u64, u64)>,
+}
+
+impl Shards {
+    fn of(m: &Verified) -> Shards {
+        let members = |g: &str| m.group_size(g).expect("verified: a shard names a declared group");
+        Shards {
+            positions: m.states.values().find_map(|s| match &s.shard {
+                Some(Shard::Position { group }) => Some(Positions { group: group.clone(), members: members(group) }),
+                _ => None,
+            }),
+            heads: m
+                .states
+                .iter()
+                .filter_map(|(name, s)| match &s.shard {
+                    Some(Shard::Heads { group, segments }) => Some((
+                        name.clone(),
+                        Heads { group: group.clone(), members: members(group), segments: segments.clone() },
+                    )),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
 }
 
 impl Protocol {
@@ -230,7 +296,7 @@ impl Protocol {
         let axis_var = |axis: VarAxis| -> Option<Bound> {
             m.vars.iter().find(|(_, v)| v.axis == Some(axis)).map(|(n, v)| Bound { var: n.clone(), max: v.max })
         };
-        let (rows, groups, tray) = (axis_var(VarAxis::Rows), axis_var(VarAxis::Groups), axis_var(VarAxis::Tray));
+        let (rows, groups, ranks) = (axis_var(VarAxis::Rows), axis_var(VarAxis::Groups), axis_var(VarAxis::Ranks));
         for (axis, found) in [(VarAxis::Rows, &rows), (VarAxis::Groups, &groups)] {
             if found.is_none() {
                 errs.push(format!("no var has `axis: {axis}`: nothing counts a call's {axis}"));
@@ -244,8 +310,8 @@ impl Protocol {
                 Some(Axis::Rows)
             } else if v == groups.var {
                 Some(Axis::Groups)
-            } else if tray.as_ref().is_some_and(|t| t.var == v) {
-                Some(Axis::Tray)
+            } else if ranks.as_ref().is_some_and(|t| t.var == v) {
+                Some(Axis::Ranks)
             } else {
                 None
             }
@@ -276,11 +342,11 @@ impl Protocol {
             };
             let Some(axis) = axis else { continue };
             let ok = match fill {
-                Fill::Token => width == 1 && matches!(axis, Axis::Rows | Axis::Tray | Axis::Groups),
+                Fill::Token => width == 1 && matches!(axis, Axis::Rows | Axis::Ranks | Axis::Groups),
                 Fill::Position | Fill::Valid | Fill::Slot => width == 1 && axis == Axis::Rows,
                 Fill::SeqLen | Fill::Count => width == 1 && axis == Axis::Groups,
                 Fill::CuSeqlens => matches!(axis, Axis::Fixed(n) if n > groups.max),
-                Fill::Tokens => axis == Axis::Groups || (axis == Axis::Tray && width == 1),
+                Fill::Tokens => axis == Axis::Groups || (axis == Axis::Ranks && width == 1),
                 Fill::Error => axis == Axis::Fixed(1) && b.dtype == DType::I32,
                 Fill::Blocks => matches!(axis, Axis::Fixed(n) if n >= 2) && b.dtype == DType::I32,
             };
@@ -289,11 +355,11 @@ impl Protocol {
                     "`{name}` (fill `{fill}`) is shaped {:?}: {}",
                     b.shape,
                     match fill {
-                        Fill::Token => "expected [rows], [tray] (one per row) or [groups] (each sequence's first)",
+                        Fill::Token => "expected [rows], [ranks] (one per row) or [groups] (each sequence's first)",
                         Fill::Position | Fill::Valid | Fill::Slot => "expected [rows]",
                         Fill::SeqLen | Fill::Count => "expected [groups]",
                         Fill::CuSeqlens => "expected [n] with n >= groups + 1",
-                        Fill::Tokens => "expected [groups], [groups, w] or [tray]",
+                        Fill::Tokens => "expected [groups], [groups, w] or [ranks]",
                         Fill::Error => "expected i32 [1]",
                         Fill::Blocks => "expected i32 [members + 1]",
                     }
@@ -302,7 +368,7 @@ impl Protocol {
             }
             fills.push(Filled { name: name.clone(), fill, dtype: b.dtype, axis, width });
         }
-        for (fill, axis) in [(Fill::Token, Axis::Rows), (Fill::Token, Axis::Tray)] {
+        for (fill, axis) in [(Fill::Token, Axis::Rows), (Fill::Token, Axis::Ranks)] {
             let n = fills.iter().filter(|f| f.fill == fill && f.axis == axis).count();
             if n > 1 {
                 errs.push(format!("fill `{fill}` over {axis:?} is on {n} buffers, expected one"));
@@ -316,11 +382,11 @@ impl Protocol {
                 errs.push(format!("fill `{fill}` is on more than one buffer"));
             }
         }
-        if fills.iter().any(|f| f.fill == Fill::Token && f.axis == Axis::Tray) && tray.is_none() {
-            errs.push("a `token` fill spans the tray but no var names the tray batch".into());
+        if fills.iter().any(|f| f.fill == Fill::Token && f.axis == Axis::Ranks) && ranks.is_none() {
+            errs.push("a `token` fill spans the ranks but no var names the rows of every rank".into());
         }
-        if one(Fill::Blocks).is_some() && tray.is_none() {
-            errs.push("fill `blocks` without a var naming the tray batch".into());
+        if one(Fill::Blocks).is_some() && ranks.is_none() {
+            errs.push("fill `blocks` without a var naming the rows of every rank".into());
         }
 
         // Tables: the inputs indexing a state that have no role of their own
@@ -343,7 +409,7 @@ impl Protocol {
                     [Dim::Const(l), Dim::Var(c)] => (*l, c, 1),
                     [Dim::Const(l), Dim::Var(c), Dim::Const(w)] => (*l, c, *w),
                     s => {
-                        errs.push(format!("line table `{name}` is shaped {s:?}, expected [lines, <groups|tray>] or [lines, <groups|tray>, w]"));
+                        errs.push(format!("line table `{name}` is shaped {s:?}, expected [lines, <groups|ranks>] or [lines, <groups|ranks>, w]"));
                         continue;
                     }
                 };
@@ -503,7 +569,7 @@ impl Protocol {
             Ok(Protocol {
                 rows,
                 groups,
-                tray,
+                ranks,
                 context: context_var,
                 fills,
                 page_tables,
@@ -511,6 +577,7 @@ impl Protocol {
                 forwards,
                 once,
                 derive,
+                shards: Shards::of(m),
             })
         } else {
             Err(ProtocolErrors(errs))
@@ -543,14 +610,14 @@ impl Protocol {
     }
 
     /// The var vars of a call: `b` sequences of `rows` rows in all on this
-    /// rank, `tray` rows in the whole tray batch (the sum of its members'
-    /// blocks; this rank's `rows` when it is alone), `context` the call's
+    /// rank, `ranks` rows over every rank of the group (the sum of its
+    /// members' blocks; this rank's `rows` when it is alone), `context` the call's
     /// sequences' lengths once their rows are in, summed (only read into a
     /// context var).
-    pub fn vars(&self, b: u64, rows: u64, tray: u64, context: u64) -> BTreeMap<String, u64> {
+    pub fn vars(&self, b: u64, rows: u64, ranks: u64, context: u64) -> BTreeMap<String, u64> {
         let mut vars = BTreeMap::from([(self.rows.var.clone(), rows), (self.groups.var.clone(), b)]);
-        if let Some(t) = &self.tray {
-            vars.insert(t.var.clone(), tray);
+        if let Some(t) = &self.ranks {
+            vars.insert(t.var.clone(), ranks);
         }
         if let Some(c) = &self.context {
             vars.insert(c.var.clone(), context);
@@ -569,9 +636,9 @@ impl Protocol {
         self.fills.iter().find(|f| f.fill == fill)
     }
 
-    /// The tokens fed, one per row (over this rank's rows or the tray's),
+    /// The tokens fed, one per row (over this rank's rows or the group's),
     /// when the manifest takes any: a pipeline stage past the first does not.
     pub fn token_rows(&self) -> Option<&Filled> {
-        self.filled(Fill::Token, Axis::Rows).or_else(|| self.filled(Fill::Token, Axis::Tray))
+        self.filled(Fill::Token, Axis::Rows).or_else(|| self.filled(Fill::Token, Axis::Ranks))
     }
 }

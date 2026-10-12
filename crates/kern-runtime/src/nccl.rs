@@ -1,7 +1,7 @@
-//! Tray collectives as NCCL: the ops a manifest names `extern:nccl_*`
+//! Rank group collectives as NCCL: the ops a manifest names `extern:nccl_*`
 //! instead of shipping a kernel, one communicator per topology group.
 //!
-//! A tray batch's rows are reduced and gathered across a group by the
+//! A group's batch rows are reduced and gathered across a group by the
 //! library built for the NVLink domain, not by a peer kernel of our own:
 //! for the hundreds of megabytes a prefill chunk moves, NCCL's NVLS path
 //! runs at the link's rate where the Lamport kernel of the decode path
@@ -19,6 +19,10 @@
 //! natural row order straight out of the receive buffer, the tail past the
 //! chunk being rows nobody reads. A reduce-scatter is its inverse: every
 //! rank's `world * count` elements summed, rank `r` receiving block `r`.
+//! An all-to-all is the transpose: rank `r`'s send block `p` lands in rank
+//! `p`'s receive block `r`, `count` elements per peer, issued as one NCCL
+//! group of a send and a receive per peer (its own block included) so it
+//! is one launch to the manifest and one node sequence to a graph capture.
 
 use std::collections::BTreeSet;
 
@@ -68,6 +72,7 @@ pub(crate) enum Coll {
     AllReduce,
     AllGather,
     ReduceScatter,
+    AllToAll,
 }
 
 /// The element type of an `extern:nccl_*` launch.
@@ -106,6 +111,7 @@ pub(crate) fn extern_op(name: &str) -> Option<(Coll, Elem)> {
         "allreduce" => Coll::AllReduce,
         "allgather" => Coll::AllGather,
         "reducescatter" => Coll::ReduceScatter,
+        "alltoall" => Coll::AllToAll,
         _ => return None,
     };
     let elem = match elem {
@@ -151,12 +157,13 @@ impl Runtime {
         // Every channel connects at init: NCCL's default connects a peer the
         // first time a collective needs it, and that first time may be
         // inside a graph capture, where enabling peer access is refused.
-        // The protocol is LL128: in a runtime's process the Simple protocol
-        // returns wrong sums and gathers past ~100 MB while NCCL's own tests
-        // pass at those sizes (docs/lessons.md, 2026-09-18); LL128 is exact
-        // and within 20% of Simple's bandwidth. Either variable set by the
-        // caller wins.
-        for (k, v) in [("NCCL_RUNTIME_CONNECT", "0"), ("NCCL_PROTO", "LL128")] {
+        // The protocols are LL and LL128, never Simple: in a runtime's process
+        // Simple returns wrong sums and gathers past ~100 MB while NCCL's own
+        // tests pass at those sizes (docs/lessons.md, 2026-09-18); LL128 is
+        // exact and within 20% of Simple's bandwidth, and LL is what keeps a
+        // decode-sized allreduce at ~29 us instead of LL128's ~47 (8 ranks
+        // over two trays). Either variable set by the caller wins.
+        for (k, v) in [("NCCL_RUNTIME_CONNECT", "0"), ("NCCL_PROTO", "LL,LL128")] {
             if std::env::var_os(k).is_none() {
                 std::env::set_var(k, v);
             }
@@ -178,7 +185,8 @@ impl Runtime {
 
     /// Issue one collective on the compute stream: `args` as the launch
     /// wired them, `[send, recv, count, rank]`, `count` in elements per
-    /// rank (the block an all-gather sends and a reduce-scatter receives).
+    /// rank (the block an all-gather sends and a reduce-scatter receives)
+    /// or, for an all-to-all, per peer.
     pub(crate) fn collective(&self, coll: Coll, elem: Elem, group: &str, args: &[RVal]) -> Result<()> {
         let [send, recv, count, _] = args else {
             bail!(Manifest, "nccl collective takes [send, recv, count, rank], got {} args", args.len());
@@ -191,6 +199,7 @@ impl Runtime {
             Coll::AllReduce => (n, n),
             Coll::AllGather => (n, n * c.world),
             Coll::ReduceScatter => (n * c.world, n),
+            Coll::AllToAll => (n * c.world, n * c.world),
         };
         if send.bytes < ins * elem.bytes() || recv.bytes < out * elem.bytes() {
             bail!(
@@ -216,11 +225,34 @@ impl Runtime {
                 Coll::ReduceScatter => {
                     result::reduce_scatter(s, r, n as usize, elem.nccl(), sys::ncclRedOp_t::ncclSum, c.comm, stream)
                 }
+                Coll::AllToAll => all_to_all(s, r, n, elem, c, stream),
             }
         }
         .map_err(nccl)?;
         Ok(())
     }
+}
+
+/// One send and one receive of `n` elements per peer inside an NCCL group,
+/// block `p` of `s` to peer `p` and peer `p`'s block into block `p` of `r`.
+unsafe fn all_to_all(
+    s: *const std::ffi::c_void,
+    r: *mut std::ffi::c_void,
+    n: u64,
+    elem: Elem,
+    c: &Comm,
+    stream: sys::cudaStream_t,
+) -> std::result::Result<result::NcclStatus, result::NcclError> {
+    let block = (n * elem.bytes()) as usize;
+    result::group_start()?;
+    let issued = (0..c.world).try_for_each(|p| {
+        let off = p as usize * block;
+        result::send(s.byte_add(off), n as usize, elem.nccl(), p as i32, c.comm, stream)?;
+        result::recv(r.byte_add(off), n as usize, elem.nccl(), p as i32, c.comm, stream).map(|_| ())
+    });
+    let ended = result::group_end();
+    issued?;
+    ended
 }
 
 /// Connect group `group` across `rts`, every rank of it in this process:
@@ -245,6 +277,7 @@ mod tests {
         assert_eq!(extern_op("nccl_reducescatter_bf16"), Some((Coll::ReduceScatter, Elem::Bf16)));
         assert_eq!(extern_op("nccl_allgather_u8"), Some((Coll::AllGather, Elem::U8)));
         assert_eq!(extern_op("nccl_allgather_i32"), Some((Coll::AllGather, Elem::I32)));
+        assert_eq!(extern_op("nccl_alltoall_bf16"), Some((Coll::AllToAll, Elem::Bf16)));
         assert_eq!(
             (extern_op("nccl_reduce_f32"), extern_op("nccl_allreduce_f16"), extern_op("cublas_bf16_tn_f32")),
             (None, None, None)

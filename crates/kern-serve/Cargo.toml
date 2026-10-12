@@ -22,6 +22,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 vllm-chat.workspace = true
+vllm-tokenizer = { workspace = true, features = ["test-utils"] }
 
 [lints]
 workspace = true

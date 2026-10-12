@@ -98,7 +98,7 @@ fn random_manifest(r: &mut Rand) -> Manifest {
     let uses_state = named.contains("\"state\"");
     Manifest::from_json(
         &json!({
-            "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 4}},
+            "schema_version": 7, "model": "t", "vars": {"tokens": {"max": 4}},
             "states": if uses_state { json!({"s": {"bytes_per_token": 16}}) } else { json!({}) },
             "buffers": buffers, "modules": {}, "ops": ops,
             "programs": {
@@ -279,4 +279,14 @@ fn a_cut_says_why_it_cannot_be_made() {
     for at in [vec![], vec![0], vec![5, 5], vec![n]] {
         assert!(cut(&qwen3(), &at).is_err(), "{at:?}");
     }
+}
+
+#[test]
+fn a_sharded_manifest_is_never_cut() {
+    // A shard names a topology group, and a pipeline stage is one rank:
+    // states split over a group stay whole manifests (the decode side of a
+    // P/D split), and a cut refuses them before looking at a call.
+    let m = verify(Manifest::from_json(include_str!("fixtures/dealt.json")).unwrap()).unwrap();
+    let errs = cut(&m, &[1]).expect_err("a sharded manifest is cut").0;
+    assert!(errs.iter().any(|e| e.contains("a cut takes a single-rank manifest")), "{errs:#?}");
 }

@@ -203,6 +203,7 @@ fn seq_slots_and_lines() {
     assert_eq!(p.lease(16).unwrap_err(), Denied::Busy);
     // Line r of a slot: slot × 3 + r; the null line 0 belongs to no lease.
     assert_eq!(a.seq_line("line_index", 2).unwrap(), sa * 3 + 2);
+    assert_eq!(a.seq_line_row("line_index").unwrap(), [sa * 3, sa * 3 + 1, sa * 3 + 2]);
     assert_eq!(a.seq_lines("line_index").unwrap(), 3);
     assert!(a.seq_line("line_index", 3).is_err());
     assert_ne!(a.seq_line("line_index", 0).unwrap(), 0);
@@ -475,7 +476,7 @@ fn slot_only_leases_move_the_slot_alone() {
 fn a_long_chain_drops_without_recursion() {
     let m = Manifest::from_json(
         r#"{
-        "schema_version": 5, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
+        "schema_version": 7, "model": "t", "vars": {"tokens": {"max": 8}, "seqs": {"max": 2}},
         "states": {"kv": {"bytes_per_token": 1}},
         "buffers": {
             "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 200000], "domain": {"index_into": "kv", "stride": 1}}

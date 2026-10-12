@@ -170,7 +170,7 @@ wbig / wsm / w_f_b / cw / dt_bias / a_log / w_o 按 24 头一卡切开（当时�
 四卡复制批、`--fork 12`（每卡都 fork）都过；步时 4 层 B=1 1.723 → **1.420 ms**、
 B=8 2.176 → **1.633 ms**——3 个 KDA 层的投影权重每卡少读 3/4，已经盖过了
 collective 的开销。随之改的契约：manifest 的 seq slot 数跟 `rows` 界走（每卡持有
-tray 批每一行的 state 分片），否则 4 卡各租 4B 行时 pool 一开始就在 remap。
+组 batch 每一行的 state 分片），否则 4 卡各租 4B 行时 pool 一开始就在 remap。
 
 第三块（tray07，shared expert / dense FFN 按列切）：wsh / wgu 的 gate、up 各切行，
 sh_down / w_dn 切列，down 的 partial 走 allreduce，每层一次（lat_up 复制不切：它的
@@ -185,7 +185,7 @@ fixture）：B=1 108/128（EP4 111/128）、B=8 mixed 113/128（EP4 110/128）�
 "uted"↔"used"、" framing"↔" own"），没有乱码；行间无串扰，collective 无超时。步时
 分短上下文（40 步 fixture，E2b 的 29.3 / 35.3 / 48.3 是这个口径）和 12.9k 上下文：
 
-| 每 rank B | tray 行 | EP4 短 ctx | **EP4×TP4 短 ctx** | EP4 12.9k | EP4×TP4 12.9k |
+| 每 rank B | 组 batch 行 | EP4 短 ctx | **EP4×TP4 短 ctx** | EP4 12.9k | EP4×TP4 12.9k |
 |---:|---:|---:|---:|---:|---:|
 | 1 | 4 | 29.3 | **20.8** | 31.5 | 23.1 |
 | 8 | 32 | 35.3 | **25.5** | 42.3 | 35.6 |
@@ -222,14 +222,14 @@ MNNVL、vLLM `custom_all_reduce`、FlashInfer `mixed_comm`、NCCL device API、D
 
 移植成 `tools/kernels-src/peer_allreduce.cu`，改了四处：workspace 表拆成三个 peer 数组
 + 一个本地 carry；own-rows-first 的行旋转——one-shot 发送端按接收方的本地行号写，
-two-shot 按 **tray 行号**给 cluster 分派（它的 barrier 是 block b 对每个 peer 的 block b
-配对，不是全网格，同一 tray 行在各 rank 必须由同一个 cluster 处理，第一版按本地行分派
+two-shot 按 **组 batch 行号**给 cluster 分派（它的 barrier 是 block b 对每个 peer 的 block b
+配对，不是全网格，同一组 batch 行在各 rank 必须由同一个 cluster 处理，第一版按本地行分派
 就读到了零）；two-shot 的切片改成"自己的行"、在 kernel 里算；spin 加超时写 `tp_err`。
 Lamport 三级缓冲要预填 -0.0，manifest 多一个 `tp_init` program，`k3_golden` 在
 `import_peers` 后跑一次。`peer_collective.rs` 三个 allreduce 同输入并排（tray03，grid 152
 × 224 线程，cluster 8）：
 
-| tray 行 | 4 | 16 | 24 | 32 | 64 | 96 | 128 | 256 |
+| 组 batch 行 | 4 | 16 | 24 | 32 | 64 | 96 | 128 | 256 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | LL one-shot（旧） | 5.2 | 8.3 | 11.9 | 14.1 | 24.9 | 35.7 | 46.0 | 90.3 |
 | **TRT one-shot** | **5.1** | **6.4** | **8.2** | **9.3** | **15.0** | **21.3** | **27.9** | 54.0 |
@@ -273,17 +273,53 @@ FlashInfer 的 `trtllm_mnnvl_allreduce` 都是小消息的低延迟路径，对�
 同级：manifest 一个 launch `[send, recv, count, {"rank": g}]`（`nccl_{allreduce,allgather,
 reducescatter}_{f32,bf16,i32,u8}`；allgather 按 rank 序放 `count` 元素，reducescatter 是它的逆），
 runtime 按 topology 组建 communicator（`nccl.rs`），driver 装载后 `connect_nccl` / `join_nccl`。
-prefill-only 形态的两个 collective 走它（下节）；decode tray 批（≤192 行）仍走 Lamport 核。
+prefill-only 形态的两个 collective 走它（下节）；decode 组 batch（≤192 行）仍走 Lamport 核。
 `tp_err` / 自旋超时在 NCCL 路径上没有对应（NCCL 默认挂死），先不管（用户定）。
 
 runtime 在 `join_nccl` 钉两个 NCCL 变量（调用者设了就不动）：`NCCL_RUNTIME_CONNECT=0`——默认的
 懒连接会落在图捕获里，`cudaDeviceEnablePeerAccess` 在捕获中被拒（`kern bench` 第一次就撞上）；
-`NCCL_PROTO=LL128`——**Simple 协议在 kern 的进程里给出错的 sum / gather**（93 层 0/2、logits
+`NCCL_PROTO=LL,LL128`（2026-10-09 前只钉 LL128，小消息因此贵了一截，见下节）——**Simple 协议在 kern 的进程里给出错的 sum / gather**（93 层 0/2、logits
 退化），二分表在 demo 的 `results/kern/93l/README.md`：与 NVLS、算法、进程内 direct 指针、分配方式
 （stream-ordered pool 换 `cuMemAlloc`）、库版本（2.31.2 / 2.30.7）都无关，LL / LL128 全对，而
 NCCL 自带的 `all_reduce_perf -g 4`（同样单进程四卡）在 1 MB–2 GB 与本块的精确尺寸上 Simple 全
-对（512 MB：Simple 419 GB/s，LL128 331）。根因未找到，记在 roadmap；钉 LL128 的代价约每
+对（512 MB：Simple 419 GB/s，LL128 331）。根因未找到，记在 roadmap；不许 Simple 的代价约每
 470 MB 0.2 ms。lessons.md 有这一条。
+
+### 跨 tray 的 all-to-all 与小消息 allreduce（2026-10-09，tray08 + tray09）
+
+`extern:nccl_alltoall_{bf16,f32}`：一个 NCCL group 里每个 peer 一对 send / recv（含自己），
+`[send, recv, count_per_peer, {"rank": g}]`。门禁是 `crates/kern-runtime/examples/cross_collective.rs`：
+8 进程（一卡一个，tray08 4 + tray09 4，NCCL 走 `P2P/MNNVL`），每 rank 0.3–8 MiB，每个尺寸、每种类型
+eager 100 次加图回放 100 次，每次换一份图样、逐字节比对，全对；先捕图后 eager 的顺序（`--capture-first`）
+也对。延迟（捕获 burst，每次调用）：
+
+| 每 rank | 每 peer | bf16 µs | f32 µs | 出 rank GB/s |
+|---|---|---|---|---|
+| 0.3 MiB | 39 KB | 16.9 | 16.8 | 16 |
+| 1 MiB | 128 KB | 18.0 | 17.9 | 51 |
+| 2 MiB | 256 KB | 19.8 | 19.8 | 93 |
+| 4 MiB | 512 KB | 24.4 | 24.3 | 150 |
+| 8 MiB | 1 MiB | 32.4 | 32.5 | 226 |
+
+**点对点的协议不听 `NCCL_PROTO`**：runtime 钉的 LL128、`Simple`、`LL` 三种设置延迟逐位相同；只有
+`NCCL_P2P_LL_THRESHOLD`（缺省 16 KB）动它。门禁尺寸每 peer ≥ 39 KB，所以缺省走的就是 Simple——
+2026-09-18 那条 Simple 算错的 collective 不在点对点上复现（≤ 8 MiB）；阈值调到 4 MiB 强制 LL
+同样 200 轮全对，但 1 MiB/peer 慢到 55.9 µs。另：NCCL 在图捕获里注册用户 buffer 失败
+（`ncclCuMemGetAddressRange` invalid argument，NCCL_DEBUG=WARN 才看得见），退回不注册的路径，结果不受影响。
+
+同一个例子给 decode 的 allreduce 选项排了表（8 rank 跨两 tray，f32 `[rows, 7168]`，每种都先逐元素验过）：
+
+| rows | 字节 | NCCL f32（只许 LL128） | NCCL f32（`LL,LL128`，RING/LL） | Lamport one-shot | two-shot |
+|---|---|---|---|---|---|
+| 1 | 28 KB | 46.8 | 28.8 | **7.2** | 22.3 |
+| 8 | 229 KB | 49.3 | 28.9 | **8.8** | 22.8 |
+| 16 | 459 KB | 49.6 | 29.1 | **11.0** | 24.8 |
+| 24 | 688 KB | 55.6 | 29.4 | **15.6** | 27.1 |
+| 36 | 1.03 MB | 56.3 | 30.4 | **19.7** | 27.8 |
+
+`peer_allreduce.cu` 只要 `-DNRANKS=8` 重编：fabric handle 跨 tray 照样映射，one-shot 在 1 MB 以内比 NCCL
+最快的 RING/LL 快 1.5–4 倍（M2 量的 SGLang 是 31–34 µs，与 LL 可选一列相符）。只许 LL128 时小消息
+贵出 18–26 µs/次，所以 `join_nccl` 的钉法从 `LL128` 放宽到 `LL,LL128`（Simple 仍禁）；两列都逐元素验过。
 
 ### GPU 自提交
 
@@ -299,7 +335,8 @@ NCCL 自带的 `all_reduce_perf -g 4`（同样单进程四卡）在 1 MB–2 GB 
 
 - `Runtime` = 一个 CUDA context、一个 stream、一份 manifest、一套
   buffer/state、一组图。**没有 rank 的概念以外的任何多卡知识。**
-- 一个 caller 线程驱动它的全部 runtime（一 tray 4 个），顺序 launch。
+- kern-serve 一卡一进程、一进程一个 runtime（2026-10-09 起，serve.md「每卡一个进程」）；
+  harness（`k3_golden`）仍是一个线程顺序 launch 一台机器上的全部 runtime。
 - 跨 rank 的一切同步都发生在 kernel 里（release/acquire flag、原子计数
   器），host 不参与 step 内的任何同步。
 - manifest 是 SPMD 的：**一份 manifest，全部 rank 共用**，rank 是 load 时
@@ -416,7 +453,7 @@ allreduce 用 tp 组、dispatch 用 ep 组，同一份 manifest。组的成员�
 
 ### 最终形态（2026-09-03 定）
 
-一句话：**tray 是一个 batch，权重按头切，只有 MLA 的 KV 按行归各卡。** 逐张量：
+一句话：**tp 组是一个 batch，权重按头切，只有 MLA 的 KV 按行归各卡。** 逐张量：
 
 | 东西 | 切法 | 为什么 |
 |---|---|---|
@@ -437,7 +474,7 @@ manifest、同一条 launch 列表，区别只在 rank 索引到的数据——�
 地板 ~30 → ~18 ms，步 52 → ~40 ms，或固定步时下 B 16 → 24。
 
 代价：一个 session 的 KDA state 分在四张卡上，checkpoint / park / wake / fork 变成
-tray 级对象（四卡各存各的那份，同一把 `Lease` 编号）；runtime 已是一 tray 一进程，
+组级对象（四卡各存各的那份；kern-serve 的 head 用一个 `Row` 拿着四卡各自的 `Lease`），
 是自然的推广。collective 不进 `crates/`：和 E1 的 dispatch 一样，是读 peer 数组的
 kernel。
 
@@ -449,10 +486,10 @@ CP 只管长 prefill 时谁算哪段新 token，与这张表无关（K4 / K5 另
 已按 chunk 捕图，一次 launch 1–2 µs 对应几十 ms GPU；余数块 eager 630 µs
 host 也远小于 GPU 时间——只要提交前不 sync 就被藏掉。TP 下同样。
 
-### Prefill-only 的 tray 形态（`gen_k3.py --tp R --chunk N`，2026-09-18）
+### Prefill-only 的组形态（`gen_k3.py --tp R --chunk N`，2026-09-18）
 
-TTFT 导向的 prefill 服务（RSI demo，roadmap "K3 prefill" 线）不要 decode tray 批：
-manifest 只有 `prefill` 一条 program，tray 的 R 张卡喂**同一段 chunk、行序不变**。
+TTFT 导向的 prefill 服务（RSI demo，roadmap "K3 prefill" 线）不要 decode 组 batch：
+manifest 只有 `prefill` 一条 program，组里的 R 张卡喂**同一段 chunk、行序不变**。
 切法就是 vLLM / SGLang 的 TP + EP，只把 Megatron 的 allreduce 拆成 reduce-scatter +
 all-gather（sequence parallel），让 attention 之外的一切只算自己那份行（`--tp 1` 是同一
 形态去掉 collective：每卡各喂各的序列）：
@@ -483,6 +520,63 @@ SGLang TP4 pruned nightly 同形状 678 ms（1.15×）；此前按行切 + f32 a
 kernel 中位数之和 794 ms：MegaMoE 231（29%）、cuBLAS f32-out GEMM 201（25%）、FlashKDA 103（13%）、
 reduce-scatter 52 + all-gather 36（11%）、bf16-out GEMM 41、FMHA 30（3.8%）、残差 elementwise ~50。
 下一刀是 MoE（SGL 用 fp8 grouped GEMM）和 f32 输出的 GEMM。
+
+### prefill → decode：把页与 slot 推进另一个进程的 state（2026-10-09）
+
+prefill 一个 prompt 之后，流水线的每一级把自己那些层的 KV 页和 per-seq slot 拷进 decode
+rank 的 state（`crates/kern-runtime/src/push.rs`）。难点在 pooled state 不是一块分配：
+它是一段保留一次的地址，背后是所有 pooled state 共用、remap 线程在页与 slot 之间搬的物理块
+（K1b）。所以导出的是**块**而不是 state：
+
+- `Runtime::export_pool() -> PoolHandle`：每个物理块的 handle（设备支持就是 fabric，否则
+  `Local`，与 `alloc_vmm` 同一套回退；物理块从此按 fabric 类型 `cuMemCreate`）+ 每个 pooled
+  state 的名字、类别、每页 / 每 slot 字节、保留的块位置数；`to_bytes` / `from_bytes` 是线格式。
+- `Runtime::placement() -> Placement`（`kern-pool`）：每个块位置上是哪个块。pusher 的
+  `map_pool(&handle)` 导入全部块、每个 state 保留同样大小的地址、什么都不 map；`place(&mut mirror,
+  &placement)` 跑"旧 placement → 新 placement"的 `Remap`（变了的位置先 unmap 再 map 再 access），
+  于是镜像里第 p 页 / 第 j 个 slot 的偏移与目标完全相同。
+- 契约：push 只写目标**持有**的对象（它租下的页和 slot），且镜像用的是这次 lease **之后**取的
+  placement。remap 只从没人持有的对象上拆块，所以持有着的对象一直在那份 placement 说的地方
+  （`kern-pool/tests/placement.rs` 的 property test：镜像按 remap 跟随池子，持有对象的块在任何
+  remap 之后不动）。别的写法（没租的、placement 之后才租的）是未定义：未映射的位置 fault，过期的
+  位置写进别的对象。目标的 lease 在自己的 stream 上清零 slot，所以目标在 stream 过了 lease 之后
+  才把 ids 和 placement 发出去；只有 `remaps()` 动了才需要发新 placement。
+- `push_pages(state, &[(src, dst)], &mirror)`：连续的对用 `kern_pool::runs`（与 host 层同一个
+  函数）折成一次 memcpy；`push_slot(state, src, dst, &mirror)` 整 slot 一次 memcpy；
+  `push_slot_part(state, src, dst, &split, k, &mirror)`：目标按头把 state 切给 tp 组 `of` 个成员
+  时只推成员 k 那份。manifest 只声明 slot 字节和 line 表的 stride，不声明 line 里面长什么样，
+  所以切法由调用方给（生成器的知识）：`Split::new(&[(rows, width), ..], of)`——一条 line 是若干段
+  首尾相接，每段 `rows` 行 `width` 字节、最外维是头（KDA 的递推 `[96,128,128]` f32 是 1 行，三个
+  conv 窗 `[3][96·128]` bf16 是 9 行）；成员 k 拿每行的第 k 个 `width/of`，自己的 line 是同样的段
+  `width/of` 宽。每段每行一次 2D 拷贝覆盖全部 line（K3：10 次，源 pitch 整 line、目标 pitch 成员
+  line）。`Split::ranges` 是按字节的定义，`tests/push.rs` 穷举 1–4 成员、1–3 段、1–3 line：各成员的
+  源恰好铺满 slot，每个成员的目标恰好铺满它的 slot。
+- `push_rows(state, &deal, &mirror)`：目标组按位置分片（`by: position`，`kern_pool::Interleave`）时
+  推的是行不是页：成员 m 拿序列的第 m, m+w, … 行，排进自己的页。`kern_pool::deal` 把它折成
+  `RowRun`，runtime 用自带的 gather 核一次 launch 推完一个成员的一个 state（与 hold / flag 一样
+  是内嵌 PTX）：219k token、8 成员时一段约 8 万个 8 行的 run，逐 run 调拷贝光 host 就要 0.2–0.4 s。
+  run 按 `Rows::PIECE`（64 KiB）切块、一块一个 block（`Rows::dealt`，host 测试对逐行定义），页相邻
+  折成一条长 run 时也铺得满设备；块表放在 mapped pinned 内存里由核直接读，launch 后取一个 mark，
+  表在 mark 过了之后才复用——发射线程上不 free、不等。行字节两边必须相同（`PoolHandle` 带页的
+  行数，镜像据此算对端行宽），且是 16 的倍数（核按 16 字节搬）；deal 越出任一侧 arena 即拒。
+  门禁 `push_states --rows`（3 个 1152 B/行 state、64 行页，每成员一个 runtime；2026-10-09 tray08
+  GPU 2→3 同进程与跨进程、tray08 GPU 2→tray09 GPU 2 跨 tray）：w=1/3/8、源页打散与相邻、两侧末页
+  不满，读回逐字节同且份外的尾行不动。`--bench`：219000 token × 3 层发给 8 成员（757 MB，24 次
+  launch），页相邻 1.31 ms（579 GB/s，发射 0.15 ms），打散（每成员 3422 条 8 行 run）1.52 ms（498 GB/s，
+  发射 0.71 ms），20 次中位数；同 tray 与跨 tray 数字一样。
+- 都在 pusher 的 compute stream 上，之后取的 `Mark` 说什么时候落地。
+
+门禁 `crates/kern-runtime/examples/push_states.rs`（toy-stateful：64 KiB 页、1 MiB slot、64 MiB 块；
+tray03 GPU 2，2026-10-09）：同进程三个 runtime——A 推 6 对页（`(3,5,8..12) → (1..7)`，折成 3 次拷贝，
+连续 4 页一次）、整 slot 进 B，4 个成员各自那份进 C（每份 256 KiB、5 次 2D 拷贝 × 2 line）；B 读回
+393216 + 1048576 字节、C 读回 4 × 262144 字节逐字节相同，B 没推的页仍是零；然后 B 租 64 个 slot
+直到一个页块搬进 slot arena（59 次 remap），A 重新 place 后推进这个新 slot，B 再推回 A、A 读回
+1048576 字节相同。fabric 与 `KERN_NO_FABRIC=1` 两条路都过。`--cross` 把目标放进第二个进程（线格式
+走文件）：map + place 0.4 ms，262144 + 1048576 字节相同。目标在另一张卡 / 另一个 tray 由上面
+`--rows` 的门禁走过（块镜像跨卡、跨 tray）。
+
+代价：fabric 类型的块 `cuMemCreate` 慢 ~5×（tray03 GPU 2）：qwen3-4b 207 GiB / 3312 块 64 MiB
+60 → 246 ms；toy-big 244 GiB / 125000 块 2 MiB 3.1 → 16.6 s。真模型的块都是 24–64 MiB，差在几百 ms。
 
 ### 故障模型
 
@@ -535,7 +629,8 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
 
 ## 已决（2026-09-02）
 
-1. **进程拓扑：一进程一 tray**（4 runtime，1 线程）。故障域本来就是 tray。
+1. **进程拓扑：一卡一进程**（2026-10-09 改；原定一进程一台机器、4 runtime 1 线程）：rank 0 的
+   head 记全部 rank 的账，其余 rank 只执行（serve.md「每卡一个进程」）。
 2. **控制通道：纯 GPU 内存。** follower 没有 host 路径（见"执行模型"）；TCP 只在
    启动 / 成员变更 / 故障时用。
 3. **故障模型：spin 带超时**，错误码经 carry buffer 回 host（见"故障模型"）。
@@ -549,7 +644,7 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
 8. **MoE 通信 = DeepGEMM MegaMoE**（pegainfer 的 AOT fork，一层一个 launch），源码级
    对比见 `moe-comm-survey.md`。TRT one-sided 作为 fallback 的事以后再说；不自写，NCCL
    不作为 extern 保留。
-10. **decode 分片形态 = tray 一个 batch，dense / KDA 权重按头 TP4，MLA KV 按行归各卡，
+10. **decode 分片形态 = tp 组一个 batch，dense / KDA 权重按头 TP4，MLA KV 按行归各卡，
    expert EP32**（2026-09-03，见"最终形态"）。attention-TP 不做；P 池不做。
 9. **K3 decode 核来源 = pegainfer 认证核集，不从 vLLM 挖。** vLLM 的 K3 路径
    （fused_kda_decode / flashinfer-trtllm MLA / DeepGEMM / torch.compile）拆不出可

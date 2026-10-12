@@ -41,7 +41,7 @@ fn main() -> Result<()> {
     let manifest = std::fs::read_to_string(manifest.context("--manifest")?)?;
     let verified = Verified::from_json(&manifest)?;
     let has_topology = verified.topology.is_some();
-    let capacity = Some(Capacity { tokens: Some(kern_pool::page_unit(&verified)), seqs: 1 });
+    let capacity = Some(Capacity { tokens: Some(kern_pool::page_unit(&verified)), seqs: 1, landings: 0 });
     let mut rt = Runtime::load(&verified, kernels.as_deref(), gpu, capacity, has_topology.then_some(&topo))?;
     Weights::parse(&weights)?.bind(&mut rt)?;
     let names: Vec<(String, u64)> = rt

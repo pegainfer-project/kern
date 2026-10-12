@@ -30,7 +30,7 @@ use crate::error::{bail, cuda_check};
 use crate::lease::Remaps;
 use crate::peers::PeerSlot;
 use crate::weights::{Blob, Tensors};
-use crate::{compile, cubin, derive, weights, Capacity, Error, Result, Runtime, Topology, HEADROOM};
+use crate::{compile, cubin, derive, weights, Budget, Capacity, Error, Result, Runtime, Topology, HEADROOM};
 use kern_pool::{chunks_for, page_unit, Kind, Pool};
 
 impl Runtime {
@@ -201,6 +201,15 @@ impl Runtime {
             }
         }
 
+        let arriving = |b: &Buffer| b.export && matches!(b.kind, BufferKind::Input | BufferKind::Inout);
+        let mut landings = BTreeMap::new();
+        for (name, _) in manifest.buffers.iter().filter(|(_, b)| arriving(b)) {
+            for slot in 0..capacity.map_or(0, |c| c.landings) {
+                let twin = alloc_vmm(&stream, dev, buffers[name].bytes, &format!("landing {slot} of `{name}`"))?;
+                landings.insert((name.clone(), slot), twin);
+            }
+        }
+
         // Op scratch is allocated here, at var max, like the buffers.
         let resolved = compile::resolve_ops(&manifest, &modules, kernels_dir, &stream, &blt, &vars_max)?;
 
@@ -255,7 +264,7 @@ impl Runtime {
         let t0 = std::time::Instant::now();
         let (pool, initial) = Pool::new(&manifest, chunk, chunks, first_slots as usize, tokens)?;
         let planned = t0.elapsed();
-        let physical = Physical::create(dev, chunk as usize, chunks as usize)?;
+        let physical = Arc::new(Physical::create(dev, chunk as usize, chunks as usize)?);
         let created = t0.elapsed() - planned;
         let mut arenas = Vec::with_capacity(pool.pooled().len());
         for a in pool.pooled() {
@@ -268,7 +277,7 @@ impl Runtime {
             states.insert(a.state.clone(), buf);
             arenas.push(arena);
         }
-        let mut mapper = Mapper::new(arenas, physical);
+        let mut mapper = Mapper::new(arenas, Arc::clone(&physical));
         let t1 = std::time::Instant::now();
         mapper.run(&initial)?;
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
@@ -301,6 +310,7 @@ impl Runtime {
         let mut rt = Runtime {
             host_weights_ready: !manifest.buffers.values().any(|b| b.placement == Placement::Host),
             signals: crate::exec::Signals::load(&ctx, gpu)?,
+            gather: crate::push::Gather::load(&ctx)?,
             manifest,
             filled,
             kept,
@@ -314,7 +324,9 @@ impl Runtime {
             provision,
             pool: Arc::new(pool),
             remaps,
+            chunks: physical,
             remap_count: 0,
+            budget: Budget { chunk, chunks, first_slots: first_slots as usize, tokens },
             buffers,
             states,
             staging,
@@ -329,6 +341,7 @@ impl Runtime {
             ranks,
             peers,
             imports: Vec::new(),
+            landings,
             compare: Default::default(),
             joins: [join_event()?, join_event()?],
             derivation: Some(derivation),

@@ -1,0 +1,31 @@
+{
+  "schema_version": 7, "model": "t",
+  "vars": {"tokens": {"max": 8, "axis": "rows"}, "seqs": {"max": 8, "axis": "groups"}},
+  "topology": {"groups": {"tp": 4}},
+  "states": {
+    "kv.0": {"bytes_per_token": 16, "shard": {"group": "tp", "by": "position"}},
+    "kv.1": {"bytes_per_token": 16, "shard": {"group": "tp", "by": "position"}},
+    "kda": {"bytes_per_seq": 24, "shard": {"group": "tp", "by": "heads", "segments": [[1, 64], [2, 16]]}}
+  },
+  "buffers": {
+    "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token"},
+    "slot_mapping": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "domain": {"index_into": "kv.0"}, "fill": "slot"},
+    "seq_lens": {"kind": "input", "dtype": "i32", "shape": ["seqs"], "fill": "seq_len"},
+    "block_table": {"kind": "input", "dtype": "i32", "shape": ["seqs", 3], "domain": {"index_into": "kv.0", "stride": 16}},
+    "kda.line_index": {"kind": "input", "dtype": "i32", "shape": [3, "seqs"], "domain": {"index_into": "kda", "stride": 8}},
+    "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"], "fill": "tokens"},
+    "tp_err": {"kind": "output", "dtype": "i32", "shape": [1], "fill": "error"}
+  },
+  "modules": {},
+  "ops": {
+    "step": {
+      "params": ["in buffer<i64>", "in buffer<i64>", "in buffer<i32>", "in buffer<i32>", "in buffer<i32>", "inout state", "inout state", "inout state", "out buffer<i64>", "out buffer<i32>"],
+      "impl": {"launches": [{"entry": "extern:x"}]}
+    }
+  },
+  "programs": {
+    "decode": {"batch": {"groups": 8, "rows": 1}, "calls": [
+      {"op": "step", "args": [{"buf": "token_ids"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"buf": "block_table"}, {"buf": "kda.line_index"}, {"state": "kv.0"}, {"state": "kv.1"}, {"state": "kda"}, {"buf": "next_token"}, {"buf": "tp_err"}]}
+    ]}
+  }
+}

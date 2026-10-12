@@ -15,8 +15,8 @@ layer is `l<i>.`, the stage's own calls `embed`, `in.`, `out.` ...), then
 slices `load` and `derive` back to the calls the kept ones read from and
 drops every buffer, op and module nothing kept names.
 
-Two migrations bring the stage, made against kern b43bb5a, to the current
-schema: its vars say which axis of a call they count, and `span_at` (the
+Two migrations bring the stage, made against kern b43bb5a, to schema 7:
+its vars say which axis of a call they count, and `span_at` (the
 row a span started at, always 0 in a chunk program) becomes a carry `load`
 fills with 0, since the fill it named is gone.
 """
@@ -25,10 +25,11 @@ import pathlib
 import sys
 
 
-AXES = {"tokens": "rows", "seqs": "groups", "rows": "tray"}
+AXES = {"tokens": "rows", "seqs": "groups", "rows": "ranks"}
 
 
 def migrate(m):
+    m["schema_version"] = 7
     for v, axis in AXES.items():
         m["vars"][v]["axis"] = axis
     m["buffers"]["span_at"] = {"dtype": "i32", "shape": [1], "kind": "carry"}

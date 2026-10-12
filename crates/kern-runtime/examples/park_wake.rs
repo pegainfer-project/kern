@@ -48,10 +48,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let unit = kern_pool::page_unit(&m) as usize;
     let pages = tokens.div_ceil(unit);
     let capacity = ((pages + 1) * unit) as u64;
-    let mut rt =
-        Runtime::load(&m, Some(&kernels), gpu, Some(kern_runtime::Capacity { tokens: Some(capacity), seqs: 4 }), None)?;
+    let mut rt = Runtime::load(
+        &m,
+        Some(&kernels),
+        gpu,
+        Some(kern_runtime::Capacity { tokens: Some(capacity), seqs: 4, landings: 0 }),
+        None,
+    )?;
     let t = Instant::now();
-    rt.reserve_host(host_gib << 30)?;
+    let (host_pages, host_slots) = rt.host_units(host_gib << 30, tokens as u64);
+    rt.reserve_host(host_pages, host_slots)?;
     println!("host tier {host_gib} GiB reserved in {:.2} s", t.elapsed().as_secs_f64());
 
     // Every pooled state, its bytes per page (0: per-seq) and per slot.
@@ -83,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             drop(rt.checkpoint(&mut lease, k * unit)?);
         }
     }
-    let cp = rt.checkpoint(&mut lease, tokens)?;
+    let (cp, _) = rt.checkpoint(&mut lease, tokens)?;
     drop(lease);
     rt.synchronize()?;
 

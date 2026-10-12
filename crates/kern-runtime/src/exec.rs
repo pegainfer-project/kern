@@ -16,7 +16,7 @@
 //! batched decode keeps one per bucket) and per-step H2D writes stay
 //! outside the graph.
 //!
-//! Ranks whose kernels wait on each other (an EP dispatch, a tray
+//! Ranks whose kernels wait on each other (an EP dispatch, a group
 //! collective) must all be issued before any is waited for: `enqueue` or
 //! `issue` each, then [`Runtime::synchronize`] each.
 //!
@@ -348,7 +348,7 @@ impl Runtime {
 
     /// Issue one program's launches onto the stream and return without
     /// waiting. Ranks whose kernels wait on each other (an EP dispatch, a
-    /// tray collective) must all be issued before any is waited for:
+    /// group collective) must all be issued before any is waited for:
     /// `enqueue` each, then [`Runtime::synchronize`] each.
     pub(crate) fn enqueue(&self, program: &str, vars: &BTreeMap<String, u64>) -> Result<()> {
         self.require_ready()?;

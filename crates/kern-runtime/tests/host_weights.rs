@@ -26,7 +26,7 @@ fn checkpoint() -> Vec<u8> {
 #[ignore = "requires a CUDA GPU"]
 fn mapped_weight_rectangle_replay_shared_scope_and_guards() {
     let manifest = serde_json::json!({
-        "schema_version": 5, "model": "host-weight-test", "vars": {}, "states": {},
+        "schema_version": 7, "model": "host-weight-test", "vars": {}, "states": {},
         "buffers": {
             "a": {"kind": "input", "dtype": "bf16", "shape": [16, 16]},
             "w": {"kind": "weight", "placement": "host", "dtype": "bf16", "shape": [16, 16],
@@ -46,7 +46,7 @@ fn mapped_weight_rectangle_replay_shared_scope_and_guards() {
     let dir = std::env::temp_dir().join(format!("kern-host-weight-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let scope = HostWeights::new();
-    let capacity = Some(Capacity { tokens: Some(1), seqs: 1 });
+    let capacity = Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 });
     let mut first = Runtime::load_with_host_weights(&verified, Some(&dir), 0, capacity, None, &scope).unwrap();
     let mut second = Runtime::load_with_host_weights(&verified, Some(&dir), 0, capacity, None, &scope).unwrap();
     assert_eq!(scope.allocated_bytes().unwrap(), 512);

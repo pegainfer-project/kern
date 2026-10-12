@@ -34,7 +34,7 @@ call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scr
 per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`kern-pool`：`chunks.rs` 记块，
 `pages.rs` 的 `Pool` 在其上记页与 slot）。每个这样的 state 保留一段虚拟地址
 （`cuMemAddressReserve`，一次保留永不搬，`DeviceBuf::Reserved`），页与 slot 各是
-地址上的一段块区间；物理块 `cuMemCreate` 一次建齐，块大小是 2 MiB 粒度的整数倍、
+地址上的一段块区间；物理块 `cuMemCreate` 一次建齐（设备支持就带 fabric handle，另一个进程可以镜像整个池、往持有的页和 slot 里推，见 multi-gpu.md「prefill → decode」），块大小是 2 MiB 粒度的整数倍、
 不超过最小对象的一半、封顶 64 MiB（qwen3.8 24 MiB）；最小对象连两个粒度都不到时
 「对象跨两块」本就不成立，直接取封顶 64 MiB（qwen3-4b / K3 / DSV4.1）——driver 对池子
 的每个操作按块数计费且全 tray 串行，DSV4.1 的 102 GiB 从 52245 块 13–16 s 降到 1632
@@ -99,7 +99,7 @@ state），纯 KV 模型可以分在任何位置。和 `lease_from` 是同一套
 区别只在源头是 `Lease` 还是 `Checkpoint`，父序列不用先 checkpoint。`lease_from`
 现在也接受 `len < checkpoint.len`（只对纯 KV 的 checkpoint，整页处起步）。
 
-**host 层（K3）**：`Runtime::reserve_host(bytes)` 一次 `cuMemHostAlloc` 一块 pinned
+**host 层（K3）**：`Runtime::reserve_host(pages, slots)` 一次 `cuMemHostAlloc` 一块 pinned
 DRAM（GB300 上约 100 ms/GiB，只做一次），分配前把线程的 NUMA 策略绑到这张卡所在的
 节点（sysfs 的 `numa_node` + `set_mempolicy`，分完恢复默认）：一个 GB300 tray 两颗
 Grace 各挂两张卡，本地 DRAM 拷贝 180 / 197 GiB/s（park / wake），跨到另一颗 CPU 的
@@ -115,9 +115,15 @@ park 能先在四张卡上都找到地方再动一个字节（半途失败的 pa
 提前 drop 会等拷贝完再还页）；一个请求的房间只问一次（2026-09-15，lessons.md）。host 上
 的页也是链（`kern-pool/host.rs`，一页一个节点，device 节点记着它 host 副本的 `Weak`），同一 session
 下一轮再 park 只拷新增的页，醒来的再睡一个字节不拷；一页在 host 上是所有分页 state 的该页首尾相接，slot 同理，
-按 64 KiB 粒度 first-fit（页从低端长、slot 从高端长）。拷贝走单独的 transfer stream
+块的前段是 host 页、后段是 host slot，`kern_pool::Host` 只按单元号记账（2026-10-09 起，
+`--host-gib` 的字节经 `Runtime::host_units` / `host_split` 每 `--host-turn` token 的页配一个 slot，见 `pool.md`）。拷贝走单独的 transfer stream
 （`cuMemcpy2DAsync`，连续页折成一次），transfer stream 在 compute stream 已入队的一切
-之后开始，compute stream 从不等它，decode 步不排在拷贝后面。`Prefix` 表按
+之后开始，compute stream 从不等它，decode 步不排在拷贝后面。流水线（2026-10-09，serve.md「流水线」）
+没有要护着的 decode 步，反过来让 host 拷贝走 compute stream：`Runtime::park_now(checkpoint)` /
+`Runtime::wake_now(&parked, len, tokens)` 在 compute stream 上按序拷、当场交回计划，checkpoint 的页立即
+回池、醒来的 `Lease` 立即可喂——之后写或读它们的 launch 都排在拷贝后面，次序就是保证；
+`Runtime::copy_out` / `copy_in` 是 `Runtime::copy` 跨 host 边界的样子，替持有同一套 id 的段执行头的
+计划（越界的 id 拒绝）。`Prefix` 表按
 `Tier::{Resident, Parked}` 分层：`lookup` 先挑 resident；纯 KV 的 checkpoint 链在表里
 是一个随页增长的条目（每个深度都登记），所以 parked 的条目部分命中时只醒需要的页；
 `evict(Some(|cp| ...))` 是调用方腾地方的一个动作（park 最冷的 resident，host 满了先丢
@@ -161,16 +167,18 @@ bf16 / f32 结果，参数 `[a, w, c, a_scale, w_scale, m, n, k]`，可追加第
 所以激活的 amax+量化可以在图内做，GEMM 不看任何 host 值。列主序映射与 bf16 路径
 相同，正好就是 cublasLt 对 fp8 的要求（A 转置、B 不转置）；k 必须是 16 的倍数。
 `extern:nccl_allreduce_{f32,bf16}` / `extern:nccl_allgather_{f32,bf16}` /
-`extern:nccl_reducescatter_{f32,bf16}`：tray collective 走 NCCL（`nccl.rs`），
+`extern:nccl_reducescatter_{f32,bf16}` / `extern:nccl_alltoall_{f32,bf16}`：组 collective 走 NCCL（`nccl.rs`），
 launch 连线 `[send, recv, count, {"rank": g}]`，rank 参点名 topology 组，count 是
 每 rank 的元素数（allgather 的 recv 是 `count × 组大小`，按 rank 序排列；
-reducescatter 反过来，send 是 `count × 组大小`，rank r 收到求和后的第 r 块）。每组一个 communicator：单进程持有全组时
+reducescatter 反过来，send 是 `count × 组大小`，rank r 收到求和后的第 r 块；alltoall 的 count
+是每个 peer 的元素数，send / recv 都是 `count × 组大小`，rank r 的第 p 块落到 rank p 的第 r 块，
+一个 NCCL group 里每个 peer 一对 send / recv，可被图捕获）。每组一个 communicator：单进程持有全组时
 `connect_nccl(group, &mut [Runtime])`（一个 NCCL group call 里逐 rank
 `join_nccl`），跨进程则 `NcclId` 走 fabric handle 的通道再各自 `join_nccl`；
 没有 join 的组一律拒绝 issue（`require_nccl`，与 `require_peers` 并列）。
 NCCL 版本钉在 cudarc 的 `nccl` 绑定（2.30），运行时 dlopen 无版本号的
 `libnccl.so`。`join_nccl` 在 init 前钉两个 NCCL 变量（调用者已设则不动）：
-`NCCL_RUNTIME_CONNECT=0`，否则懒连接会落进图捕获里被拒；`NCCL_PROTO=LL128`，
+`NCCL_RUNTIME_CONNECT=0`，否则懒连接会落进图捕获里被拒；`NCCL_PROTO=LL,LL128`（不许 Simple），
 因为 Simple 协议在 runtime 的进程里给出错的结果而 NCCL 自测无恙（lessons.md
 2026-09-18，根因开在 roadmap P5）。
 

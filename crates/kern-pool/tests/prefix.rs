@@ -19,7 +19,7 @@ fn toks(n: usize) -> Vec<i64> {
 }
 
 fn host() -> Arc<Host> {
-    Arc::new(Host::new(64, 4, 4, 8))
+    Arc::new(Host::new(16, 2))
 }
 
 fn tier<R, P>(h: &Hit<R, P>) -> Tier {
@@ -240,11 +240,11 @@ fn parked_entries_are_found_after_resident_ones() {
     assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&key[..]), dropped: 0 }));
     assert_eq!((p.used(), t.count(Tier::Parked), t.count(Tier::Resident)), (0, 1, 0));
     let hit = t.lookup(&toks(13)).unwrap();
-    assert_eq!((hit.len, tier(&hit), parked(&hit).map(|q| q.offsets())), (12, Tier::Parked, Some(vec![0, 4, 8])));
+    assert_eq!((hit.len, tier(&hit), parked(&hit).map(|q| q.page_ids())), (12, Tier::Parked, Some(vec![0, 1, 2])));
     assert_eq!(find(&mut t, &toks(6)), Some((4, Tier::Parked)));
     // Nothing resident to make room with; a hit outlives what the index does to the entry.
     assert_eq!(park(&mut t, &h), None);
-    assert_eq!((t.entries(), h.used()), (1, 12));
+    assert_eq!((t.entries(), h.used()), (1, 3));
     drop(hit);
     // Resident and parked: the resident one is found first.
     let mut l = p.lease(12).unwrap();
@@ -269,7 +269,7 @@ fn parked_entries_are_found_after_resident_ones() {
         .unwrap();
     assert_eq!(
         (evicted, copied, t.count(Tier::Parked), h.used()),
-        (Some(Evicted::Parked { key: Arc::from(&key[..]), dropped: 0 }), None, 1, 12)
+        (Some(Evicted::Parked { key: Arc::from(&key[..]), dropped: 0 }), None, 1, 3)
     );
     drop(l);
     assert_eq!(p.used(), 0);
@@ -284,7 +284,7 @@ fn a_stateful_park_keeps_its_slot_and_its_length() {
     t.insert(&toks(10), p.retire(l, 10));
     assert_eq!((p.used(), p.slots_used()), (3, 1));
     assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&toks(10)[..]), dropped: 0 }));
-    assert_eq!((p.used(), p.slots_used(), h.used()), (0, 0, 20));
+    assert_eq!((p.used(), p.slots_used(), h.used(), h.slots_used()), (0, 0, 3, 1));
     let hit = t.lookup(&toks(12)).unwrap();
     assert_eq!((hit.len, parked(&hit).map(|q| q.has_slot())), (10, Some(true)));
     assert!(t.lookup(&toks(9)).is_none());
@@ -293,7 +293,7 @@ fn a_stateful_park_keeps_its_slot_and_its_length() {
 #[test]
 fn a_full_host_drops_its_coldest_and_a_failed_copy_drops_the_entry() {
     let p = pool4();
-    let h = Arc::new(Host::new(4, 4, 4, 0));
+    let h = Arc::new(Host::new(1, 0));
     let mut t = table();
     let mut l = p.lease(8).unwrap();
     let mut l2 = p.lease(4).unwrap();
@@ -304,10 +304,10 @@ fn a_full_host_drops_its_coldest_and_a_failed_copy_drops_the_entry() {
     t.insert(&c, p.checkpoint(&mut l2, 4).unwrap().0);
     // a (the coldest) fills the block.
     assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&a[..]), dropped: 0 }));
-    assert_eq!((h.used(), t.count(Tier::Parked)), (4, 1));
+    assert_eq!((h.used(), t.count(Tier::Parked)), (1, 1));
     // c fits once a is dropped from the host: one parked entry gone for it.
     assert_eq!(park(&mut t, &h), Some(Evicted::Parked { key: Arc::from(&c[..]), dropped: 1 }));
-    assert_eq!((h.used(), t.count(Tier::Parked), t.entries()), (4, 1, 1));
+    assert_eq!((h.used(), t.count(Tier::Parked), t.entries()), (1, 1, 1));
     assert_eq!(find(&mut t, &[&c[..], &[0]].concat()), Some((4, Tier::Parked)));
     // b is two pages: the block never holds it, c is dropped for nothing, then b.
     t.insert(&b, p.checkpoint(&mut l, 8).unwrap().0);
@@ -331,6 +331,21 @@ impl Kept for K {
     fn has_slot(&self) -> bool {
         self.1
     }
+}
+
+/// Each entry's role among the stateful entries, by how many are nearest
+/// below it: 0 newest (or stateless), 1 superseded, 2 for more (shared).
+fn roles(entries: &[(&[i64], bool)]) -> Vec<usize> {
+    let below = |a: &[i64], b: &[i64]| b.len() > a.len() && b.starts_with(a);
+    entries
+        .iter()
+        .map(|&(e, _)| {
+            let nearest = entries.iter().filter(|&&(d, slot)| {
+                slot && below(e, d) && !entries.iter().any(|&(f, fs)| fs && below(e, f) && below(f, d))
+            });
+            nearest.count().min(2)
+        })
+        .collect()
 }
 
 /// An entry as the model sees it: its tokens, whether a state pins it,
@@ -415,12 +430,28 @@ fn lookup_matches_the_brute_force_model() {
                 4 | 5 => {
                     // A host that takes the park, one that refuses it, or no host at all.
                     let host = rand.next(3);
+                    let roles = roles(&model.iter().map(|e| (&e.tokens[..], e.slot)).collect::<Vec<_>>());
+                    let resident = |want: usize| {
+                        model.iter().zip(&roles).filter(move |(e, r)| e.resident && e.slot && **r == want)
+                    };
+                    let superseded: Vec<&[i64]> = resident(1).map(|(e, _)| &e.tokens[..]).collect();
+                    let shared: Vec<&[i64]> = resident(2).map(|(e, _)| &e.tokens[..]).collect();
+                    let movable = model.iter().filter(|e| e.resident).count() > shared.len();
+                    let superseded: Vec<Vec<i64>> = superseded.into_iter().map(<[i64]>::to_vec).collect();
+                    let shared: Vec<Vec<i64>> = shared.into_iter().map(<[i64]>::to_vec).collect();
                     let got = match host {
                         2 => t.evict(None::<fn(K) -> Result<Result<K, K>, ()>>),
                         _ => t.evict(Some(|r: K| Ok::<_, ()>(if host == 1 { Err(r) } else { Ok(K(r.0, r.1)) }))),
                     }
                     .unwrap();
                     let parked_before = model.iter().filter(|e| !e.resident).count();
+                    // Room takes a superseded entry while one is resident, and a
+                    // shared prefix only when nothing else is.
+                    if let Some(Evicted::Parked { key, .. } | Evicted::Dropped { key, .. }) = &got {
+                        let key = key.to_vec();
+                        assert!(superseded.is_empty() || superseded.contains(&key), "took {key:?} over {superseded:?}");
+                        assert!(!movable || !shared.contains(&key), "took shared {key:?}");
+                    }
                     match &got {
                         None => assert!(model.iter().all(|e| !e.resident)),
                         Some(Evicted::Parked { key, dropped }) => {
@@ -470,4 +501,84 @@ fn a_lookup_that_uses_nothing_touches_nothing() {
     assert_eq!(find(&mut t, &[999, 998]), None);
     assert_eq!(find(&mut t, &[b[0], 55, 56]), None);
     assert_eq!(drop_coldest(&mut t), Some(Evicted::Dropped { key: Arc::from(&b[..]), dropped: 0 }));
+}
+
+/// Conversations taking turns, some forked from another's checkpoint,
+/// against a reference trie of their checkpoints that stamps recency as
+/// the index does (a lookup touches every entry on the prompt's path, the
+/// deeper colder; an insert touches its own). A turn hits the deepest
+/// checkpoint on its path and is kept at its history end; room is made
+/// whenever more than `ROOM` are kept, and now and then besides. Room takes
+/// the least recent superseded checkpoint while any is resident, else the
+/// least recent newest one, never a prefix two conversations went on
+/// from; so a conversation loses its newest only once nothing superseded
+/// is left, and a shared prefix outlives the conversations evicted below
+/// it until at most one is left.
+#[test]
+fn room_takes_turns_moved_past_then_the_idlest_conversation_never_a_shared_prefix() {
+    const CONVS: usize = 6;
+    const ROOM: usize = 10;
+    let mut rand = Rand::new(0x5E55_1015_0000_0001);
+    let mut t: Prefix<K, K> = Prefix::new(4);
+    // Each checkpoint's tokens and recency; each conversation's history.
+    let mut model: Vec<(Vec<i64>, (u64, usize))> = Vec::new();
+    let mut convs: Vec<Vec<i64>> = vec![vec![0, 1, 2]; CONVS];
+    let mut fresh = 100i64;
+    let (mut newest_taken, mut shared_seen) = (0, 0);
+    for now in 1..20000u64 {
+        match rand.next(8) {
+            0 => {
+                // A new conversation forks another at one of its checkpoints,
+                // or at its whole history, abandoning the one it replaces.
+                let (from, into) = (rand.next(CONVS), rand.next(CONVS));
+                let on: Vec<&Vec<i64>> = model.iter().map(|(k, _)| k).filter(|k| convs[from].starts_with(k)).collect();
+                convs[into] = match rand.next(on.len() + 1) {
+                    i if i < on.len() => on[i].clone(),
+                    _ => convs[from].clone(),
+                };
+            }
+            r => {
+                let s = rand.next(CONVS);
+                let ext = 1 + rand.next(5);
+                let tail = 1 + rand.next(2);
+                let prompt: Vec<i64> =
+                    convs[s].iter().copied().chain((0..ext + tail).map(|i| fresh + i as i64)).collect();
+                fresh += 1000;
+                let usable = &prompt[..prompt.len() - 1];
+                let mut path: Vec<usize> = (0..model.len()).filter(|&i| usable.starts_with(&model[i].0)).collect();
+                path.sort_by_key(|&i| model[i].0.len());
+                let want = path.last().map(|&i| model[i].0.len());
+                assert_eq!(t.lookup(&prompt).map(|h| h.len), want, "conversation {s} at {now}");
+                for (depth, &i) in path.iter().enumerate() {
+                    model[i].1 = (now, usize::MAX - 1 - depth);
+                }
+                let end = prompt.len() - tail;
+                if end > want.unwrap_or(0) {
+                    t.insert(&prompt[..end], K(end, true));
+                    model.push((prompt[..end].to_vec(), (now, usize::MAX)));
+                }
+                convs[s] = prompt[..end].to_vec();
+                while model.len() > ROOM || (r == 1 && !model.is_empty() && model.len() == ROOM) {
+                    let roles = roles(&model.iter().map(|(k, _)| (&k[..], true)).collect::<Vec<_>>());
+                    shared_seen += roles.iter().filter(|&&r| r == 2).count();
+                    let coldest = |want: usize| {
+                        let of = model.iter().zip(&roles).filter(|&(_, &r)| r == want);
+                        of.min_by_key(|((_, at), _)| *at).map(|((k, _), _)| k.clone())
+                    };
+                    let want = coldest(1).or_else(|| coldest(0));
+                    newest_taken += (coldest(1).is_none()) as usize;
+                    let got = t.evict(None::<fn(K) -> Result<Result<K, K>, ()>>).unwrap().map(|e| match e {
+                        Evicted::Dropped { key, .. } | Evicted::Parked { key, .. } => key.to_vec(),
+                    });
+                    assert_eq!(got, want, "room at {now}");
+                    model.retain(|(k, _)| Some(k) != got.as_ref());
+                }
+            }
+        }
+        let roles = roles(&model.iter().map(|(k, _)| (&k[..], true)).collect::<Vec<_>>());
+        let superseded = roles.iter().filter(|&&r| r == 1).count();
+        assert_eq!((t.entries(), t.superseded()), (model.len(), superseded), "at {now}");
+    }
+    // The run went through every case: a newest taken, shared prefixes passed over.
+    assert!(newest_taken > 0 && shared_seen > 0, "newest taken {newest_taken}, shared seen {shared_seen}");
 }

@@ -43,7 +43,7 @@ fn sources_derive_through_one_window_and_are_gone_after() {
         b
     };
     let manifest = serde_json::json!({
-        "schema_version": 5, "model": "derive-test", "vars": {}, "states": {},
+        "schema_version": 7, "model": "derive-test", "vars": {}, "states": {},
         "buffers": {
             "eye": bound("weight", "eye"), "s1": bound("source", "a"), "s2": bound("source", "b"),
             "c1": square("carry"), "c2": square("carry"), "o1": square("output"), "o2": square("output")
@@ -61,7 +61,9 @@ fn sources_derive_through_one_window_and_are_gone_after() {
     let verified = Verified::from_json(&manifest.to_string()).unwrap();
     let dir = std::env::temp_dir().join(format!("kern-derive-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut rt = Runtime::load(&verified, Some(&dir), 0, Some(Capacity { tokens: Some(1), seqs: 1 }), None).unwrap();
+    let mut rt =
+        Runtime::load(&verified, Some(&dir), 0, Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }), None)
+            .unwrap();
     let sources = |rt: &Runtime| -> Vec<String> {
         rt.buffer_sizes().into_iter().filter(|(_, k, _)| *k == BufferKind::Source).map(|(n, ..)| n.into()).collect()
     };

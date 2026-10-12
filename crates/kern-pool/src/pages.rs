@@ -76,7 +76,7 @@ use std::sync::{Arc, Mutex};
 
 use kern_manifest::types::{BufferKind, Dim, Manifest};
 
-use crate::chunks::{Chunks, Kind, Remap};
+use crate::chunks::{Chunks, Kind, Placement, Remap};
 use crate::error::{bail, Result};
 use crate::store::{ancestor, chain_pages, lock, sealed, Copies, HostTwin, Node, SlotOwn, Storage, Store};
 
@@ -547,6 +547,13 @@ impl Pool {
         self.seq_tables.keys().map(String::as_str)
     }
 
+    /// The chunk behind every position of every arena, as decided: a
+    /// remap planned and not landed yet is in it. What a mirror of the
+    /// arenas maps; an object held now is where it says while it is held.
+    pub fn placement(&self) -> Placement {
+        lock(&self.inner).chunks.placement()
+    }
+
     /// Whether any remap was ever planned: the initial layout is gone.
     pub fn remapped(&self) -> bool {
         lock(&self.inner).remapped
@@ -956,6 +963,18 @@ impl Lease {
             bail!(Api, "lease holds no sequence slot");
         };
         Ok(slot * t.per_slot + row as i32 % t.per_slot)
+    }
+
+    /// Every line of this sequence in line table `table`, line 0 first:
+    /// `seq_line` for each, the table looked up once.
+    pub fn seq_line_row(&self, table: &str) -> Result<Vec<i32>> {
+        let Some(t) = self.pool.seq_tables.get(table) else {
+            bail!(Api, "`{table}` is not a line table of this manifest");
+        };
+        let Some(slot) = self.seq_slot() else {
+            bail!(Api, "lease holds no sequence slot");
+        };
+        Ok((0..t.rows).map(|r| slot * t.per_slot + r as i32 % t.per_slot).collect())
     }
 
     /// Lines per sequence line table `table` names.

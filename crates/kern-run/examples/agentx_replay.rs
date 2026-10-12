@@ -3,7 +3,7 @@
 //!
 //!     agentx_replay --traces <cc-traces-weka-062126>/traces.jsonl   # HF semianalysisai/cc-traces-weka-062126 \
 //!         [--unit 64] [--kv-bytes 65536] [--state <bytes per slot>] [--budget-gib 250 | --capacity <tokens>]
-//!         [--slots 130] [--concurrency 32] [--sessions N] [--host-gib 0]
+//!         [--slots 130] [--concurrency 32] [--sessions N] [--host-gib 0] [--host-turn 8192] [--pp-head]
 //!
 //! Every request of a session is a sequence: leased at its timestamp for
 //! `in + out` tokens, prefilled from the longest checkpoint holding a
@@ -23,13 +23,24 @@
 //! do: `--slots` is only what the pool starts with, a `Remapping` denial
 //! is landed on the spot and the lease asked for again. With `--host-gib`
 //! a `Busy` lease parks the coldest resident checkpoint into a host tier
-//! of that size instead of dropping it (dropping the coldest parked ones
+//! of that size, split into host pages and host slots as the runtime
+//! splits it (`kern_runtime::host_split`, one slot per `--host-turn`
+//! tokens of pages), instead of dropping it (dropping the coldest parked ones
 //! when the tier is full), and a hit on a parked one wakes it.
+//!
+//! `--pp-head` (with `--state`) replays as a pipeline head serving the
+//! prefill of a P/D split does: a request leases its prompt only, is kept
+//! where its prompt ends (the next request carries its output, which the
+//! decode tier made), and the pool never carves a slot: a lease or a
+//! checkpoint takes one only while one is free, making room otherwise.
 //!
 //! Reported: hit rate (prefix tokens found / input tokens), the hits and
 //! their tokens by tier (resident, or woken from the host), extend
 //! percentiles, checkpoints kept, evictions, requests that had to wait,
-//! remaps, the most slots the pool grew to, parks and wakes.
+//! remaps, the most slots the pool grew to, parks and wakes; the most
+//! entries and slots held at once, the entries a later turn of their
+//! session moved past at the end, and the requests that found nothing
+//! although an earlier one of their session had finished.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader};
@@ -144,7 +155,7 @@ fn manifest(unit: usize, kv_bytes: u64, state: u64, slots: usize, row: usize) ->
     };
     Manifest::from_json(&format!(
         r#"{{
-        "schema_version": 5, "model": "replay", "vars": {{"tokens": {{"max": 1, "axis": "rows"}}, "seqs": {{"max": {seqs}, "axis": "groups"}}}},
+        "schema_version": 7, "model": "replay", "vars": {{"tokens": {{"max": 1, "axis": "rows"}}, "seqs": {{"max": {seqs}, "axis": "groups"}}}},
         "states": {{"kv": {{"bytes_per_token": {kv_bytes}}}{state_json}}},
         "buffers": {{
             "block_table": {{"kind": "input", "dtype": "i32", "shape": ["seqs", {row}], "domain": {{"index_into": "kv", "stride": {unit}}}}}{line_json}
@@ -193,8 +204,15 @@ struct Tally {
     parks: u64,
     wakes: u64,
     wake_tokens: u64,
+    /// Host pages the parks copied out (pages parked already are not copied again).
+    park_pages: u64,
     host_evictions: u64,
-    host_peak: u64,
+    /// The most host pages and host slots held at once.
+    host_peak: (u64, u64),
+    peak_entries: usize,
+    peak_slots_used: usize,
+    /// Requests that found nothing after an earlier one of their session finished.
+    lost: u64,
 }
 
 /// Make room for a `Busy` lease: park the coldest resident checkpoint
@@ -203,11 +221,24 @@ struct Tally {
 fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, tally: &mut Tally) -> bool {
     // The plan's copies would run on the runtime; here the bytes are
     // imaginary and the checkpoint goes straight back.
-    let park = host.map(|h| move |cp| Ok::<_, ()>(h.park(&cp).map(|(p, _)| p).map_err(|_| cp)));
-    let dropped = match prefix.evict(park).unwrap() {
+    let mut copied = 0u64;
+    let park = host.map(|h| {
+        |cp| {
+            Ok::<_, ()>(h.park(&cp).map(|(p, plan)| {
+                copied += plan.pages.len() as u64;
+                p
+            }))
+            .map(|r| r.map_err(|_| cp))
+        }
+    });
+    let evicted = prefix.evict(park).unwrap();
+    tally.park_pages += copied;
+    let dropped = match evicted {
         Some(Evicted::Parked { dropped, .. }) => {
             tally.parks += 1;
-            tally.host_peak = tally.host_peak.max(host.map_or(0, |h| h.used()));
+            if let Some(h) = host {
+                tally.host_peak = (tally.host_peak.0.max(h.used()), tally.host_peak.1.max(h.slots_used()));
+            }
             dropped
         }
         Some(Evicted::Dropped { dropped, .. }) => {
@@ -239,6 +270,8 @@ fn main() {
     let mut concurrency = 32usize;
     let mut sessions_cap = usize::MAX;
     let mut host_gib = 0u64;
+    let mut host_turn = 8192u64;
+    let mut pp_head = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut v = || args.next().expect("value");
@@ -253,6 +286,8 @@ fn main() {
             "--concurrency" => concurrency = v().parse().unwrap(),
             "--sessions" => sessions_cap = v().parse().unwrap(),
             "--host-gib" => host_gib = v().parse().unwrap(),
+            "--host-turn" => host_turn = v().parse().unwrap(),
+            "--pp-head" => pp_head = true,
             _ => panic!("unknown arg {a}"),
         }
     }
@@ -287,9 +322,13 @@ fn main() {
         None => (budget_gib << 30) / chunk,
     };
     let first_slots = if state > 0 { slots } else { 0 };
+    // The head's pages all exist from load and never give way to slots.
+    let cap = capacity.filter(|_| pp_head);
     let pool =
-        Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots, None).expect("the budget holds the first slots").0);
-    let host = (host_gib > 0).then(|| Arc::new(Host::new(host_gib << 30, 1 << 16, page_bytes, state)));
+        Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots, cap).expect("the budget holds the first slots").0);
+    let host_units = (host_gib > 0)
+        .then(|| kern_runtime::host_split(host_gib << 30, page_bytes, state, host_turn.div_ceil(unit as u64)));
+    let host = host_units.map(|(pages, slots)| Arc::new(Host::new(pages, slots)));
     let mut prefix = Prefix::new(unit);
     let mut tally = Tally::default();
     let mut order: Vec<usize> = (0..reqs.len()).collect();
@@ -303,9 +342,12 @@ fn main() {
     let mut waiting: VecDeque<usize> = VecDeque::new();
     let mut live_ids = 0usize;
 
-    let finish = |live: Live, prefix: &mut Prefix, tally: &mut Tally| {
+    assert!(!pp_head || state > 0, "--pp-head models a recurrent state: pass --state");
+    let mut finished = vec![false; sessions];
+    let finish = |live: Live, prefix: &mut Prefix, tally: &mut Tally, finished: &mut [bool]| {
         let r = &reqs[live.req];
-        let total = r.input + r.out;
+        finished[r.session] = true;
+        let total = if pp_head { r.input } else { r.input + r.out };
         if state > 0 {
             if total >= 1 {
                 let cp = pool.retire(live.lease, total);
@@ -344,12 +386,14 @@ fn main() {
             let r = &reqs[ri];
             now = now.max(offset[r.session] + r.t);
             let toks = tokens(&reqs, ri);
-            let worst = r.input + r.out;
+            let worst = if pp_head { r.input } else { r.input + r.out };
             let mut woken = false;
             let lease = loop {
                 // Room made for a retry may have parked or dropped the
                 // checkpoint hit: look it up again where it is now.
                 let attempt = match prefix.lookup(&toks[..r.input]) {
+                    // The head's pool never carves a slot (`pp::cache`).
+                    _ if pp_head && pool.slots() <= pool.slots_used() + 1 => Err(Denied::Busy),
                     Some(h) => match h.found {
                         Found::Resident(cp) => pool.restore(&cp, h.len, worst).map(|(l, _)| l),
                         // Woken straight into the lease; the parked
@@ -393,11 +437,12 @@ fn main() {
                     // Fall through to the next finish.
                     let ((bits, _), live) = finishing.pop_first().unwrap();
                     now = f64::from_bits(bits);
-                    finish(live, &mut prefix, &mut tally);
+                    finish(live, &mut prefix, &mut tally, &mut finished);
                 }
                 continue;
             };
             let hit_len = lease.prefix();
+            tally.lost += (hit_len == 0 && finished[r.session]) as u64;
             tally.input += r.input as u64;
             tally.hit += hit_len as u64;
             tally.extend.push(r.input - hit_len);
@@ -424,8 +469,10 @@ fn main() {
         } else {
             let ((bits, _), live) = finishing.pop_first().unwrap();
             now = f64::from_bits(bits);
-            finish(live, &mut prefix, &mut tally);
+            finish(live, &mut prefix, &mut tally, &mut finished);
         }
+        tally.peak_entries = tally.peak_entries.max(prefix.entries());
+        tally.peak_slots_used = tally.peak_slots_used.max(pool.slots_used());
     }
     let main_reqs = reqs.iter().filter(|r| !r.subagent).count();
     println!(
@@ -442,14 +489,19 @@ fn main() {
         tally.max_slots.max(pool.slots()),
         tally.remaps,
     );
-    if host.is_some() {
+    if let Some((pages, slots)) = host_units {
+        let gib = |p: u64, s: u64| (p * page_bytes + s * state) as f64 / (1u64 << 30) as f64;
         println!(
-            "host tier {host_gib} GiB: {} parks, {} wakes ({} tokens), {} parked dropped for room, peak {:.1} GiB, {} parked at the end",
+            "host tier {host_gib} GiB: {pages} pages and {slots} slots, {} parks ({} pages copied out, {:.1} TiB), {} wakes ({} tokens), {} parked dropped for room, peak {} pages and {} slots ({:.1} GiB), {} parked at the end",
             tally.parks,
+            tally.park_pages,
+            (tally.park_pages * page_bytes) as f64 / (1u64 << 40) as f64,
             tally.wakes,
             tally.wake_tokens,
             tally.host_evictions,
-            tally.host_peak as f64 / (1u64 << 30) as f64,
+            tally.host_peak.0,
+            tally.host_peak.1,
+            gib(tally.host_peak.0, tally.host_peak.1),
             prefix.count(Tier::Parked),
         );
     }
@@ -472,5 +524,14 @@ fn main() {
         tally.waited,
         tally.rejected,
         tally.max_live,
+    );
+    println!(
+        "at most {} entries and {} slots held at once ({} and {} at the end, {} entries superseded); {} requests found nothing after their session had finished one",
+        tally.peak_entries,
+        tally.peak_slots_used,
+        prefix.entries(),
+        pool.slots_used(),
+        prefix.superseded(),
+        tally.lost,
     );
 }

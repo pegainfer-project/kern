@@ -31,7 +31,7 @@ e2e 把串行的接受率门在里面）。
 词表是 256 个字节 token（id = 字节值）加 eos 256，tokenizer 是无 merge 的 byte-level
 BPE，任何文本都能进。权重只有一个 64 项的 salt。
 
-## 五种形状，每种两份
+## 五种形状，每种两份，外加一个切开的
 
 | target | 形状 | 对应的真 target |
 |---|---|---|
@@ -41,8 +41,21 @@ BPE，任何文本都能进。权重只有一个 64 项的 salt。
 | `toy-stateful-spec` | line + round | qwen3.8-27b-dflash2 |
 | `toy-big` | 64 KiB/token、页 64、64k 上下文：默认预算下 281 GiB 的 state | K3 的尺寸 |
 
+| `toy-dcp-twin` | 4 KiB/token、页 16、16 个头的 line（33 KiB/seq） | DCP 的单卡对照 |
+| `toy-dcp` / `toy-dcp8` | 同一个函数，tp 组 2 / 8 个成员：页按位置发、line 按头切 | K3 decode 的 DCP8 |
+
+`toy-dcp*` 是另一套 line：16 个头各自折叠（头 h 折 `mark(t, p, h)`），下一个 token 用
+S + 各头 carry 之和。位置 p 在成员 `p % w` 的本地位置 `p / w`，line 的每一行按头切 w 份
+（`segments [[1, 256], [255, 128]]`，与 push 的 `Split` 同一个切法）。每个成员算自己那些位置、
+那些头的部分和（`toy_dealt_partial`，旋转用全局位置），`nccl_allgather_i32` 收齐，
+`toy_combine` 按 u64 相加——整数加法，怎么切都是同一串比特，所以三份 manifest 逐 token
+相同。twin 是 w = 1 的同一份（没有 topology、shard、collective），可以单卡 `kern run`、
+`kern test`、`kern cut`；它的 line 按 `segments` 切开正好是各成员的 line，H2 拿 twin 的
+PP2 当 P、`toy-dcp` 当 D。`test_model.py` 在 CPU 上锁住这两件事。
+
 每种再出一份 `-ref`：同样的 manifest，cubin 换成 128 线程块的构建，做 `kern test` 的
-A——五种形状的每个 kernel 都过 A/B。尺寸在 `gen.py` 里改；kernel 写满、读满每个槽
+A——五种形状的每个 kernel 都过 A/B（`toy-dcp` 的是 twin 的 `-ref`；多 rank 的两份不做 A/B，
+e2e 拿 twin 对它们）。尺寸在 `gen.py` 里改；kernel 写满、读满每个槽
 和每条 line，runtime 的分页、park 拷贝、slot remap 按真尺寸做。
 
 ## 它测什么、不测什么
@@ -50,4 +63,6 @@ A——五种形状的每个 kernel 都过 A/B。尺寸在 `gen.py` 里改；ker
 测 state 的路径：分页、每页 checkpoint、请求末快照、前缀命中、park 到 DRAM 再醒、slot
 增长的 remap、投机轮的 count 与回滚、`--rows 1`、chunked prefill、graph 捕获。每个门
 都是逐 token 精确的，包括真模型上只能"报不门"的 warm 对 cold 与醒来的对 cold。
+`toy-dcp*` 测复制组（kern-serve 的 `Ranks` 复制模式）：每个位置只由一个成员写、本地
+seq_len 可以是 0（L < w）、本地页表跨页、pad 页没人读、NCCL 在图里、什么都不留。
 不测 kernel 数值和性能——那是 `kern test` 和真模型 e2e 的事（docs/serve.md）。

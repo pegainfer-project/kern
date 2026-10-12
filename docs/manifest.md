@@ -1,4 +1,4 @@
-# Manifest 格式（schema_version 4）与 Verifier
+# Manifest 格式（schema_version 7）与 Verifier
 
 Model provider 交付 `manifest.json + kernels/ + weights`，runtime 负责：
 加载时像 rustc 一样苛刻地校验 manifest，运行时按声明闭眼执行。runtime
@@ -28,19 +28,19 @@ cut                          cut      流水线的一段：id、第几段、共�
 顶层平铺，全部名字唯一、引用必须解析、不允许未知字段：
 
 ```json
-{ "schema_version": 5, "model": "qwen3.8-27b",
+{ "schema_version": 7, "model": "qwen3.8-27b",
   "topology": {"groups": {"ep": 4}},
   "vars": …, "states": …, "buffers": …, "modules": …, "ops": …, "programs": … }
 ```
 
-- `schema_version`：wire format 版本，只认 4。`model`：标签，runtime
+- `schema_version`：wire format 版本，只认 7。`model`：标签，runtime
   不赋予含义（kern-serve 用它做对外的模型名）。
 - `vars`：caller 每次调用时提供的标量（如 `tokens`），声明 `max`，下界
   恒为 1；所有静态校验在界上进行，运行时拒绝越界值。**会改变内存尺寸或
   launch 几何的标量才是 var**；别的标量（temperature 之类）是数据，走
-  `[1]` 形状的 input buffer。可选的 `axis`（`rows` / `groups` / `tray`）
-  说这个 var 数的是一次调用的哪根轴——本卡的行、本卡的序列、整个 tray
-  batch 的行——每根轴至多一个 var；runtime 不读它（见「Serving 协议」）。
+  `[1]` 形状的 input buffer。可选的 `axis`（`rows` / `groups` / `ranks`）
+  说这个 var 数的是一次调用的哪根轴——本卡的行、本卡的序列、组里每个 rank
+  的行合起来——每根轴至多一个 var；runtime 不读它（见「Serving 协议」）。
 - `states`：不透明持久内存。**runtime 只知道字节数**——`bytes_per_token`
   （按 token 容量伸缩：paged KV）、`bytes_per_seq`（每个活跃序列一个
   slot：GDN 的 conv + SSM 递归状态；runtime 供应 `seqs.max + 2` 个 slot，
@@ -50,6 +50,20 @@ cut                          cut      流水线的一段：id、第几段、共�
   reserve + map），别的 rank 可映射（设备支持时经 fabric handle，否则
   同进程内经 allocation handle，见 runtime.md 多卡一节），所以 `peer`
   buffer 可以 `of` 一个 state（P/D push、跨 rank 读 KV 的入口）。
+  可选的 `shard` 说一个 rank 组怎么在成员间切这个 state（runtime 不读，
+  每个成员按自己那份照常供应、寻址）：
+  - `{"group": "tp", "by": "position"}`，只用于 paged state：序列的位置
+    p 存在成员 `p mod w`（w = 组大小），本地位置 `⌊p/w⌋`；喂给成员的
+    slot、seq_len、页表都是本地值，一个位置只有它的成员写，别的成员的
+    slot 指向 pad。有一个 paged state 这样切，所有 paged state 都必须
+    这样切、同一个组（pool 只有一套页号），而且这个组跑**复制的 batch**：
+    每个成员拿同样的行、同样的顺序，所以不得有 `axis: ranks` 的 var，
+    也不得有 `blocks` fill（decode 的 DCP）。
+  - `{"group": "tp", "by": "heads", "segments": [[1, 6291456], [9,
+    24576]]}`，只用于 per-seq state：一条序列的整份 state 是若干段首尾
+    相接，每段 `[rows, width]` 是 rows 行、每行 width 字节、头在最外维；
+    成员的 slot 是每行的 1/w。要求每个 width 被 w 整除、Σ rows·width =
+    w × `bytes_per_seq`。这正是 PD push 按头切 slot 的 `Split` 的入参。
 - `buffers`：`dtype + shape + kind`，可选 `domain`（内容的先验，见下）与
   `fill`（在 serving 循环里的角色，见「Serving 协议」）。shape 维度是常量或 var 名；kind 说
   的是"谁供应、活多久"：`input`（runtime 写入）/ `output`（runtime 读回）
@@ -92,7 +106,7 @@ cut                          cut      流水线的一段：id、第几段、共�
     （module 里的入口点）+ 几何；**extern launch**：`entry` 写
     `extern:<name>` 表示 runtime 内置（`cublaslt_bf16_tn` / `_acc` /
     `cublas_bf16_tn_f32` / `cublaslt_fp8_tn` / `cublaslt_fp8_tn_f32`，NCCL collective `nccl_allreduce_{f32,bf16}` /
-    `nccl_allgather_{f32,bf16}` / `nccl_reducescatter_{f32,bf16}`，见 runtime.md），没有 module 也没有几何。其余字段：
+    `nccl_allgather_{f32,bf16}` / `nccl_reducescatter_{f32,bf16}` / `nccl_alltoall_{f32,bf16}`，见 runtime.md），没有 module 也没有几何。其余字段：
     `params`（该 launch 自己的 ABI；**不写 = 同接口**）、
     `block`/`grid`（grid 用下述表达式集合；可选 `shared_mem`，上限 227KB
     opt-in；可选 `cluster: [x, y, z]` 线程块簇，grid 每轴必须是它的倍数，
@@ -257,7 +271,7 @@ torch 扩展 .so）：runtime 剖开 ELF 取 `.nv_fatbin` 里的设备代码逐�
 挖矿基线逐字节一致。
 
 **Wire format 的 ground truth 是 `kern-manifest` 的 Rust 类型**（parser
-即法律）；`schema/manifest-v5.schema.json` 是它生成的可发布投影
+即法律）；`schema/manifest-v7.schema.json` 是它生成的可发布投影
 （`cargo run -p kern-manifest --example gen_schema`，CI golden 检查防
 漂移），给生成器/agent 当形状契约用。
 
@@ -345,11 +359,11 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
 
 - **buffer 上的 `fill`**：这个 buffer 在循环里的角色。input：`token`
   （每行一个；形如 `[seqs]` 时每组一个，即投机轮的 anchor）、`position`、
-  `slot`、`seq_len`、`cu_seqlens`、`blocks`（tray batch 各成员的块：
-  按成员序的行数前缀和，`[t + 1]` 个 i32，末项是 tray 的行数；块不必等长，
-  collective 核按它把本卡行号换算成 tray 行号）；output：`tokens`（`[seqs]`
+  `slot`、`seq_len`、`cu_seqlens`、`blocks`（组 batch 各成员的块：
+  按成员序的行数前缀和，`[t + 1]` 个 i32，末项是组 batch 的行数；块不必等长，
+  collective 核按它把本卡行号换算成组 batch 的行号）；output：`tokens`（`[seqs]`
   每组一个，`[seqs, r]` 每行一个）、`count`（每组取几个，缺省恒 1）、`error`
-  （非零即该步失败，tray 的 allreduce 用）。fill 只许落在 input / output
+  （非零即该步失败，组内 allreduce 用）。fill 只许落在 input / output
   的 i32 / i64 buffer 上，与 `domain` 平级可共存；caller 按 buffer 的
   dtype 编码，不写死 i64 / i32。页表和 line 表不加 fill：`index_into`
   一个 state 本来就是它。没有 buffer 要 `position`，caller 就不写。
@@ -378,7 +392,7 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   `--eager` 只是调试开关，全部按 launch 跑。要求有 `batch`。
 
 轴是 var 自己声明的（`axis: rows` 的 `tokens`、`axis: groups` 的 `seqs`、
-`axis: tray` 的 k3 `rows`），fill 只说角色，不定轴：一份不读 `seq_len`
+`axis: ranks` 的 k3 `rows`），fill 只说角色，不定轴：一份不读 `seq_len`
 的 manifest 照样有序列轴，流水线首段之外的段根本不吃 token（v5 之前轴从
 `slot` / `seq_len` fill 所在的维反推，于是每个 forward 都"必须"有这两个
 角色——把 scheduler 的习惯写成了函数的类型）。manifest 里没有一个名字是
@@ -397,6 +411,13 @@ var），每个
 个 `count` 取。`kern verify <manifest>` 打印这层事实；kern-run 与
 kern-serve 只拿 `Protocol` 驱动 runtime，不读 JSON（CI 用 grep 保证它们
 的代码里没有 fill / program / var / buffer 的名字面量）。
+
+`Protocol.shards` 是 state 上 `shard` 的投影：`positions`（按位置切 paged
+state 的组和成员数）有值时，组里每个成员跑同一个 batch——rows / groups 轴
+就是组的全部行，各成员之间只有寻址自己位置的东西不同（slot 只由 owner 写、
+本地 seq_len、本地页表、本卡的 line）；`heads` 按 state 名给出每个按头切的
+per-seq state 的组、成员数和段，push 用它切 slot（`Split::new(segments,
+members)`），握手用它核对 P 与 D 的字节。
 
 一步的形状因此统一：prefill 是"1 组 c 行"，decode 是"b 组 1 行"，投机轮
 是"b 组 r 行、每组取 `count` 个"——同一段代码，`--rows` 选每组行数（缺省取 manifest 声明的最宽）。设计与取舍见
@@ -474,7 +495,7 @@ logits 与 token 与整份逐位同（serve.md「流水线」）。
    互斥，`batch.groups ≥ 1`、`rows` 是 ≥ 1 的常量或已声明的 var（fill 之间
    是否凑成一份 serving 契约是 `Protocol::check` 的事，不在这里）；
 10. 拒绝一切未使用的声明（buffer / op / module / state / var / topology
-    group）；
+    group；`shard` 引用一个组也算用到它）；
 11. 多卡：组大小 > 0；`peer` buffer 必须 `dtype: u64`、shape 恰为
     `[组大小]`、`of` 指向一个 `export` 的 buffer 或一个 state（不能是
     自己、不能是另一个 peer）、`group` 已声明、不带 domain、自身不可
@@ -492,6 +513,11 @@ logits 与 token 与整份逐位同（serve.md「流水线」）。
     符寻址的字节数（末元素之后）在每个 call 上不得超过 `buffer 字节数 −
     offset`（var 上界；铺满的维不算），`out` 参上的描述符算写了它。`cluster`
     无零维、不超 16 块，grid 在 var 上下界都被它整除。
+13. shard：组已声明；`by: position` 只在 paged state 上、`by: heads` 只在
+    per-seq state 上；一个 paged state 按位置切，则所有 paged state 都按
+    位置切、同一个组，且没有 `axis: ranks` 的 var、没有 `blocks` fill；
+    heads 的段非空、每段行数与宽度非零、宽度被组大小整除、总字节 = 组大小
+    × `bytes_per_seq`。每条都单独报出 state 名、期望值与实际值。
 
 反序列化层已拒绝：未知字段（包括实参对象里的未知键）、重复名字、非法
 参数类型串。
@@ -506,6 +532,23 @@ runtime crate 的 phase-2 校验。唯一一条 runtime 替 verifier 查的 kern
 地址会把发起的 GPU 卡死到整机重启（GB300 实测），而 verifier 看不见
 SASS。簇内 barrier 的 `UTCBAR.2CTA.MULTICAST` 不碰全局内存，放行
 （MegaMoE 用它）。没有 cuobjdump 就拒绝装载。
+
+## 从 v6 到 v7
+
+state 加可选的 `shard`（`by: position` / `by: heads` + `segments`，见「顶层
+结构」），verifier 加第 13 条，`Protocol` 加 `shards: Shards { positions:
+Option<Positions { group, members }>, heads: BTreeMap<state, Heads { group,
+members, segments }> }`：`positions` 有值就是"这个组跑复制 batch"的声明。
+`kern verify` 打印这两项。有 topology 的 manifest 本来就不能 `kern cut`，所以
+切分永远不会碰到 shard。别的不变；examples 只改版本号（K3 4 层的五份由
+gen_k3.py 重出、解析后相等），golden 重生成。
+
+## 从 v5 到 v6
+
+var 的轴 `axis: tray` 改名 `axis: ranks`（`VarAxis::Ranks` / `protocol::Axis::Ranks`，
+`Protocol.ranks`）：它数的是一个 rank 组（`tp`）里每个 rank 的行合起来、本卡的行在前，
+与机柜里的 tray 无关——一卡一进程之后，锁步的 rank 集合是 head 的 `Ranks`
+（serve.md「每卡一个进程」）。别的不变；examples 由生成器重出（解析后相等），golden 重生成。
 
 ## 从 v3 到 v4
 

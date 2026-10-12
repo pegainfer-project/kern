@@ -44,6 +44,10 @@
 //! lets a stage carry only its own. A table whose state a stage dropped
 //! indexes a kept state of the same kind: a pool hands every paged state
 //! the same ids.
+//!
+//! A manifest with a topology is never cut: a stage is one rank. That
+//! includes every manifest whose states a group shards, so a stage never
+//! carries a shard.
 
 use std::collections::{BTreeMap, BTreeSet};
 

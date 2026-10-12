@@ -11,14 +11,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Canonical JSON hashes of the checked-in examples (last: unified attention
 # reads the kv state, `inout` -> `in`, 2026-09-16; qwen3-4b: one kv state per
 # layer and registry builds of argmax / embedding / weight_prep, 2026-10-07; all: vars
-# declare their `axis`, 2026-10-08). Changes to kernel wiring,
+# declare their `axis`, 2026-10-08; schema 6, 2026-10-09; schema 7, 2026-10-09). Changes to kernel wiring,
 # capacities, float literals or even artifact pins require review.
 BASELINES = {
-    "qwen3-4b-dspark.json": "40349cc8712c2efde92a04072ebe6444ec0718e90989e7d5702e21b07a5d0543",
-    "qwen3-4b-silu-mined.json": "014b6caf3b7588ad28c19a8b439357e1b83cf5e42011ba7c363416192d815f5a",
-    "qwen3-4b.json": "dac04a3a6f9793e10ee2d89e27d9252998c4b376d2d91cfb42eec1d10de73262",
-    "qwen3.8-27b-dflash2.json": "7500f3047dd5bd68a21efccbe04ba83a3f100b727722947cbe84cdf4a7ee632f",
-    "qwen3.8-27b.json": "0f404c48c06a310d894dfb6ab8e6600b4badaa65b0c55fdd14e4ef97d5603175"
+    "qwen3-4b-dspark.json": "0c53d2d2c114c12584b38912491aaa2bb1e571b2c852c3c39b39ee0dd75bb229",
+    "qwen3-4b-silu-mined.json": "512e71644455bc27f6e14af9f3a8cfc9be6d5d01a9e00dd2f6cc6de4a4a9fc3a",
+    "qwen3-4b.json": "266ddf976a1e06dabca00aa4f41735240d745d02ce6ac084d5bf627928099c15",
+    "qwen3.8-27b-dflash2.json": "487976495a64acb69f13aa4e4be2b7f66aef810e53dae99ab1b05a3dce045e2a",
+    "qwen3.8-27b.json": "0d4436a4b6fe85fb434f321d718c08f469310ae28c00a74e441a9b7bd7ecd9ea"
 }
 
 

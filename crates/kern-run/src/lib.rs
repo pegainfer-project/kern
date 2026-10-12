@@ -140,7 +140,7 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
 /// back); and the call's vars.
 ///
 /// Every fill a caller of one rank produces is there; `blocks` is the
-/// tray batch's and only a caller that spans a rank group can fill it.
+/// group's batch, and only a caller that spans a rank group can fill it.
 pub fn fills<'p, L: Borrow<Lease>>(
     p: &'p Protocol,
     leases: &[L],
@@ -387,7 +387,7 @@ impl Caller {
         }
         for t in &protocol.line_tables {
             let cols = match t.axis {
-                Axis::Tray => protocol.tray.as_ref().map_or(1, |b| b.max),
+                Axis::Ranks => protocol.ranks.as_ref().map_or(1, |b| b.max),
                 _ => protocol.groups.max,
             };
             rt.write_input(&t.name, &le_bytes_i32(&line_rows(t, one, cols as usize)?))?;

@@ -3,17 +3,26 @@
 //! The HTTP/protocol stack is pegainfer's frontend (vLLM's Rust server
 //! crates underneath: completions, chat completions, streaming, chat
 //! templates, stop strings). This crate contributes the engine behind it:
-//! `scheduler::KernScheduler`, the pegainfer `Scheduler` contract over a
-//! `tray::Tray` — one `kern_runtime::Runtime` per GPU, driven in lockstep
-//! (KV pages are the runtimes' leases). The crate's public surface is
-//! [`serve`] and its option structs.
+//! `scheduler::KernScheduler`, the pegainfer `Scheduler` contract over
+//! [`ranks::Ranks`] — every rank's accounting, kept by the head — and
+//! `executor::Executors`, one process per GPU running what it decided.
+//! A cut manifest is served by `pp` instead, one process per stage, its
+//! head behind a [`front::Front`], and may hand each prompt to a decode
+//! tier ([`pd`]). The crate's public
+//! surface is [`serve`], its option structs, and the accounting,
+//! protocols and packing policy its tests drive.
 
 #![deny(unsafe_code)]
 
+mod executor;
+pub mod front;
 pub mod logline;
+pub mod pd;
 mod pp;
+pub mod ranks;
 mod scheduler;
-mod tray;
+
+pub use pp::pack;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -21,8 +30,8 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use kern_manifest::Verified;
-use kern_runtime::{Capacity, Runtime, Topology};
+use kern_manifest::{Protocol, Verified};
+use kern_runtime::Capacity;
 use pegainfer_frontend::engine::{
     drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler, Scheduler,
 };
@@ -30,7 +39,6 @@ use pegainfer_frontend::vllm::{self, ParserSelection};
 use tracing::info;
 
 use scheduler::{KernScheduler, Policy};
-use tray::Tray;
 
 /// The manifest and its artifacts, as named on the command line.
 pub struct Artifacts {
@@ -49,11 +57,9 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 8000)]
     pub port: u16,
 
-    /// CUDA device ordinals, one per rank of the tray, in rank order (a
-    /// manifest with a topology needs every group's members; `tp` groups
-    /// are consecutive ranks). Default: 0
-    #[arg(long, value_delimiter = ',')]
-    pub gpus: Vec<usize>,
+    /// CUDA device this process drives: one GPU per process
+    #[arg(long, default_value_t = 0)]
+    pub gpu: usize,
 
     /// KV pool in tokens per rank (rounded down to the page); every request
     /// reserves its worst case `prompt + max_tokens` at admission. Default:
@@ -82,21 +88,49 @@ pub struct ServeOpts {
     #[arg(long)]
     pub rows: Option<u64>,
 
-    /// Pinned host memory (GiB) per rank for snapshots parked off the
-    /// device: a lease short of pages or slots parks the coldest snapshot
-    /// there instead of dropping it, and a prompt hitting one wakes it
-    /// (0: off)
+    /// Pinned host memory (GiB) per rank, or per stage on a pipeline's head,
+    /// for snapshots parked off the device: a lease short of pages or slots
+    /// parks the coldest snapshot there instead of dropping it, and a
+    /// prompt hitting one wakes it (0: off)
     #[arg(long, default_value_t = 0.0)]
     pub host_gib: f64,
 
-    /// Serve stage 0 of a cut manifest (`kern cut`): HTTP, scheduler and
-    /// pool, waiting at this host:port for every other stage to join
-    #[arg(long, conflicts_with = "pp_head")]
-    pub pp_listen: Option<String>,
+    /// Tokens a parked snapshot adds to the prefix its session's other
+    /// snapshots share: the host tier holds one slot per this many tokens
+    /// of pages. The default fits the AgentX traces on qwen3.8 and full K3
+    #[arg(long, default_value_t = 8192)]
+    pub host_turn: u64,
 
-    /// Serve a later stage of a cut manifest, joining the head at host:port
+    /// Serve as the head of several processes: HTTP, scheduler and every
+    /// process's accounting, waiting at this host:port for the others to
+    /// join — the later stages of a cut manifest (`kern cut`), or ranks
+    /// 1.. of a manifest whose topology spans several GPUs
+    #[arg(long, conflicts_with = "head")]
+    pub listen: Option<String>,
+
+    /// Join the head at host:port: as a later stage of a cut manifest, or
+    /// as rank `--rank` of a manifest with a topology
     #[arg(long)]
-    pub pp_head: Option<String>,
+    pub head: Option<String>,
+
+    /// This process's rank with `--head`, 1.. of the manifest's ranks
+    /// (rank 0 is the head; `tp` groups are consecutive ranks)
+    #[arg(long, requires = "head")]
+    pub rank: Option<usize>,
+
+    /// On the head of a pipeline: hand every prompt of more than one token
+    /// to a decode tier whose head listens at host:port (`--decode-listen`)
+    /// once prefilled, and relay what it generates; repeated, each request
+    /// goes to one of the tiers
+    #[arg(long, requires = "listen")]
+    pub decode: Vec<String>,
+
+    /// Serve as a decode tier: no HTTP; wait at this host:port for the one
+    /// pipeline head (`--decode`) whose prompts it decodes. Its other ranks,
+    /// if any, join at `--listen` as usual. `--max-seqs` is the seats a
+    /// group holds, reserved and running
+    #[arg(long, conflicts_with = "head")]
+    pub decode_listen: Option<String>,
 }
 
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
@@ -108,62 +142,78 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         kern = %*kern_run::VERSION,
         "loading"
     );
-    let gpus = if o.gpus.is_empty() { vec![0] } else { o.gpus.clone() };
     let manifest_json = std::fs::read_to_string(&art.manifest)
         .with_context(|| format!("reading manifest {}", art.manifest.display()))?;
     let manifest =
         Verified::from_json(&manifest_json).with_context(|| format!("manifest {}", art.manifest.display()))?;
     log_manifest(&manifest);
-    anyhow::ensure!(
-        manifest.cut.is_none() || (gpus.len() == 1 && (o.pp_listen.is_some() || o.pp_head.is_some())),
-        "a pipeline stage runs on one GPU, with `--pp-listen` (stage 0) or `--pp-head` (the others)"
-    );
-    if let Some(head) = &o.pp_head {
-        let stage = pp::stage::Stage {
-            head: head.clone(),
-            gpu: gpus[0],
-            kernels: art.kernels.clone(),
-            capacity: o.capacity,
-            max_seqs: o.max_seqs,
-            eager: o.eager,
-        };
-        return pp::stage::run(manifest, &weights, stage);
-    }
-
     let model_path = weights.dirs().remove(0);
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
 
-    if let Some(listen) = o.pp_listen.clone() {
+    if manifest.cut.is_some() {
+        anyhow::ensure!(o.rank.is_none(), "a pipeline stage's place is its cut manifest's; `--rank` is a topology's");
+        anyhow::ensure!(
+            o.decode_listen.is_none(),
+            "a decode tier serves an uncut manifest; this one is a pipeline stage"
+        );
+        if let Some(head) = &o.head {
+            let stage = pp::stage::Stage {
+                head: head.clone(),
+                gpu: o.gpu,
+                kernels: art.kernels.clone(),
+                capacity: o.capacity,
+                max_seqs: o.max_seqs,
+                eager: o.eager,
+            };
+            return pp::stage::run(manifest, &weights, stage);
+        }
+        let listen =
+            o.listen.clone().context("a pipeline stage runs with `--listen` (stage 0) or `--head` (the others)")?;
         let head = pp::head::Head {
             listen,
-            gpu: gpus[0],
+            gpu: o.gpu,
             kernels: art.kernels.clone(),
             capacity: o.capacity,
             chunk: o.chunk,
             max_seqs: o.max_seqs,
             eager: o.eager,
+            decode: o.decode.clone(),
+            host_bytes: (o.host_gib * (1u64 << 30) as f64) as u64,
+            host_turn: o.host_turn,
         };
-        let load = move || -> Result<(pp::head::PpHead, scheduler::Facts)> {
-            let h = pp::head::load(manifest, &weights, head)?;
-            let facts = h.facts();
-            Ok((h, facts))
-        };
+        let load = move || pp::head::spawn(manifest, weights, head);
         return launch(load, served_name, model_path, o.port);
     }
 
-    // Every sequence of a tray batch group holds a token slot on each of
-    // its `t` ranks, and each rank its pad.
-    let t = manifest.group_size("tp").unwrap_or(1) as usize;
-    let capacity = Capacity { tokens: o.capacity, seqs: ((o.max_seqs + 1) * t) as u64 };
-    let host_bytes = (o.host_gib * (1u64 << 30) as f64) as u64;
-    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes };
-    let (kernels, eager) = (art.kernels.clone(), o.eager);
+    // Every sequence of a group batch holds a token slot on each of its
+    // `t` ranks, and each rank its pad. A replicated group's batch is
+    // `--max-seqs` rows on every member, not `t` members' worth.
+    let replicated = Protocol::check(&manifest)?.shards.positions.is_some();
+    let t = if replicated { 1 } else { manifest.group_size("tp").unwrap_or(1) as usize };
+    let load = executor::Load {
+        gpu: o.gpu,
+        kernels: art.kernels.clone(),
+        capacity: Capacity { tokens: o.capacity, seqs: ((o.max_seqs + 1) * t) as u64, landings: 0 },
+        eager: o.eager,
+    };
+    if let Some(head) = &o.head {
+        let q = o.rank.context("`--head` with a topology manifest joins as `--rank <q>`")?;
+        return executor::rank(&manifest, &weights, &load, head, q);
+    }
+    anyhow::ensure!(o.decode.is_empty(), "`--decode` hands prompts off from a pipeline head; this manifest is not cut");
+    if let Some(at) = &o.decode_listen {
+        let (ranks, exec) = executor::head(&manifest, &weights, &load, o.listen.as_deref(), (0, 0))?;
+        let pools = exec.pools()?;
+        return pd::tier::serve(ranks, exec, pools, pd::shapes(&manifest), at, o.max_seqs);
+    }
+    let host = ((o.host_gib * (1u64 << 30) as f64) as u64, o.host_turn);
+    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes: host.0 };
+    let listen = o.listen.clone();
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
         let t0 = Instant::now();
-        let bind = |rt: &mut Runtime, _: &Topology| weights.bind(rt);
-        let tray = Tray::load(&manifest, kernels.as_deref(), &gpus, capacity, &bind, host_bytes, eager)?;
-        info!(model = %tray.manifest().model, gpus = ?gpus, load_s = logline::secs(t0.elapsed()), "tray loaded");
-        let sched = KernScheduler::new(tray, policy)?;
+        let (ranks, exec) = executor::head(&manifest, &weights, &load, listen.as_deref(), host)?;
+        info!(model = %manifest.model, ranks = ranks.groups().ranks(), load_s = logline::secs(t0.elapsed()), "ranks loaded");
+        let sched = KernScheduler::new(ranks, exec, policy)?;
         let facts = sched.facts();
         Ok((sched, facts))
     };

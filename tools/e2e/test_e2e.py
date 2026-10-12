@@ -85,6 +85,31 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual([e2e.oracle_gate(r, avail) for r, avail in ((1, True), (1, False), (4, False))], [True, False, None])
 
 
+class DealtTest(unittest.TestCase):
+    def test_a_group_is_asked_short_page_crossing_chunked_and_many_rows(self):
+        for w in (2, 8):
+            cases = e2e.dealt_cases(w, 16, 2048, 64)
+            by = lambda sc: [c for c in cases if c.scenario == sc]
+            span = 16 * w
+            short = {len(c.ids) for c in by("short")}
+            crossing = [c for c in by("pages") if len(c.ids) // span < (len(c.ids) + c.max_tokens) // span]
+            self.assertEqual((min(short) < w, max(short) > w), (True, True))
+            self.assertEqual((bool(crossing), max(len(c.ids) for c in by("pages")) > 2048, len(by("many_rows"))), (True, True, 64))
+            self.assertEqual({1, 64} <= {c.max_tokens for c in by("short")}, True)
+            self.assertEqual((len(set(cases)), all(0 <= i < 256 for c in cases for i in c.ids)), (len(cases), True))
+
+    def test_gpus_name_their_node_and_a_dealt_target_finds_its_twin(self):
+        self.assertEqual(e2e.gpus_of("0,3,node2:1"), [e2e.Gpu(0), e2e.Gpu(3), e2e.Gpu(1, "node2")])
+        mk = lambda name, ranks, model, dealt: e2e.Target(name, Path("k.toml"), Path(__file__), Path("."), [], None, ranks, True, model, dealt)
+        twin, other, d = mk("twin", 1, "m", False), mk("other", 1, "x", False), mk("d", 2, "m", True)
+        self.assertEqual((e2e.twin_of(d, [other, d, twin]), e2e.twin_of(twin, [d, twin]), e2e.twin_of(d, [other, d])), (twin, None, None))
+
+    def test_exactness_names_the_first_divergence(self):
+        self.assertEqual(e2e.exact([("a", [1, 2], [1, 2])]), (True, "1/1 identical"))
+        ok, note = e2e.exact([("a", [1, 2], [1, 2]), ("b", [1, 3], [1, 2])])
+        self.assertEqual((ok, note.startswith("1/2 identical; b: diverge at token 1")), (False, True))
+
+
 class SummaryTest(unittest.TestCase):
     def test_nothing_run_is_not_a_pass(self):
         skipped = e2e.Report(target="t", skipped="missing: kern")

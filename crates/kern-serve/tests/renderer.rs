@@ -99,3 +99,63 @@ fn v41_typed_reasoning_effort_controls_numeric_budget() {
         assert!(render(&request).is_err(), "{effort}");
     }
 }
+
+/// The PP head checkpoints a recurrent line at `history_tokens`: the prompt
+/// minus the generation prompt tail, which pegainfer measures on the last
+/// message alone. For Kimi K3 that is sound only while the conversation
+/// rendered without a generation prompt is a prefix of the next turn's prompt
+/// and the tail the whole conversation adds equals what the last message alone
+/// adds. Checked over every user/assistant shape up to four messages that ends
+/// in a user turn, the shape AgentX replays.
+#[test]
+fn k3_history_is_a_prefix_of_the_next_turn_and_the_tail_is_local() {
+    use std::sync::Arc;
+    use vllm_chat::{GenerationPromptMode, KimiK3ChatRenderer};
+    use vllm_tokenizer::test_utils::TestTokenizer;
+
+    let tokenizer = ["<|open|>", "<|close|>", "<|sep|>", "<|end_of_msg|>"]
+        .into_iter()
+        .zip(256..)
+        .fold(TestTokenizer::new(), |t, (token, id)| t.with_special_token(token, id));
+    let k3 = KimiK3ChatRenderer::new(Arc::new(tokenizer), Default::default());
+    let render = |messages: &[ChatMessage], mode| {
+        let mut request = ChatRequest { messages: messages.to_vec(), ..ChatRequest::for_test() };
+        request.chat_options.generation_prompt_mode = mode;
+        k3.render(&request).unwrap().prompt.into_token_ids().unwrap()
+    };
+    let tail = |messages: &[ChatMessage]| {
+        render(messages, GenerationPromptMode::StartNewAssistant).len()
+            - render(messages, GenerationPromptMode::NoGenerationPrompt).len()
+    };
+    let texts = ["Hello.", "", " padded\n", "literal <|open|>message<|sep|>"];
+    let message =
+        |user: bool, text: &str| if user { ChatMessage::user(text) } else { ChatMessage::assistant_text(text) };
+    let mut level: Vec<Vec<ChatMessage>> = vec![vec![]];
+    let mut shapes = level.clone();
+    for _ in 0..3 {
+        level = level
+            .iter()
+            .flat_map(|s| {
+                texts.iter().flat_map(move |t| [true, false].map(|u| [s.clone(), vec![message(u, t)]].concat()))
+            })
+            .collect();
+        shapes.extend(level.iter().cloned());
+    }
+    let mut checked = 0;
+    for history in &shapes {
+        for text in texts {
+            let turn = [history.clone(), vec![ChatMessage::user(text)]].concat();
+            let next = [turn.clone(), vec![ChatMessage::assistant_text("reply"), ChatMessage::user("next")]].concat();
+            let prompt = render(&turn, GenerationPromptMode::StartNewAssistant);
+            let boundary = prompt.len() - tail(&turn[turn.len() - 1..]);
+            let next = render(&next, GenerationPromptMode::StartNewAssistant);
+            assert_eq!(
+                (prompt[..boundary] == next[..boundary], tail(&turn), boundary),
+                (true, prompt.len() - boundary, render(&turn, GenerationPromptMode::NoGenerationPrompt).len()),
+                "{turn:?}"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, (1 + 8 + 64 + 512) * 4);
+}

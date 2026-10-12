@@ -594,7 +594,7 @@ impl Bench {
         );
         let gpus: Vec<usize> = (inputs.gpu..inputs.gpu + n).collect();
         let host_weights = HostWeights::new();
-        let capacity = Capacity { tokens: Some(plan.tokens), seqs: plan.seqs };
+        let capacity = Capacity { tokens: Some(plan.tokens), seqs: plan.seqs, landings: 0 };
         let loaded: Vec<Result<crate::Sent<Runtime>>> = std::thread::scope(|s| {
             let handles: Vec<_> = gpus
                 .iter()

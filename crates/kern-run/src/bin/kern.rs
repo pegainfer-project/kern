@@ -218,13 +218,13 @@ fn verify(path: &Path) -> bool {
     let axis = |a: Axis| match a {
         Axis::Rows => format!("[{}]", p.rows.var),
         Axis::Groups => format!("[{}]", p.groups.var),
-        Axis::Tray => format!("[{}]", p.tray.as_ref().map_or("tray", |t| t.var.as_str())),
+        Axis::Ranks => format!("[{}]", p.ranks.as_ref().map_or("ranks", |t| t.var.as_str())),
         Axis::Fixed(n) => format!("[{n}]"),
     };
     println!("  rows      `{}` <= {}", p.rows.var, p.rows.max);
     println!("  groups    `{}` <= {}", p.groups.var, p.groups.max);
-    if let Some(t) = &p.tray {
-        println!("  tray      `{}` <= {}", t.var, t.max);
+    if let Some(t) = &p.ranks {
+        println!("  ranks     `{}` <= {}", t.var, t.max);
     }
     for f in &p.fills {
         let w = if f.width > 1 { format!(" x {}", f.width) } else { String::new() };
@@ -236,6 +236,12 @@ fn verify(path: &Path) -> bool {
     for t in &p.line_tables {
         let w = if t.width > 1 { format!(", {}", t.width) } else { String::new() };
         println!("  lines     `{}` [{}, {}{w}]", t.name, t.lines, axis(t.axis).trim_matches(['[', ']']));
+    }
+    if let Some(s) = &p.shards.positions {
+        println!("  dealt     positions over `{}` of {}: one replicated batch", s.group, s.members);
+    }
+    for (state, h) in &p.shards.heads {
+        println!("  heads     `{state}` over `{}` of {}: segments {:?}", h.group, h.members, h.segments);
     }
     for f in &p.forwards {
         let rows = match f.rows {

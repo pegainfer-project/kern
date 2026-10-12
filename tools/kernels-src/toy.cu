@@ -25,6 +25,21 @@
 //                 next row the token predicted after the last;
 //                 `count` says 1 + S % rows of them are taken.  grid [seqs]
 //
+// The dealt shape (toy-dcp) is decode context parallelism over a group of
+// w members: a sequence's position p lives on member p % w at its local
+// p / w, and its line is H heads, each folding the tokens on its own
+// (head h folds mark(t, p, h)), split by heads, H / w per member. The next
+// token is next_of(S + the sum of every head's carry): a member's partial
+// over the positions and heads it holds, gathered over the group and
+// summed in u64, the same bits however the sum is dealt. Its twin is the
+// same manifest at w = 1.
+//
+//   toy_heads_fold:     a group's rows folded into each head a line
+//                       holds, in order                         grid [groups]
+//   toy_dealt_partial:  a sequence's sum over the positions and
+//                       heads held here                          grid [seqs]
+//   toy_combine:        the members' partials summed, the token  grid [seqs]
+//
 //   nvcc -cubin -arch=sm_103a -o target/cubins/toy.cubin tools/kernels-src/toy.cu
 #include <cstdint>
 
@@ -98,10 +113,12 @@ __device__ static u64 fill_slot(u64* s, i64 t, i64 p, i64 words, const i64* salt
   return acc;
 }
 
-// The sum over positions [0, n) of sequence `g`, through its page-table
-// row, poisoned when any tail word disagrees with its head.
+// The sum over the `n` positions sequence `g` holds here, through its
+// page-table row, poisoned when any tail word disagrees with its head.
+// Local position q is the sequence's q * members + member (positions dealt
+// over a group; 1 and 0 when they are not), the one its words rotate by.
 __device__ static u64 pages_sum(const int* table, int width, int page, const unsigned char* kv, i64 bytes_per_token,
-                                i64 n) {
+                                i64 n, int members, int member) {
   const int* row = table + (i64)blockIdx.x * width;
   i64 limit = (i64)width * page;
   if (n > limit) n = limit;
@@ -111,7 +128,7 @@ __device__ static u64 pages_sum(const int* table, int width, int page, const uns
     i64 slot = (i64)row[q / page] * page + q % page;
     const u64* s = reinterpret_cast<const u64*>(kv + slot * bytes_per_token);
     for (i64 w = threadIdx.x; w < words; w += BLOCK) {
-      if (w < WORDS) acc += rotl(s[w], (int)q);
+      if (w < WORDS) acc += rotl(s[w], (int)(q * members + member));
       else bad += s[w] != tail_of(s, w);
     }
   }
@@ -150,7 +167,7 @@ extern "C" __global__ void toy_write(const i64* __restrict__ token_ids, const i6
 extern "C" __global__ void toy_predict(const int* __restrict__ seq_lens, const int* __restrict__ block_table,
                                        const unsigned char* __restrict__ kv, const i64* __restrict__ salt,
                                        i64* __restrict__ next_token, i64 bytes_per_token, int page, int width) {
-  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, seq_lens[blockIdx.x]);
+  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, seq_lens[blockIdx.x], 1, 0);
   if (threadIdx.x == 0) next_token[blockIdx.x] = next_of(s);
 }
 
@@ -159,7 +176,7 @@ extern "C" __global__ void toy_predict_mem(const int* __restrict__ seq_lens, con
                                            const unsigned char* __restrict__ mem, const i64* __restrict__ salt,
                                            i64* __restrict__ next_token, i64 bytes_per_token, int page, int width,
                                            i64 line_bytes) {
-  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, seq_lens[blockIdx.x]);
+  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, seq_lens[blockIdx.x], 1, 0);
   int line = line_index[blockIdx.x];
   u64 c = line > 0 ? line_read(reinterpret_cast<const u64*>(mem + (i64)line * line_bytes), line_bytes) : 0;
   if (threadIdx.x == 0) next_token[blockIdx.x] = next_of(s + c);
@@ -188,7 +205,7 @@ __device__ static void round_chain(const i64* token_ids, const i64* positions, c
                                    i64 bytes_per_token, int page, int width, int rows, u64 carry, u64* folded,
                                    int* taken) {
   i64 r0 = (i64)blockIdx.x * rows;
-  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, positions[r0]);
+  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, positions[r0], 1, 0);
   __shared__ i64 t;
   __shared__ u64 c;
   if (threadIdx.x == 0) {
@@ -240,4 +257,69 @@ extern "C" __global__ void toy_round_mem(const i64* __restrict__ token_ids, cons
   round_chain(token_ids, positions, slot_mapping, block_table, kv, salt, out, count, bytes_per_token, page, width,
               rows, carry, &folded, &taken);
   if (l) line_write(l, folded, p0 + taken, line_bytes);
+}
+
+// A share of `n` heads of a line: words [0, 2n) are each head's carry and
+// next position, then one tail row after another of a word per head, each
+// a function of its head's carry. Split by heads, a whole line's rows are
+// every member's rows side by side, so a member's share is this layout too.
+__device__ static inline u64 heads_tail(const u64* l, int n, i64 k) {
+  i64 i = k - 2 * n;
+  return line_tail(l[2 * (i % n)], i / n);
+}
+
+__device__ static bool heads_bad(const u64* l, int n, i64 line_bytes) {
+  u64 bad = 0;
+  for (i64 k = 2 * n + threadIdx.x; k < line_bytes / 8; k += BLOCK) bad += l[k] != heads_tail(l, n, k);
+  return block_sum(bad) != 0;
+}
+
+// Rows `g*rows .. (g+1)*rows` of group `g` folded into each of the `heads`
+// heads this line holds, the first being head `member * heads`; a head
+// that does not continue at the group's first position (a stale or
+// foreign copy) or whose tail is off is poisoned.
+extern "C" __global__ void toy_heads_fold(const i64* __restrict__ token_ids, const i64* __restrict__ positions,
+                                          const int* __restrict__ line_index, unsigned char* __restrict__ mem,
+                                          const i64* __restrict__ salt, int rows, i64 line_bytes, int heads,
+                                          int member) {
+  int line = line_index[blockIdx.x];
+  if (line <= 0) return;
+  u64* l = reinterpret_cast<u64*>(mem + (i64)line * line_bytes);
+  i64 r0 = (i64)blockIdx.x * rows, p0 = positions[r0];
+  bool bad = heads_bad(l, heads, line_bytes);
+  for (int j = threadIdx.x; j < heads; j += BLOCK) {
+    u64 c = p0 == 0 ? 0 : ((i64)l[2 * j + 1] != p0 || bad ? l[2 * j] ^ POISON : l[2 * j]);
+    for (int i = 0; i < rows; ++i) c = rotl(c, 7) ^ mark(token_ids[r0 + i], positions[r0 + i], member * heads + j, salt);
+    l[2 * j] = c;
+    l[2 * j + 1] = (u64)(p0 + rows);
+  }
+  __syncthreads();
+  for (i64 k = 2 * heads + threadIdx.x; k < line_bytes / 8; k += BLOCK) l[k] = heads_tail(l, heads, k);
+}
+
+// A sequence's partial: its rotated sum over the positions held here (the
+// `members`-th ones from `member`) plus the carries of the heads held here.
+extern "C" __global__ void toy_dealt_partial(const int* __restrict__ seq_lens, const int* __restrict__ block_table,
+                                             const unsigned char* __restrict__ kv, const int* __restrict__ line_index,
+                                             const unsigned char* __restrict__ mem, u64* __restrict__ partial,
+                                             i64 bytes_per_token, int page, int width, int members, int member,
+                                             i64 line_bytes, int heads) {
+  u64 s = pages_sum(block_table, width, page, kv, bytes_per_token, seq_lens[blockIdx.x], members, member);
+  int line = line_index[blockIdx.x];
+  if (line > 0) {
+    const u64* l = reinterpret_cast<const u64*>(mem + (i64)line * line_bytes);
+    bool bad = heads_bad(l, heads, line_bytes);
+    u64 c = 0;
+    for (int j = 0; j < heads; ++j) c += l[2 * j];
+    s += bad ? c ^ POISON : c;
+  }
+  if (threadIdx.x == 0) partial[blockIdx.x] = s;
+}
+
+// The members' partials, member m's at m * seqs (an all-gather's order).
+extern "C" __global__ void toy_combine(const u64* __restrict__ partials, i64* __restrict__ next_token, int members) {
+  if (threadIdx.x != 0) return;
+  u64 s = 0;
+  for (int m = 0; m < members; ++m) s += partials[(i64)m * gridDim.x + blockIdx.x];
+  next_token[blockIdx.x] = next_of(s);
 }

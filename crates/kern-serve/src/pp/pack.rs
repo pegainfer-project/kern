@@ -1,20 +1,42 @@
-//! What the next item of a packed prefill carries: the oldest sequences'
-//! next rows, back to back, until the call is full.
+//! What the next item of a pipeline's prefill carries, and when it goes.
 //!
 //! An item reads a stage's weights once whatever its rows, so a pipeline
 //! fed one prompt per item pays a whole weight pass for a prompt's last
-//! few hundred rows. Packing fills each item instead: sequences in
-//! admission order each give their next rows, the last one a partial chunk
-//! if that is what fits, until the item has its rows, its sequences or its
-//! context (the sum of its sequences' lengths after the call, what a
-//! program sized by its context expands). A sequence never skips ahead of
-//! an older one, so no prompt starves behind shorter ones arriving later.
+//! few hundred rows. Packing fills each item instead: sequences in turn
+//! each give their next rows, the last one a partial chunk if that is what
+//! fits, until the item has its rows, its sequences or its context (the
+//! sum of its sequences' lengths after the call, what a program sized by
+//! its context expands). A sequence the context has no room for is passed
+//! over, not waited on.
+//!
+//! The turn is shortest remaining first. A prompt continuing from a long
+//! kept prefix has a few thousand rows left where a cold one has its whole
+//! length, and a cold 200k prompt holds a pipeline for seconds: oldest
+//! first, every hit admitted behind cold prompts waits all of them out.
+//! Nothing starves: a sequence passed over by `patience` items goes ahead
+//! of every sequence passed over fewer times, and the one passed over most
+//! always fits (its own context is below the bound), so a sequence with
+//! rows left is in at least one of every `patience + n` items, `n` the
+//! sequences waiting.
+//!
+//! Answers are collected and prompts admitted only between items, and each
+//! send waits on the head's device, so how far the head runs ahead of the
+//! stages is how late it decides. A full item goes out while at most as
+//! many items as stages are in flight (one queued ahead of stage 0), a
+//! partial one only while fewer: packing waits for rows only when the
+//! stages have work, and a burst of long prompts neither stops the head
+//! answering and admitting nor puts the hit arriving behind it after every
+//! item the burst could fill.
 
-/// One sequence waiting to be fed: `pos` rows already sent, `left` still to send.
+use std::cmp::Reverse;
+
+/// One sequence waiting to be fed: `pos` rows already sent, `left` still
+/// to send, `passed` items gone out without it since it last had rows in one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Waiting {
     pub pos: usize,
     pub left: usize,
+    pub passed: usize,
 }
 
 /// What one call may hold.
@@ -25,79 +47,56 @@ pub struct Bounds {
     pub context: usize,
 }
 
-/// The next item as `(index into seqs, rows)`, oldest first; empty when
-/// nothing is waiting or the oldest cannot advance at all.
-pub fn pack(seqs: &[Waiting], b: Bounds) -> Vec<(usize, usize)> {
+/// The indices of the sequences with rows left, in their turn: those
+/// passed over at least `patience` times, most passed first, then the rest
+/// by rows left; ties go to the older (lower index).
+pub fn turn(seqs: &[Waiting], patience: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..seqs.len()).filter(|&i| seqs[i].left > 0).collect();
+    order.sort_by_key(|&i| match seqs[i] {
+        s if s.passed >= patience => (false, Reverse(s.passed), 0, i),
+        s => (true, Reverse(0), s.left, i),
+    });
+    order
+}
+
+/// The next item as `(index into seqs, rows)`, in turn; empty when nothing
+/// is waiting.
+pub fn pack(seqs: &[Waiting], b: Bounds, patience: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let (mut rows, mut context) = (0, 0);
-    for (i, s) in seqs.iter().enumerate().filter(|(_, s)| s.left > 0) {
-        let room = b.context.saturating_sub(context + s.pos);
-        let n = s.left.min(b.rows - rows).min(room);
-        if n == 0 || out.len() == b.seqs {
+    for i in turn(seqs, patience) {
+        if out.len() == b.seqs || rows == b.rows {
             break;
         }
-        out.push((i, n));
-        rows += n;
-        context += s.pos + n;
+        let s = seqs[i];
+        let n = s.left.min(b.rows - rows).min(b.context.saturating_sub(context + s.pos));
+        if n > 0 {
+            out.push((i, n));
+            rows += n;
+            context += s.pos + n;
+        }
     }
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Each sequence's `passed` once `plan` has gone out: none for the
+/// sequences in it, one more for those with rows left it went without.
+pub fn passed(seqs: &[Waiting], plan: &[(usize, usize)]) -> Vec<usize> {
+    seqs.iter()
+        .enumerate()
+        .map(|(i, s)| match plan.iter().any(|&(j, _)| j == i) {
+            true => 0,
+            false if s.left > 0 => s.passed + 1,
+            false => s.passed,
+        })
+        .collect()
+}
 
-    const B: Bounds = Bounds { rows: 8, seqs: 3, context: 20 };
-
-    fn w(pos: usize, left: usize) -> Waiting {
-        Waiting { pos, left }
-    }
-
-    #[test]
-    fn fills_the_call_oldest_first() {
-        assert_eq!(pack(&[w(0, 5), w(0, 5), w(0, 5)], B), vec![(0, 5), (1, 3)]);
-        assert_eq!(pack(&[w(0, 20)], B), vec![(0, 8)]);
-        assert_eq!(pack(&[w(0, 1), w(0, 1), w(0, 1), w(0, 1)], B), vec![(0, 1), (1, 1), (2, 1)]);
-        assert_eq!(pack(&[w(4, 0), w(0, 2)], B), vec![(1, 2)]);
-        assert_eq!(pack(&[], B), vec![]);
-    }
-
-    #[test]
-    fn a_long_context_takes_the_room() {
-        assert_eq!(pack(&[w(16, 8), w(0, 8)], B), vec![(0, 4)]);
-        assert_eq!(pack(&[w(10, 2), w(0, 8)], B), vec![(0, 2), (1, 6)]);
-        assert_eq!(pack(&[w(20, 2)], B), vec![]);
-    }
-
-    /// Every small input against the rules restated plainly: within bounds,
-    /// in order, no sequence skipped while it could still take a row, and
-    /// feeding the plan repeatedly sends every row exactly once.
-    #[test]
-    fn every_small_input_drains_within_bounds() {
-        let shapes = (0..4).flat_map(|a| (0..4).flat_map(move |b| (0..10).map(move |c| [a, b, c])));
-        for lefts in shapes.flat_map(|l| (0..3).map(move |p| (l, p))) {
-            let (lefts, p0) = lefts;
-            let mut seqs: Vec<Waiting> =
-                lefts.iter().enumerate().map(|(i, &l)| w(if i == 0 { p0 } else { 0 }, l)).collect();
-            let total: usize = seqs.iter().map(|s| s.left).sum();
-            let mut sent = 0;
-            for _ in 0..=total {
-                let plan = pack(&seqs, B);
-                if plan.is_empty() {
-                    break;
-                }
-                let rows: usize = plan.iter().map(|&(_, n)| n).sum();
-                let context: usize = plan.iter().map(|&(i, n)| seqs[i].pos + n).sum();
-                assert!(rows <= B.rows && plan.len() <= B.seqs && context <= B.context, "{seqs:?} {plan:?}");
-                assert!(plan.windows(2).all(|x| x[0].0 < x[1].0), "{plan:?}");
-                let first = seqs.iter().position(|s| s.left > 0).unwrap();
-                assert_eq!(plan[0].0, first, "{seqs:?} {plan:?}");
-                for &(i, n) in &plan {
-                    seqs[i] = w(seqs[i].pos + n, seqs[i].left - n);
-                    sent += n;
-                }
-            }
-            assert_eq!((sent, seqs.iter().all(|s| s.left == 0)), (total, true), "{lefts:?} from {p0}");
-        }
-    }
+/// Whether `plan` goes out with `flying` items in a pipeline of `depth`
+/// stages: a full item (all its rows or all its sequences) while at most
+/// `depth` are in flight, a partial one while fewer.
+pub fn goes_out(plan: &[(usize, usize)], b: Bounds, flying: usize, depth: usize) -> bool {
+    let rows: usize = plan.iter().map(|&(_, n)| n).sum();
+    let full = rows == b.rows || plan.len() == b.seqs;
+    !plan.is_empty() && flying < depth + usize::from(full)
 }

@@ -278,7 +278,7 @@ documents `kern.toml`.
 
 The wire format is one JSON Schema, generated from the code and
 golden-checked in CI:
-[`schema/manifest-v5.schema.json`](schema/manifest-v5.schema.json)
+[`schema/manifest-v7.schema.json`](schema/manifest-v7.schema.json)
 · [rendered](https://kern-baa.pages.dev/schema/).
 
 | Path | What it is |

@@ -15,6 +15,12 @@
 //! Positions are shared where an object boundary falls inside a chunk: a
 //! position counts the objects that exist over it, is mapped when the
 //! first arrives and unmapped when the last leaves.
+//!
+//! Another runtime reaches these states through a [`Placement`]: the
+//! chunk at every position, which it mirrors over the same chunks mapped
+//! into its own address space. A remap moves chunks only off objects
+//! nobody holds, so an object held when a placement is taken stays where
+//! that placement says for as long as it is held.
 
 use std::ops::Range;
 
@@ -67,6 +73,83 @@ impl Remap {
     }
 }
 
+/// The chunk at every position of every arena, in arena order: where a
+/// mirror of the arenas maps what. Each chunk is at one position at most.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placement(Vec<Vec<Option<u32>>>);
+
+impl Placement {
+    /// Arenas of `positions` positions each, nothing mapped.
+    pub fn unmapped(positions: &[usize]) -> Placement {
+        Placement(positions.iter().map(|&n| vec![None; n]).collect())
+    }
+
+    /// Positions per arena.
+    pub fn shape(&self) -> Vec<usize> {
+        self.0.iter().map(Vec::len).collect()
+    }
+
+    /// The chunk at position `p` of arena `a`.
+    pub fn at(&self, a: usize, p: usize) -> Option<u32> {
+        self.0[a][p]
+    }
+
+    /// One past the highest chunk placed (0 when nothing is).
+    pub fn chunks(&self) -> u32 {
+        self.0.iter().flatten().flatten().map(|&c| c + 1).max().unwrap_or(0)
+    }
+
+    /// The remap that turns this placement into `next`, of the same shape:
+    /// every position whose chunk changes comes off, then gets its new
+    /// chunk, then is granted access.
+    pub fn toward(&self, next: &Placement) -> Remap {
+        assert_eq!(self.shape(), next.shape(), "placements of different arenas");
+        let mut plan = Remap::default();
+        for (a, (was, now)) in self.0.iter().zip(&next.0).enumerate() {
+            for (p, (&w, &n)) in was.iter().zip(now).enumerate() {
+                if w == n {
+                    continue;
+                }
+                if w.is_some() {
+                    plan.unmap.push((a, p));
+                }
+                if let Some(c) = n {
+                    plan.map.push((a, p, c));
+                    plan.access.push((a, p..p + 1));
+                }
+            }
+        }
+        plan
+    }
+
+    /// Wire form: the arena count, then per arena its position count and
+    /// a chunk per position (`u32::MAX` for none), little-endian `u32`s.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let words = std::iter::once(self.0.len() as u32).chain(
+            self.0.iter().flat_map(|a| std::iter::once(a.len() as u32).chain(a.iter().map(|c| c.unwrap_or(u32::MAX)))),
+        );
+        words.flat_map(u32::to_le_bytes).collect()
+    }
+
+    /// The placement [`Placement::to_bytes`] wrote; `None` for bytes that
+    /// are not one, or that place a chunk twice.
+    pub fn from_bytes(b: &[u8]) -> Option<Placement> {
+        if !b.len().is_multiple_of(4) {
+            return None;
+        }
+        let mut words = b.as_chunks::<4>().0.iter().map(|&w| u32::from_le_bytes(w));
+        let arenas = (0..words.next()?)
+            .map(|_| {
+                let n = words.next()?;
+                (0..n).map(|_| words.next().map(|c| (c != u32::MAX).then_some(c))).collect::<Option<Vec<_>>>()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let placed: Vec<u32> = arenas.iter().flatten().flatten().copied().collect();
+        let distinct: std::collections::BTreeSet<u32> = placed.iter().copied().collect();
+        (words.next().is_none() && distinct.len() == placed.len()).then_some(Placement(arenas))
+    }
+}
+
 /// The chunk pool: `total` chunks of `chunk` bytes, each mapped at one
 /// position of one arena or free.
 #[derive(Debug, Clone)]
@@ -97,6 +180,10 @@ impl Chunks {
 
     pub fn free(&self) -> usize {
         self.free.len()
+    }
+
+    pub fn placement(&self) -> Placement {
+        Placement(self.arenas.iter().map(|a| a.chunk.clone()).collect())
     }
 
     /// Positions `object` of arena `a` covers.

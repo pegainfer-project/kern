@@ -72,8 +72,9 @@ With thinking on, the reasoning arrives as `reasoning` deltas and the answer
 as `content`. `/v1/models` lists what is served, `/metrics` is Prometheus.
 
 `--served-model-name` is the id the API answers to (default: the manifest's
-`model`). `--port` defaults to 8000. `--gpus 0,1,2,3` drives several GPUs in
-lockstep when the manifest declares a topology; this one is single-GPU.
+`model`). `--port` defaults to 8000. `--gpu` picks the device. A manifest that declares a
+topology runs one process per GPU in lockstep: rank 0 adds `--listen host:port`,
+rank q runs `--gpu g --head host:port --rank q`; this one is single-GPU.
 
 ## Generate without a server
 

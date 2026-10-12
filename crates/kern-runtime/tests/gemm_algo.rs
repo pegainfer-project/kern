@@ -96,7 +96,7 @@ fn manifest(small: Value, large: Value) -> Verified {
     let params = json!(["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32"]);
     let call = |op: &str, out: &str| json!({"op": op, "args": [{"buf": "a"}, {"buf": "w"}, {"buf": out}, {"var": "rows"}, {"i32": N}, {"i32": K}]});
     let m = json!({
-        "schema_version": 5, "model": "gemm-algo-test", "vars": {"rows": {"max": MAX}}, "states": {},
+        "schema_version": 7, "model": "gemm-algo-test", "vars": {"rows": {"max": MAX}}, "states": {},
         "buffers": {
             "a": {"kind": "input", "dtype": "bf16", "shape": ["rows", K]},
             "w": {"kind": "input", "dtype": "bf16", "shape": [N, K]},
@@ -120,7 +120,7 @@ fn manifest(small: Value, large: Value) -> Verified {
 }
 
 fn load(v: &Verified) -> kern_runtime::Result<Runtime> {
-    Runtime::load(v, None, 0, Some(Capacity { tokens: Some(1), seqs: 1 }), None)
+    Runtime::load(v, None, 0, Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }), None)
 }
 
 #[test]

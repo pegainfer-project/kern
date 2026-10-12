@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use kern_manifest::protocol::{Axis, Bound, LineTable, PageTable, ProtocolErrors, Rows};
+use kern_manifest::protocol::{Axis, Bound, Heads, LineTable, PageTable, Positions, ProtocolErrors, Rows, Shards};
 use kern_manifest::types::{Batch, Buffer, Dim, Fill, Op};
 use kern_manifest::{verify, Manifest, Protocol};
 /// A single-rank contract: a prefill chunk that only fills state, a
@@ -39,10 +39,16 @@ fn speculative() -> Manifest {
     m
 }
 
-/// A tray manifest: the tokens, the line table and the output over
-/// the tray's rows, the rest this rank's own.
-fn tray() -> Manifest {
-    Manifest::from_json(include_str!("fixtures/tray.json")).unwrap()
+/// A manifest whose batch spans its ranks: the tokens, the line table
+/// and the output over every rank's rows, the rest this rank's own.
+fn ranks() -> Manifest {
+    Manifest::from_json(include_str!("fixtures/ranks.json")).unwrap()
+}
+
+/// Decode context parallelism: a `tp` group of 4 deals the paged states
+/// by position and splits the recurrent one by heads.
+fn dealt() -> Manifest {
+    Manifest::from_json(include_str!("fixtures/dealt.json")).unwrap()
 }
 
 /// An op with an extern launch, for a fixture that only needs the ABI.
@@ -70,7 +76,7 @@ fn rejects(m: &Manifest, what: &str) {
 fn plain_contract() {
     let p = protocol(&plain()).unwrap();
     assert_eq!((p.rows.var.as_str(), p.rows.max, p.groups.var.as_str(), p.groups.max), ("tokens", 8, "seqs", 4));
-    assert_eq!(p.tray, None);
+    assert_eq!(p.ranks, None);
     assert_eq!(
         (
             p.token_rows().unwrap().name.as_str(),
@@ -142,14 +148,36 @@ fn context_contract() {
 }
 
 #[test]
-fn tray_contract() {
-    let p = protocol(&tray()).unwrap();
-    assert_eq!(p.tray, Some(Bound { var: "rows".into(), max: 32 }));
-    assert_eq!(p.token_rows().unwrap().axis, Axis::Tray);
-    assert_eq!(p.line_tables[0].axis, Axis::Tray);
+fn ranks_contract() {
+    let p = protocol(&ranks()).unwrap();
+    assert_eq!(p.ranks, Some(Bound { var: "rows".into(), max: 32 }));
+    assert_eq!(p.token_rows().unwrap().axis, Axis::Ranks);
+    assert_eq!(p.line_tables[0].axis, Axis::Ranks);
     assert_eq!(p.any(Fill::Error).map(|f| f.name.as_str()), Some("tp_err"));
     assert_eq!(p.once, vec!["tp_init".to_string()]);
     assert_eq!(p.vars(2, 2, 8, 9), BTreeMap::from([("tokens".into(), 2), ("seqs".into(), 2), ("rows".into(), 8)]));
+    assert_eq!(
+        (p.shards.positions.is_none(), p.shards.heads.get("kda").map(|h| (h.members, h.segments.clone()))),
+        (true, Some((4, vec![(3, 32)])))
+    );
+}
+
+#[test]
+fn a_group_dealing_positions_is_a_replicated_batch() {
+    let p = protocol(&dealt()).unwrap();
+    assert_eq!(
+        p.shards,
+        Shards {
+            positions: Some(Positions { group: "tp".into(), members: 4 }),
+            heads: BTreeMap::from([(
+                "kda".into(),
+                Heads { group: "tp".into(), members: 4, segments: vec![(1, 64), (2, 16)] }
+            )]),
+        }
+    );
+    assert_eq!((p.ranks.is_none(), p.token_rows().map(|f| f.axis)), (true, Some(Axis::Rows)));
+    assert_eq!((p.line_tables[0].axis, p.page_tables[0].width), (Axis::Groups, 3));
+    assert_eq!(protocol(&plain()).unwrap().shards, Shards::default());
 }
 
 #[test]

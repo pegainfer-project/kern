@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         &manifest,
         Some(&kernels),
         1,
-        Some(Capacity { tokens: Some(32768), seqs: vars.get("seqs").copied().unwrap_or(1) }),
+        Some(Capacity { tokens: Some(32768), seqs: vars.get("seqs").copied().unwrap_or(1), landings: 0 }),
         Some(&Topology::default()),
     )?;
     let paths: Vec<_> = io["weights"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();

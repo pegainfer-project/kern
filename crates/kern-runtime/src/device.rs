@@ -637,47 +637,132 @@ impl Drop for Arena {
 }
 
 /// The physical chunks behind the pooled states: created once, released
-/// once every arena has let go of them. No fabric handle: a pooled state
-/// is not exportable.
+/// once every arena has let go of them. Created with fabric handles where
+/// the device offers them, like [`alloc_vmm`], so another runtime can
+/// mirror the states ([`Physical::export`]); a peer's chunks imported
+/// here are a `Physical` too, owning its handles when the import made
+/// them (a fabric handle) and not when they are the peer's own (a local
+/// one).
 pub(crate) struct Physical {
     handles: Vec<sys::CUmemGenericAllocationHandle>,
+    chunk: usize,
+    fabric: bool,
+    owns: bool,
 }
 
 impl Physical {
     pub(crate) fn create(dev: i32, chunk: usize, count: usize) -> Result<Physical> {
-        let prop = alloc_prop(dev, none_handle_type());
-        let mut handles = Vec::with_capacity(count);
+        let fabric = fabric_supported(dev)?;
+        match Physical::create_as(dev, chunk, count, fabric) {
+            // The attribute says fabric, the driver says no (no IMEX
+            // channel, say): only this process's runtimes can mirror them.
+            Err(e) if fabric => {
+                tracing::warn!("state chunks: cuMemCreate with a fabric handle failed ({e}); creating without one");
+                Physical::create_as(dev, chunk, count, false)
+            }
+            r => r,
+        }
+    }
+
+    fn create_as(dev: i32, chunk: usize, count: usize, fabric: bool) -> Result<Physical> {
+        let prop = alloc_prop(dev, if fabric { fabric_handle_type() } else { none_handle_type() });
+        let mut out = Physical { handles: Vec::with_capacity(count), chunk, fabric, owns: true };
         for i in 0..count {
             let mut h: sys::CUmemGenericAllocationHandle = 0;
             if let Err(e) = cuda_check(unsafe { sys::cuMemCreate(&mut h, chunk, &prop, 0) }, "cuMemCreate") {
-                drop(Physical { handles });
                 return Err(Error::Cuda(format!("chunk {i} of {count} ({chunk} bytes): {e}")));
             }
-            handles.push(h);
+            out.handles.push(h);
         }
-        Ok(Physical { handles })
+        Ok(out)
+    }
+
+    /// What a peer maps to reach each chunk, in chunk order.
+    pub(crate) fn export(&self) -> Result<Vec<PeerHandle>> {
+        let bytes = self.chunk as u64;
+        self.handles
+            .iter()
+            .map(|&handle| {
+                if !self.fabric {
+                    return Ok(PeerHandle::Local { handle, bytes });
+                }
+                let mut fh = sys::CUmemFabricHandle { data: [0; 64] };
+                cuda_check(
+                    unsafe {
+                        sys::cuMemExportToShareableHandle(
+                            &mut fh as *mut _ as *mut c_void,
+                            handle,
+                            fabric_handle_type(),
+                            0,
+                        )
+                    },
+                    "cuMemExportToShareableHandle",
+                )?;
+                Ok(PeerHandle::Fabric { fabric: fh.data, bytes })
+            })
+            .collect()
+    }
+
+    /// A peer's chunks, each `chunk` bytes, all of one kind of handle.
+    pub(crate) fn import(chunk: usize, handles: &[PeerHandle], what: &str) -> Result<Physical> {
+        let owns = matches!(handles.first(), Some(PeerHandle::Fabric { .. }));
+        let mut out = Physical { handles: Vec::with_capacity(handles.len()), chunk, fabric: false, owns };
+        for (i, h) in handles.iter().enumerate() {
+            if h.bytes() != chunk as u64 {
+                bail!(Api, "{what}: chunk {i} is {} bytes, the pool's chunks are {chunk}", h.bytes());
+            }
+            let handle = match (h, owns) {
+                (PeerHandle::Fabric { fabric, .. }, true) => {
+                    let mut fh = sys::CUmemFabricHandle { data: *fabric };
+                    let mut handle: sys::CUmemGenericAllocationHandle = 0;
+                    cuda_check(
+                        unsafe {
+                            sys::cuMemImportFromShareableHandle(
+                                &mut handle,
+                                &mut fh as *mut _ as *mut c_void,
+                                fabric_handle_type(),
+                            )
+                        },
+                        &format!("{what}: chunk {i}: cuMemImportFromShareableHandle"),
+                    )?;
+                    handle
+                }
+                (PeerHandle::Local { handle, .. }, false) => *handle,
+                _ => bail!(Api, "{what}: chunk {i} is {h:?}, chunk 0 is a different kind of handle"),
+            };
+            out.handles.push(handle);
+        }
+        Ok(out)
     }
 }
 
 impl Drop for Physical {
     fn drop(&mut self) {
-        for &h in &self.handles {
-            unsafe { sys::cuMemRelease(h) };
+        if self.owns {
+            for &h in &self.handles {
+                unsafe { sys::cuMemRelease(h) };
+            }
         }
     }
 }
 
 /// The shell of the pool's remaps: arenas in the pool's order over one set
-/// of physical chunks. Arenas drop first, then the chunks.
+/// of physical chunks. Arenas drop first, then the chunks. A runtime's own
+/// mapper lives on its remap thread; a mirror of a peer's states is one
+/// too, run by [`crate::Runtime::place`].
 pub(crate) struct Mapper {
     arenas: Vec<Arena>,
-    #[allow(dead_code)]
-    physical: Physical,
+    physical: Arc<Physical>,
 }
 
 impl Mapper {
-    pub(crate) fn new(arenas: Vec<Arena>, physical: Physical) -> Mapper {
+    pub(crate) fn new(arenas: Vec<Arena>, physical: Arc<Physical>) -> Mapper {
         Mapper { arenas, physical }
+    }
+
+    /// Where arena `a` starts.
+    pub(crate) fn ptr(&self, a: usize) -> u64 {
+        self.arenas[a].ptr()
     }
 
     /// Unmap, map, grant access — in that order, so a chunk a plan moves

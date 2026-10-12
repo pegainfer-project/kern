@@ -50,7 +50,7 @@ fn main() {
         ]
     });
     let manifest = serde_json::json!({
-        "schema_version": 5,
+        "schema_version": 7,
         "model": "peer-barrier",
         "topology": { "groups": { "ep": n } },
         "buffers": {
@@ -93,7 +93,7 @@ fn main() {
                     &verified,
                     Some(&kernels),
                     gpu,
-                    Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1 }),
+                    Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1, landings: 0 }),
                     Some(&topo),
                 )?;
                 let mine = rt.export_handles()?;

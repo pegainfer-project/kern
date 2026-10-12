@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A pipeline's timeline from its stages' `pp item` log lines (kern-serve --pp-*).
+"""A pipeline's timeline from its stages' `pp item` log lines (kern-serve --listen / --head).
 
 Every stage logs when it issued each item and when the item left its
 device (`issued_us`, `done_us`); the item number is the same on every

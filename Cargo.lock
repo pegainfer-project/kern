@@ -2305,6 +2305,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vllm-chat",
+ "vllm-tokenizer",
 ]
 
 [[package]]

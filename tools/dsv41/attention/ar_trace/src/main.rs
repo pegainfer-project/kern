@@ -69,9 +69,9 @@ fn main() -> anyhow::Result<()> {
         threads.push(std::thread::spawn(move || {
             let work = || -> anyhow::Result<()> {
                 let protocol = Protocol::check(&m)?;
-                ensure!(protocol.tray.is_none(), "this trace harness expects DP4 EP4 local rows");
+                ensure!(protocol.ranks.is_none(), "this trace harness expects DP4 EP4 local rows");
                 let mut rt = Runtime::load_with_host_weights(&m, Some(&kernels), rank,
-                    Some(Capacity { tokens: Some(capacity), seqs: 1 }),
+                    Some(Capacity { tokens: Some(capacity), seqs: 1, landings: 0 }),
                     Some(&Topology::one("ep", rank as u64, 4)), &host)?;
                 let maps = kern_run::map_weights(&paths)?;
                 rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|x| &x[..]).collect::<Vec<_>>())?)?;

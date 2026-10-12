@@ -448,7 +448,7 @@ fn load_side(
     // states need. Sizing them for the manifest's whole batch made every
     // whole-state read of a span copy 128 slots: on qwen3.8-27b (154 MB of
     // GDN state per slot) a run grew past 700 GB of host memory.
-    let capacity = Capacity { tokens: Some(capacity), seqs: 1 };
+    let capacity = Capacity { tokens: Some(capacity), seqs: 1, landings: 0 };
     let loaded: Vec<Result<crate::Sent<Runtime>>> = std::thread::scope(|s| {
         let handles: Vec<_> = gpus
             .iter()

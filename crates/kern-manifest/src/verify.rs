@@ -41,6 +41,13 @@
 //!      binds only to i32/i64 params; an op with an extern launch never
 //!      receives a peer buffer (runtime built-ins may not touch peer memory)
 //!  11. cut: at least two stages, the stage below their count, an id
+//!  12. shard: the group is declared; `by: position` on a paged state and
+//!      `by: heads` on a per-sequence one; once one paged state is dealt by
+//!      position every paged state is, over the same group (one page id
+//!      space), and the group's batch is replicated, so no var counts
+//!      `axis: ranks` and no buffer fills `blocks`; a heads shard's
+//!      segments are non-empty, each width splits over the members and
+//!      together they span the members' slots
 //!
 //! What this deliberately cannot check: kernel *behavior*, and the
 //! *semantics* of interface params (that a replacement implementation
@@ -188,7 +195,7 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             errs.push(format!("var `{name}`: max must be >= {}", Var::MIN));
         }
     }
-    for axis in [VarAxis::Rows, VarAxis::Groups, VarAxis::Tray] {
+    for axis in [VarAxis::Rows, VarAxis::Groups, VarAxis::Ranks] {
         let named: Vec<&String> = m.vars.iter().filter(|(_, v)| v.axis == Some(axis)).map(|(n, _)| n).collect();
         if named.len() > 1 {
             errs.push(format!("vars {named:?} all count the `{axis}` axis; one var does"));
@@ -242,6 +249,56 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             }
             (None, 1) => {}
             (None, _) => errs.push(format!("state `{name}`: bytes_per_token, bytes and bytes_per_seq are exclusive")),
+        }
+    }
+
+    // 12. shards
+    for (name, st) in &m.states {
+        let Some(sh) = &st.shard else { continue };
+        let ctx = format!("state `{name}`: shard");
+        let w = group_ctx(sh.group(), &mut errs, &mut used_groups, &ctx);
+        match sh {
+            Shard::Position { .. } if !is_paged(st) => {
+                errs.push(format!("{ctx}: `by: position` deals a paged state, got a {} one", kind_of(st)))
+            }
+            Shard::Heads { .. } if !(st.is_owned() && st.is_per_seq()) => {
+                errs.push(format!("{ctx}: `by: heads` splits a per-sequence state, got a {} one", kind_of(st)))
+            }
+            Shard::Heads { group, segments } => {
+                if let Some(w) = w {
+                    check_heads(&ctx, group, w, st.bytes_per_seq, segments, &mut errs);
+                }
+            }
+            Shard::Position { .. } => {}
+        }
+    }
+    let dealt = m.states.iter().find_map(|(n, st)| match &st.shard {
+        Some(Shard::Position { group }) if is_paged(st) => Some((n, group)),
+        _ => None,
+    });
+    if let Some((first, g)) = dealt {
+        let why = "the paged states share one page id space";
+        for (name, st) in m.states.iter().filter(|(_, st)| is_paged(st)) {
+            match &st.shard {
+                Some(Shard::Position { group }) if group == g => {}
+                Some(Shard::Position { group }) => errs.push(format!(
+                    "state `{name}`: shard deals positions over `{group}`, but `{first}` deals them over `{g}`; {why}, so one group deals them all"
+                )),
+                _ => errs.push(format!(
+                    "state `{name}`: not dealt by position, but `{first}` is dealt over `{g}`; {why}, so every one is dealt the same way"
+                )),
+            }
+        }
+        let replicated = format!("state `{first}` deals positions over `{g}`, so the group runs one replicated batch");
+        for (name, _) in m.vars.iter().filter(|(_, v)| v.axis == Some(VarAxis::Ranks)) {
+            errs.push(format!(
+                "var `{name}`: `axis: ranks` counts every member's rows with this rank's first, but {replicated}; every member takes the same rows"
+            ));
+        }
+        for (name, _) in m.buffers.iter().filter(|(_, b)| b.fill == Some(Fill::Blocks)) {
+            errs.push(format!(
+                "buffer `{name}`: fill `blocks` splits the group's batch into members' blocks, but {replicated}"
+            ));
         }
     }
 
@@ -1049,6 +1106,48 @@ fn check_host_tensor(name: &str, h: &HostTensor, errs: &mut Vec<String>) {
     }
     if h.span(1).is_none() {
         errs.push(format!("{ctx}: shape {:?} with strides {:?} overflows 64 bits", h.shape, h.strides));
+    }
+}
+
+/// A state the pool pages: runtime memory sized per token.
+fn is_paged(st: &State) -> bool {
+    st.is_owned() && st.bytes_per_token > 0
+}
+
+fn kind_of(st: &State) -> &'static str {
+    match (st.is_owned(), st.bytes_per_token > 0, st.is_per_seq()) {
+        (false, ..) => "host",
+        (true, true, _) => "paged",
+        (true, false, true) => "per-sequence",
+        (true, false, false) => "fixed",
+    }
+}
+
+/// The segments of a heads shard over `w` members tile the whole state
+/// of a sequence, `w` slots of `bytes_per_seq`, and each row splits
+/// evenly: what a push's split of the line into members' parts takes.
+fn check_heads(ctx: &str, group: &str, w: u64, bytes_per_seq: u64, segments: &[(u64, u64)], errs: &mut Vec<String>) {
+    if segments.is_empty() {
+        errs.push(format!("{ctx}: `by: heads` needs at least one segment"));
+        return;
+    }
+    for (i, &(rows, width)) in segments.iter().enumerate() {
+        if rows == 0 || width == 0 {
+            errs.push(format!("{ctx}: segment #{i} is {rows} rows of {width} bytes, expected neither 0"));
+        } else if !width.is_multiple_of(w) {
+            errs.push(format!(
+                "{ctx}: segment #{i} rows are {width} bytes, expected a multiple of the {w} members of `{group}`"
+            ));
+        }
+    }
+    let line = segments.iter().try_fold(0u64, |acc, &(r, wd)| r.checked_mul(wd)?.checked_add(acc));
+    match (line, w.checked_mul(bytes_per_seq)) {
+        (Some(l), Some(want)) if l == want => {}
+        (got, want) => errs.push(format!(
+            "{ctx}: segments span {} bytes, expected the {w} members of `{group}` times bytes_per_seq {bytes_per_seq} = {}",
+            got.map_or("more than 2^64".into(), |l| l.to_string()),
+            want.map_or("more than 2^64".into(), |l| l.to_string()),
+        )),
     }
 }
 

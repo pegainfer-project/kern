@@ -1,4 +1,4 @@
-//! Manifest schema (format 5). Parsing is already strict: unknown fields,
+//! Manifest schema (format 7). Parsing is already strict: unknown fields,
 //! duplicate names and malformed type strings are rejected at
 //! deserialization time. Semantic checks (references, dtypes, dataflow,
 //! bounds) live in [`crate::verify`]; what a serving loop needs to drive
@@ -28,7 +28,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 /// The one format this crate reads and writes.
-pub(crate) const SCHEMA_VERSION: u32 = 5;
+pub(crate) const SCHEMA_VERSION: u32 = 7;
 
 /// Deserialize a JSON object into a map, rejecting duplicate keys (plain
 /// serde silently keeps the last one).
@@ -67,7 +67,7 @@ where
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Wire-format version; must be `5`.
+    /// Wire-format version; must be `7`.
     pub schema_version: u32,
     /// Free-form model label, e.g. `"qwen3-4b"`.
     pub model: String,
@@ -102,7 +102,7 @@ impl Manifest {
     /// state: the widest column axis of any line table (an input indexing
     /// a per-sequence state, shaped `[lines, cols]` or `[lines, cols, w]`
     /// — every rank holds a slice of every row's state, so the axis may
-    /// span a tray batch), 1 without one — plus one so a batched caller
+    /// span the ranks of a group), 1 without one — plus one so a batched caller
     /// can hold a padding lease, plus slot 0, which is never leased —
     /// kernels may treat line index 0 as the null line.
     pub fn seq_slots(&self) -> u64 {
@@ -148,7 +148,7 @@ pub struct Program {
     /// The shape of one call — `groups` sequences of `rows` rows each — for a program a serving loop drives; absent for one only a harness runs (a single layer under test, a barrier).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch: Option<Batch>,
-    /// Run once after load (after every peer is imported), never per step: a tray manifest's collective setup. Takes no per-call input.
+    /// Run once after load (after every peer is imported), never per step: a rank group's collective setup. Takes no per-call input.
     #[serde(default, skip_serializing_if = "is_false")]
     pub once: bool,
     /// Run by the runtime inside weight loading, call by call, to turn `source` buffers into the `carry` buffers the other programs read (a shuffle into a kernel's layout, a dtype cast). Reads no state, peer, input or output; nothing else may run it.
@@ -190,7 +190,7 @@ pub enum Fill {
     SeqLen,
     /// Input: exclusive prefix sums of rows per sequence, `groups + 1` entries.
     CuSeqlens,
-    /// Input: the tray batch's blocks — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the tray's rows.
+    /// Input: the members' blocks of the group's batch — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the batch's rows.
     Blocks,
     /// Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).
     Tokens,
@@ -249,7 +249,7 @@ pub struct Var {
     pub axis: Option<VarAxis>,
 }
 
-/// What a var counts in one call of a program: this rank's rows, its sequences, or the rows of the whole tray batch. The runtime never reads it.
+/// What a var counts in one call of a program: this rank's rows, its sequences, or the rows of every rank of its group. The runtime never reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VarAxis {
@@ -257,8 +257,8 @@ pub enum VarAxis {
     Rows,
     /// One per sequence of this rank's call, e.g. `seqs`.
     Groups,
-    /// One per row of the whole tray batch, this rank's rows first, e.g. a `tp` manifest's `rows`.
-    Tray,
+    /// One per row of every rank of the group, this rank's rows first, e.g. a `tp` manifest's `rows`.
+    Ranks,
 }
 
 impl fmt::Display for VarAxis {
@@ -266,7 +266,7 @@ impl fmt::Display for VarAxis {
         f.write_str(match self {
             VarAxis::Rows => "rows",
             VarAxis::Groups => "groups",
-            VarAxis::Tray => "tray",
+            VarAxis::Ranks => "ranks",
         })
     }
 }
@@ -292,6 +292,36 @@ pub struct State {
     /// Memory the host allocates, sizes and indexes — a serving engine's KV cache or recurrent state, e.g. `{"dtype": "bf16", "shape": [0, 64, 4, 512], "strides": [131072, 2048, 512, 1]}`. The declaration is the layout the kernels were written against; the host proves it hands over that layout when it binds the address, and none of the three sizes is set. Inputs whose domain `index_into`s it declare the host's ids: a page table (`stride` tokens per block) or a line table (`stride` bytes per line, one line per block), shared by every host state of the same layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostTensor>,
+    /// How a rank group splits the state among its members, e.g. `{"group": "tp", "by": "position"}`. Each member provisions and indexes its own share like any state; the runtime never reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shard: Option<Shard>,
+}
+
+/// How a rank group splits a state among its members: the paged states by token position, a per-sequence state by heads. What a member holds is a state like any other; the declaration is for the serving loop that stages the members and the push that fills them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "by", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Shard {
+    /// A paged state dealt over the group by position: position `p` of a sequence lives on member `p mod w` at its local position `p / w`, so a member's pages, slots and lengths are local ones. The group runs one replicated batch: every member takes the same rows in the same order, e.g. `{"group": "tp", "by": "position"}`.
+    Position {
+        /// The topology group dealt over, e.g. `"tp"`.
+        group: String,
+    },
+    /// A per-sequence state split by heads: the whole sequence's state is `segments` laid end to end, each `[rows, width]` rows of `width` bytes with the head outermost in a row, and a member's slot is its `1/w` of every row, e.g. `{"group": "tp", "by": "heads", "segments": [[1, 6291456], [9, 24576]]}`.
+    Heads {
+        /// The topology group split over, e.g. `"tp"`.
+        group: String,
+        /// `[rows, width bytes]` per segment, in order; every width a multiple of the group size, the rows times widths summing to the group size times `bytes_per_seq`.
+        segments: Vec<(u64, u64)>,
+    },
+}
+
+impl Shard {
+    /// The group the state is split over.
+    pub fn group(&self) -> &str {
+        match self {
+            Shard::Position { group } | Shard::Heads { group, .. } => group,
+        }
+    }
 }
 
 impl State {

@@ -12,8 +12,10 @@ python3 tools/e2e/e2e.py --gpus 0,1,2,3 --out results/ [--config kern.toml] [--t
 在有 GPU 的机器上跑。target 的 artifact 不在这台机器上就 skip（不算 fail）；
 需要的 rank 数超过 `--gpus` 也 skip；一个 target 都没跑退出码非零。单 rank 的
 target 用 `--gpus` 里的第二张卡跑 `kern run` 做 oracle（server 占满第一张卡），
-没给第二张卡就是 `conc1_equals_run` FAIL，不会悄悄降成只报；tray target（EP4）没有
-`kern run`，它冷启动的 conc1 答案就是 warm 答案的 oracle。`--reference <module.py>`
+没给第二张卡就是 `conc1_equals_run` FAIL，不会悄悄降成只报；多 rank 的 target（EP4，
+每张卡一个 kern-serve 进程：rank 0 是 head，`--listen` 在 session 端口 + 100，其余
+`--head … --rank q`，日志在 `server-*.rank<q>.log`）没有 `kern run`，它冷启动的
+conc1 答案就是 warm 答案的 oracle。`--reference <module.py>`
 换成一个 Python 模块的 `generate(ids, max_tokens, manifest)` 做 oracle：模型自己的
 算术，精确，任何 rank 数都有，分歧一律不放过，这时第二张卡上的 `kern run` 自己也
 被 reference 门住（`run_equals_reference`）——`tools/toy` 的 manifest 就这么门
@@ -38,13 +40,38 @@ python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/mod
 | `slot_growth` | 带循环状态的 manifest 用 `--max-seqs 2` 起（首批 slot 只有几个）、池子默认：2 × 首批 slot 数 + 4 条结束后 `remaps` ≥ 1、`slots` 比 `scheduler ready` 时多，答案同冷，turn2 的命中与答案同第一个 session | stats 行 |
 | `rows1_equals_run` | 投机 manifest `--rows 1` == `kern run --rows 1`；与整块 rows 的答案相同条数只报 | |
 
+位置按 `tp` 组发下去的 target（manifest 有 `shard: {by: position}`，DCP：一个复制的 batch，
+什么都不留）不走上面那张表，走 `session_dealt`。它的 oracle 是 **twin**：同一个 config 里
+`model` 相同的单 rank target，在 server 起来之前用 head 那张卡 `kern run` 把每条答完
+（`twin.json` 缓存；有 `--reference` 时 twin 自己先过 `twin_equals_reference`）。prompt 全部
+直接发 id（PROMPTS 的字节），不经 tokenizer：
+
+| 场景 | 门 |
+|---|---|
+| `conc1` | 12 条 prompt 逐条 == twin |
+| `short` | 长 1..w+1（有成员一个位置都没有）、max_tokens 1 / 2 / 全长，逐条 == twin |
+| `pages` | 结束在组页边界（页 × w 个位置）前后、两页半、十二页、比 chunk 长，逐条 == twin |
+| `concurrent` | 12 条同时 == twin |
+| `many_rows` | 64 条同时（长 1..三个组页、max_tokens 1 / 3 / 全长）== twin |
+| `kept_nothing` | 同样 4 条再来：`cached` 全 0、答案 == twin |
+| `abort` | 流式读 3 个 chunk 挂断，下一条 == twin |
+
+多节点：`--gpus` 里写 `host:i` 的卡在另一个节点上，那个 rank 经 ssh 起（共享盘上的二进制、config、
+`--out`；`PATH`、`LD_LIBRARY_PATH`、`NCCL_*`、`CUDA_*` 带过去），head 这时 `--listen 0.0.0.0:…`，
+别的 rank 按本机 hostname 连。rank 0 必须在本机。跨节点的 NCCL 组要用 `NCCL_SOCKET_IFNAME` 钉 bootstrap 网卡，否则 join 可能挂住。
+
+```
+python3 tools/e2e/e2e.py --config target/toy/kern.toml --reference tools/toy/model.py \
+    --targets toy-dcp8 --gpus 0,1,2,3,node2:0,node2:1,node2:2,node2:3 --out results/
+```
+
 字节一致是所有门的标准。不一致时报第一个分歧 token；单 rank target 会再拿 `kern run
 --prompt-ids <prompt + 分歧前的 token> --rows 1 --probe-dir` 把分歧那一步的 logits 倒出来
 （这一步本身的上下文，不是另一条 run 的第 k 步——投机的第 k 步已经是另一串）：两个 token
 都离 top-1 ≤ 4 个 bf16 ULP（按 top logit 自己的 ulp，`math.frexp`）才算近平局
 （docs/test.md 的 logit 规则），否则就是 bug。近平局只放过那一个 token：之后拿
 `kern run` 从 server 选的那个 token 续算，剩下的继续逐字比，一条答案最多放过 3 个。
-tray target 没有这个出口：同一条路的一致性（重复、abort 后）照门，换了数值路径的
+多 rank 的 target 没有这个出口：同一条路的一致性（重复、abort 后）照门，换了数值路径的
 （warm 对 cold、醒来的对 cold）只报不门——K3 4 层的 checkpoint 近乎平局遍地（并发
 12 条只有 1 条与 conc1 同）。有 state 的 target，投机轮多算到 max_tokens 之外的请求
 server 不留 checkpoint（`not kept` 行带 `request=req-N`，N 是到达序），turn2 的命中要么

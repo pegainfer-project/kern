@@ -2,12 +2,13 @@
 //!
 //! A manifest with a `topology` is SPMD: every rank loads it with its own
 //! [`Topology`](crate::Topology), its index in each group. `export`
-//! buffers and every state are virtual-memory allocations every rank can
-//! map (a fabric handle where the device offers one, the allocation
-//! handle itself otherwise: [`PeerHandle`]); [`Runtime::export_handles`]
-//! hands this rank's out, the caller carries them to the group (within
-//! this process for a tray; over whatever channel it has for fabric
-//! handles), and [`Runtime::import_peers`] maps the other ranks'
+//! buffers and every fixed state are virtual-memory allocations every
+//! rank can map (a fabric handle where the device offers one, the
+//! allocation handle itself otherwise: [`PeerHandle`]); a pooled state is
+//! reached through its chunks instead (`push`'s [`Runtime::export_pool`]).
+//! [`Runtime::export_handles`] hands this rank's out, the caller carries
+//! them to the group (within this process for a tray; over whatever
+//! channel it has for fabric handles), and [`Runtime::import_peers`] maps the other ranks'
 //! allocations into this address space and writes the group's addresses
 //! into each `peer` buffer, the array a kernel indexes by rank. A remote allocation is
 //! mapped once however many peer buffers name it, and the mapping lives
@@ -61,8 +62,34 @@ impl Runtime {
         device::copy_1d(self.stream.cu_stream(), to.ptr(), self.buffers[name].ptr, bytes)
     }
 
-    /// A handle for every `export` buffer and every state, by name: what
-    /// the other ranks pass to [`Runtime::import_peers`].
+    /// Exported twin `slot` of buffer `name`, allocated at load
+    /// ([`crate::Capacity::landings`]): a pipeline stage before this one pushes
+    /// items into its twins while this runtime still reads `name` for an
+    /// item before, until [`Runtime::land`] moves one over.
+    pub fn landing(&self, name: &str, slot: usize) -> Result<PeerHandle> {
+        self.ctx.bind_to_thread()?;
+        let Some(twin) = self.landings.get(&(name.to_string(), slot)) else {
+            bail!(Api, "buffer `{name}` has no landing {slot}: load takes them for exported input buffers only, as many as `Capacity::landings`");
+        };
+        twin.export()?
+            .ok_or_else(|| Error::Cuda(format!("landing {slot} of `{name}`: not a virtual-memory allocation")))
+    }
+
+    /// Copy twin `slot` of buffer `name`, as long as its shape is at
+    /// `vars`, into the buffer, on the compute stream: behind every launch
+    /// issued before, so the item before is through with `name`.
+    pub fn land(&self, name: &str, slot: usize, vars: &BTreeMap<String, u64>) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        let Some(twin) = self.landings.get(&(name.to_string(), slot)) else {
+            bail!(Api, "buffer `{name}` has no landing {slot}");
+        };
+        let b = &self.manifest.buffers[name];
+        let bytes = compile::shaped_bytes(&format!("buffer `{name}`"), &b.shape, b.dtype.bytes(), vars)?;
+        device::copy_1d(self.stream.cu_stream(), self.buffers[name].ptr, twin.ptr, bytes)
+    }
+
+    /// A handle for every `export` buffer and every fixed state, by name:
+    /// what the other ranks pass to [`Runtime::import_peers`].
     pub fn export_handles(&self) -> Result<BTreeMap<String, PeerHandle>> {
         self.ctx.bind_to_thread()?;
         let mut out = BTreeMap::new();

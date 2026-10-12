@@ -17,15 +17,27 @@
 //! typed is one entry.
 //!
 //! Room is the caller's answer to a `Busy` lease: [`Prefix::evict`]
-//! moves the resident entry hit least recently to the host through the
+//! moves the resident entry worth least (below) to the host through the
 //! caller's copy, dropping the coldest parked ones until it fits, or
 //! drops it when there is no host tier; dropping is all that frees
 //! anything (pages shared with a live sequence or another entry stay).
 //! Recency is a counter, not a clock. A hit touches every entry on the
-//! prompt's path, the deepest coldest, so a chain ages together and its
-//! leaf goes first. A stateless resident entry made one page past
+//! prompt's path, the deepest coldest, so a stateless chain ages together
+//! and its leaf goes first. A stateless resident entry made one page past
 //! another on the same path replaces it: a sequence checkpointing every
 //! page keeps one entry that grows.
+//!
+//! Entries with a recurrent state are a trie of conversations, since one
+//! serves only prompts that continue it exactly. By the stateful entries
+//! nearest below it, a stateful entry is a session's newest (none), a turn
+//! its session has moved past (one: superseded), or a prefix several
+//! conversations share (more). Room takes the superseded first, least
+//! recently used first; they stay while there is room, so a client that
+//! rewrites its conversation back to an older turn still hits it, and give
+//! back only their slot and the page they end inside (their other pages
+//! are their successor's prefix). Then the session idle longest gives up
+//! its newest, never while anything superseded is left. A shared prefix belongs to no one session: it goes
+//! only once at most one conversation is left below it, as that one's.
 //!
 //! No clock, no hash, no hash map: a replay makes the same decisions in
 //! the same order.
@@ -45,7 +57,7 @@ pub enum Tier {
 }
 
 /// What the index needs to know of what it keeps: a checkpoint, a parked
-/// one, or a caller's bundle of several (a tensor-parallel tray's
+/// one, or a caller's bundle of several (a tensor-parallel group's
 /// per-rank checkpoints of one sequence). A clone is another holder of
 /// the same bytes.
 pub trait Kept: Clone {
@@ -270,12 +282,41 @@ fn paged_in_mut<R, P>(node: &mut Node<R, P>, resident: bool) -> Option<&mut Node
     }
 }
 
+/// What a stateful entry is to the conversations through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Newest,
+    Superseded,
+    Shared,
+}
+
+/// Each stateful entry under `node` (its own included) as its role, tier
+/// and recency stamp; returns how many stateful entries are nearest at or
+/// below `node`.
+fn roles<R: Clone, P: Clone>(node: &Node<R, P>, out: &mut Vec<(Role, Tier, u64)>) -> usize {
+    let below: usize = node.children.values().map(|c| roles(c, out)).sum();
+    match node.entry.as_ref().filter(|e| e.slot) {
+        Some(e) => {
+            let role = match below {
+                0 => Role::Newest,
+                1 => Role::Superseded,
+                _ => Role::Shared,
+            };
+            out.push((role, e.tier(), e.used));
+            1
+        }
+        None => below,
+    }
+}
+
 pub struct Prefix<R = Checkpoint, P = Parked> {
     unit: usize,
     root: Node<R, P>,
     /// Recency stamp → entry key, per tier: the eviction order.
     lru: [BTreeMap<u64, Arc<[i64]>>; 2],
     count: [usize; 2],
+    /// Entries holding a recurrent state, either tier.
+    states: usize,
     clock: u64,
 }
 
@@ -287,7 +328,21 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
     /// An index over sequences paged in `unit` tokens.
     pub fn new(unit: usize) -> Prefix<R, P> {
         assert!(unit >= 1);
-        Prefix { unit, root: Node::new(Vec::new()), lru: [BTreeMap::new(), BTreeMap::new()], count: [0, 0], clock: 0 }
+        Prefix {
+            unit,
+            root: Node::new(Vec::new()),
+            lru: [BTreeMap::new(), BTreeMap::new()],
+            count: [0, 0],
+            states: 0,
+            clock: 0,
+        }
+    }
+
+    /// Stateful entries a later turn of their session has moved past.
+    pub fn superseded(&self) -> usize {
+        let mut out = Vec::new();
+        roles(&self.root, &mut out);
+        out.iter().filter(|(r, ..)| *r == Role::Superseded).count()
     }
 
     /// Entries in both tiers.
@@ -341,6 +396,7 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
                 let key: Arc<[i64]> = Arc::from(key);
                 self.lru[slot_of(Tier::Resident)].insert(tick, Arc::clone(&key));
                 self.count[slot_of(Tier::Resident)] += 1;
+                self.states += slot as usize;
                 node.entry = Some(Entry { key: Arc::clone(&key), device: Some(r), host: None, slot, used: tick });
                 if !slot {
                     bump(&mut self.root, &key, 1, 1);
@@ -449,8 +505,26 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         self.lru[slot_of(tier)].values().next().cloned()
     }
 
-    /// Room for a `Busy` lease: the resident entry hit least recently
-    /// goes to the host through `park` (the runtime's copy, `Ok(Err(r))`
+    /// The resident entry room takes first: the superseded one used least
+    /// recently, else the coldest that is no shared prefix.
+    fn victim(&self) -> Option<Arc<[i64]>> {
+        if self.states == 0 {
+            return self.coldest(Tier::Resident);
+        }
+        let mut out = Vec::new();
+        roles(&self.root, &mut out);
+        let resident = |want: Role| out.iter().filter(move |&&(r, t, _)| r == want && t == Tier::Resident);
+        let order = &self.lru[slot_of(Tier::Resident)];
+        if let Some(&(.., used)) = resident(Role::Superseded).min_by_key(|&&(.., u)| u) {
+            return order.get(&used).cloned();
+        }
+        let shared: Vec<u64> = resident(Role::Shared).map(|&(.., u)| u).collect();
+        order.iter().find(|(u, _)| !shared.contains(u)).or(order.iter().next()).map(|(_, k)| Arc::clone(k))
+    }
+
+    /// Room for a `Busy` lease: the resident entry room takes first (the
+    /// module doc's order; without states, the one hit least recently) goes
+    /// to the host through `park` (the runtime's copy, `Ok(Err(r))`
     /// handing the checkpoint back when the host is full), the parked
     /// entries hit least recently dropped until it fits; without a host
     /// tier (`park` is `None`), or once nothing parked is left to drop,
@@ -461,7 +535,7 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         &mut self,
         park: Option<impl FnMut(R) -> std::result::Result<std::result::Result<P, R>, E>>,
     ) -> std::result::Result<Option<Evicted>, E> {
-        let Some(key) = self.coldest(Tier::Resident) else { return Ok(None) };
+        let Some(key) = self.victim() else { return Ok(None) };
         let mut dropped = 0;
         if let Some(mut park) = park {
             loop {
@@ -521,5 +595,6 @@ impl<R: Kept, P: Kept> Prefix<R, P> {
         let Some(e) = take_entry(&mut self.root, key) else { return };
         self.lru[slot_of(e.tier())].remove(&e.used);
         self.count[slot_of(e.tier())] -= 1;
+        self.states -= e.slot as usize;
     }
 }

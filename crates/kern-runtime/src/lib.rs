@@ -20,7 +20,7 @@
 //! phase-2 ABI check doubles as instance selection.
 //!
 //! Every entry point binds the runtime's CUDA context to the calling
-//! thread first, so one thread may drive several runtimes (a tray) and a
+//! thread first, so one thread may drive several runtimes (a test's ranks) and a
 //! runtime may be loaded on one thread and driven from another.
 //!
 
@@ -41,6 +41,7 @@ mod nccl;
 mod park;
 mod peers;
 pub mod profile;
+mod push;
 mod weights;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,7 +55,7 @@ use kern_manifest::Verified;
 pub use compare::{At, Cmp, Logit, TOP_MAX};
 use compile::{CompiledProgram, Dense};
 use cublas::Blas;
-use device::{alloc, DeviceBuf, Pinned};
+use device::{alloc, DeviceBuf};
 pub use device::{device_uuid, Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
@@ -62,12 +63,13 @@ pub use exec::{Fetch, Gate, Mark};
 pub use harness::Scratch;
 pub use host::HostRegion;
 pub use host_weights::HostWeights;
-use kern_pool::{page_unit, row_tokens, Checkpoint, Host, Pool};
+use kern_pool::{page_unit, row_tokens, Checkpoint, Pool};
 use lease::Remaps;
 pub use load::Resident;
 pub use nccl::{connect_nccl, NcclId};
-pub use park::{Room, Waking};
+pub use park::{host_split, Landing, Room, Waking};
 use peers::PeerSlot;
+pub use push::{MappedPool, PoolHandle, Rows, Split};
 pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
 
 /// The CUDA API this binary binds (`13000` is 13.0): fixed by the `cudarc`
@@ -85,6 +87,32 @@ pub struct Capacity {
     /// Tokens of paged state; `None` takes what the device has left.
     pub tokens: Option<u64>,
     pub seqs: u64,
+    /// Twins of every exported input buffer, taken before the states take
+    /// what is left ([`Runtime::landing`]); 0 outside a pipeline stage.
+    pub landings: usize,
+}
+
+/// The states' budget as load cut it: the chunk, how many, the slots that
+/// exist from the start and the tokens asked for. [`kern_pool::Pool::new`]
+/// is pure, so the pool another process builds from a runtime's budget
+/// starts where this runtime's pool did and decides exactly as it would:
+/// that process holds the accounting and this runtime runs its plans
+/// ([`Runtime::remap`], [`Runtime::copy`], [`Runtime::zero_slot`],
+/// [`Runtime::host_out`], [`Runtime::host_in`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub chunk: u64,
+    pub chunks: u32,
+    pub first_slots: usize,
+    pub tokens: Option<u64>,
+}
+
+impl Budget {
+    /// The pool of `m` over this budget; its initial layout is already
+    /// mapped wherever the budget came from.
+    pub fn pool(&self, m: &Manifest) -> kern_pool::Result<Pool> {
+        Pool::new(m, self.chunk, self.chunks, self.first_slots, self.tokens).map(|(p, _)| p)
+    }
 }
 
 /// This rank's place in every group the manifest's `topology` declares.
@@ -114,7 +142,7 @@ pub struct Runtime {
     /// The host tier's copies run here, off the compute stream.
     xfer: Arc<CudaStream>,
     /// The host tier: its accounting and its pinned block, once reserved.
-    host: Option<(Arc<Host>, Pinned)>,
+    host: Option<park::Block>,
     /// Checkpoints whose park copies are still in flight: held here so
     /// their pages and slots stay out of the pool until the copy lands.
     parking: Vec<(Checkpoint, sys::CUevent)>,
@@ -129,6 +157,9 @@ pub struct Runtime {
     /// The remap thread: runs the pool's plans off the serving thread.
     remaps: Remaps,
     remap_count: u64,
+    /// The chunks the remap thread maps, kept here to export them.
+    chunks: Arc<device::Physical>,
+    budget: Budget,
     /// Name-keyed because names are the caller API (`write_input`,
     /// `read_output`, weight binding); execution never looks these up —
     /// their device pointers are baked into `programs`.
@@ -136,6 +167,7 @@ pub struct Runtime {
     /// No kernels may read mapped host bytes before checkpoint binding completes.
     host_weights_ready: bool,
     signals: exec::Signals,
+    gather: push::Gather,
     /// Weight buffers holding their checkpoint bytes: taken from a
     /// [`Resident`] at load, or copied by `load_weights`.
     filled: BTreeSet<String>,
@@ -176,6 +208,9 @@ pub struct Runtime {
     /// Peer mappings kept alive as long as the addresses in `peers`.
     #[allow(dead_code)]
     imports: Vec<DeviceBuf>,
+    /// Exported twins of arriving buffers, by name and slot
+    /// ([`Runtime::landing`]).
+    landings: BTreeMap<(String, usize), DeviceBuf>,
     /// The harness's comparison kernels, loaded on first use.
     compare: compare::CompareCell,
     /// The two edges between a host's stream and this one
@@ -341,6 +376,11 @@ impl Runtime {
     /// e.g. `block_table` and a speculative manifest's `draft_block_table`.
     pub fn page_tables(&self) -> impl Iterator<Item = &str> {
         self.pool.tables()
+    }
+
+    /// The states' budget, for a pool another process holds for this runtime.
+    pub fn budget(&self) -> Budget {
+        self.budget
     }
 
     /// Token slots the paged states hold now (whole pages).

@@ -42,9 +42,11 @@ fn main() -> anyhow::Result<()> {
                     &manifest,
                     Some(&kernels),
                     rank,
-                    io.get("capacity_tokens")
-                        .and_then(|v| v.as_u64())
-                        .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 }),
+                    io.get("capacity_tokens").and_then(|v| v.as_u64()).map(|tokens| Capacity {
+                        tokens: Some(tokens),
+                        seqs: 1,
+                        landings: 0,
+                    }),
                     Some(&Topology::one("ep", rank as u64, 4)),
                 )?;
                 let vars: BTreeMap<String, u64> =

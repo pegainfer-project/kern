@@ -23,7 +23,7 @@ const BYTES: usize = 4 * 129_280 * 5;
 fn runtime() -> Runtime {
     let cols = BYTES / 2 / 5;
     let manifest = serde_json::json!({
-        "schema_version": 5, "model": "device-compare-test", "vars": {}, "states": {},
+        "schema_version": 7, "model": "device-compare-test", "vars": {}, "states": {},
         "buffers": {
             "a": {"kind": "input", "dtype": "bf16", "shape": [5, cols]},
             "b": {"kind": "input", "dtype": "bf16", "shape": [5, cols]},
@@ -47,7 +47,7 @@ fn runtime() -> Runtime {
         &verified,
         Some(&dir),
         gpu,
-        Some(Capacity { tokens: Some(1), seqs: 1 }),
+        Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }),
         None,
         &scope,
     )

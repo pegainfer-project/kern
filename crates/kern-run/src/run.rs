@@ -264,10 +264,11 @@ fn execute(o: Opts) -> Result<()> {
     let verified = Verified::from_json(&manifest_json)?;
     // One sequence: its reach, unless told otherwise (a manifest without
     // paged state takes the runtime's fit).
-    let capacity = o
-        .capacity
-        .or_else(|| kern_runtime::seq_capacity(&verified))
-        .map(|tokens| Capacity { tokens: Some(tokens), seqs: 1 });
+    let capacity = o.capacity.or_else(|| kern_runtime::seq_capacity(&verified)).map(|tokens| Capacity {
+        tokens: Some(tokens),
+        seqs: 1,
+        landings: 0,
+    });
     let mut rt = Runtime::load(&verified, o.inputs.kernels.as_deref(), o.inputs.gpu, capacity, None)?;
     rt.set_eager(o.eager);
     banner(&rt, &o.inputs.manifest, o.inputs.kernels.as_deref(), t0.elapsed());
@@ -333,6 +334,7 @@ fn execute(o: Opts) -> Result<()> {
         if let Some(first) = first {
             if o.inputs.stop_tokens.contains(&first) {
                 info!("stop token {first} at pos {pos}");
+                info!("generated ids: []");
                 println!("{}", o.prompt);
                 return Ok(());
             }
