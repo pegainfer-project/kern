@@ -2,7 +2,7 @@
 //! busy with half-second items and its decode tier a thread stepping every
 //! 25 ms: D's tokens reach the client a step after D makes them whatever
 //! the head is doing, and the clients that leave or stop mid-decode free
-//! their seats from the front.
+//! their seats at once, the front's aborts written by the head.
 
 use std::collections::BTreeMap;
 use std::sync::{mpsc, Arc, Mutex};
@@ -43,7 +43,7 @@ fn request(max_tokens: usize, stop: StopPolicy) -> Request {
 struct Log {
     /// D's tokens as it sent them.
     sent: BTreeMap<Req, Vec<Instant>>,
-    /// The aborts the front sent D.
+    /// The aborts the head wrote to D for the front.
     aborted: BTreeMap<Req, Instant>,
     /// The clients gone the head heard of.
     gone: Vec<RequestId>,
@@ -51,24 +51,33 @@ struct Log {
 
 type Shared = Arc<Mutex<Log>>;
 
-/// A head busy with item after item, each `ITEM` long, hearing the front
-/// only between them: a submission whose client is still there is
-/// admitted, gets its first token and goes to D; one gone is retired.
+/// A head busy with item after item, each `ITEM` long, hearing the front's
+/// submissions and departures only between them: a submission whose
+/// client is still there is admitted, gets its first token and goes to D;
+/// one gone is retired. The front's aborts it writes to D at once, as the
+/// head does while it waits on its pipeline.
 fn head(calls: mpsc::Receiver<Call>, notes: mpsc::Sender<Note>, d: mpsc::Sender<Ask>, log: Shared) {
+    let mut next = Instant::now() + ITEM;
+    let mut heard = Vec::new();
     loop {
-        std::thread::sleep(ITEM);
-        let mut heard = Vec::new();
-        loop {
-            match calls.try_recv() {
-                Ok(c) => heard.push(c),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return,
+        match calls.recv_timeout(next.saturating_duration_since(Instant::now())) {
+            Ok(Call::Abort { tier, req }) => {
+                assert_eq!(tier, 0);
+                log.lock().unwrap().aborted.insert(req, Instant::now());
+                d.send(Ask::Abort { req }).unwrap();
+                continue;
             }
+            Ok(c) => {
+                heard.push(c);
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => next += ITEM,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
         let gone: Vec<RequestId> =
             heard.iter().filter_map(|c| if let Call::Gone(id) = c { Some(*id) } else { None }).collect();
         log.lock().unwrap().gone.extend(&gone);
-        for c in heard {
+        for c in std::mem::take(&mut heard) {
             let Call::Submit(q) = c else { continue };
             let (id, max) = (q.id, q.request.max_tokens);
             if gone.contains(&id) {
@@ -132,16 +141,6 @@ fn stack() -> (LiveScheduler, StepReceiver, Shared) {
     let (calls_tx, calls) = mpsc::channel();
     let (asks_tx, asks) = mpsc::channel();
     let to_head = move |c: Call| calls_tx.send(c).map_err(|_| anyhow!("head gone"));
-    let to_d = {
-        let (asks_tx, log) = (asks_tx.clone(), log.clone());
-        move |(tier, a): (usize, Ask)| {
-            assert_eq!(tier, 0);
-            if let Ask::Abort { req } = a {
-                log.lock().unwrap().aborted.insert(req, Instant::now());
-            }
-            asks_tx.send(a).map_err(|_| anyhow!("tier gone"))
-        }
-    };
     std::thread::spawn({
         let (notes, log) = (notes.clone(), log.clone());
         move || head(calls, notes, asks_tx, log)
@@ -150,7 +149,7 @@ fn stack() -> (LiveScheduler, StepReceiver, Shared) {
         let log = log.clone();
         move || tier(asks, notes, log)
     });
-    let mut live = spawn_scheduler("front", Front::new(front_notes, to_head, to_d, 100));
+    let mut live = spawn_scheduler("front", Front::new(front_notes, to_head, 100));
     let steps = live.handle.take_steps().unwrap();
     (live, steps, log)
 }

@@ -19,9 +19,11 @@
 //! Who answers a client: the head, from submission until it finishes,
 //! rejects or retires the request or hands it over; the front after. A
 //! client that leaves is the front's to see (the ledger's abort flag): it
-//! retires a decoding request and frees its seats at once, and tells the
-//! head once of any other ([`Call::Gone`]), which retires it at its next
-//! touch.
+//! retires a decoding request at once and has the head free its seats
+//! ([`Call::Abort`], as for a stop the relays see first: the head is the
+//! one writer to a decode tier, and the hand-over came before the head's
+//! `Start`, so the abort is behind it), and tells the head once of any
+//! other ([`Call::Gone`]), which retires it at its next touch.
 
 use std::collections::BTreeMap;
 use std::sync::mpsc;
@@ -76,6 +78,11 @@ pub enum Call {
     Submit(Box<QueuedRequest>),
     /// The client left a request the head may still hold.
     Gone(RequestId),
+    /// A request decoding on tier `tier` ended here: free its seats.
+    Abort {
+        tier: usize,
+        req: Req,
+    },
 }
 
 type Link<T> = Box<dyn FnMut(T) -> Result<()> + Send>;
@@ -91,7 +98,6 @@ struct Open {
 pub struct Front {
     notes: mpsc::Receiver<Note>,
     head: Link<Call>,
-    d: Link<(usize, Ask)>,
     relays: Relays,
     /// The decode tier of every request the relays hold.
     tiers: BTreeMap<Req, usize>,
@@ -101,19 +107,16 @@ pub struct Front {
 }
 
 impl Front {
-    /// The front of a head that reads `head` and writes `notes`, whose
-    /// decode tiers read `d` (a tier and what it is asked), its pool
+    /// The front of a head that reads `head` and writes `notes`, its pool
     /// `pages_total` pages.
     pub fn new(
         notes: mpsc::Receiver<Note>,
         head: impl FnMut(Call) -> Result<()> + Send + 'static,
-        d: impl FnMut((usize, Ask)) -> Result<()> + Send + 'static,
         pages_total: u64,
     ) -> Front {
         Front {
             notes,
             head: Box::new(head),
-            d: Box::new(d),
             relays: Relays::new(),
             tiers: BTreeMap::new(),
             open: BTreeMap::new(),
@@ -164,9 +167,9 @@ impl Front {
                     ledger.finish_with_cause(id, why, cause);
                     self.open.remove(&id);
                 }
-                Out::Ask(a @ Ask::Abort { req }) => {
+                Out::Ask(Ask::Abort { req }) => {
                     let tier = *self.tiers.get(&req).context("an abort of a request on no decode tier")?;
-                    (self.d)((tier, a))?
+                    (self.head)(Call::Abort { tier, req })?
                 }
                 o => bail!("the relays asked for {o:?}"),
             }

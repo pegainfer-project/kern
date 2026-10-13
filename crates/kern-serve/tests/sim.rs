@@ -145,9 +145,14 @@ struct Client {
 #[derive(Debug)]
 enum Event {
     Tell(Tell),
-    Pushed { stage: usize, req: Req },
+    Pushed {
+        stage: usize,
+        req: Req,
+    },
     First(Req),
     Gone(Req),
+    /// The front's relays ended a decoding request: free its seats.
+    Abort(Req),
 }
 
 /// What reaches the front's note channel.
@@ -174,7 +179,9 @@ enum Step {
     HeadPrefill(Req),
     FrontNote,
     FrontSweep,
-    Leave(Req),
+    /// A client leaves: of those still there, the one the step count picks,
+    /// so departures spread over every phase rather than crowd the start.
+    Leave,
     DHear,
     Decode,
     /// P's reader of D's connection: tokens to the front, the rest to the head.
@@ -358,8 +365,8 @@ impl Sim {
         if self.front.open.iter().any(|(r, &told)| self.clients[r].gone && (!told || self.front.r.holds(*r))) {
             v.push(Step::FrontSweep);
         }
-        if self.left > 0 {
-            v.extend(self.clients.iter().filter(|(_, c)| c.end.is_none() && !c.gone).map(|(&r, _)| Step::Leave(r)));
+        if self.left > 0 && self.clients.values().any(|c| c.end.is_none() && !c.gone) {
+            v.push(Step::Leave);
         }
         if !self.to_d.is_empty() {
             v.push(Step::DHear);
@@ -411,8 +418,12 @@ impl Sim {
                 self.note(n)
             }
             Step::FrontSweep => self.sweep(),
-            Step::Leave(req) => {
-                self.say(format!("{:?}", self.head.h.standing(req)));
+            Step::Leave => {
+                let live: Vec<Req> =
+                    self.clients.iter().filter(|(_, c)| c.end.is_none() && !c.gone).map(|(&r, _)| r).collect();
+                let req = live[self.log.len() % live.len()];
+                let decoding = self.front.r.holds(req);
+                self.say(format!("{req}, {:?}{}", self.head.h.standing(req), if decoding { ", decoding" } else { "" }));
                 self.left -= 1;
                 self.clients.get_mut(&req).unwrap().gone = true;
                 Ok(())
@@ -603,6 +614,10 @@ impl Sim {
                     Vec::new()
                 }
             }
+            Event::Abort(req) => {
+                self.ask(Ask::Abort { req })?;
+                Vec::new()
+            }
             Event::Gone(req) => {
                 let holds = self.head.waiting.contains(&req)
                     || self.head.admitted.contains_key(&req)
@@ -705,7 +720,11 @@ impl Sim {
                     let t = self.clients[&req].tokens.clone();
                     self.end(req, End::Finished(t, why))?;
                 }
-                Out::Ask(a @ Ask::Abort { .. }) => self.ask(a)?,
+                // The head is the one writer to D: the front's aborts go through it.
+                Out::Ask(Ask::Abort { req }) => {
+                    self.say(format!("abort {req} through the head"));
+                    self.head.events.push_back(Event::Abort(req));
+                }
                 o => return Err(Violation::PrefillDied(format!("the relays asked for {o:?}"))),
             }
         }
@@ -895,13 +914,17 @@ fn a_placement_moved_on_d_reaches_every_mirror_before_a_push_needs_it() {
     }
 }
 
-/// Review finding 2: the head hands the request to the front before it
-/// writes `Start`; the front, seeing the client gone, writes `Abort` on the
-/// same connection in between, and D, finding no seat to start, exits.
+/// Review finding 2, closed: the head is the one writer to D and the
+/// front's aborts go through it, so the abort of a request the head handed
+/// to the front lands behind the head's `Start`, never ahead of it.
 #[test]
-fn an_abort_from_the_front_overtakes_the_heads_start() {
+fn an_abort_from_the_front_comes_behind_the_heads_start() {
     let cfg = Config { requests: 4, slots: 10, slot: 24, seats: 3, leave: 4, long: false };
-    let f = explore(cfg, 3000).expect("the overtaking abort is found");
-    report("abort overtakes start", &f);
-    assert!(matches!(&f.3, Violation::DecodeDied(m) if m.contains("starts with no seat")), "{:?}", f.3);
+    if let Some(f) = explore(cfg, 3000) {
+        report("abort and start", &f);
+        panic!("{:?}", f.3);
+    }
+    let reached = reach(cfg, 3000, "FrontSweep | abort");
+    eprintln!("of 3000 schedules, {reached} have the front abort a decoding request");
+    assert!(reached > 20, "{reached} of 3000");
 }

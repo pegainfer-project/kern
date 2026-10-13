@@ -36,9 +36,12 @@
 //! runs on a thread of its own ([`spawn`]), hears submissions and departed
 //! clients among its events, and writes what it decides as notes to its
 //! [`Front`], which the HTTP side's driver steps. While it waits for stage
-//! 1 to take an item it goes on hearing the stages and the decode tier, so
-//! a first token or a landed push starts its request on D at once; what
-//! the front says waits for the next turn, as admission does.
+//! 1 to take an item it goes on hearing the stages, the decode tier and
+//! the front's aborts, so a first token or a landed push starts its
+//! request on D at once; submissions and departures wait for the next
+//! turn, as admission does. The head is the only writer to a decode tier:
+//! the front's aborts come through it, so every ask reaches D in the order
+//! the head decided it, an abort never ahead of its request's start.
 //!
 //! With a decode tier (`--decode`, `pd`) a request of more than one token
 //! is handed off instead of finished: admission waits for its seats there
@@ -56,7 +59,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -157,17 +160,10 @@ enum Event {
     Taken,
 }
 
-/// The write half of the connection to a decode tier, which the head and
-/// the front both ask on.
-type Wire = Arc<Mutex<TcpStream>>;
-
-fn ask(w: &Wire, a: &Ask) -> Result<()> {
-    send(&mut w.lock().unwrap_or_else(|e| e.into_inner()), a)
-}
-
-/// A decode tier, as the head holds it.
+/// A decode tier, as the head holds it: the head alone writes to it, so
+/// what it asks reaches D in the order the head decided it.
 struct Pd {
-    d: Wire,
+    d: TcpStream,
     h: Handoffs,
     pools: Pools,
     mirrors: Mirrors,
@@ -225,8 +221,7 @@ pub fn spawn(m: Verified, weights: Weights, h: Head) -> Result<(Front, Facts)> {
         .name("kern-pp-head".into())
         .spawn(move || match load(m, &weights, h, notes) {
             Ok(head) => {
-                let wires: Vec<Wire> = head.tiers.iter().map(|p| p.d.clone()).collect();
-                let _ = ready.send(Ok((head.facts(), head.calls.clone(), wires, head.rt.pages_total() as u64)));
+                let _ = ready.send(Ok((head.facts(), head.calls.clone(), head.rt.pages_total() as u64)));
                 head.run()
             }
             Err(e) => {
@@ -234,13 +229,9 @@ pub fn spawn(m: Verified, weights: Weights, h: Head) -> Result<(Front, Facts)> {
             }
         })
         .context("spawning the head's thread")?;
-    let (facts, calls, wires, pages) = loaded.recv().context("the head's thread died loading")??;
+    let (facts, calls, pages) = loaded.recv().context("the head's thread died loading")??;
     let head = move |c: Call| calls.send(Event::Call(c)).map_err(|_| anyhow::anyhow!("the pipeline head is gone"));
-    let d = move |(tier, a): (usize, Ask)| match wires.get(tier) {
-        Some(w) => ask(w, &a),
-        None => bail!("{a:?} to decode tier {tier}, of {}", wires.len()),
-    };
-    Ok((Front::new(front_notes, head, d, pages), facts))
+    Ok((Front::new(front_notes, head, pages), facts))
 }
 
 /// Wait for every other stage, load stage 0 at the pages they all have,
@@ -440,7 +431,7 @@ fn decode_tier(
             std::process::exit(1);
         }
     });
-    Ok(Pd { d: Arc::new(Mutex::new(d)), h: Handoffs::new(count, tier), pools, mirrors, load: Load::default() })
+    Ok(Pd { d, h: Handoffs::new(count, tier), pools, mirrors, load: Load::default() })
 }
 
 /// Read one stage's connection to its end: the last stage's answers and
@@ -500,7 +491,7 @@ impl PpHead {
         let Some(i) = pick(req, &seats) else { return Ok(()) };
         let p = &mut self.tiers[i];
         let a = p.h.reserve(req, tokens, relay).expect("a ready tier takes a reserve");
-        ask(&p.d, &a)
+        send(&mut p.d, &a)
     }
 
     /// Lease each waiting prompt in order, from what the cache kept of it;
@@ -589,7 +580,7 @@ impl PpHead {
     fn apply(&mut self, tier: usize, outs: Vec<Out>) -> Result<()> {
         for o in outs {
             match o {
-                Out::Ask(a) => ask(&self.tiers[tier].d, &a)?,
+                Out::Ask(a) => send(&mut self.tiers[tier].d, &a)?,
                 Out::Push(p) => self.push(&p)?,
                 Out::Place { tier, rank, epoch, placement } => {
                     let job = Job::Place { tier, rank, epoch, placement };
@@ -874,12 +865,12 @@ impl PpHead {
     }
 
     /// Wait until stage 1 has taken the item before the one just issued,
-    /// hearing all but the front meanwhile.
+    /// hearing all but the front's submissions and departures meanwhile.
     fn taken(&mut self) -> Result<()> {
         let t0 = Instant::now();
         while !self.flow.ready()? {
             match self.events.recv_timeout(super::TIMEOUT.saturating_sub(t0.elapsed())) {
-                Ok(e @ Event::Call(_)) => self.later.push_back(e),
+                Ok(e @ Event::Call(Call::Submit(_) | Call::Gone(_))) => self.later.push_back(e),
                 Ok(e) => self.hear(e)?,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     bail!("stage 1 took nothing in {:?}; the stage is gone", super::TIMEOUT)
@@ -923,6 +914,10 @@ impl PpHead {
                     self.gone.insert(id);
                 }
                 return Ok(());
+            }
+            Event::Call(Call::Abort { tier, req }) => {
+                let d = self.tiers.get_mut(tier).with_context(|| format!("an abort on decode tier {tier}, of none"))?;
+                return send(&mut d.d, &Ask::Abort { req });
             }
             Event::Taken => return Ok(()),
         };
