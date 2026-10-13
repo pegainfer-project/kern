@@ -24,7 +24,9 @@
 //! still unsent, and sending them one by one ahead of its own kept every
 //! device idle for as long as the encoding took. A rank answers once its device is done with the order's item,
 //! having checked the manifest's error word; a rank that fails exits, and
-//! a closed connection is an error on the other side.
+//! once the tables are out a closed connection ends the process on the
+//! other side ([`crate::watch`]): a member waiting on a dead one's
+//! collective would otherwise wait forever.
 //!
 //! Every item leaves one debug line per rank, `rank item`: the rank's
 //! wall-clock microseconds at issue and at done (`kern_serve=debug`), and
@@ -278,6 +280,7 @@ pub fn head(
         send(&mut s, &table(m, groups, q, &handles, &ids, host))?;
         budgets.push(Budget { chunk: h.chunk, chunks: h.chunks, first_slots: h.first_slots, tokens: h.tokens });
         exported.push(h.pool);
+        crate::watch::exit_with(&s, format!("rank {q}"))?;
         remote.push(s);
     }
     join(&mut rt, &p, groups, &table(m, groups, 0, &handles, &ids, host))?;
@@ -287,7 +290,7 @@ pub fn head(
     Ok((ranks, Executors { local: Executor::new(0, rt, p), remote, pools: exported }))
 }
 
-/// Serve rank `q` for the head at `head` until it closes the connection.
+/// Serve rank `q` for the head at `head` until the head is gone.
 pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> Result<()> {
     let groups = world(m)?;
     ensure!(
@@ -311,6 +314,7 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
     };
     send(&mut s, &hello)?;
     let t: Table = recv(&mut s)?.context("the head closed before its table")?;
+    crate::watch::exit_with(&s, "the head".into())?;
     join(&mut rt, &p, groups, &t)?;
     info!(rank = q, head, "rank serving");
     let mut x = Executor::new(q, rt, p);

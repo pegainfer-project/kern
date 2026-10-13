@@ -21,6 +21,7 @@ pub mod pd;
 mod pp;
 pub mod ranks;
 mod scheduler;
+mod watch;
 
 pub use pp::pack;
 
