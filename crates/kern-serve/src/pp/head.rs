@@ -591,6 +591,14 @@ impl PpHead {
             match o {
                 Out::Ask(a) => ask(&self.tiers[tier].d, &a)?,
                 Out::Push(p) => self.push(&p)?,
+                Out::Place { tier, rank, epoch, placement } => {
+                    let job = Job::Place { tier, rank, epoch, placement };
+                    for w in &mut self.stages {
+                        send(w, &job)?;
+                    }
+                    let Job::Place { placement, .. } = &job else { unreachable!("built above") };
+                    self.tiers[tier].mirrors.place(&self.rt, rank, epoch, placement)?;
+                }
                 Out::Emit { req, tok } => self.note(Note::Emit { id: RequestId::new(req), tok })?,
                 Out::Finish { req, why, cause } => {
                     let id = RequestId::new(req);

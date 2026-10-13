@@ -249,10 +249,17 @@ struct Front {
     open: BTreeMap<Req, bool>,
 }
 
+/// What the head sends a stage, in order.
+#[derive(Debug)]
+enum Job {
+    Push(Push),
+    Place { rank: usize, epoch: u64, placement: String },
+}
+
 struct Stage {
-    inbox: VecDeque<Push>,
-    /// Every D rank's pool as this stage last placed it.
-    mirror: Vec<Placement>,
+    inbox: VecDeque<Job>,
+    /// Every D rank's pool as this stage last placed it, and the epoch.
+    mirror: Vec<(Placement, u64)>,
 }
 
 struct Sim {
@@ -293,7 +300,7 @@ impl Sim {
         }
         let d = Decoder::new(replicated_of(m.clone(), W, 1, cfg.slots), Fake, cfg.seats).unwrap();
         let pools = d.pools(vec![String::new(); W], kern_serve::pd::shapes(&m));
-        let mirror: Vec<Placement> = pools.placements.iter().map(|h| placement(h)).collect();
+        let mirror: Vec<(Placement, u64)> = pools.placements.iter().map(|h| (placement(h), 0)).collect();
         Sim {
             geo: Geometry::new(&m, cfg.slots),
             head: Head {
@@ -428,10 +435,10 @@ impl Sim {
                 }
                 Ok(())
             }
-            Step::Stage(s) => {
-                let p = self.stages[s].inbox.pop_front().expect("enabled");
-                self.push(s, &p)
-            }
+            Step::Stage(s) => match self.stages[s].inbox.pop_front().expect("enabled") {
+                Job::Push(p) => self.push(s, &p),
+                Job::Place { rank, epoch, placement } => self.place(s, rank, epoch, &placement),
+            },
             Step::Last(req) => {
                 self.firsts.remove(&req);
                 self.head.events.push_back(Event::First(req));
@@ -447,10 +454,16 @@ impl Sim {
             Out::Push(p) => {
                 self.in_flight.insert(p.req, STAGES);
                 for s in 1..STAGES {
-                    self.stages[s].inbox.push_back(p.clone());
+                    self.stages[s].inbox.push_back(Job::Push(p.clone()));
                 }
                 // The head is stage 0: it pushes from its own mirrors at once.
                 return self.push(0, &p);
+            }
+            Out::Place { rank, epoch, placement, .. } => {
+                for s in 1..STAGES {
+                    self.stages[s].inbox.push_back(Job::Place { rank, epoch, placement: placement.clone() });
+                }
+                return self.place(0, rank, epoch, &placement);
             }
             Out::Emit { req, tok } => Note::Emit(req, tok),
             Out::Finish { req, why, .. } => {
@@ -493,11 +506,12 @@ impl Sim {
         }
         for t in &tells {
             let said = match t {
-                Tell::Grant { req, seats, placements, .. } => format!(
-                    "D→ Grant {req} slots {:?} placements of ranks {:?}",
+                Tell::Grant { req, seats, .. } => format!(
+                    "D→ Grant {req} slots {:?} at epochs {:?}",
                     seats.iter().map(|s| s.slot).collect::<Vec<_>>(),
-                    placements.iter().map(|p| p.0).collect::<Vec<_>>()
+                    seats.iter().map(|s| s.epoch).collect::<Vec<_>>()
                 ),
+                Tell::Placed { rank, epoch, .. } => format!("D→ Placed rank {rank} at {epoch}"),
                 Tell::Tokens { step, .. } => format!("D→ Tokens {step:?}"),
                 t => format!("D→ {t:?}"),
             };
@@ -507,18 +521,34 @@ impl Sim {
         Ok(())
     }
 
-    /// Stage `s` places what the push says moved, then writes every seat
-    /// through its mirrors: each position it writes must be where D has it.
-    fn push(&mut self, s: usize, p: &Push) -> Checked<()> {
-        for (q, hex) in &p.placements {
-            self.stages[s].mirror[*q] = placement(hex);
+    /// Stage `s` places D rank `rank`'s mirror at `epoch`, as `Mirrors::place`.
+    fn place(&mut self, s: usize, rank: usize, epoch: u64, hex: &str) -> Checked<()> {
+        let at = self.stages[s].mirror[rank].1;
+        self.say(format!("stage {s} places rank {rank} at {epoch}"));
+        if epoch != at + 1 {
+            return Err(Violation::PrefillDied(format!("stage {s}: rank {rank}'s placement {epoch} after {at}")));
         }
+        self.stages[s].mirror[rank] = (placement(hex), epoch);
+        Ok(())
+    }
+
+    /// Stage `s` writes every seat through its mirrors once they reach the
+    /// seats' epochs, as `Mirrors::push`: each position it writes must be
+    /// where D has it.
+    fn push(&mut self, s: usize, p: &Push) -> Checked<()> {
         self.say(format!(
-            "stage {s} pushes {} into slots {:?}, placing ranks {:?}",
+            "stage {s} pushes {} into slots {:?} at epochs {:?}",
             p.req,
             p.seats.iter().map(|s| s.slot).collect::<Vec<_>>(),
-            p.placements.iter().map(|p| p.0).collect::<Vec<_>>()
+            p.seats.iter().map(|s| s.epoch).collect::<Vec<_>>()
         ));
+        if let Some(seat) = p.seats.iter().find(|seat| self.stages[s].mirror[seat.rank].1 < seat.epoch) {
+            let at = self.stages[s].mirror[seat.rank].1;
+            return Err(Violation::PrefillDied(format!(
+                "stage {s}: request {} at placement {} of rank {}, the mirror at {at}",
+                p.req, seat.epoch, seat.rank
+            )));
+        }
         let truth = self.d.pools(vec![String::new(); W], BTreeMap::new()).placements;
         for seat in &p.seats {
             let now = placement(&truth[seat.rank]);
@@ -527,7 +557,7 @@ impl Sim {
                     .geo
                     .positions(a, seat)
                     .into_iter()
-                    .find(|&x| self.stages[s].mirror[seat.rank].at(a, x) != now.at(a, x));
+                    .find(|&x| self.stages[s].mirror[seat.rank].0.at(a, x) != now.at(a, x));
                 if let Some(position) = bad {
                     return Err(Violation::StaleMirror { stage: s, req: p.req, rank: seat.rank, arena: a, position });
                 }
@@ -809,6 +839,18 @@ fn shrink(cfg: Config, seed: u64, mut c: Vec<usize>, kind: &str) -> Vec<usize> {
     }
 }
 
+/// How many of `seeds` schedules of `cfg` have a step whose log line
+/// holds `what`: that the schedules reach the case a test is about.
+fn reach(cfg: Config, seeds: u64, what: &str) -> usize {
+    let mut rand = Rand(0x9E37_79B9_7F4A_7C15);
+    (1..=seeds)
+        .filter(|&seed| {
+            let choices: Vec<usize> = (0..400).map(|_| rand.next(1 << 16)).collect();
+            run(cfg, seed, &choices).0.iter().any(|l| l.contains(what))
+        })
+        .count()
+}
+
 fn report(name: &str, found: &(u64, Vec<usize>, Vec<String>, Violation)) {
     let (seed, choices, log, v) = found;
     eprintln!("{name}: seed {seed}, {} choices, {} steps: {v:?}", choices.len(), log.len());
@@ -829,16 +871,28 @@ fn with_nothing_leaving_and_nothing_remapping_every_schedule_ends_cleanly() {
     }
 }
 
-/// Review finding 1: a D rank's new placement rides on one request's
-/// grant; when that request is released (P rejects its prompt) or its
-/// client leaves before the push, nothing places it, and the next push to
-/// that rank writes through the old mirror.
+/// Review finding 1, closed: a D rank's placement is the connection's,
+/// told in order ahead of the grant that needs it, so a grant released
+/// (P rejects its prompt) or abandoned (its client leaves) takes nothing
+/// with it, and every push writes through a mirror at its seats' epochs.
 #[test]
-fn a_placement_riding_on_a_released_grant_is_lost() {
-    let cfg = Config { requests: 6, slots: 3, slot: 768, seats: 3, leave: 0, long: true };
-    let f = explore(cfg, 300).expect("the lost placement is found");
-    report("lost placement", &f);
-    assert_eq!(f.3.kind(), "stale mirror");
+fn a_placement_moved_on_d_reaches_every_mirror_before_a_push_needs_it() {
+    for leave in [0, 3] {
+        let cfg = Config { requests: 6, slots: 3, slot: 768, seats: 3, leave, long: true };
+        if let Some(f) = explore(cfg, 1000) {
+            report("placement", &f);
+            panic!("leave {leave}: {:?}", f.3);
+        }
+        let reached = (reach(cfg, 200, "D→ Placed"), reach(cfg, 200, "pushes"), reach(cfg, 200, "at epochs [1"));
+        eprintln!(
+            "leave {leave}: of 200 schedules, {} place, {} push, {} push at epoch 1",
+            reached.0, reached.1, reached.2
+        );
+        assert!(
+            reached.0 > 20 && reached.2 > 20,
+            "leave {leave}: (placed, pushed, pushed at epoch 1) in {reached:?} of 200"
+        );
+    }
 }
 
 /// Review finding 2: the head hands the request to the front before it

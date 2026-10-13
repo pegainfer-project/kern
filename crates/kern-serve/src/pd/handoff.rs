@@ -49,6 +49,14 @@ pub enum Out {
         why: FinishReason,
         cause: Option<StopCause>,
     },
+    /// Decode tier `tier`'s rank `rank` is at placement `epoch` (hex): the
+    /// head's mirror and every stage's, ahead of any push behind it.
+    Place {
+        tier: usize,
+        rank: usize,
+        epoch: u64,
+        placement: String,
+    },
     /// The waiting front's reserve was refused: reject it.
     Reject {
         req: Req,
@@ -64,7 +72,7 @@ pub enum Out {
 #[derive(Debug)]
 enum Phase {
     Reserving,
-    Granted { seats: Vec<Seat>, placements: Vec<(usize, String)> },
+    Granted { seats: Vec<Seat> },
     Pushing { pushed: BTreeSet<usize>, first: Option<u32>, len: usize },
 }
 
@@ -178,13 +186,13 @@ impl Handoffs {
     /// `len` positions: the push to every stage, unless its client left.
     pub fn prefilled(&mut self, req: Req, lease: &Lease, len: usize) -> Vec<Out> {
         let Some(h) = self.live.get_mut(&req) else { return Vec::new() };
-        let Phase::Granted { seats, placements } =
+        let Phase::Granted { seats } =
             std::mem::replace(&mut h.phase, Phase::Pushing { pushed: BTreeSet::new(), first: None, len })
         else {
             unreachable!("a request is prefilled once, after its grant")
         };
         let (pages, slot, tier) = (lease.page_ids().to_vec(), lease.seq_slot(), self.tier);
-        let push = Push { req, tier, pages, slot, len, seats, placements };
+        let push = Push { req, tier, pages, slot, len, seats };
         vec![Out::Push(push)]
     }
 
@@ -247,10 +255,11 @@ impl Handoffs {
         };
         match t {
             Tell::Pools(_) => bail!("the decode tier sent its pools twice"),
-            Tell::Grant { req, seats, placements, .. } => {
+            Tell::Placed { rank, epoch, placement } => Ok(vec![Out::Place { tier: self.tier, rank, epoch, placement }]),
+            Tell::Grant { req, seats, .. } => {
                 answered(req, &mut self.asking)?;
                 let h = self.live.get_mut(&req).expect("asking is live");
-                h.phase = Phase::Granted { seats, placements };
+                h.phase = Phase::Granted { seats };
                 Ok(match h.closed {
                     true => self.release(req),
                     false => Vec::new(),

@@ -21,9 +21,17 @@
 //!
 //! - admission asks D for seats first: `Reserve { tokens }` (prompt plus
 //!   `max_tokens`) is answered `Grant` (a lease on every member, adopted
-//!   without zeroing, and a fresh placement for any rank that remapped),
-//!   `Busy` (no room now; P asks again once D says `Room`) or `Refuse`
-//!   (it will never fit). A request of one token never asks: P finishes it.
+//!   without zeroing), `Busy` (no room now; P asks again once D says
+//!   `Room`) or `Refuse` (it will never fit). A request of one token never
+//!   asks: P finishes it.
+//! - where a D rank's chunks are is the connection's, not a request's: D
+//!   tells `Placed` with the rank's next epoch whenever its placement moved,
+//!   ahead of the grant that needs it, and each seat names the epoch it
+//!   lives in. An object held stays where every later placement says, so a
+//!   mirror at that epoch or past it writes the seat right. The P head
+//!   places its own mirror and forwards the placement to every stage on
+//!   its job stream, where it lands ahead of any push behind it; a stage
+//!   refuses a push whose seats' epochs its mirrors have not reached.
 //! - right after the item that writes the prompt's last rows, the P head
 //!   sends every stage a [`Push`]; each stage moves its states into the
 //!   seats on its compute stream ([`moves`]: rows dealt by position, a
@@ -94,7 +102,7 @@ pub fn shapes(m: &Manifest) -> BTreeMap<String, Shape> {
 pub struct Pools {
     /// Every D rank's `PoolHandle`, hex, in rank order.
     pub handles: Vec<String>,
-    /// Every D rank's `Placement` as of now, hex, in rank order.
+    /// Every D rank's `Placement` at epoch 0, hex, in rank order.
     pub placements: Vec<String>,
     pub states: BTreeMap<String, Shape>,
     /// Members of a D group, the ranks one row spans.
@@ -181,13 +189,18 @@ pub enum Ask {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tell {
     Pools(Pools),
-    /// The seats, one per member of a group in member order, the
-    /// placement (hex) of every rank whose pool moved since it was last
-    /// told, and the tier's load with them held.
+    /// D rank `rank`'s placement (hex) moved: this is its `epoch`th, every
+    /// epoch one past the last.
+    Placed {
+        rank: usize,
+        epoch: u64,
+        placement: String,
+    },
+    /// The seats, one per member of a group in member order, and the
+    /// tier's load with them held.
     Grant {
         req: Req,
         seats: Vec<Seat>,
-        placements: Vec<(usize, String)>,
         load: Load,
     },
     /// No room now; a `Room` follows once there may be.
@@ -248,17 +261,18 @@ pub enum Refusal {
     KvBudget,
 }
 
-/// One D member's part of a row: its rank, its pages and its slot.
+/// One D member's part of a row: its rank, its pages and its slot, and the
+/// epoch of the rank's placement it was granted in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seat {
     pub rank: usize,
     pub pages: Vec<i32>,
     pub slot: Option<i32>,
+    pub epoch: u64,
 }
 
 /// What every stage moves for one request: the prompt's `len` positions in
-/// the P pages and slot, into the D seats of decode tier `tier`, after
-/// placing the mirrors the grant moved.
+/// the P pages and slot, into the D seats of decode tier `tier`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Push {
     pub req: Req,
@@ -267,7 +281,6 @@ pub struct Push {
     pub slot: Option<i32>,
     pub len: usize,
     pub seats: Vec<Seat>,
-    pub placements: Vec<(usize, String)>,
 }
 
 /// One copy a stage runs for a push, into D rank `rank`'s mirror.

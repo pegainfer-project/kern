@@ -128,6 +128,11 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
                 flow.pushed(&rt, push.req)?;
                 continue;
             }
+            super::Job::Place { tier, rank, epoch, placement } => {
+                let m = mirrors.get_mut(tier).with_context(|| format!("a placement of decode tier {tier}, of none"))?;
+                m.place(&rt, rank, epoch, &placement)?;
+                continue;
+            }
         };
         let vars: Vars = item.vars.into_iter().filter(|(k, _)| rt.manifest.vars.contains_key(k)).collect();
         // The acts, fills and tables are stream-ordered behind the item

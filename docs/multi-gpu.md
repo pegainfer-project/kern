@@ -540,7 +540,9 @@ rank 的 state（`crates/kern-runtime/src/push.rs`）。难点在 pooled state �
   （`kern-pool/tests/placement.rs` 的 property test：镜像按 remap 跟随池子，持有对象的块在任何
   remap 之后不动）。别的写法（没租的、placement 之后才租的）是未定义：未映射的位置 fault，过期的
   位置写进别的对象。目标的 lease 在自己的 stream 上清零 slot，所以目标在 stream 过了 lease 之后
-  才把 ids 和 placement 发出去；只有 `remaps()` 动了才需要发新 placement。
+  才把 ids 和 placement 发出去。只有 placement 真的变了才需要发新的：`remaps()` 动了不等于
+  位置动了，比如一次只授权访问、不挪块的 remap。kern-serve 把每个 rank 的 placement 当成
+  连接上的有序快照（epoch），每个 seat 写明自己所在的 epoch（`docs/protocol.md`）。
 - `push_pages(state, &[(src, dst)], &mirror)`：连续的对用 `kern_pool::runs`（与 host 层同一个
   函数）折成一次 memcpy；`push_slot(state, src, dst, &mirror)` 整 slot 一次 memcpy；
   `push_slot_part(state, src, dst, &split, k, &mirror)`：目标按头把 state 切给 tp 组 `of` 个成员
