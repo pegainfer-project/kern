@@ -10,11 +10,12 @@ states, bound to the tensors SGLang allocated for each layer.
       sglang serve --model-path <checkpoint> --page-size 64 --attention-backend trtllm_mha \\
         --mamba-radix-cache-strategy extra_buffer --disable-prefill-cuda-graph ...
 
-The plugin takes the checkpoint's own architecture name, so SGLang still
-recognizes the model as what it is (pools, cache policy, defaults) and only
-the class that runs it changes. It does nothing unless `KERN_MANIFEST` is
-set. The manifest (`tools/qwen38_sglang.py` writes one) follows a small
-contract, see `model.py`.
+The plugin takes the checkpoint's own architecture name (`KERN_ARCHITECTURE`,
+e.g. `KimiK3ForConditionalGeneration`), so SGLang still recognizes the model
+as what it is (pools, cache policy, defaults) and only the class that runs it
+changes. It does nothing unless `KERN_MANIFEST` is set. The manifest
+(`tools/qwen38_sglang.py` writes one; K3's comes from kern-k3-pp-prefill's
+`k3_sglang.py`) follows a small contract, see `model.py`.
 """
 import os
 
