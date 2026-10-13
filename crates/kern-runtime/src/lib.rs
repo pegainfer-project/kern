@@ -157,6 +157,9 @@ pub struct Runtime {
     /// The remap thread: runs the pool's plans off the serving thread.
     remaps: Remaps,
     remap_count: u64,
+    /// Where the remaps [`Runtime::remap`] was handed leave the chunks: the
+    /// next one is checked against it before it runs.
+    driven: kern_pool::Placement,
     /// The chunks the remap thread maps, kept here to export them.
     chunks: Arc<device::Physical>,
     budget: Budget,

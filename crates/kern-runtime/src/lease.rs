@@ -351,14 +351,18 @@ impl Runtime {
     /// (one built from [`Runtime::budget`]), on the remap thread once both
     /// streams have passed everything enqueued so far. One at a time, as
     /// that pool plans them; [`Runtime::remapped`] says when it has landed.
-    /// A runtime driven this way leases nothing itself.
+    /// A runtime driven this way leases nothing itself. A plan that does
+    /// not follow from the placement the earlier ones left (a chunk at two
+    /// positions, an unmap of an empty one) is refused before it runs.
     pub fn remap(&mut self, plan: Remap) -> Result<()> {
         self.ctx.bind_to_thread()?;
+        let next = self.driven.apply(&plan, self.budget.chunks)?;
         let after = [record(&self.stream)? as u64, record(&self.xfer)? as u64];
         self.remap_count += 1;
         if self.remaps.jobs.send(Job::Run { plan, after }).is_err() {
             bail!(Cuda, "the remap thread is gone");
         }
+        self.driven = next;
         Ok(())
     }
 

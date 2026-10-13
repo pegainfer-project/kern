@@ -322,6 +322,7 @@ impl Runtime {
             blt,
             blas,
             provision,
+            driven: pool.placement(),
             pool: Arc::new(pool),
             remaps,
             chunks: physical,

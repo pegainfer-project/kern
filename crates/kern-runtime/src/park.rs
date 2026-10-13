@@ -259,6 +259,7 @@ impl Runtime {
     /// host block, after everything the compute stream has enqueued.
     pub fn host_out(&self, plan: &Copies<i32, u64>) -> Result<Landing> {
         self.ctx.bind_to_thread()?;
+        self.check_host(plan.pages.iter().copied(), plan.slot)?;
         self.transfer(&self.xfer, &plan.pages, plan.slot, true)?;
         Ok(Landing { event: record(&self.xfer)? })
     }
@@ -267,7 +268,9 @@ impl Runtime {
     /// pages and slot.
     pub fn host_in(&self, plan: &Copies<u64, i32>) -> Result<Landing> {
         self.ctx.bind_to_thread()?;
-        self.transfer(&self.xfer, &inward(&plan.pages), plan.slot.map(|(o, s)| (s, o)), false)?;
+        let (pages, slot) = (inward(&plan.pages), plan.slot.map(|(o, s)| (s, o)));
+        self.check_host(pages.iter().copied(), slot)?;
+        self.transfer(&self.xfer, &pages, slot, false)?;
         Ok(Landing { event: record(&self.xfer)? })
     }
 

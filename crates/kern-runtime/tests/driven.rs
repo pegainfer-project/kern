@@ -5,12 +5,22 @@
 //! issued, not run into aliased chunks or the wrong part of the host block.
 
 use kern_manifest::Verified;
-use kern_pool::{Copies, Remap};
+use std::sync::Arc;
+
+use kern_pool::{Copies, Denied, Remap};
 use kern_runtime::{Capacity, Error, Runtime};
 
 /// A paged `kv` of 4 KiB a token and a 24-byte `gdn` slot; the one
 /// program that names them is never run.
 fn plain(tokens: u64) -> Runtime {
+    let m = manifest();
+    let dir = std::env::temp_dir().join(format!("kern-driven-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let capacity = Capacity { tokens: Some(tokens), seqs: 4, landings: 0 };
+    Runtime::load(&m, Some(&dir), 0, Some(capacity), None).unwrap()
+}
+
+fn manifest() -> Verified {
     let m = serde_json::json!({
         "schema_version": 7, "model": "driven-test", "vars": {},
         "states": {"kv": {"bytes_per_token": 4096}, "gdn": {"bytes_per_seq": 24}},
@@ -23,11 +33,30 @@ fn plain(tokens: u64) -> Runtime {
             {"state": "kv"}, {"state": "gdn"}, {"state": "kv"}, {"i32": 1}, {"i32": 1}, {"i32": 1}
         ]}]}}
     });
-    let m = Verified::from_json(&m.to_string()).unwrap();
-    let dir = std::env::temp_dir().join(format!("kern-driven-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let capacity = Capacity { tokens: Some(tokens), seqs: 4, landings: 0 };
-    Runtime::load(&m, Some(&dir), 0, Some(capacity), None).unwrap()
+    Verified::from_json(&m.to_string()).unwrap()
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn the_remaps_a_pool_over_the_budget_plans_run() {
+    let mut rt = plain(4096);
+    let pool = Arc::new(rt.budget().pool(&manifest()).unwrap());
+    let mut leases = Vec::new();
+    let mut ran = 0;
+    // Slots past the first ones are carved from free pages: each a remap.
+    while ran < 3 {
+        match pool.lease_slot() {
+            Ok(l) => leases.push(l),
+            Err(Denied::Remapping) => {
+                let plan = pool.take_pending().expect("a remap planned");
+                rt.remap(plan.clone()).unwrap();
+                assert_eq!(rt.remapped(true).unwrap(), 1);
+                pool.complete(plan);
+                ran += 1;
+            }
+            Err(d) => panic!("{d:?} after {ran} remaps"),
+        }
+    }
 }
 
 #[test]

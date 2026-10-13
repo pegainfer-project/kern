@@ -22,7 +22,10 @@
 //! nobody holds, so an object held when a placement is taken stays where
 //! that placement says for as long as it is held.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
+
+use crate::error::{bail, Result};
 
 /// What an arena's objects are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -122,6 +125,43 @@ impl Placement {
         plan
     }
 
+    /// This placement once `plan` has run over `chunks` chunks: its unmaps
+    /// off mapped positions, then its maps onto empty ones, every chunk at
+    /// one position at most, then access over mapped positions only. A plan
+    /// that breaks any of these is its planner's bug, refused whole.
+    pub fn apply(&self, plan: &Remap, chunks: u32) -> Result<Placement> {
+        let shape = self.shape();
+        let inside = |a: usize, p: usize| shape.get(a).is_some_and(|&n| p < n);
+        let mut next = self.clone();
+        for &(a, p) in &plan.unmap {
+            if !inside(a, p) || next.0[a][p].take().is_none() {
+                bail!(Api, "a remap unmaps position {p} of arena {a}, which holds no chunk");
+            }
+        }
+        let mut placed: BTreeSet<u32> = next.0.iter().flatten().flatten().copied().collect();
+        for &(a, p, c) in &plan.map {
+            if c >= chunks || !inside(a, p) {
+                bail!(Api, "a remap maps chunk {c} at position {p} of arena {a}: {chunks} chunks, positions {shape:?}");
+            }
+            if let Some(was) = next.0[a][p] {
+                bail!(Api, "a remap maps chunk {c} at position {p} of arena {a}, which holds chunk {was}");
+            }
+            if !placed.insert(c) {
+                bail!(Api, "a remap maps chunk {c} at position {p} of arena {a} while it is placed elsewhere");
+            }
+            next.0[a][p] = Some(c);
+        }
+        if let Some((a, p)) = plan
+            .access
+            .iter()
+            .flat_map(|(a, r)| r.clone().map(|p| (*a, p)))
+            .find(|&(a, p)| !inside(a, p) || next.0[a][p].is_none())
+        {
+            bail!(Api, "a remap grants access at position {p} of arena {a}, which holds no chunk");
+        }
+        Ok(next)
+    }
+
     /// Wire form: the arena count, then per arena its position count and
     /// a chunk per position (`u32::MAX` for none), little-endian `u32`s.
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -145,7 +185,7 @@ impl Placement {
             })
             .collect::<Option<Vec<_>>>()?;
         let placed: Vec<u32> = arenas.iter().flatten().flatten().copied().collect();
-        let distinct: std::collections::BTreeSet<u32> = placed.iter().copied().collect();
+        let distinct: BTreeSet<u32> = placed.iter().copied().collect();
         (words.next().is_none() && distinct.len() == placed.len()).then_some(Placement(arenas))
     }
 }
