@@ -15,7 +15,7 @@ PR #50 的 review 找出的问题几乎都出在这里。原因是同一个：�
 |---|---|---|---|---|
 | 锁步组 | ranks head（rank 0，`Ranks`）↔ 每个 rank 的 `Executor` | `Hello` / `Table`，然后 `Order { acts, item, wait }` ↔ `Answer { tokens, counts, remaps, landed }` | 每个 rank 的 pool 账（页、slot、remap、host）全在 head；rank 的 runtime 只执行 | 每个 rank 一条 TCP，一问一答；组内 kernel 靠 collective 互等 |
 | 流水线 | pp head（stage 0）↔ stage 1..n | `Job::Item { acts, rows, vars }` / `Job::Push` ↔ `Report::Tokens` / `Report::Pushed` | 整条流水线只有一个 pool，在 head；stage 执行 acts 和 push | 每个 stage 一条 TCP；stream 顺序 |
-| P/D | P head、P front ↔ D head；P 的每个 stage → D 的显存 | `Ask { Reserve, Start, Abort }` ↔ `Tell { Pools, Grant, Busy, Room, Refuse, Tokens }`；`Push` 经镜像写进 D 的 pool | D 的 seat 和 placement 在 D head；交接阶段在 P head（`Handoffs`）；解码中的 relay 在 P front（`Relays`） | 一条 TCP，**P 侧有两个写者**（head、front 共用一把锁）；镜像写入与 D 的 remap 之间没有序 |
+| P/D | P head、P front ↔ D head；P 的每个 stage → D 的显存 | `Ask { Reserve, Start, Abort }` ↔ `Tell { Pools, Placed, Grant, Busy, Room, Refuse, Tokens }`；`Push` 经镜像写进 D 的 pool | D 的 seat 和 placement 在 D head；交接阶段在 P head（`Tiers`）；解码中的 relay 在 P front（`Clients`） | 一条 TCP，P 侧只有 head 一个写者，front 的 abort 经 head 转发；placement 按 epoch 在连接上先于用到它的 `Grant` 告知，镜像只接受下一个 epoch，seat 的 epoch 超过镜像的 push 被拒 |
 
 ## 不变量
 
@@ -46,26 +46,33 @@ PR #50 的 review 找出的问题几乎都出在这里。原因是同一个：�
 
 | 手段 | 在哪 | 查什么 |
 |---|---|---|
-| 确定性仿真 | `crates/kern-serve/tests/sim.rs`（CPU） | S1–S4、L2。真实的 `Handoffs`、`Relays`、`Decoder` 和 pool，每个线程是一个 actor，每条连接是一个 FIFO，调度由种子决定；反例会被收缩成最短调度，并逐步讲清每一步做了什么 |
+| 确定性仿真 | `crates/kern-serve/tests/sim.rs`（CPU） | S1–S4、L2。真实的 `Tiers`、`Clients`、`Decoder` 和 pool，每个线程是一个 actor，每条连接是一个 FIFO，调度由种子决定；反例会被收缩成最短调度，并逐步讲清每一步做了什么 |
 | 执行者的 GPU 测试 | `crates/kern-runtime/tests/driven.rs`（`--ignored`，要 GPU） | S5 |
 | 故障注入 | 多 rank 的 kern-serve 上，空闲或解码中 `SIGKILL` 一个 rank，计时 | L1 |
 
-仿真里，head 和 front 围绕纯逻辑的那层 glue 是照 `pp/head.rs`、`front.rs` 手写的模型。
-这两层绑在 CUDA runtime 和 pegainfer 的 ledger 上，测试跑不了真代码。这是现状的缺口，
-不是仿真本身的选择：glue 本身必须写成纯的 `step(state, event) -> (state, effects)`，
-仿真才能直接跑真代码；状态也必须是 `Clone + Eq + Hash`，小配置才能做穷举 BFS。
-现在的 `Handoffs` 和 `Decoder` 两条都不满足，所以只能做"随机调度 + 收缩"。
+head 和 front 的决策是纯的状态机：`pd::Tiers` 返回 `(tier, Out)`，`front::Clients`
+返回 `Write`，`PpHead` 和 `Front` 只负责执行，不做判断。仿真跑的就是这两份真代码，
+手写的只剩 head admission 外围 P 自己的 pool 和 runtime（prompt 超过上限就拒，否则
+lease）。head 只在听到事件之后才轮到一次 turn，和它的主循环一致，所以 admission 卡住
+时报出来的是残留的 seat 或没结束的客户端，而不是 livelock。
+
+检查器本身也要验：把真代码改坏，仿真必须抓到。去掉 front 对解码中离开客户端的
+`Retire`，报 `request 1: None (gone true)`；让 `Tiers::release` 什么都不释放，报
+`held at the end: [3]`。
+
+穷举 BFS 还做不了：它要求状态是 `Clone + Eq + Hash`，`Decoder` 和 pool 还不满足，
+所以目前只能做"随机调度 + 收缩"。
 
 ## 在现有代码上的复现（2026-10-12）
 
 在动生产代码之前，检查手段必须先在现有代码上把 review 找出的四个问题都抓出来。
 
-| # | 问题 | 结果 |
-|---|---|---|
-| 1 | placement 增量挂在单个请求的 `Grant` 上（`decoder.rs` `told[q]` 在发送时就推进），请求被 release 或 abort 时它跟着丢失 | 仿真，种子 1，94 步：Grant 3 带着新 carve 出来的 slot 3 和两个 rank 的 placement；P 拒掉 3（prompt 太长）→ `release` → `Abort`；Grant 6 拿到同一个 slot 3，不带 placement；stage 0 透过旧镜像写 slot 3。违反 S1 |
-| 2 | head 先发 `Note::Decode`，再锁 wire 发 `Start`（`pp/head.rs` `apply`）；front 在两者之间看到客户端离开，`Abort` 先上 wire | 仿真，种子 50，43 步：第 27 步 head 发 Decode → 第 28 步 front 处理 → 第 29 步 front sweep 发 `Abort 1` → 第 30 步 head 发 `Start 1` → D：`request 1 starts with no seat`，tier 退出。违反 S2 |
-| 3 | `Runtime::remap` 原样执行线上来的 `Remap`；`host_out` / `host_in` 跳过 `check_host` | GPU：一个把位置 0 的 chunk 也映射到位置 1 的 remap 返回 `Ok`，写位置 0、读位置 1 得到同样的字节；一个写进 host 第 1 页（只预留了 1 页）的 park 返回 `Ok`，覆盖的是 slot 区。违反 S5 |
-| 4 | 一个 rank 在 issue 前就死了，同组成员在 collective 里永远等下去 | toy-dcp，2 rank：rank 1 空闲时 `SIGKILL`，再发一个请求；head 60 s 内没有退出，没有一行错误日志，客户端一个字节都没收到。违反 L1。对照：解码中 kill 时，rank 1 那一步的 kernel 已经发出，head 1.0 s 后读到 EOF，退出码 1 |
+| # | 问题 | 结果 | 现在 |
+|---|---|---|---|
+| 1 | placement 增量挂在单个请求的 `Grant` 上（`decoder.rs` `told[q]` 在发送时就推进），请求被 release 或 abort 时它跟着丢失 | 仿真，种子 1，94 步：Grant 3 带着新 carve 出来的 slot 3 和两个 rank 的 placement；P 拒掉 3（prompt 太长）→ `release` → `Abort`；Grant 6 拿到同一个 slot 3，不带 placement；stage 0 透过旧镜像写 slot 3。违反 S1 | 已修：placement 属于连接，按 epoch 先于 `Grant` 告知。leave 0 和 3 各 1000 个种子全部干净；200 个种子里 196 / 145 个有 push 在 epoch 1 写入 |
+| 2 | head 先发 `Note::Decode`，再锁 wire 发 `Start`（`pp/head.rs` `apply`）；front 在两者之间看到客户端离开，`Abort` 先上 wire | 仿真，种子 50，43 步：第 27 步 head 发 Decode → 第 28 步 front 处理 → 第 29 步 front sweep 发 `Abort 1` → 第 30 步 head 发 `Start 1` → D：`request 1 starts with no seat`，tier 退出。违反 S2 | 已修：head 是唯一写者，front 的 abort 经 head 转发。3000 个种子全部干净，其中 103 个有 front abort 解码中的请求；让 front 直接写 D 的变异体在种子 16 被抓到 |
+| 3 | `Runtime::remap` 原样执行线上来的 `Remap`；`host_out` / `host_in` 跳过 `check_host` | GPU：一个把位置 0 的 chunk 也映射到位置 1 的 remap 返回 `Ok`，写位置 0、读位置 1 得到同样的字节；一个写进 host 第 1 页（只预留了 1 页）的 park 返回 `Ok`，覆盖的是 slot 区。违反 S5 | 未修 |
+| 4 | 一个 rank 在 issue 前就死了，同组成员在 collective 里永远等下去 | toy-dcp，2 rank：rank 1 空闲时 `SIGKILL`，再发一个请求；head 60 s 内没有退出，没有一行错误日志，客户端一个字节都没收到。违反 L1。对照：解码中 kill 时，rank 1 那一步的 kernel 已经发出，head 1.0 s 后读到 EOF，退出码 1 | 未修 |
 
 对照组：不 remap、没有客户端离开、没有 prompt 被拒，300 个种子全部干净结束。所以上面
 抓到的问题是对应配置自己的。
