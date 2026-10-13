@@ -45,7 +45,7 @@
 //!
 //! With a decode tier (`--decode`, `pd`) a request of more than one token
 //! is handed off instead of finished: admission waits for its seats there
-//! ([`Handoffs`]: one reserve at a time, the waiting front's), the item
+//! ([`Tiers`]: one reserve at a time, the waiting front's), the item
 //! that writes its last rows is followed at once by a push to every stage
 //! and to the head's own device, before its lease goes to the cache, and
 //! its first token goes to the client as it comes; the decode tier's after
@@ -76,7 +76,7 @@ use super::pack::{goes_out, pack, passed, Bounds, Waiting};
 use super::{connect, recv, send, Flow, Hello, Item, Job, Next, Report, Table};
 use crate::front::{Call, Front, Note};
 use crate::pd::mirror::Mirrors;
-use crate::pd::{cover, pick, shapes, Ask, Handoffs, Load, Out, Pools, Push, Refusal, Relay, Req, Standing, Tell};
+use crate::pd::{cover, shapes, Gate, Load, Out, Pools, Push, Refusal, Req, Tell, Tiers};
 use crate::scheduler::Facts;
 
 /// How long the head keeps trying to reach a decode tier still loading.
@@ -160,15 +160,12 @@ enum Event {
     Taken,
 }
 
-/// A decode tier, as the head holds it: the head alone writes to it, so
-/// what it asks reaches D in the order the head decided it.
+/// A decode tier's connection and mirrors: the head alone writes to it,
+/// so what it asks reaches D in the order the head decided it.
 struct Pd {
     d: TcpStream,
-    h: Handoffs,
     pools: Pools,
     mirrors: Mirrors,
-    /// As it last said.
-    load: Load,
 }
 
 /// Rows fed since the stats line was last logged.
@@ -200,7 +197,9 @@ struct PpHead {
     pages_told: u64,
     /// Events heard while waiting on stage 1 that wait for the next turn.
     later: VecDeque<Event>,
-    tiers: Vec<Pd>,
+    /// Where each handed-off request stands on its decode tier.
+    tiers: Tiers,
+    decode: Vec<Pd>,
     waiting: VecDeque<QueuedRequest>,
     active: VecDeque<Active>,
     /// Per item in flight, oldest first, the prompts its reply finishes.
@@ -295,13 +294,13 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let (tx, events) = mpsc::channel();
     let mut states = vec![shapes(&rt.manifest)];
     states.extend(hellos.values().map(|(x, ..)| x.states.clone()));
-    let tiers: Vec<Pd> = (h.decode.iter().enumerate())
-        .map(|(i, addr)| decode_tier(&rt, addr, i, &states, cut.stages as usize, tx.clone(), notes.clone()))
+    let decode: Vec<Pd> = (h.decode.iter().enumerate())
+        .map(|(i, addr)| decode_tier(&rt, addr, i, &states, tx.clone(), notes.clone()))
         .collect::<Result<_>>()?;
     let next_of = |s: u64| hellos.get(&(s + 1)).map(|(x, _, reach)| (reach.clone(), x.arrivals.clone()));
-    let decode: Vec<Pools> = tiers.iter().map(|p| p.pools.clone()).collect();
+    let pools: Vec<Pools> = decode.iter().map(|p| p.pools.clone()).collect();
     let tables: Vec<Table> =
-        (1..cut.stages).map(|s| Table { pages, next: next_of(s), decode: decode.clone(), host }).collect();
+        (1..cut.stages).map(|s| Table { pages, next: next_of(s), decode: pools.clone(), host }).collect();
     let first = next_of(0).expect("stage 1 said hello");
     let mut stages = Vec::new();
     for ((s, (_, mut w, _)), table) in hellos.into_iter().zip(tables) {
@@ -346,7 +345,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         gone: BTreeSet::new(),
         pages_told: 0,
         later: VecDeque::new(),
-        tiers,
+        tiers: Tiers::new(decode.len(), cut.stages as usize),
+        decode,
         waiting: VecDeque::new(),
         active: VecDeque::new(),
         due: VecDeque::new(),
@@ -387,7 +387,6 @@ fn decode_tier(
     addr: &str,
     tier: usize,
     stages: &[BTreeMap<String, crate::pd::Shape>],
-    count: usize,
     tx: mpsc::Sender<Event>,
     notes: mpsc::Sender<Note>,
 ) -> Result<Pd> {
@@ -431,7 +430,7 @@ fn decode_tier(
             std::process::exit(1);
         }
     });
-    Ok(Pd { d, h: Handoffs::new(count, tier), pools, mirrors, load: Load::default() })
+    Ok(Pd { d, pools, mirrors })
 }
 
 /// Read one stage's connection to its end: the last stage's answers and
@@ -455,7 +454,7 @@ fn listen(stage: u64, mut r: TcpStream, tx: mpsc::Sender<Event>, last: bool) {
 
 impl PpHead {
     fn facts(&self) -> Facts {
-        let d = self.tiers.iter().map(|p| p.pools.max_seq_tokens).min().unwrap_or(usize::MAX);
+        let d = self.decode.iter().map(|p| p.pools.max_seq_tokens).min().unwrap_or(usize::MAX);
         Facts {
             total_blocks: self.rt.pages_total(),
             block_size: self.rt.page() as usize,
@@ -477,21 +476,7 @@ impl PpHead {
         self.waiting.iter().any(|q| q.id == id)
             || self.active.iter().any(|a| a.id == id)
             || self.due.iter().flatten().any(|f| f.id == id)
-            || self.tiers.iter().any(|p| p.h.open().contains(&id.raw()))
-    }
-
-    /// The tier `req` is reserved or underway on, and where it stands there.
-    fn tier_of(&self, req: Req) -> Option<(usize, Standing)> {
-        self.tiers.iter().map(|p| p.h.standing(req)).enumerate().find(|&(_, s)| s != Standing::Unasked)
-    }
-
-    /// Reserve seats for `req` on the tier [`pick`] takes, if any can be asked.
-    fn reserve(&mut self, req: Req, tokens: usize, relay: Relay) -> Result<()> {
-        let seats: Vec<Option<usize>> = self.tiers.iter().map(|p| p.h.ready().then_some(p.load.seats)).collect();
-        let Some(i) = pick(req, &seats) else { return Ok(()) };
-        let p = &mut self.tiers[i];
-        let a = p.h.reserve(req, tokens, relay).expect("a ready tier takes a reserve");
-        send(&mut p.d, &a)
+            || self.tiers.open().contains(&id.raw())
     }
 
     /// Lease each waiting prompt in order, from what the cache kept of it;
@@ -502,10 +487,8 @@ impl PpHead {
             if self.gone.remove(&id) {
                 self.note(Note::Retire(id))?;
                 self.waiting.pop_front();
-                if let Some((i, _)) = self.tier_of(id.raw()) {
-                    let outs = self.tiers[i].h.abort(id.raw());
-                    self.apply(i, outs)?;
-                }
+                let outs = self.tiers.abort(id.raw());
+                self.apply(outs)?;
                 continue;
             }
             // More prompts feeding than an item carries would only hold pages.
@@ -513,18 +496,11 @@ impl PpHead {
                 break;
             }
             let (prompt, max_tokens) = (q.request.prompt_tokens.len(), q.request.max_tokens);
-            let handoff = !self.tiers.is_empty() && Relay::hands_off(max_tokens);
-            let tier = match self.tier_of(id.raw()).filter(|_| handoff) {
-                None if handoff => {
-                    let relay = Relay::new(max_tokens, q.request.stop_policy.clone());
-                    self.reserve(id.raw(), prompt + max_tokens, relay)?;
-                    break;
-                }
-                None => None,
-                Some((_, Standing::Reserving)) => break,
-                Some((i, Standing::Granted)) => Some(i),
-                Some((i, _)) => bail!("request {id} is underway on decode tier {i} while waiting here"),
-            };
+            let (gate, outs) = self.tiers.gate(id.raw(), prompt + max_tokens, max_tokens, &q.request.stop_policy)?;
+            self.apply(outs)?;
+            let Gate::Lease(tier) = gate else { break };
+            let Some(q) = self.waiting.front() else { unreachable!("the request gated is still at the front") };
+            let handoff = tier.is_some();
             let limit = self.rt.max_seq_tokens();
             let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
             let leased = match prompt {
@@ -550,8 +526,8 @@ impl PpHead {
                     let stop = q.request.stop_policy.clone();
                     let a = Active { id, lease, ids, pos: start, stop, mark, snap, parts, handoff, passed: 0 };
                     self.active.push_back(a);
-                    if let Some(i) = tier {
-                        self.tiers[i].h.admitted(id.raw());
+                    if let Some(t) = tier {
+                        self.tiers.admitted(t, id.raw());
                     }
                     continue;
                 }
@@ -567,20 +543,20 @@ impl PpHead {
             if let Some(why) = reject {
                 self.note(Note::Reject { id, why })?;
                 self.waiting.pop_front();
-                if let Some(i) = tier {
-                    let outs = self.tiers[i].h.release(id.raw());
-                    self.apply(i, outs)?;
+                if let Some(t) = tier {
+                    let outs = self.tiers.release(t, id.raw());
+                    self.apply(outs)?;
                 }
             }
         }
         Ok(())
     }
 
-    /// Carry out what tier `tier`'s handoffs decided, in order.
-    fn apply(&mut self, tier: usize, outs: Vec<Out>) -> Result<()> {
-        for o in outs {
+    /// Carry out what the tiers decided, in order.
+    fn apply(&mut self, outs: Vec<(usize, Out)>) -> Result<()> {
+        for (tier, o) in outs {
             match o {
-                Out::Ask(a) => send(&mut self.tiers[tier].d, &a)?,
+                Out::Ask(a) => send(&mut self.decode[tier].d, &a)?,
                 Out::Push(p) => self.push(&p)?,
                 Out::Place { tier, rank, epoch, placement } => {
                     let job = Job::Place { tier, rank, epoch, placement };
@@ -588,7 +564,7 @@ impl PpHead {
                         send(w, &job)?;
                     }
                     let Job::Place { placement, .. } = &job else { unreachable!("built above") };
-                    self.tiers[tier].mirrors.place(&self.rt, rank, epoch, placement)?;
+                    self.decode[tier].mirrors.place(&self.rt, rank, epoch, placement)?;
                 }
                 Out::Emit { req, tok } => self.note(Note::Emit { id: RequestId::new(req), tok })?,
                 Out::Finish { req, why, cause } => {
@@ -628,7 +604,7 @@ impl PpHead {
         for w in &mut self.stages {
             send(w, &job)?;
         }
-        let pd = self.tiers.get_mut(p.tier).with_context(|| format!("a push to decode tier {}, of none", p.tier))?;
+        let pd = self.decode.get_mut(p.tier).with_context(|| format!("a push to decode tier {}, of none", p.tier))?;
         pd.mirrors.push(&self.rt, p)?;
         self.flow.pushed(&self.rt, p.req)
     }
@@ -734,9 +710,11 @@ impl PpHead {
     /// A prompt whose last rows were just issued: handed off, it is pushed
     /// now, from its lease, before the lease goes to the cache.
     fn prefilled(&mut self, a: &Active) -> Result<()> {
-        let Some((i, _)) = self.tier_of(a.id.raw()).filter(|_| a.handoff) else { return Ok(()) };
-        let outs = self.tiers[i].h.prefilled(a.id.raw(), &a.lease, a.ids.len());
-        self.apply(i, outs)
+        if !a.handoff {
+            return Ok(());
+        }
+        let outs = self.tiers.prefilled(a.id.raw(), &a.lease, a.ids.len());
+        self.apply(outs)
     }
 
     /// Stage one item of `parts` (a lease, its position, its rows) on every
@@ -856,8 +834,8 @@ impl PpHead {
                 superseded = state.then(|| self.cache.superseded()),
                 slots_used = state.then(|| self.rt.seq_slots_used()),
                 slots = state.then(|| self.rt.seq_slots()),
-                decode_seats = ?self.tiers.iter().map(|p| p.load.seats).collect::<Vec<_>>(),
-                decode_kv_pct = ?self.tiers.iter().map(|p| round(p.load.pages as f64 * 100.0 / p.load.pages_total.max(1) as f64, 10.0)).collect::<Vec<_>>(),
+                decode_seats = ?self.tiers.loads().iter().map(|l| l.seats).collect::<Vec<_>>(),
+                decode_kv_pct = ?self.tiers.loads().iter().map(|l| round(l.pages as f64 * 100.0 / l.pages_total.max(1) as f64, 10.0)).collect::<Vec<_>>(),
                 "stats"
             );
         }
@@ -889,20 +867,15 @@ impl PpHead {
         let t = match e {
             Event::Answer(t) => t,
             Event::Pushed { stage, req } => {
-                let (i, _) =
-                    self.tier_of(req).with_context(|| format!("stage {stage} pushed request {req}, on no tier"))?;
-                let outs = self.tiers[i].h.pushed(req, stage)?;
-                return self.apply(i, outs);
+                let outs = self.tiers.pushed(req, stage)?;
+                return self.apply(outs);
             }
             Event::Tell { tier, t } => {
-                if let Tell::Grant { load, .. } = &t {
-                    self.tiers[tier].load = *load;
-                }
-                let outs = self.tiers[tier].h.hear(t)?;
-                return self.apply(tier, outs);
+                let outs = self.tiers.hear(tier, t)?;
+                return self.apply(outs);
             }
             Event::Load { tier, load } => {
-                self.tiers[tier].load = load;
+                self.tiers.load(tier, load);
                 return Ok(());
             }
             Event::Call(Call::Submit(q)) => {
@@ -916,8 +889,8 @@ impl PpHead {
                 return Ok(());
             }
             Event::Call(Call::Abort { tier, req }) => {
-                let d = self.tiers.get_mut(tier).with_context(|| format!("an abort on decode tier {tier}, of none"))?;
-                return send(&mut d.d, &Ask::Abort { req });
+                let out = self.tiers.stop(tier, req)?;
+                return self.apply(vec![out]);
             }
             Event::Taken => return Ok(()),
         };
@@ -928,10 +901,8 @@ impl PpHead {
             };
             let tok = tok as u32;
             if r.handoff {
-                if let Some((i, _)) = self.tier_of(r.id.raw()) {
-                    let outs = self.tiers[i].h.first(r.id.raw(), tok)?;
-                    self.apply(i, outs)?;
-                }
+                let outs = self.tiers.first(r.id.raw(), tok)?;
+                self.apply(outs)?;
                 continue;
             }
             if self.gone.remove(&r.id) {
@@ -947,16 +918,14 @@ impl PpHead {
 
     /// The clients gone from handed-off requests the head still holds.
     fn retire_gone(&mut self) -> Result<()> {
-        for i in 0..self.tiers.len() {
-            let gone: Vec<Req> =
-                self.tiers[i].h.open().into_iter().filter(|&r| self.gone.contains(&RequestId::new(r))).collect();
-            for req in gone {
-                let id = RequestId::new(req);
-                self.gone.remove(&id);
-                self.note(Note::Retire(id))?;
-                let outs = self.tiers[i].h.abort(req);
-                self.apply(i, outs)?;
-            }
+        let gone: Vec<Req> =
+            self.tiers.open().into_iter().filter(|&r| self.gone.contains(&RequestId::new(r))).collect();
+        for req in gone {
+            let id = RequestId::new(req);
+            self.gone.remove(&id);
+            self.note(Note::Retire(id))?;
+            let outs = self.tiers.abort(req);
+            self.apply(outs)?;
         }
         Ok(())
     }

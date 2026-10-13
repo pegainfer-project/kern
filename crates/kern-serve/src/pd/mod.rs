@@ -47,15 +47,16 @@
 //! - `Abort` frees the seats, and P sends it only while no push is in
 //!   flight: before the push, or after every stage said `Pushed`.
 //!
-//! [`Handoffs`] (until `Start`) and [`Relays`] (after) are the P side's half
-//! as pure state machines, [`Decoder`] the D head's; the processes around
-//! them only move frames.
+//! [`Handoffs`] (until `Start`, one a tier, [`Tiers`] over them all) and
+//! [`Relays`] (after) are the P side's half as pure state machines,
+//! [`Decoder`] the D head's; the processes around them only move frames.
 
 mod decoder;
 mod handoff;
 pub(crate) mod mirror;
 mod relay;
 pub(crate) mod tier;
+mod tiers;
 
 use std::collections::BTreeMap;
 
@@ -68,6 +69,7 @@ use serde::{Deserialize, Serialize};
 pub use decoder::{Decoder, Run};
 pub use handoff::{Handoffs, Out, Standing};
 pub use relay::{Relay, Relays};
+pub use tiers::{Gate, Tiers};
 
 /// A request on the P/D connection: the P head's request id.
 pub type Req = u64;

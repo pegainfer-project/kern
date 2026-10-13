@@ -45,7 +45,7 @@ impl Relay {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Relays {
     live: BTreeMap<Req, Relay>,
 }

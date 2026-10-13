@@ -3,16 +3,16 @@
 //! (docs/protocol.md).
 //!
 //! Every thread of the deployment is an actor and every connection a FIFO:
-//! the P head (its [`Handoffs`], carrying out each [`Out`] as a step of its
-//! own, as `apply` does), the front (its [`Relays`] and its sweep of
-//! departed clients), the D tier's reader and scheduler (a real
-//! [`Decoder`] over real pools), the reader of D's connection on P, the
-//! stages pushing into their mirrors of D's pools, the last stage's first
-//! tokens, and the clients, who may leave at any step. A seeded schedule
-//! picks which enabled actor moves next. The head's and the front's glue
-//! around their pure halves is modelled here after `pp/head.rs` and
-//! `front.rs`: those halves are bound to a CUDA runtime and a pegainfer
-//! ledger, so no test can run them.
+//! the P head (the real [`Tiers`], carrying out each [`Out`] as a step of
+//! its own, as `apply` does), the front (the real [`Clients`], its writes
+//! carried out against the clients and the head), the D tier's reader and
+//! scheduler (a real [`Decoder`] over real pools), the reader of D's
+//! connection on P, the stages pushing into their mirrors of D's pools,
+//! the last stage's first tokens, and the clients, who may leave at any
+//! step. A seeded schedule picks which enabled actor moves next. What is
+//! modelled is only what the head's admission does around [`Tiers`] with
+//! P's own pool and runtime: a prompt longer than [`P_LIMIT`] is rejected,
+//! any other leased.
 //!
 //! What it checks, at every step: no process dies on what a peer sent; a
 //! stage writes into a D object only through a mirror that maps that
@@ -27,9 +27,10 @@ use std::sync::Arc;
 
 use kern_manifest::types::Manifest;
 use kern_pool::{Kind, Placement, Pool, Pooled};
-use kern_serve::pd::{Ask, Decoder, Handoffs, Out, Push, Relay, Relays, Req, Run, Seat, Standing, Tell};
+use kern_serve::front::{Clients, Note, Write};
+use kern_serve::pd::{Ask, Decoder, Gate, Out, Push, Refusal, Req, Run, Seat, Tell, Tiers};
 use kern_serve::ranks::{Act, Answer, Order};
-use pegainfer_frontend::engine::{EosPolicy, FinishReason, StopPolicy};
+use pegainfer_frontend::engine::{EosPolicy, FinishReason, RejectReason, RequestId, StopPolicy};
 
 mod common;
 use common::{dealt_with, replicated_of, Rand};
@@ -149,22 +150,17 @@ enum Event {
         stage: usize,
         req: Req,
     },
-    First(Req),
+    /// The last stage's token for `req`, issued handed off or not.
+    First {
+        req: Req,
+        handoff: bool,
+    },
     Gone(Req),
-    /// The front's relays ended a decoding request: free its seats.
-    Abort(Req),
-}
-
-/// What reaches the front's note channel.
-#[derive(Debug)]
-enum Note {
-    Admit,
-    Reject(Req),
-    Emit(Req, u32),
-    Finish(Req, FinishReason),
-    Retire(Req),
-    Decode(Req, Relay),
-    Tokens(Vec<(Req, u32, bool)>),
+    /// The front ended a request decoding on `tier`: free its seats.
+    Abort {
+        tier: usize,
+        req: Req,
+    },
 }
 
 /// One thing that can happen next.
@@ -240,20 +236,21 @@ fn placement(hex: &str) -> Placement {
 }
 
 struct Head {
-    h: Handoffs,
-    outbox: VecDeque<Out>,
+    tiers: Tiers,
+    outbox: VecDeque<(usize, Out)>,
     events: VecDeque<Event>,
     waiting: VecDeque<Req>,
     /// Admitted, last rows not yet issued: the lease and whether it hands off.
     admitted: BTreeMap<Req, (kern_pool::Lease, bool)>,
     gone: BTreeSet<Req>,
+    /// Something was heard since the last turn: the head's loop admits
+    /// after every event, and otherwise blocks on its channel.
+    turn: bool,
 }
 
 struct Front {
-    r: Relays,
+    c: Clients,
     notes: VecDeque<Note>,
-    /// Submitted, not answered; whether the head was told the client left.
-    open: BTreeMap<Req, bool>,
 }
 
 /// What the head sends a stage, in order.
@@ -278,8 +275,9 @@ struct Sim {
     to_d: VecDeque<Ask>,
     to_p: VecDeque<Tell>,
     stages: Vec<Stage>,
-    /// Requests whose last rows are issued and whose first token is not back.
-    firsts: BTreeSet<Req>,
+    /// Requests whose last rows are issued and whose first token is not
+    /// back, and whether each is handed off.
+    firsts: BTreeMap<Req, bool>,
     p_pool: Arc<Pool>,
     /// Stages yet to push, by request.
     in_flight: BTreeMap<Req, usize>,
@@ -311,24 +309,27 @@ impl Sim {
         Sim {
             geo: Geometry::new(&m, cfg.slots),
             head: Head {
-                h: Handoffs::new(STAGES, 0),
+                tiers: Tiers::new(1, STAGES),
                 outbox: VecDeque::new(),
                 events: VecDeque::new(),
                 waiting: clients.keys().copied().collect(),
                 admitted: BTreeMap::new(),
                 gone: BTreeSet::new(),
+                turn: true,
             },
             front: Front {
-                r: Relays::new(),
+                c: clients.keys().fold(Clients::new(0), |mut c, &r| {
+                    c.submit(RequestId::new(r));
+                    c
+                }),
                 notes: VecDeque::new(),
-                open: clients.keys().map(|&r| (r, false)).collect(),
             },
             clients,
             d,
             to_d: VecDeque::new(),
             to_p: VecDeque::new(),
             stages: (0..STAGES).map(|_| Stage { inbox: VecDeque::new(), mirror: mirror.clone() }).collect(),
-            firsts: BTreeSet::new(),
+            firsts: BTreeMap::new(),
             p_pool: Arc::new(Pool::new(&plain, 64, 1024, 16, None).unwrap().0),
             in_flight: BTreeMap::new(),
             left: cfg.leave,
@@ -353,7 +354,7 @@ impl Sim {
                 if !self.head.events.is_empty() {
                     v.push(Step::HeadHear);
                 }
-                if !self.head.waiting.is_empty() || self.head.h.open().iter().any(|r| self.head.gone.contains(r)) {
+                if self.head.turn {
                     v.push(Step::HeadTurn);
                 }
                 v.extend(self.head.admitted.keys().map(|&r| Step::HeadPrefill(r)));
@@ -362,7 +363,7 @@ impl Sim {
         if !self.front.notes.is_empty() {
             v.push(Step::FrontNote);
         }
-        if self.front.open.iter().any(|(r, &told)| self.clients[r].gone && (!told || self.front.r.holds(*r))) {
+        if self.front.c.clone().sweep(|id| self.clients[&id.raw()].gone).is_ok_and(|w| !w.is_empty()) {
             v.push(Step::FrontSweep);
         }
         if self.left > 0 && self.clients.values().any(|c| c.end.is_none() && !c.gone) {
@@ -378,7 +379,7 @@ impl Sim {
             v.push(Step::PRead);
         }
         v.extend((1..STAGES).filter(|&s| !self.stages[s].inbox.is_empty()).map(Step::Stage));
-        v.extend(self.firsts.iter().map(|&r| Step::Last(r)));
+        v.extend(self.firsts.keys().map(|&r| Step::Last(r)));
         v
     }
 
@@ -387,16 +388,18 @@ impl Sim {
         match s {
             Step::HeadOut => {
                 let o = self.head.outbox.pop_front().expect("enabled");
-                if !matches!(o, Out::Ask(_) | Out::Push(_)) {
+                if !matches!(o.1, Out::Ask(_) | Out::Push(_)) {
                     self.say(format!("{o:?}"));
                 }
                 self.carry(o)
             }
             Step::HeadHear => {
                 let e = self.head.events.pop_front().expect("enabled");
+                self.head.turn = true;
                 self.hear(e)
             }
             Step::HeadTurn => {
+                self.head.turn = false;
                 self.retire_gone()?;
                 self.admit()
             }
@@ -404,26 +407,33 @@ impl Sim {
                 let (lease, handoff) = self.head.admitted.remove(&req).expect("enabled");
                 self.say(format!("prompt {}", self.clients[&req].prompt));
                 if handoff {
-                    let outs = self.head.h.prefilled(req, &lease, self.clients[&req].prompt);
+                    let outs = self.head.tiers.prefilled(req, &lease, self.clients[&req].prompt);
                     self.head.outbox.extend(outs);
                 }
                 // The head's lease goes to its cache: P's pages are not checked here.
                 drop(lease);
-                self.firsts.insert(req);
+                self.firsts.insert(req, handoff);
                 Ok(())
             }
             Step::FrontNote => {
                 let n = self.front.notes.pop_front().expect("enabled");
-                self.say(format!("{n:?}"));
-                self.note(n)
+                if !matches!(n, Note::Tokens(_)) {
+                    self.say(format!("{n:?}"));
+                }
+                let w = self.front.c.note(n).map_err(|e| Violation::PrefillDied(format!("{e:#}")))?;
+                self.write(w)
             }
-            Step::FrontSweep => self.sweep(),
+            Step::FrontSweep => {
+                let clients = &self.clients;
+                let w = self.front.c.sweep(|id| clients[&id.raw()].gone);
+                let w = w.map_err(|e| Violation::PrefillDied(format!("{e:#}")))?;
+                self.write(w)
+            }
             Step::Leave => {
                 let live: Vec<Req> =
                     self.clients.iter().filter(|(_, c)| c.end.is_none() && !c.gone).map(|(&r, _)| r).collect();
                 let req = live[self.log.len() % live.len()];
-                let decoding = self.front.r.holds(req);
-                self.say(format!("{req}, {:?}{}", self.head.h.standing(req), if decoding { ", decoding" } else { "" }));
+                self.say(format!("{req}"));
                 self.left -= 1;
                 self.clients.get_mut(&req).unwrap().gone = true;
                 Ok(())
@@ -451,15 +461,15 @@ impl Sim {
                 Job::Place { rank, epoch, placement } => self.place(s, rank, epoch, &placement),
             },
             Step::Last(req) => {
-                self.firsts.remove(&req);
-                self.head.events.push_back(Event::First(req));
+                let handoff = self.firsts.remove(&req).expect("enabled");
+                self.head.events.push_back(Event::First { req, handoff });
                 Ok(())
             }
         }
     }
 
     /// The head carries out one decision, as `PpHead::apply`.
-    fn carry(&mut self, o: Out) -> Checked<()> {
+    fn carry(&mut self, (tier, o): (usize, Out)) -> Checked<()> {
         let n = match o {
             Out::Ask(a) => return self.ask(a),
             Out::Push(p) => {
@@ -476,29 +486,38 @@ impl Sim {
                 }
                 return self.place(0, rank, epoch, &placement);
             }
-            Out::Emit { req, tok } => Note::Emit(req, tok),
-            Out::Finish { req, why, .. } => {
+            Out::Emit { req, tok } => Note::Emit { id: RequestId::new(req), tok },
+            Out::Finish { req, why, cause } => {
                 self.head.gone.remove(&req);
-                Note::Finish(req, why)
+                Note::Finish { id: RequestId::new(req), why, cause }
             }
             Out::Decode { req, relay } => {
                 self.head.gone.remove(&req);
-                Note::Decode(req, relay)
+                Note::Decode { id: RequestId::new(req), relay, tier }
             }
-            Out::Reject { req, .. } => {
+            Out::Reject { req, why } => {
                 let i = self.head.waiting.iter().position(|&r| r == req);
                 let i =
                     i.ok_or_else(|| Violation::PrefillDied(format!("a refused request {req} no longer waiting")))?;
                 self.head.waiting.remove(i);
                 self.head.gone.remove(&req);
-                Note::Reject(req)
+                let c = &self.clients[&req];
+                let why = match why {
+                    Refusal::ContextLength { limit } => {
+                        RejectReason::ContextLength { prompt_tokens: c.prompt, max_tokens: c.max_tokens, limit }
+                    }
+                    Refusal::KvBudget => {
+                        RejectReason::KvBudget { prompt_tokens: c.prompt, worst_case_tokens: c.prompt + c.max_tokens }
+                    }
+                };
+                Note::Reject { id: RequestId::new(req), why }
             }
         };
         self.front.notes.push_back(n);
         Ok(())
     }
 
-    /// An ask onto the one connection to D, whichever thread writes it.
+    /// An ask onto the one connection to D.
     fn ask(&mut self, a: Ask) -> Checked<()> {
         if let Ask::Abort { req } = a {
             if self.in_flight.contains_key(&req) {
@@ -590,39 +609,25 @@ impl Sim {
     /// One event heard, as `PpHead::hear`.
     fn hear(&mut self, e: Event) -> Checked<()> {
         let outs = match e {
-            Event::Tell(t) => Self::died(self.head.h.hear(t))?,
-            Event::Pushed { stage, req } => {
-                if self.head.h.standing(req) == Standing::Unasked {
-                    return Err(Violation::PrefillDied(format!("stage {stage} pushed request {req}, on no tier")));
-                }
-                Self::died(self.head.h.pushed(req, stage))?
-            }
-            Event::First(req) => {
+            Event::Tell(t) => Self::died(self.head.tiers.hear(0, t))?,
+            Event::Pushed { stage, req } => Self::died(self.head.tiers.pushed(req, stage))?,
+            Event::First { req, handoff: true } => Self::died(self.head.tiers.first(req, first_token(req)))?,
+            Event::First { req, handoff: false } => {
+                let id = RequestId::new(req);
                 let tok = first_token(req);
-                if Relay::hands_off(self.clients[&req].max_tokens) {
-                    match self.head.h.standing(req) {
-                        Standing::Unasked => Vec::new(),
-                        _ => Self::died(self.head.h.first(req, tok))?,
-                    }
-                } else if self.head.gone.remove(&req) {
-                    self.front.notes.push_back(Note::Retire(req));
-                    Vec::new()
-                } else {
-                    let why = if tok == STOP { FinishReason::Stop } else { FinishReason::Length };
-                    self.front.notes.push_back(Note::Emit(req, tok));
-                    self.front.notes.push_back(Note::Finish(req, why));
-                    Vec::new()
+                let why = if tok == STOP { FinishReason::Stop } else { FinishReason::Length };
+                match self.head.gone.remove(&req) {
+                    true => self.front.notes.push_back(Note::Retire(id)),
+                    false => self.front.notes.extend([Note::Emit { id, tok }, Note::Finish { id, why, cause: None }]),
                 }
-            }
-            Event::Abort(req) => {
-                self.ask(Ask::Abort { req })?;
                 Vec::new()
             }
+            Event::Abort { tier, req } => vec![Self::died(self.head.tiers.stop(tier, req))?],
             Event::Gone(req) => {
                 let holds = self.head.waiting.contains(&req)
                     || self.head.admitted.contains_key(&req)
-                    || self.firsts.contains(&req)
-                    || self.head.h.open().contains(&req);
+                    || self.firsts.contains_key(&req)
+                    || self.head.tiers.open().contains(&req);
                 if holds {
                     self.head.gone.insert(req);
                 }
@@ -635,119 +640,69 @@ impl Sim {
 
     /// As `PpHead::retire_gone`.
     fn retire_gone(&mut self) -> Checked<()> {
-        let gone: Vec<Req> = self.head.h.open().into_iter().filter(|r| self.head.gone.contains(r)).collect();
+        let gone: Vec<Req> = self.head.tiers.open().into_iter().filter(|r| self.head.gone.contains(r)).collect();
         for req in gone {
             self.head.gone.remove(&req);
-            self.front.notes.push_back(Note::Retire(req));
-            let outs = self.head.h.abort(req);
+            self.front.notes.push_back(Note::Retire(RequestId::new(req)));
+            let outs = self.head.tiers.abort(req);
             self.head.outbox.extend(outs);
         }
         Ok(())
     }
 
-    /// As `PpHead::admit`, over the one decode tier.
+    /// As `PpHead::admit`: P rejects a prompt past [`P_LIMIT`] and leases any other.
     fn admit(&mut self) -> Checked<()> {
         while let Some(&req) = self.head.waiting.front() {
+            let id = RequestId::new(req);
             if self.head.gone.remove(&req) {
-                self.front.notes.push_back(Note::Retire(req));
+                self.front.notes.push_back(Note::Retire(id));
                 self.head.waiting.pop_front();
-                if self.head.h.standing(req) != Standing::Unasked {
-                    let outs = self.head.h.abort(req);
-                    self.head.outbox.extend(outs);
-                }
+                let outs = self.head.tiers.abort(req);
+                self.head.outbox.extend(outs);
                 continue;
             }
-            let c = &self.clients[&req];
-            let handoff = Relay::hands_off(c.max_tokens);
-            match (handoff, self.head.h.standing(req)) {
-                (true, Standing::Unasked) => {
-                    let relay = Relay::new(c.max_tokens, stop());
-                    if let Some(a) = self.head.h.reserve(req, c.prompt + c.max_tokens, relay) {
-                        self.head.outbox.push_back(Out::Ask(a));
-                    }
-                    return Ok(());
-                }
-                (true, Standing::Reserving) => return Ok(()),
-                (true, Standing::Underway) => {
-                    return Err(Violation::PrefillDied(format!("request {req} is underway while waiting")))
-                }
-                _ => {}
-            }
+            let (prompt, max_tokens) = (self.clients[&req].prompt, self.clients[&req].max_tokens);
+            let (gate, outs) = Self::died(self.head.tiers.gate(req, prompt + max_tokens, max_tokens, &stop()))?;
+            self.head.outbox.extend(outs);
+            let Gate::Lease(tier) = gate else { return Ok(()) };
             self.head.waiting.pop_front();
-            if c.prompt > P_LIMIT {
-                self.front.notes.push_back(Note::Reject(req));
-                if handoff {
-                    let outs = self.head.h.release(req);
+            if prompt > P_LIMIT {
+                let why = RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit: P_LIMIT };
+                self.front.notes.push_back(Note::Reject { id, why });
+                if let Some(t) = tier {
+                    let outs = self.head.tiers.release(t, req);
                     self.head.outbox.extend(outs);
                 }
                 continue;
             }
-            let lease = self.p_pool.lease(c.prompt).expect("P's pool holds every prompt");
-            self.front.notes.push_back(Note::Admit);
-            if handoff {
-                self.head.h.admitted(req);
+            let lease = self.p_pool.lease(prompt).expect("P's pool holds every prompt");
+            self.front.notes.push_back(Note::Admit { id, cached: 0 });
+            if let Some(t) = tier {
+                self.head.tiers.admitted(t, req);
             }
-            self.head.admitted.insert(req, (lease, handoff));
+            self.head.admitted.insert(req, (lease, tier.is_some()));
         }
         Ok(())
     }
 
-    /// One note, as `Front::note` and `Front::relay`.
-    fn note(&mut self, n: Note) -> Checked<()> {
-        match n {
-            Note::Admit => {}
-            Note::Reject(req) => self.end(req, End::Rejected)?,
-            Note::Emit(req, tok) => self.emit(req, tok)?,
-            Note::Finish(req, why) => {
-                let t = self.clients[&req].tokens.clone();
-                self.end(req, End::Finished(t, why))?;
-            }
-            Note::Retire(req) => self.end(req, End::Retired)?,
-            Note::Decode(req, relay) => self.front.r.start(req, relay),
-            Note::Tokens(step) => {
-                let outs = self.front.r.hear(step).map_err(|e| Violation::PrefillDied(format!("{e:#}")))?;
-                self.relay(outs)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn relay(&mut self, outs: Vec<Out>) -> Checked<()> {
-        for o in outs {
-            match o {
-                Out::Emit { req, tok } => self.emit(req, tok)?,
-                Out::Finish { req, why, .. } => {
-                    let t = self.clients[&req].tokens.clone();
-                    self.end(req, End::Finished(t, why))?;
+    /// The front's writes carried out, as `Front::carry`: onto the clients'
+    /// ledger, or to the head.
+    fn write(&mut self, writes: Vec<Write>) -> Checked<()> {
+        for w in writes {
+            match w {
+                Write::Admit { .. } => {}
+                Write::Reject { id, .. } => self.end(id.raw(), End::Rejected)?,
+                Write::Tokens { id, tok } => self.emit(id.raw(), tok)?,
+                Write::Finish { id, why, .. } => {
+                    let t = self.clients[&id.raw()].tokens.clone();
+                    self.end(id.raw(), End::Finished(t, why))?;
                 }
-                // The head is the one writer to D: the front's aborts go through it.
-                Out::Ask(Ask::Abort { req }) => {
+                Write::Retire(id) => self.end(id.raw(), End::Retired)?,
+                Write::Gone(id) => self.head.events.push_back(Event::Gone(id.raw())),
+                Write::Abort { tier, req } => {
                     self.say(format!("abort {req} through the head"));
-                    self.head.events.push_back(Event::Abort(req));
+                    self.head.events.push_back(Event::Abort { tier, req });
                 }
-                o => return Err(Violation::PrefillDied(format!("the relays asked for {o:?}"))),
-            }
-        }
-        Ok(())
-    }
-
-    /// As `Front::sweep`.
-    fn sweep(&mut self) -> Checked<()> {
-        let gone: Vec<Req> = self
-            .front
-            .open
-            .iter()
-            .filter(|(r, &told)| self.clients[r].gone && (!told || self.front.r.holds(**r)))
-            .map(|(&r, _)| r)
-            .collect();
-        for req in gone {
-            if self.front.r.holds(req) {
-                self.end(req, End::Retired)?;
-                let outs = self.front.r.abort(req);
-                self.relay(outs)?;
-            } else {
-                self.front.open.insert(req, true);
-                self.head.events.push_back(Event::Gone(req));
             }
         }
         Ok(())
@@ -768,7 +723,6 @@ impl Sim {
             return Err(Violation::End(format!("{req} ended twice: {was:?}, then {e:?}")));
         }
         c.end = Some(e);
-        self.front.open.remove(&req);
         Ok(())
     }
 
@@ -793,9 +747,9 @@ impl Sim {
                 )));
             }
         }
-        let held = (self.head.h.live(), self.front.r.live(), self.d.seated());
+        let held = (self.head.tiers.live(), self.front.c.open(), self.front.c.decoding(), self.d.seated());
         match held {
-            (0, 0, ref s) if s.is_empty() => Ok(()),
+            (0, 0, 0, ref s) if s.is_empty() => Ok(()),
             _ => Err(Violation::End(format!("held at the end: {held:?}"))),
         }
     }
@@ -873,7 +827,7 @@ fn reach(cfg: Config, seeds: u64, what: &str) -> usize {
 fn report(name: &str, found: &(u64, Vec<usize>, Vec<String>, Violation)) {
     let (seed, choices, log, v) = found;
     eprintln!("{name}: seed {seed}, {} choices, {} steps: {v:?}", choices.len(), log.len());
-    for (i, s) in log.iter().enumerate() {
+    for (i, s) in log.iter().enumerate().skip(log.len().saturating_sub(200)) {
         eprintln!("  {i:>3} {s}");
     }
 }
