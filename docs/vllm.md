@@ -77,6 +77,20 @@ State as of 2026-09-25, Qwen3.8-27B on one GB300, vLLM `e97573215`:
 - **Scope.** Single GPU, one model. The adapter
   reads a small named contract from the manifest (see [Limits](#limits)).
 
+State as of 2026-10-13, vLLM main `12b005eef`, which the plugin now
+targets (`get_supported_kernel_block_sizes` takes the spec, DCP asks the
+impl whether it can return the LSE); the Qwen3.8 numbers above are from
+`e97573215` and have not been re-measured on it:
+
+- **Multi-rank.** A manifest with a topology runs as one rank per vLLM
+  tensor-parallel rank. A 4-layer Kimi-K3 decode manifest (3 KDA + 1 MLA,
+  TP8 / DCP8 / EP8, Lamport all-reduce, from kern-k3-pp-prefill's
+  `k3_vllm.py`) serves over two 4-GPU GB300 nodes, eager and under
+  `FULL_DECODE_ONLY` graphs. The manifest has no prefill: one-token prompts
+  decode from their first token, longer ones take their cache from vLLM's
+  `DecodeBenchConnector`. See
+  [Multi-rank: Kimi-K3 decode](#multi-rank-kimi-k3-decode).
+
 The rest of this note explains why vLLM's model interface can host an external
 runtime at all, then what kern needed on its side.
 
@@ -330,7 +344,8 @@ four things:
 
 1. **Declares stub layers from the manifest.** It creates one stub layer per host
    state. A rank-4 `[B, H, N, C]` state becomes a `KernKV` layer
-   (`FullAttentionSpec`). A rank-2 `[B, bytes]` state becomes a `KernState`
+   (`FullAttentionSpec`), or a `KernMLA` layer (`MLAAttentionSpec`, one head of
+   C) when the state is named `mla.l<i>`. A rank-2 `[B, bytes]` state becomes a `KernState`
    layer (a `MambaBase` returning a `uint8[bytes]` `MambaSpec`). Their backends
    declare kernel block `[64]`, layout `LBNHC` and `UNIFORM_SINGLE_TOKEN_DECODE`,
    and their builders return the common metadata unchanged. The per-layer views
@@ -339,25 +354,36 @@ four things:
 2. **Binds.** On the first eager step with metadata, and whenever a layer's
    cache tensor changes, it passes every layer's `kv_cache` pointer, shape and
    strides to `bind_host`. On the first bind it also runs the manifest's `once`
-   programs.
+   programs, then waits at a barrier of the TP group's gloo `cpu_group` (a
+   manifest with a topology joined its peers when the model was built:
+   `kern.group.connect` over that group).
 3. **Splits each step into program calls.** A pure decode step is one
    `decode_batch`, which is what vLLM captures. In a mixed step, consecutive
    single-token rows go through `decode_batch` together and each prefill row
-   through its own `prefill` call. Each call copies vLLM's inputs into kern's
-   regions, calls `enqueue_after`, and copies `hidden` back into vLLM's output
-   buffer. New requests get their GDN pages zeroed first, because vLLM does not
-   clear pages and kern's prefill always reads an initial state. The GDN line
-   table is built from each GDN group's block table column 0; padded rows
-   (`seq_len = 0`) point at the null page.
+   through its own `prefill` call. Each call copies the inputs the manifest
+   declares from vLLM's metadata into kern's regions (`seq_lens` from the
+   DCP-local lengths when vLLM shards the KV), calls `enqueue_after`, and
+   copies `hidden` back into vLLM's output buffer. A manifest without
+   `prefill` refuses a step with a longer row; its prompts come through a KV
+   connector. New requests get their state pages zeroed first, because vLLM
+   does not clear them (it hands a freed page out first) and kern's kernels
+   always read an initial state. That includes a one-token prompt, whose first
+   step is a decode row; vLLM runs a step that holds a prompt eagerly, so the
+   zeroing never sits in a graph. The line table (the input whose domain
+   indexes the state pages) is built from each state group's block table
+   column 0; padded rows (`seq_len = 0`) point at the null page.
 4. **Computes logits.** It writes the sampled rows into `head_in`, runs `head`,
-   and returns `logits` to vLLM's sampler.
+   and returns `logits` to vLLM's sampler. Logits narrower than the vocab are
+   this rank's contiguous slice of it, gathered over the TP group
+   (`tensor_model_parallel_all_gather`), as vLLM's own `LogitsProcessor` does.
 
 Qwen3.8's config declares M-RoPE, so vLLM requires `SupportsMRoPE`. For text
 all three channels equal the token position, and the forward uses row 0.
 
 In the launch command at the top, `--max-num-batched-tokens` must not exceed
 the manifest's `tokens` bound (8192; workspaces and scratch are sized for it),
-and `--max-num-seqs` must not exceed `seqs` (128).
+and `--max-num-seqs` must not exceed `seqs` (128); the model refuses to build
+otherwise.
 
 ## Results
 
@@ -437,6 +463,42 @@ On one GPU AgentX rarely presents the shape: at 24 agents prefills arrive one
 at a time, and at 64 the KV pool cannot hold the agents' contexts (cache hit
 14%), so steps fill with 8k-token recomputes where packing is worth ~1.05×.
 
+### Multi-rank: Kimi-K3 decode
+
+2026-10-13, two 4-GPU GB300 nodes over MNNVL, vLLM main `12b005eef` (its
+prebuilt aarch64 wheel, torch 2.13 cu130). The manifest is kern-k3-pp-prefill's
+D step cut to 4 layers (`gen_stage.py --layers 4 --tp 8 --experts 896
+--peer-ar`: KDA layers 0–2, MLA layer 3, MoE in layers 1–3, Lamport
+all-reduce, no NCCL op) and moved onto vLLM's memory by its `k3_vllm.py`.
+vLLM runs `-tp 8 -dcp 8 --nnodes 2`, `--max-num-seqs 64
+--max-num-batched-tokens 64`, bf16 KV, prefix caching off, eager or
+`FULL_DECODE_ONLY` (capture sizes 1, 2, 4, …, 64), with `KERN_CHECK_ERRORS=1`.
+
+- **Spec.** vLLM sizes the hybrid cache as the transform assumed: 768-token
+  blocks, the KDA page padded 8.68% to 884,736 B, 64-token kernel blocks for
+  `KERN_MLA`. Every rank's `bind_host` admits the views.
+- **Ranks.** Every rank loads its slice, trades offers over the TP group's
+  gloo group, runs `tp_init` and `load` and meets the others at the barrier.
+  Every step, eager and replayed, ends with the error word 0 on every rank;
+  the logits vLLM samples are `[n, 163840]` f32 after the all-gather.
+- **Agreement.** 64 one-token prompts, 32 greedy tokens each (half of them
+  one prompt, half distinct), twice on each fresh server: every divergence
+  between any two of the four runs is at a top-1/top-2 margin ≤ 0.24, all but
+  one ≤ 0.06 (that one flipped at 0.02 in its own run), and eager agrees with
+  graph about as often as with itself (44 and 41 of 64 requests identical
+  against 47). Before a one-token prompt's state pages were zeroed, a request
+  on a freed page started from its previous owner's state and flipped
+  confident tokens at its first step.
+- **Prompts.** The manifest has no prefill, so a longer prompt's cache comes
+  from vLLM's `DecodeBenchConnector`. Sixteen 3000-word prompts run eager and
+  graph, but their tokens mean nothing: in this vLLM the connector refills a
+  hybrid model's state tensors whole for every new request (every running
+  sequence's KDA state, and the pages the overlaid views span), and, as we
+  read it, indexes the MLA view, split into 64-token kernel blocks, with
+  manager block ids. Fine for timing a decode step, not for agreement.
+
+Scripts, logs and the gate table: `~/bench_results/2026-10-13-kern-vllm-k3-probe`.
+
 ## Limits
 
 - **Mixed steps.** A step's consecutive prefill rows share one `prefill` call
@@ -447,10 +509,14 @@ at a time, and at 64 the KV pool cannot hold the agents' contexts (cache hit
   plugin runs each sequence on its last token's state page; vLLM copies the
   state across blocks. Greedy multi-turn output with and without caching
   agrees up to near-tie flips (top1/top2 margin ≤ 0.125).
-- **Single GPU only**; TP/EP are not wired.
+- **Ranks are TP ranks.** A manifest with a topology runs one rank per vLLM
+  tensor-parallel rank, every topology group the size of the TP group; no
+  pipeline parallelism.
+- **Decode-only manifests** take a prompt longer than one token only through
+  a KV connector.
 - **Named contract.** The adapter finds inputs by name (`token_ids`,
   `positions`, `slot_mapping`, `seq_lens`, `cu_seqlens_q`, `block_table`,
-  `gdn.line_index`, `hidden`, `head_in`, `logits`) and programs likewise
-  (`prefill`, `decode_batch`, `head`), as documented at the top of
+  `hidden`, `head_in`, `logits`; the line table by its domain) and programs
+  likewise (`prefill`, `decode_batch`, `head`), as documented at the top of
   `python/kern_vllm/kern_vllm/model.py`. Another model needs a transform that
   produces the same contract.
