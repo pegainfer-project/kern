@@ -207,14 +207,26 @@ fn verify(path: &Path) -> bool {
             return false;
         }
     };
-    let p = match kern_manifest::Protocol::check(&m) {
+    // A hosted manifest's protocol is the one its own host would drive: the
+    // host states owned in their layouts, and no token handed back (the
+    // engine samples).
+    let hosted = m.states.values().any(|s| !s.is_owned());
+    let p = match hosted {
+        false => kern_manifest::Protocol::check(&m).map_err(|e| e.to_string()),
+        true => m
+            .self_hosted()
+            .map_err(|e| e.to_string())
+            .and_then(|own| kern_manifest::Protocol::check_unsampled(&own).map_err(|e| e.to_string())),
+    };
+    let p = match p {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("{}: {e}", path.display());
             return false;
         }
     };
-    tracing::info!("{}: `{}` schema v{}, verified", path.display(), m.model, m.schema_version);
+    let how = if hosted { ", hosted: the protocol of its self-hosted twin, unsampled" } else { "" };
+    tracing::info!("{}: `{}` schema v{}, verified{how}", path.display(), m.model, m.schema_version);
     let axis = |a: Axis| match a {
         Axis::Rows => format!("[{}]", p.rows.var),
         Axis::Groups => format!("[{}]", p.groups.var),
