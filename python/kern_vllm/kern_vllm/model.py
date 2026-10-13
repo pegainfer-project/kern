@@ -25,7 +25,8 @@ through `decode_batch` together, consecutive longer rows through one
 A pure decode step is one `decode_batch` over vLLM's padded batch, so vLLM
 can capture it; padded rows have no slot and the null state page, which
 the kernels skip. A sequence's first chunk finds its state pages zeroed
-here: vLLM hands out pages without clearing them.
+here, a one-token prompt's too: vLLM hands out pages without clearing them
+and reuses a freed one first.
 
 A manifest with a topology runs one rank per vLLM tensor-parallel rank:
 member `i` of every topology group is TP rank `i`. The ranks trade offers
@@ -261,6 +262,10 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         lines = self.lines(states, attn)
         stream = torch.cuda.current_stream().cuda_stream
         if attn.max_query_len == 1:
+            # A one-token prompt's first step is a decode row. vLLM runs a step holding a prompt
+            # eagerly, never from a decode graph, so a graph never meets a fresh row.
+            if not torch.cuda.is_current_stream_capturing():
+                self.zero_fresh(attn, states)
             for r0, r1 in chunks(0, attn.num_reqs, self.decode_rows):
                 self.run(stream, "decode_batch", input_ids, positions, attn, lines, r0, r1, r0, r1)
             return self.out[:n]
@@ -287,10 +292,12 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         return torch.stack([torch.where(live, self.pages(s, r), 0) for s in states])
 
     def zero_fresh(self, attn, states) -> None:
+        """Zero the state pages of the rows that start a sequence (a host sync)."""
         r = attn.num_reqs
-        fresh = attn.seq_lens[:r] == attn.query_start_loc[1 : r + 1] - attn.query_start_loc[:r]
-        for layer, s in zip(self.state_layers, states):
-            layer.view.index_fill_(0, torch.where(fresh, self.pages(s, r), 0).long(), 0)
+        fresh = (attn.seq_lens[:r] == attn.query_start_loc[1 : r + 1] - attn.query_start_loc[:r]).nonzero()[:, 0]
+        if fresh.numel():
+            for layer, s in zip(self.state_layers, states):
+                layer.view.index_fill_(0, self.pages(s, r)[fresh].long(), 0)
 
     def run(self, stream, program, input_ids, positions, attn, lines, r0, r1, t0, t1) -> None:
         rows, k = r1 - r0, t1 - t0
