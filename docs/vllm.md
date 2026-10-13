@@ -284,6 +284,22 @@ ptr, nbytes = rt.region("token_ids")
 rt.enqueue_after("decode_batch", {"tokens": n, "seqs": n}, torch.cuda.current_stream().cuda_stream)
 ```
 
+A manifest with a topology loads as one rank of it, and its ranks meet over
+the engine's own process group (any gloo `torch.distributed` group whose
+rank `i` is member `i` of every topology group):
+
+```python
+rt = kern.Runtime(manifest, kernels_dir, [checkpoint_dir], gpu, {"tp": (rank, world)})
+kern.group.connect(rt, m, cpu_group)   # all_gather_object of every rank's offer, then map the peers
+...                                    # bind_host
+kern.group.start(rt, m, cpu_group)     # the once programs, then a barrier
+```
+
+The barrier is not a formality: a rank that has run its `once` setup may push
+into a peer's Lamport stage, and if that peer poisons the stage afterwards
+the data is lost and the reader times out. `kern.host` holds the helpers
+every adapter shares (`region`, `host_region`, `resolve`, `once`).
+
 ### The manifest transform: `tools/qwen38_vllm.py`
 
 kern's manifests are written against kern's own memory plan, so the model

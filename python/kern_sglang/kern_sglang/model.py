@@ -41,6 +41,8 @@ import torch
 from torch import nn
 
 import kern
+from kern import group
+from kern.host import host_region, region, resolve
 from sglang.kernels.ops.mamba.mamba_state_scatter_triton import track_mamba_states_all_layers
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.model_executor.forward_context import (
@@ -50,7 +52,6 @@ from sglang.srt.model_executor.forward_context import (
 )
 from sglang.srt.runtime_context import mamba_cache_chunk_size
 
-DTYPES = {"bf16": torch.bfloat16, "u8": torch.uint8, "f32": torch.float32, "i32": torch.int32, "i64": torch.int64}
 INPUTS = ("token_ids", "positions", "slot_mapping", "seq_lens", "cu_seqlens_q", "block_table",
           "gdn.conv_index", "gdn.ssm_index", "hidden", "head_in", "logits")
 
@@ -60,33 +61,12 @@ def manifest() -> dict:
     return json.load(open(os.environ["KERN_MANIFEST"]))
 
 
-def resolve(m: dict, dim):
-    return m.get("constants", {}).get(dim, dim) if isinstance(dim, str) else dim
-
-
 def host_states(m: dict) -> list[tuple[str, str, int, dict]]:
     """(state, kind, layer, host tensor), in layer order."""
     def parse(n):
         kind, layer = re.fullmatch(r"(\w+)\.l(\d+)", n).groups()
         return kind, int(layer)
     return sorted(((n, *parse(n), s["host"]) for n, s in m["states"].items() if "host" in s), key=lambda h: h[2])
-
-
-class Bytes:
-    def __init__(self, ptr: int, nbytes: int):
-        self.__cuda_array_interface__ = {"shape": (nbytes,), "typestr": "|u1", "data": (ptr, False), "version": 3}
-
-
-def region(rt, m: dict, name: str) -> torch.Tensor:
-    ptr, nbytes = rt.region(name)
-    b = m["buffers"][name]
-    shape = [resolve(m, m["vars"][d]["max"] if d in m["vars"] else d) for d in b["shape"]]
-    return torch.as_tensor(Bytes(ptr, nbytes), device="cuda").view(DTYPES[b["dtype"]]).view(*shape)
-
-
-def host_region(t: torch.Tensor) -> tuple:
-    name = {v: k for k, v in DTYPES.items()}[t.dtype]
-    return t.data_ptr(), name, list(t.shape), list(t.stride())
 
 
 def runs(qlens: list[int], decode_rows: int) -> list[tuple[int, int]]:
@@ -168,9 +148,8 @@ class KernForCausalLM(nn.Module):
         """Bind (again, when SGLang reallocated) the pools' tensors."""
         first = self.bound is None
         self.rt.bind_host({n: host_region(x) for n, x in self.tensors().items()})
-        for name, p in sorted(self.m["programs"].items()):
-            if first and p.get("once"):
-                self.rt.run(name, {v: 1 for v in self.m["vars"]})
+        if first:
+            group.start(self.rt, self.m)
         self.bound = self.pools()
 
     def forward(self, input_ids, positions, forward_batch, **_):

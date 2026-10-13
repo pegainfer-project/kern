@@ -39,6 +39,8 @@ import torch
 from torch import nn
 
 import kern
+from kern import group
+from kern.host import DTYPES, host_region, region, resolve
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
@@ -50,16 +52,9 @@ from vllm.v1.kv_cache_interface import FullAttentionSpec
 
 from kern_vllm.backend import KernAttentionBackend, KernStateBackend
 
-DTYPES = {"bf16": torch.bfloat16, "u8": torch.uint8, "f32": torch.float32, "i32": torch.int32, "i64": torch.int64}
-
-
 @functools.cache
 def manifest() -> dict:
     return json.load(open(os.environ["KERN_MANIFEST"]))
-
-
-def resolve(m: dict, dim):
-    return m.get("constants", {}).get(dim, dim) if isinstance(dim, str) else dim
 
 
 def host_states(m: dict) -> list[tuple[str, int, dict]]:
@@ -126,25 +121,6 @@ def register(prefix: str, layer) -> None:
     context[prefix] = layer
 
 
-def region(rt, m: dict, name: str) -> torch.Tensor:
-    ptr, nbytes = rt.region(name)
-    b = m["buffers"][name]
-    dtype = DTYPES[b["dtype"]]
-    shape = [resolve(m, m["vars"][d]["max"] if d in m["vars"] else d) for d in b["shape"]]
-    raw = torch.as_tensor(Bytes(ptr, nbytes), device="cuda")
-    return raw.view(dtype).view(*shape)
-
-
-class Bytes:
-    def __init__(self, ptr: int, nbytes: int):
-        self.__cuda_array_interface__ = {"shape": (nbytes,), "typestr": "|u1", "data": (ptr, False), "version": 3}
-
-
-def host_region(t: torch.Tensor) -> tuple:
-    name = {v: k for k, v in DTYPES.items()}[t.dtype]
-    return t.data_ptr(), name, list(t.shape), list(t.stride())
-
-
 class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -198,9 +174,8 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         # vLLM settles the state block size after the model is built.
         self.state_block = self.cache_config.mamba_block_size
         self.rt.bind_host({n: host_region(self.layers[f"l{i}"].view) for n, i, _ in host_states(self.m)})
-        for name, p in sorted(self.m["programs"].items()):
-            if first and p.get("once"):
-                self.rt.run(name, {v: 1 for v in self.m["vars"]})
+        if first:
+            group.start(self.rt, self.m)
         self.state_names = [f"model.layers.{i}.linear_attn" for _, i, _ in state_pages(self.m)]
         self.state_layers = [self.layers[f"l{i}"] for _, i, _ in state_pages(self.m)]
         self.bound = self.layers[next(iter(self.layers))].view
