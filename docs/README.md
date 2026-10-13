@@ -48,6 +48,7 @@ The stable, flat paths below are grouped here by purpose.
 - [Agent workload study](agent-workload.md)
 - [DCP microbench](dcp-bench.md)
 - [MoE communication survey](moe-comm-survey.md)
+- [RFC: bringing K3 results back to SGLang and vLLM](upstream-rfc.md)
 
 ### Project records
 
