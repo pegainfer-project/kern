@@ -105,7 +105,7 @@ def rank(r: int, root: str, out) -> None:
     try:
         path = f"{root}/m.json"
         m = json.load(open(path))
-        rt = kern.Runtime(path, root, [], r, {"w": (r, WORLD)})
+        rt = kern.Runtime(path, root, [], r, group.topology(m, dist.group.WORLD))
         group.connect(rt, m, dist.group.WORLD)
         group.start(rt, m, dist.group.WORLD)
         x, y, blocks, err = (region(rt, m, n) for n in ("x", "y", "blocks", "err"))

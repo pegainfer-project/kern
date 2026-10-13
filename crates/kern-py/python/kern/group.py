@@ -17,6 +17,19 @@ import torch.distributed as dist
 from kern.host import once
 
 
+def topology(m: dict, group) -> dict[str, tuple[int, int]] | None:
+    """This process's place in every topology group of `m`, as `kern.Runtime` takes it:
+    its rank in `group`, whose size each topology group must be. None without a topology."""
+    groups = m.get("topology", {}).get("groups")
+    if not groups:
+        return None
+    me, world = dist.get_rank(group), dist.get_world_size(group)
+    wrong = {g: n for g, n in groups.items() if n != world}
+    if wrong:
+        raise ValueError(f"process group of {world} ranks; the manifest's topology groups of other sizes: {wrong}")
+    return {g: (me, world) for g in groups}
+
+
 def connect(rt, m: dict, group) -> None:
     """Gather every member's offer over `group` and connect `rt` to them all."""
     me, world = dist.get_rank(group), dist.get_world_size(group)
