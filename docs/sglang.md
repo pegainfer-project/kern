@@ -41,8 +41,12 @@ State as of 2026-10-05, Qwen3.8-27B on one GB300, SGLang nightly `f70e8c68`:
 - **Ahead on agent traffic.** In an hour of AgentX replay, SGLang + kern
   served 10.5% more requests and 7% more output tokens than SGLang running
   its own model with the same flags. Numbers are in [Results](#results).
-- **Scope.** Single GPU, one model, mixed chunks off. The adapter reads a
-  small named contract from the manifest (see [Limits](#limits)).
+- **Multi-rank.** Kimi-K3's 93-layer decode runs at TP8 / DCP8 over two
+  4-GPU nodes, one kern rank per SGLang TP rank, and decodes 10–19% faster
+  per step than SGLang's own K3 forward with the same flags
+  ([Multi-rank: Kimi-K3 decode](#multi-rank-kimi-k3-decode)).
+- **Scope.** Mixed chunks off. The adapter reads a small named contract
+  from the manifest (see [Limits](#limits)).
 
 The rest of this note explains what SGLang's model interface gives an
 external runtime and where it differs from vLLM's, then what kern needed on
@@ -190,9 +194,11 @@ The model class does five things:
 1. **Loads** the runtime in its constructor, inside SGLang's weight-loading
    window. SGLang measures free memory after loading to size its pools, so
    kern's weights (53.7 GB) are counted.
-2. **Binds** on the first eager step and whenever the pools move: each host
-   state gets its tensor from SGLang's pools, then the manifest's `once`
-   programs run.
+2. **Binds** in `prepare_before_cuda_graph_capture`, which SGLang calls once
+   the pools exist and before any warmup forward, and again whenever the
+   pools move: each host state gets its tensor from the runner's pools, then
+   the manifest's `once` programs run. The hook runs outside any forward
+   context, so the pools are read off the runner, not the context.
 3. **Runs a decode step** as one `decode_batch` over SGLang's padded batch.
    The page table is `req_to_token[:, ::64] / 64`; the slot ids come from
    the GDN backend's metadata, with padded rows at -1, which the kernels
@@ -274,6 +280,49 @@ A second SGLang + kern hour served 1070 requests at 235.2 tok/s (ITL p50
   how SGLang's cache holds up under this traffic, not in kern. Not yet
   profiled.
 
+### Multi-rank: Kimi-K3 decode
+
+2026-10-13, two 4-GPU GB300 nodes over MNNVL, SGLang nightly `e6072935`
+(torch 2.14.1). The manifest is kern-k3-pp-prefill's 93-layer D
+(`gen_stage.py --layers 93 --tp 8 --experts 896 --max-ctx 327680 --seqs 64
+--peer-ar`) moved onto SGLang's pools by its `k3_sglang.py`: the MLA latent
+as 64-row pages over SGLang's token rows, a KDA layer's recurrent state and
+conv window as SGLang's own ssm and conv arrays. The only kernel that
+changes is `kda_core`, built to read the window in SGLang's
+`[slot][tap][q | k | v]` order and to skip padded rows; it is bit-identical
+to the D build on the same inputs. SGLang runs `--tp-size 8 --dcp-size 8
+--nnodes 2`, page 64, bf16 KV, f32 KDA state, radix cache off,
+`--max-running-requests 64`, decode graphs up to 64 rows;
+`KERN_ARCHITECTURE=KimiK3ForConditionalGeneration` and `--load-format dummy`
+(kern reads its slices from files in under 2 minutes).
+
+- **Bind.** Every rank binds 162 host states (24 MLA, 69 × ssm and conv)
+  against SGLang's pools. Eager steps with `KERN_CHECK_ERRORS=1` end with
+  every error word 0. Each rank's `head` writes its slice of the vocab, and
+  SGLang's logits processor gathers the slices over the TP group.
+- **Agreement.** On a unified server (one-token prompts are a one-row
+  extend, which runs as `decode_batch` into a slot SGLang hands out zeroed),
+  the vLLM gate's 64 prompts × 32 greedy tokens, twice per mode. Reruns
+  agree on 20–21 of 64 requests and eager against graph on 18, every split
+  at a top-1/top-2 margin ≤ 0.87 (median 0.07–0.15); 149 of the 256
+  requests match one of the four vLLM-hosted runs token for token, and at
+  equal batch shapes the margins are the same digits. The prompt behind the
+  0.87 split flips three ways under vLLM too.
+- **Decode A/B** against SGLang's own Kimi-K3 forward, same image and flags,
+  as a fake-transfer decode server (`--disaggregation-mode decode
+  --disaggregation-transfer-backend fake`: no prefill, the cache and the
+  recurrent state are whatever the pools hold), each point one closed batch
+  of 256 tokens a request. TPOT p50 in ms, kern / the better of SGLang's
+  MegaMoE EP8 (production) and MoE-TP: 1 × 8k 11.62 / 14.39 (TP), 8 × 8k
+  15.98 / 18.72 (TP), 32 × 8k 25.44 / 28.40 (TP; one ~0.4 s host stall in
+  kern's batch, 24.0 without it), 64 × 8k 30.45 / 35.32 (EP), 32 × 32k
+  23.40 / 29.05 (TP). kern's own step is within 1 ms of its step inside
+  vLLM; SGLang's K3 is slower than vLLM's (MoE-TP 14.39 against 9.98 at one
+  row), so the 27% kern lost at one row under vLLM is a 19% win here.
+
+Scripts, logs and the gate and A/B tables:
+`~/bench_results/2026-10-13-kern-sglang-k3-ab`.
+
 ## Limits
 
 - **One program call per prefill request**, as under vLLM; a request with a
@@ -284,7 +333,9 @@ A second SGLang + kern hour served 1070 requests at 235.2 tok/s (ITL p50
   extend steps, and their decode snapshots are not taken.
 - **Prefix-cache hit below vLLM's** on AgentX (72% vs 93%), for SGLang's own
   model as well.
-- **Single GPU only**; TP is not wired.
+- **A decode-only manifest** (K3's D) takes no prompt longer than one token
+  on a unified server; its prompts reach the cache through SGLang's P/D.
+  Its batch is capped at the manifest's 64 rows.
 - **SGLang internals.** The plugin reads the pools, the GDN backend's
   metadata and `track_mamba_states_all_layers` from SGLang's modules, so an
   SGLang bump is checked against the stub probe and the gates above.
