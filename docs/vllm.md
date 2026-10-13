@@ -499,6 +499,32 @@ vLLM runs `-tp 8 -dcp 8 --nnodes 2`, `--max-num-seqs 64
 
 Scripts, logs and the gate table: `~/bench_results/2026-10-13-kern-vllm-k3-probe`.
 
+The full 93-layer D step (`gen_stage.py --layers 93 --tp 8 --experts 896
+--max-ctx 327680 --seqs 64 --peer-ar`, then `k3_vllm.py`) serves the same
+way, kern loading its weights from files in 2 minutes, with
+`--gpu-memory-utilization 0.93` leaving 61.9 GiB of KV a rank:
+
+- **Teacher-forced.** The greedy tokens of 33 one-token prompts (graph run)
+  and 31 (eager run), 32 each, fed through kern-k3-pp-prefill's `k3_step` on
+  the same manifest without the host transform: top-1 agrees at 97.3% and
+  96.9% of positions. At every disagreement `k3_step`'s own top-1/top-2
+  margin is ≤ 0.47; at two of them vLLM's side is confident (2.43, 2.07)
+  where `k3_step` holds a two- or three-way tie (19.66 / 19.57 / 19.21).
+  `k3_step` eager and graph are bit-identical.
+- **Decode A/B** against vLLM's own Kimi-K3 forward, same venv and flags
+  (`-tp 8 -dcp 8`, bf16 KV, `FULL_DECODE_ONLY`), the context from
+  `DecodeBenchConnector` with `startup_fill`, each point one closed batch of
+  256 tokens a request. TPOT p50 in ms, kern / the better of vLLM's EP8 and
+  MoE-TP layouts: 1 × 8k 12.65 / 9.98 (TP), 8 × 8k 15.59 / 14.56 (TP),
+  32 × 8k 22.94 / 24.08 (TP), 64 × 8k 30.08 / 32.30 (EP), 32 × 32k
+  23.76 / 23.66 (TP). kern's D takes at most 64 rows a step, so 128 × 8k is
+  vLLM's alone (43.10, EP). The cache is a constant fill, and the KDA state
+  starts at 0 on kern's u8 pages against 0.015 on vLLM's: layer 92's expert
+  loads at 32 × 8k differ (Jensen–Shannon 0.14 bit) but balance across eight
+  EP ranks about the same (max / mean 1.20 against 1.23).
+
+Scripts, logs and both tables: `~/bench_results/2026-10-13-kern-vllm-k3-ab`.
+
 ## Limits
 
 - **Mixed steps.** A step's consecutive prefill rows share one `prefill` call
