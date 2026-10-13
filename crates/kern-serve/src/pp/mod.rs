@@ -136,7 +136,7 @@ pub enum Report {
 }
 
 /// Where a stage's watch thread reports.
-pub(super) type Sink = Box<dyn FnMut(Report) -> Result<()> + Send>;
+type Sink = Box<dyn FnMut(Report) -> Result<()> + Send>;
 
 /// One call, as the head staged it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
