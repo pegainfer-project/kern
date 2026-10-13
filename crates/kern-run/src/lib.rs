@@ -31,7 +31,7 @@ use kern_manifest::protocol::{Axis, Filled, Forward, LineTable, PageTable, Rows}
 use kern_manifest::types::{BufferKind, Fill};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
-use kern_runtime::{connect_nccl, GroupRank, PeerHandle, Runtime, Topology};
+use kern_runtime::{connect_local, GroupRank, Runtime, Topology};
 
 /// What `kern --version` prints: the crate version, the commit it was built
 /// from, and the CUDA API the runtime binds; the three facts a bug report
@@ -283,26 +283,13 @@ fn topology_of(m: &Verified, q: usize) -> Topology {
     }
 }
 
-/// Every rank's peer buffers imported from every other, group by group,
-/// until no rank has one unfilled, and every group an NCCL collective
-/// names joined. Nothing to do without a topology.
+/// Every rank's peers mapped and communicators joined. Nothing to do
+/// without a topology.
 fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
-    let Some(topo) = &m.topology else { return Ok(()) };
-    let handles: Vec<BTreeMap<String, PeerHandle>> =
-        rts.iter().map(Runtime::export_handles).collect::<Result<_, _>>()?;
-    for g in topo.groups.keys() {
-        for (q, rt) in rts.iter_mut().enumerate() {
-            rt.import_peers(g, &handles).with_context(|| format!("rank {q}: peers of `{g}`"))?;
-        }
+    if m.topology.is_none() {
+        return Ok(());
     }
-    for (q, rt) in rts.iter().enumerate() {
-        let pending = rt.pending_peers();
-        ensure!(pending.is_empty(), "rank {q}: peer buffers {pending:?} still unfilled after every group was imported");
-    }
-    for g in rts[0].nccl_groups() {
-        connect_nccl(&g, rts).with_context(|| format!("joining nccl group `{g}`"))?;
-    }
-    Ok(())
+    connect_local(rts).context("connecting the ranks")
 }
 
 /// A rank that has not returned in this long is hung: a collective

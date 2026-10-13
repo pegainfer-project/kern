@@ -66,9 +66,10 @@ pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Checkpoint, Pool};
 use lease::Remaps;
 pub use load::Resident;
-pub use nccl::{connect_nccl, NcclId};
+use nccl::NcclId;
 pub use park::{host_split, Landing, Room, Waking};
 use peers::PeerSlot;
+pub use peers::{connect_local, Offer};
 pub use push::{MappedPool, PoolHandle, Rows, Split};
 pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
 

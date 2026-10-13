@@ -8,10 +8,10 @@
 //! (`peer_allreduce.cu`) sits at a third of it. The manifest's part is one
 //! launch per collective, wired `[send, recv, count, {"rank": g}]`, the
 //! rank arg naming the group whose communicator runs it. The driver's part
-//! is [`connect_nccl`] when one process holds every rank of the group, or
-//! [`Runtime::join_nccl`] with an [`NcclId`] carried over whatever channel
-//! the fabric handles ride; either way before the first issue, which
-//! refuses a group still unconnected.
+//! is the peers' handshake ([`Runtime::connect`]): member 0's offer
+//! carries the group's [`NcclId`] beside the fabric handles, and every
+//! member joins with it before the first issue, which refuses a group
+//! still unconnected.
 //!
 //! An all-gather takes `count` elements from every rank and lays them in
 //! rank order, so rank `r`'s block lands at `r * count`: a manifest that
@@ -39,7 +39,7 @@ pub struct NcclId(sys::ncclUniqueId);
 
 impl NcclId {
     pub fn new() -> Result<NcclId> {
-        Ok(NcclId(result::get_uniqueid().map_err(nccl)?))
+        Ok(NcclId(result::get_uniqueid().map_err(err)?))
     }
 
     /// The id as bytes, for a channel that carries bytes.
@@ -124,7 +124,7 @@ pub(crate) fn extern_op(name: &str) -> Option<(Coll, Elem)> {
     Some((coll, elem))
 }
 
-fn nccl(e: result::NcclError) -> Error {
+pub(crate) fn err(e: result::NcclError) -> Error {
     Error::Nccl(format!("{:?}", e.0))
 }
 
@@ -144,8 +144,8 @@ impl Runtime {
 
     /// Join group `group`'s communicator as this rank. Blocks until every
     /// rank of the group has joined with the same id, unless called inside
-    /// an NCCL group call ([`connect_nccl`]).
-    pub fn join_nccl(&mut self, group: &str, id: &NcclId) -> Result<()> {
+    /// an NCCL group call ([`connect_local`](crate::connect_local)).
+    pub(crate) fn join_nccl(&mut self, group: &str, id: &NcclId) -> Result<()> {
         let Some(&index) = self.ranks.get(group) else {
             bail!(Api, "no topology group `{group}` to join");
         };
@@ -169,7 +169,7 @@ impl Runtime {
             }
         }
         let mut comm = std::ptr::null_mut();
-        unsafe { result::comm_init_rank(&mut comm, world as i32, id.0, index as i32) }.map_err(nccl)?;
+        unsafe { result::comm_init_rank(&mut comm, world as i32, id.0, index as i32) }.map_err(err)?;
         self.nccl.insert(group.to_string(), Comm { comm, world });
         Ok(())
     }
@@ -228,7 +228,7 @@ impl Runtime {
                 Coll::AllToAll => all_to_all(s, r, n, elem, c, stream),
             }
         }
-        .map_err(nccl)?;
+        .map_err(err)?;
         Ok(())
     }
 }
@@ -253,17 +253,6 @@ unsafe fn all_to_all(
     let ended = result::group_end();
     issued?;
     ended
-}
-
-/// Connect group `group` across `rts`, every rank of it in this process:
-/// one id, every runtime joining inside one NCCL group call so the
-/// blocking inits complete together.
-pub fn connect_nccl(group: &str, rts: &mut [Runtime]) -> Result<()> {
-    let id = NcclId::new()?;
-    result::group_start().map_err(nccl)?;
-    let joined = rts.iter_mut().try_for_each(|rt| rt.join_nccl(group, &id));
-    result::group_end().map_err(nccl)?;
-    joined
 }
 
 #[cfg(test)]

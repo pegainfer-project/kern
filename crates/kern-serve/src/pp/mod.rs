@@ -155,8 +155,6 @@ pub struct Item {
     pub acts: Vec<Act>,
 }
 
-pub type Handles = BTreeMap<String, String>;
-
 /// Every arriving buffer's landings, in slot order.
 pub type Landings = BTreeMap<String, Vec<String>>;
 

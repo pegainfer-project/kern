@@ -172,9 +172,9 @@ launch 连线 `[send, recv, count, {"rank": g}]`，rank 参点名 topology 组�
 每 rank 的元素数（allgather 的 recv 是 `count × 组大小`，按 rank 序排列；
 reducescatter 反过来，send 是 `count × 组大小`，rank r 收到求和后的第 r 块；alltoall 的 count
 是每个 peer 的元素数，send / recv 都是 `count × 组大小`，rank r 的第 p 块落到 rank p 的第 r 块，
-一个 NCCL group 里每个 peer 一对 send / recv，可被图捕获）。每组一个 communicator：单进程持有全组时
-`connect_nccl(group, &mut [Runtime])`（一个 NCCL group call 里逐 rank
-`join_nccl`），跨进程则 `NcclId` 走 fabric handle 的通道再各自 `join_nccl`；
+一个 NCCL group 里每个 peer 一对 send / recv，可被图捕获）。每组一个 communicator，id 由组的
+0 号成员在它的 `Offer` 里带出（见下文的握手），`connect` 时各自 `join_nccl`；单进程持有全组时
+`connect_local(&mut [Runtime])` 把所有 join 放进一个 NCCL group call；
 没有 join 的组一律拒绝 issue（`require_nccl`，与 `require_peers` 并列）。
 NCCL 版本钉在 cudarc 的 `nccl` 绑定（2.30），运行时 dlopen 无版本号的
 `libnccl.so`。`join_nccl` 在 init 前钉两个 NCCL 变量（调用者已设则不动）：
@@ -193,12 +193,19 @@ NCCL 版本钉在 cudarc 的 `nccl` 绑定（2.30），运行时 dlopen 无版�
 `Runtime::load(.., Some(&Topology))` 给出本 rank 在每个组的下标（大小
 必须与 manifest 一致），`{"rank": g}` 实参在 compile 时烧成常量。
 `export_handles()` 返回每个 export buffer / 每个 state 的 `PeerHandle`
-（handle + 映射字节数；`Fabric` 有 `to_bytes()` 72 B 一行的线格式，传输
-是 caller 的事：共享盘、TCP 都行；`Local` 没有线格式，只在同一进程里传）；`import_peers(group, members)`
+（handle + 映射字节数；`Fabric` 有 `to_bytes()` 72 B 一行的线格式；`Local`
+没有线格式，只在同一进程里传）；`import_peers(group, members)`
 收全组每个成员的 handle 表（自己那份随意，用本地地址），
 `Fabric` 经 `cuMemImportFromShareableHandle`、`Local` 直接 reserve + map
 后把 `u64[组大小]` 写进
 该组的每个 `peer` buffer（同一目标只映射一次），映射与 runtime 同寿命。
+调用者走的是包在这两个之上的一次握手：`offer()` 给出本 rank 的 `Offer`（manifest 摘要、
+全部 handle、本 rank 当 0 号成员的每个 NCCL 组的 id），`Offer::to_bytes()` 是线格式
+（有 `Local` handle 时报错，并指向 `KERN_NO_FABRIC` / 容器没挂 IMEX channel），
+传输是 caller 的事（kern-serve 的 TCP head、引擎的 gloo 组、`cross_collective` 的
+rendezvous）；`connect({组: 成员序的 offers})` 检查全员 manifest 摘要一致、逐组
+`import_peers`、确认没有 peer buffer 漏填、再 join 每个 NCCL 组。`once` 程序和其后的
+跨 rank barrier 留给 caller：只有它知道全组什么时候都跑完了。
 所有 peer buffer 填满之前 `run`/`run_range`/`capture`/`time_*` 一律
 `Api` 错误。装载时收到 peer buffer 的每个 kernel launch 都过
 `cuobjdump -sass` 扫描，见 manifest.md 信任边界一节。门禁

@@ -12,8 +12,9 @@
 //! all-to-all before anything ran eagerly, the order a server that warms
 //! up by capturing has.
 //!
-//! Rank 0 listens on the rendezvous port, collects every rank's fabric
-//! handles and sends back the table with the communicator's id.
+//! Rank 0 listens on the rendezvous port, collects every rank's offer
+//! (its fabric handles, rank 0's with the communicator's id) and sends
+//! the list back.
 //!
 //!   cross_collective --rank R --world W --gpu G --rendezvous host:port \
 //!       [--ar-cubin peer_allreduce.cubin] [--iters 100] [--burst 16] [--capture-first]
@@ -22,7 +23,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
-use kern_runtime::{Capacity, NcclId, PeerHandle, Runtime, Topology};
+use kern_runtime::{Capacity, Offer, Runtime, Topology};
 
 const H: usize = 7168;
 const R_MAX: usize = 64;
@@ -30,7 +31,6 @@ const A2A_MAX: usize = 8 << 20;
 const TIMEOUT_NS: i64 = 2_000_000_000;
 const MIB: f64 = (1 << 20) as f64;
 
-type Handles = BTreeMap<String, PeerHandle>;
 type Vars = BTreeMap<String, u64>;
 
 fn vars(kv: &[(&str, usize)]) -> Vars {
@@ -186,75 +186,47 @@ fn manifest(world: usize, peer: Option<&str>, burst: usize) -> serde_json::Value
     })
 }
 
-fn write_table(w: &mut impl Write, table: &[(u64, Handles)]) -> std::io::Result<()> {
-    w.write_all(&(table.len() as u32).to_le_bytes())?;
-    for (rank, map) in table {
-        w.write_all(&rank.to_le_bytes())?;
-        w.write_all(&(map.len() as u32).to_le_bytes())?;
-        for (name, h) in map {
-            w.write_all(&(name.len() as u16).to_le_bytes())?;
-            w.write_all(name.as_bytes())?;
-            w.write_all(&h.to_bytes().ok_or_else(|| std::io::Error::other(format!("`{name}`: not a fabric handle")))?)?;
-        }
-    }
-    w.flush()
+fn write_frame(w: &mut impl Write, b: &[u8]) -> std::io::Result<()> {
+    w.write_all(&(b.len() as u32).to_le_bytes())?;
+    w.write_all(b)
 }
 
-fn read_table(r: &mut impl Read) -> std::io::Result<Vec<(u64, Handles)>> {
+fn read_frame(r: &mut impl Read) -> std::io::Result<Vec<u8>> {
     let mut n = [0u8; 4];
     r.read_exact(&mut n)?;
-    (0..u32::from_le_bytes(n))
-        .map(|_| {
-            let (mut rank, mut entries) = ([0u8; 8], [0u8; 4]);
-            r.read_exact(&mut rank)?;
-            r.read_exact(&mut entries)?;
-            let map = (0..u32::from_le_bytes(entries))
-                .map(|_| {
-                    let mut l = [0u8; 2];
-                    r.read_exact(&mut l)?;
-                    let mut name = vec![0u8; u16::from_le_bytes(l) as usize];
-                    r.read_exact(&mut name)?;
-                    let mut h = [0u8; PeerHandle::BYTES];
-                    r.read_exact(&mut h)?;
-                    Ok((String::from_utf8(name).unwrap(), PeerHandle::from_bytes(&h).unwrap()))
-                })
-                .collect::<std::io::Result<Handles>>()?;
-            Ok((u64::from_le_bytes(rank), map))
-        })
-        .collect()
+    let mut b = vec![0u8; u32::from_le_bytes(n) as usize];
+    r.read_exact(&mut b)?;
+    Ok(b)
 }
 
-/// Every rank's handles in rank order and the communicator's id.
-fn rendezvous(addr: &str, rank: usize, world: usize, mine: Handles) -> std::io::Result<(Vec<Handles>, NcclId)> {
+/// Every rank's offer in rank order: rank 0 collects them and sends the
+/// whole list back.
+fn rendezvous(addr: &str, rank: usize, world: usize, mine: Vec<u8>) -> std::io::Result<Vec<Vec<u8>>> {
     if rank == 0 {
         let port = addr.rsplit(':').next().unwrap();
         let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
-        let id = NcclId::new().map_err(|e| std::io::Error::other(e.to_string()))?;
-        let mut table = vec![(0u64, mine)];
+        let mut offers = vec![Vec::new(); world];
+        offers[0] = mine;
         let mut streams = Vec::new();
         while streams.len() + 1 < world {
             let (mut s, _) = listener.accept()?;
-            table.extend(read_table(&mut s)?);
+            let r = u32::from_le_bytes(read_frame(&mut s)?.try_into().unwrap()) as usize;
+            offers[r] = read_frame(&mut s)?;
             streams.push(s);
         }
-        table.sort_by_key(|(r, _)| *r);
         for s in &mut streams {
-            s.write_all(&id.to_bytes())?;
-            write_table(s, &table)?;
+            offers.iter().try_for_each(|o| write_frame(s, o))?;
         }
-        return Ok((table.into_iter().map(|(_, m)| m).collect(), id));
+        return Ok(offers);
     }
     let mut s = (0..600)
         .find_map(|_| {
             TcpStream::connect(addr).map_err(|_| std::thread::sleep(std::time::Duration::from_millis(500))).ok()
         })
         .ok_or_else(|| std::io::Error::other(format!("rendezvous {addr}: no listener after 5 minutes")))?;
-    write_table(&mut s, &[(rank as u64, mine)])?;
-    let mut id = [0u8; 128];
-    s.read_exact(&mut id)?;
-    let table = read_table(&mut s)?;
-    assert_eq!(table.len(), world, "rendezvous table size");
-    Ok((table.into_iter().map(|(_, m)| m).collect(), NcclId::from_bytes(id)))
+    write_frame(&mut s, &(rank as u32).to_le_bytes())?;
+    write_frame(&mut s, &mine)?;
+    (0..world).map(|_| read_frame(&mut s)).collect()
 }
 
 struct A2a {
@@ -401,12 +373,13 @@ fn main() {
             Some(&topo),
         )
         .map_err(e)?;
-        let (members, id) =
-            rendezvous(&addr, rank, world, rt.export_handles().map_err(e)?).map_err(|e| e.to_string())?;
-        if sha.is_some() {
-            rt.import_peers("w", &members).map_err(e)?;
-        }
-        rt.join_nccl("w", &id).map_err(e)?;
+        let offers = rendezvous(&addr, rank, world, rt.offer().and_then(|o| o.to_bytes()).map_err(e)?)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|b| Offer::from_bytes(b))
+            .collect::<kern_runtime::Result<Vec<_>>>()
+            .map_err(e)?;
+        rt.connect(&BTreeMap::from([("w".to_string(), offers)])).map_err(e)?;
         let mut lines = vec![format!(
             "world {world}, NCCL_PROTO={}, NCCL_P2P_LL_THRESHOLD={}",
             std::env::var("NCCL_PROTO").unwrap_or_default(),

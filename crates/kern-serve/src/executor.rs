@@ -5,15 +5,14 @@
 //! accounting, and the head's own GPU, which it drives in-process. Every
 //! other rank is a process started with `--head host:port --rank q`; it
 //! loads its place in the topology, connects and says [`Hello`]: its rank,
-//! the manifest it loaded (a digest), the budget its pool was cut from, the
-//! handles of its exported allocations and of its pool (which a prefill
-//! tier pushes into when these ranks decode for one, `pd`). Once every rank has said hello
-//! the head answers each with a [`Table`]: every group's members' handles
-//! in member order, the NCCL id of each group the rank is in, and the host
-//! tier to reserve. Each rank then maps its peers, joins its communicators
-//! (in group order, everywhere the same, since a join blocks until the
-//! whole group has joined), runs what the manifest runs once and reserves
-//! its host tier.
+//! the budget its pool was cut from, its [`Offer`] (the manifest it loaded,
+//! its exported allocations, the id of every communicator it leads) and
+//! the handle of its pool (which a prefill tier pushes into when these
+//! ranks decode for one, `pd`). Once every rank has said hello the head
+//! answers each with a [`Table`]: every group's members' offers in member
+//! order, and the host tier to reserve. Each rank then connects
+//! ([`Runtime::connect`]: maps its peers, joins its communicators), runs
+//! what the manifest runs once and reserves its host tier.
 //!
 //! From then on the head sends every rank an [`Order`] and reads back its
 //! [`Answer`], over one TCP stream of frames (a `u32` length, then JSON) as
@@ -35,7 +34,6 @@
 //! the ranks' device time and the wire.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::hash::{Hash, Hasher};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -44,12 +42,12 @@ use anyhow::{bail, ensure, Context, Result};
 use kern_manifest::types::Fill;
 use kern_manifest::{Protocol, Verified};
 use kern_run::Weights;
-use kern_runtime::{Budget, Capacity, GroupRank, Landing, NcclId, PeerHandle, Runtime, Topology};
+use kern_runtime::{Budget, Capacity, GroupRank, Landing, Offer, Runtime, Topology};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::logline;
-use crate::pp::{connect, recv, send, Handles};
+use crate::pp::{connect, recv, send};
 use crate::ranks::{Act, Answer, Groups, Order, Ranks};
 
 /// How long a rank keeps trying to reach a head that is not up yet.
@@ -67,24 +65,22 @@ pub struct Load {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Hello {
     pub rank: usize,
-    pub manifest: String,
     pub chunk: u64,
     pub chunks: u32,
     pub first_slots: usize,
     pub tokens: Option<u64>,
-    pub handles: Handles,
+    /// The rank's [`Offer`], hex.
+    pub offer: String,
     /// The pool's `PoolHandle`, hex; none without fabric handles.
     pub pool: Option<String>,
 }
 
-/// The head's answer: by group, every member's handles in member order
-/// (this rank's own entry empty), the NCCL id of the communicator the rank
-/// joins, and the host tier to reserve as (host pages, host slots), the
+/// The head's answer: by group, every member's offer (hex) in member
+/// order, and the host tier to reserve as (host pages, host slots), the
 /// units the head's [`Host`](kern_pool::Host) counts.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
-    pub peers: BTreeMap<String, Vec<Handles>>,
-    pub nccl: BTreeMap<String, String>,
+    pub peers: BTreeMap<String, Vec<String>>,
     pub host: (u64, u64),
 }
 
@@ -126,84 +122,49 @@ fn load(m: &Verified, weights: &Weights, groups: Groups, q: usize, o: &Load) -> 
     Ok(rt)
 }
 
-/// The manifest as every rank must have loaded it.
-fn digest(m: &Verified) -> Result<String> {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    serde_json::to_string(&**m)?.hash(&mut h);
-    Ok(format!("{:016x}", h.finish()))
-}
-
-fn export(rt: &Runtime) -> Result<Handles> {
-    rt.export_handles()?
-        .into_iter()
-        .map(|(name, h)| {
-            let b = h.to_bytes().with_context(|| format!("`{name}` has no fabric handle to cross processes with"))?;
-            Ok((name, hex::encode(b)))
-        })
-        .collect()
-}
-
 /// This runtime's pool as another process maps it; `None` when its chunks
 /// have no fabric handle.
 fn export_pool(rt: &Runtime) -> Result<Option<String>> {
     Ok(rt.export_pool()?.to_bytes().map(hex::encode))
 }
 
-fn import(h: &Handles) -> Result<BTreeMap<String, PeerHandle>> {
-    h.iter()
-        .map(|(name, x)| {
-            let b = hex::decode(x).with_context(|| format!("handle of `{name}`"))?;
-            Ok((name.clone(), PeerHandle::from_bytes(&b).with_context(|| format!("handle of `{name}`"))?))
-        })
+fn offer_hex(o: &Offer) -> Result<String> {
+    Ok(hex::encode(o.to_bytes()?))
+}
+
+fn offer_of(x: &str) -> Result<Offer> {
+    Ok(Offer::from_bytes(&hex::decode(x)?)?)
+}
+
+/// Rank `q`'s groups, each as its members' offers in member order: its
+/// own `tp` group, every rank for any other group.
+fn members<T: Clone>(m: &Verified, groups: Groups, q: usize, offers: &[T]) -> BTreeMap<String, Vec<T>> {
+    let ranks = |g: &str| if g == "tp" { groups.members(q) } else { 0..groups.ranks() };
+    m.topology
+        .iter()
+        .flat_map(|t| t.groups.keys())
+        .map(|g| (g.clone(), ranks(g).map(|r| offers[r].clone()).collect()))
         .collect()
 }
 
-/// Rank `q`'s table: every group's members' handles, the communicator of
-/// each NCCL group it is in (`ids[g]`, one per `tp` group, one for any
-/// other group).
-fn table(
-    m: &Verified,
+/// Connect, run what runs once, reserve the host tier.
+fn join(
+    rt: &mut Runtime,
+    p: &Protocol,
     groups: Groups,
-    q: usize,
-    handles: &[Handles],
-    ids: &BTreeMap<String, Vec<String>>,
+    peers: &BTreeMap<String, Vec<Offer>>,
     host: (u64, u64),
-) -> Table {
-    let members = |g: &str| if g == "tp" { groups.members(q) } else { 0..groups.ranks() };
-    let peers = m
-        .topology
-        .iter()
-        .flat_map(|t| t.groups.keys())
-        .map(|g| (g.clone(), members(g).map(|r| if r == q { Handles::new() } else { handles[r].clone() }).collect()))
-        .collect();
-    let nccl = ids.iter().map(|(g, v)| (g.clone(), v[if g == "tp" { q / groups.size() } else { 0 }].clone())).collect();
-    Table { peers, nccl, host }
-}
-
-/// Map the peers, join the communicators, run what runs once, reserve the host tier.
-fn join(rt: &mut Runtime, p: &Protocol, groups: Groups, t: &Table) -> Result<()> {
-    for (g, members) in &t.peers {
-        let members = members.iter().map(import).collect::<Result<Vec<_>>>()?;
-        rt.import_peers(g, &members).with_context(|| format!("peers of `{g}`"))?;
-    }
-    let pending = rt.pending_peers();
-    if !pending.is_empty() {
-        bail!("peer buffers {pending:?} still unfilled after every group was imported");
-    }
-    for g in rt.nccl_groups() {
-        let id = t.nccl.get(&g).with_context(|| format!("the head sent no nccl id for `{g}`"))?;
-        let b: [u8; 128] = hex::decode(id)?.try_into().map_err(|_| anyhow::anyhow!("an nccl id is 128 bytes"))?;
-        rt.join_nccl(&g, &NcclId::from_bytes(b)).with_context(|| format!("joining nccl group `{g}`"))?;
-    }
+) -> Result<()> {
+    rt.connect(peers).context("connecting to the groups")?;
     // Once after load, the peers mapped: a group manifest's setup (the
     // allreduce's Lamport stages are poisoned, not zeroed).
     let vars = p.vars(1, 1, groups.size() as u64, 1);
     for prog in &p.once {
         rt.run(prog, &vars).with_context(|| format!("`{prog}`"))?;
     }
-    if t.host != (0, 0) {
+    if host != (0, 0) {
         let t0 = Instant::now();
-        let (pages, slots) = t.host;
+        let (pages, slots) = host;
         rt.reserve_host(pages, slots).context("reserving the host tier")?;
         info!(pages, slots, reserve_s = logline::secs(t0.elapsed()), "host tier reserved");
     }
@@ -233,19 +194,22 @@ pub fn head(
     let mut rt = load(m, weights, groups, 0, o)?;
     // Every rank's states are the head's manifest's, so one runtime's split holds for all.
     let host = rt.host_units(host_bytes, host_turn);
-    let digest = digest(m)?;
+    let own = rt.offer()?;
     let mut hellos: Vec<Option<(Hello, TcpStream)>> = (0..n).map(|_| None).collect();
+    let mut offers = vec![own.clone(); n];
     if let Some(l) = &listener {
         info!(listen, ranks = n, group = groups.size(), "waiting for the ranks");
         while hellos[1..].iter().any(Option::is_none) {
             let (mut s, addr) = l.accept()?;
             let _ = s.set_nodelay(true);
             let h: Hello = recv(&mut s)?.with_context(|| format!("{addr} closed before its hello"))?;
+            let o = offer_of(&h.offer).with_context(|| format!("{addr}: rank {}'s offer", h.rank))?;
             ensure!(
-                h.manifest == digest,
-                "{addr}: rank {} loaded another manifest ({}, the head's {digest})",
+                o.manifest == own.manifest,
+                "{addr}: rank {} loaded another manifest ({:016x}, the head's {:016x})",
                 h.rank,
-                h.manifest
+                o.manifest,
+                own.manifest
             );
             ensure!(
                 (1..n).contains(&h.rank) && hellos[h.rank].is_none(),
@@ -254,36 +218,25 @@ pub fn head(
             );
             info!(rank = h.rank, %addr, "rank joined");
             let q = h.rank;
+            offers[q] = o;
             hellos[q] = Some((h, s));
         }
     }
-    let mut handles = vec![Handles::new(); n];
-    if n > 1 {
-        handles[0] = export(&rt)?;
-    }
-    for (q, (h, _)) in hellos.iter().enumerate().filter_map(|(q, x)| Some((q, x.as_ref()?))) {
-        handles[q] = h.handles.clone();
-    }
-    let ids = rt
-        .nccl_groups()
-        .into_iter()
-        .map(|g| {
-            let count = if g == "tp" { n / groups.size() } else { 1 };
-            let v = (0..count).map(|_| Ok(hex::encode(NcclId::new()?.to_bytes()))).collect::<Result<_>>()?;
-            Ok((g, v))
-        })
-        .collect::<Result<BTreeMap<String, Vec<String>>>>()?;
+    let wire = match n {
+        1 => Vec::new(),
+        _ => offers.iter().map(offer_hex).collect::<Result<Vec<_>>>()?,
+    };
     let mut budgets = vec![rt.budget()];
     let mut exported = vec![export_pool(&rt)?];
     let mut remote = Vec::with_capacity(n - 1);
     for (q, (h, mut s)) in hellos.into_iter().enumerate().skip(1).map(|(q, x)| (q, x.expect("every rank said hello"))) {
-        send(&mut s, &table(m, groups, q, &handles, &ids, host))?;
+        send(&mut s, &Table { peers: members(m, groups, q, &wire), host })?;
         budgets.push(Budget { chunk: h.chunk, chunks: h.chunks, first_slots: h.first_slots, tokens: h.tokens });
         exported.push(h.pool);
         crate::watch::exit_with(&s, format!("rank {q}"))?;
         remote.push(s);
     }
-    join(&mut rt, &p, groups, &table(m, groups, 0, &handles, &ids, host))?;
+    join(&mut rt, &p, groups, &members(m, groups, 0, &offers), host)?;
     let pools = budgets.iter().map(|b| b.pool(m)).collect::<kern_pool::Result<Vec<_>>>()?;
     let ranks = Ranks::new(p.clone(), groups, pools, host)?;
     info!(ranks = n, group = groups.size(), "ranks connected");
@@ -304,18 +257,22 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
     let b = rt.budget();
     let hello = Hello {
         rank: q,
-        manifest: digest(m)?,
         chunk: b.chunk,
         chunks: b.chunks,
         first_slots: b.first_slots,
         tokens: b.tokens,
-        handles: export(&rt)?,
+        offer: offer_hex(&rt.offer()?)?,
         pool: export_pool(&rt)?,
     };
     send(&mut s, &hello)?;
     let t: Table = recv(&mut s)?.context("the head closed before its table")?;
     crate::watch::exit_with(&s, "the head".into())?;
-    join(&mut rt, &p, groups, &t)?;
+    let peers = t
+        .peers
+        .iter()
+        .map(|(g, v)| Ok((g.clone(), v.iter().map(|x| offer_of(x)).collect::<Result<_>>()?)))
+        .collect::<Result<_>>()?;
+    join(&mut rt, &p, groups, &peers, t.host)?;
     info!(rank = q, head, "rank serving");
     let mut x = Executor::new(q, rt, p);
     while let Some(order) = recv::<Order>(&mut s)? {
