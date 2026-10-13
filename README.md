@@ -274,6 +274,15 @@ SGLang works the same way through `python/kern_sglang`: [docs/sglang.md](docs/sg
 `kern <cmd> --help` lists the flags; `crates/kern-run/src/config.rs`
 documents `kern.toml`.
 
+## Deployments
+
+A model's deployment lives in a repository of its own: the generator, the
+kernel sources and builds it pins, and the manifests. kern stays model-agnostic.
+
+| Repository | Model | How it is served |
+| --- | --- | --- |
+| [pegainfer-project/kern-k3-pp-prefill](https://github.com/pegainfer-project/kern-k3-pp-prefill) | Kimi-K3, full size (896 experts) | P/D on `kern-serve`: prefill as eight pipeline stages, decode as TP8 / EP8 / DCP8 groups. One prefill pipeline with two decode groups on 24 GB300s served the AgentX 256k workload at 64 concurrent sessions: ITL p50 23.4 ms, 103.5 output tok/s per GPU (2026-10-11) |
+
 ## Inside
 
 The wire format is one JSON Schema, generated from the code and
