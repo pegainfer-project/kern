@@ -39,6 +39,11 @@ class KernBuilder(AttentionMetadataBuilder[CommonAttentionMetadata]):
 
 
 class KernImpl(AttentionImpl):
+    # kern's attention merges the members' partial softmaxes inside its own
+    # kernels; vLLM asks only that a DCP backend can.
+    supports_dcp = True
+    can_return_lse_for_decode = True
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -64,7 +69,7 @@ class KernAttentionBackend(AttentionBackend):
         return KernBuilder
 
     @staticmethod
-    def get_supported_kernel_block_sizes():
+    def get_supported_kernel_block_sizes(kv_cache_spec=None):
         return [KERNEL_BLOCK]
 
     @classmethod
@@ -76,13 +81,23 @@ class KernAttentionBackend(AttentionBackend):
         return []
 
 
+class KernMLABackend(KernAttentionBackend):
+    @staticmethod
+    def get_name() -> str:
+        return "KERN_MLA"
+
+    @classmethod
+    def is_mla(cls) -> bool:
+        return True
+
+
 class KernStateBackend(KernAttentionBackend):
     @staticmethod
     def get_name() -> str:
         return "KERN_STATE"
 
     @staticmethod
-    def get_supported_kernel_block_sizes():
+    def get_supported_kernel_block_sizes(kv_cache_spec=None):
         return []
 
     @classmethod
