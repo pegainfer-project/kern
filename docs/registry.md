@@ -17,11 +17,11 @@ vendored 的 CUTLASS 核、自己的手写核），每挖一个都要花一次 A
 
 | 事项 | 决定 |
 |---|---|
-| 字节放哪 | HF private 仓库 `Pegainfer/kern-kernels`，`blobs/<sha256>` 平铺、无扩展名，与本地缓存 `~/.cache/kern/blobs/` 同构 |
+| 字节放哪 | HF 公开仓库 `Pegainfer/kern-kernels`，`blobs/<sha256>` 平铺、无扩展名，与本地缓存 `~/.cache/kern/blobs/` 同构 |
 | 事实记哪 | 独立 private Git 仓库的 `index/<family>.toml`（`KERN_INDEX_DIR` 指向该目录），一族一文件，由导入工具生成、CI 检查、人 review |
 | ABI 在哪 | `tools/kernels/abi/<family>.py`，一族一个 Python 模块，输入 index 里的 variant 与形状、输出 manifest op 的 `impl`（今天的 `trtllm_fmha_abi.py` 就是这个形状） |
 | runtime 改什么 | `source` 除 `hf:` 外接受裸 `https://` URL（`hf:` 退化为 URL 模板的语法糖）；modules 全是 registry ref 时不再要求 `--kernels` 目录 |
-| 换主机怎么办 | 改 `source` 标签、重生成 manifest；sha 不变，index 不变。on-prem 交付 = 拷 `blobs/` 目录，不需要任何 registry |
+| 换主机怎么办 | 改 `source` 标签、重生成 manifest；sha 不变，index 不变。离线部署 = 拷 `blobs/` 目录，不需要任何 registry |
 | 不做什么 | 不做查询服务；TOML 里不做模板语言（ABI 留在 Python）；不按模型建索引；runtime 不知道 index 的存在 |
 
 ## 2. Blob store
@@ -48,12 +48,6 @@ runtime 校验的是第三个，前两个换了都不影响运行。同一个 bl
 **为什么不沿用 `cubins/<name>-<sha12>.cubin`。** 那是给人在 HF 网页上翻目录用的；
 有了 index 之后翻目录的场景消失，而平铺 sha 换来三件事：镜像是 `rsync`、
 本地缓存目录就是完整的离线分发单元、永远没有重命名与冲突。
-
-**为什么 HF、为什么 private。** runtime 已经会读 `HF_TOKEN` 拉 `hf:`，零改动；
-第三方 cubin（Apache-2.0）与我们自己的 ABI、报告混放在一个仓库里最省事，
-所以整仓 private。网络不是考虑项（海外机器）。等有第一个外部客户，按客户的
-交付形态把 `blobs/` 镜像到自己域名下的对象存储或客户的 OCI 仓库，只改
-`source` 标签。
 
 **许可证。** 再分发 Apache-2.0 的 cubin 要带 NOTICE：每个 family 的 index 记
 `license` 与 `license_blob`（LICENSE 文本的 sha），仓库 README 列全部来源。
@@ -163,12 +157,10 @@ launch = abi.trtllm_bmm.op(v, n=6144, k=3584, ...)   # v.module 给 {"cubin": "h
 - 模型仓库（`Pegainfer/kern-qwen38-sm103` 一类）以后只放 manifest 与模型自己的
   东西，cubin 一律指向 `kern-kernels`；现有仓库不动，新 manifest 按新写法生成。
 
-## 5. 商业上意味着什么
+## 5. 约定
 
-index 是资产，blob 不是：第三方 cubin 谁都能从 wheel 里拿，我们卖的是"这个
-形状用哪个变体、ABI 怎么摆、测过多少"。index 进 git 意味着它有 review 和历史；
-TOML 已移到独立 private Git 仓库，格式不变；公开仓库保留索引工具与 ABI 代码。blob store
-换主机是标签改写，离线交付是一个目录。继续遵守：不把事实写进 blob 的文件名，不让 runtime 依赖 HF 的任何特性。
+index 进 git，有 review 和历史；TOML 在独立的 Git 仓库（见第 3 节），公开仓库保留索引工具与 ABI 代码。
+blob store 换主机是标签改写，离线部署是一个目录。不把事实写进 blob 的文件名，不让 runtime 依赖 HF 的任何特性。
 
 ## 6. 门禁
 

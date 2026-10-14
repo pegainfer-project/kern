@@ -7,7 +7,7 @@ Rust 在 `kernel-lab` 容器里构建，home 挂在 `/work`；binary 宿主机�
 
 ## 这件事为什么重要
 
-kern 卖的是 model-agnostic runtime，但到今天只跑过 Qwen3-4B。这次的目标不只是
+kern 是 model-agnostic runtime，但到今天只跑过 Qwen3-4B。这次的目标不只是
 "跑通"，而是拿到一份可公开的证据：**一个 agent 从零把一个结构完全不同的新模型
 带上 kern，花了多久、改了什么、没改什么。** 整个 session trace 会开源。所以：
 
