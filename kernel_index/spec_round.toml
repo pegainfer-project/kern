@@ -1,0 +1,13 @@
+[family]
+name = "spec_round"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/spec_round.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "spec_round"
+sha256 = "f8b61d2c217c24d55b020825ae4af59e80c6a08165c901e1385d12b8ffefec8d"
+entries = ["kern_ones_i32", "kern_spec_count", "kern_spec_lines", "kern_splice_draft", "kern_splice_verify"]

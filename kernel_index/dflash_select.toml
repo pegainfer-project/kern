@@ -1,0 +1,13 @@
+[family]
+name = "dflash_select"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/dflash_select.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "dflash_select"
+sha256 = "d8886c31720ab253d1b45124b40b4eab9816415029bc7038ba4664338ead70a5"
+entries = ["kern_dflash_select"]

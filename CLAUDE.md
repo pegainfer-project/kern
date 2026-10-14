@@ -38,6 +38,8 @@ the schema golden, lints) belongs in CI, not here.
   workspace members, built by name.
 - `tools/` — capture, extract, export, manifest generators. Model knowledge
   lives here.
+- `kernel_index/` — the kernel registry's facts, one TOML per family
+  (`docs/registry.md`); the bytes live in the HF blob store.
 - GPU tests need a free GPU on a shared tray: `nvidia-smi` before `kern test`.
 
 ## What we prefer

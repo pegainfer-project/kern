@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the kernel index (docs/registry.md), offline, in CI:
 
-- every $KERN_INDEX_DIR/*.toml parses, its file name is its family's;
+- every kernel_index/*.toml parses, its file name is its family's;
 - a sha256 is 64 hex chars and names one variant across all families;
 - a pick names a variant that exists, has launch geometry, and carries a report;
 - the document is normalized (regenerating it from its own facts is a no-op);
@@ -32,7 +32,7 @@ def check(online=False):
     except FileNotFoundError as e:
         return [str(e)], 0
     if not families:
-        errs.append("kernel index is empty; set KERN_INDEX_DIR to a populated private index")
+        errs.append("kernel index is empty")
     for fam in families:
         p = index.path(fam)
         try:

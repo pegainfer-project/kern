@@ -1,0 +1,13 @@
+[family]
+name = "gdn_advance"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/gdn_advance.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "gdn_advance"
+sha256 = "fb710c22b52a1bd67893985ccc0a814e066bf5a5a9af2bbe532d6ed4ef54d4bc"
+entries = ["kern_conv_shift", "kern_mask_row0"]

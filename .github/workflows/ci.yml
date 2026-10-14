@@ -62,6 +62,9 @@ jobs:
       - name: Kernel index tooling
         run: python3 -m unittest discover -s tools/kernels -p test_index.py
 
+      - name: Kernel index
+        run: python3 tools/kernels/check.py
+
       - name: TRTLLM manifest conversion regression tests
         run: python3 -m unittest discover -s tools -p test_trtllm_manifest.py
 

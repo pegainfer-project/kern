@@ -1,0 +1,13 @@
+[family]
+name = "weight_prep"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/weight_prep.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "weight_prep"
+sha256 = "040f51b01c421b9c69a2090034ff1bc4741e40c02f5ea52bd04a3e62e5c1af4d"
+entries = ["kern_cast_bf16_f32", "kern_fill_f32", "kern_fill_i32", "kern_fill_i64", "kern_fill_u8", "kern_iota_i32", "kern_rope_table_bf16", "kern_weight_p1_bf16_f32"]

@@ -1,5 +1,5 @@
 """The kernel index (docs/registry.md): one TOML per family under
-$KERN_INDEX_DIR, read here by the generators.
+`kernel_index/`, read here by the generators.
 
 A family is one parameter ABI: a handwritten `.cu`, one vendored template
 instance, or one dtype combination of a code generator's kernels (every tile
@@ -25,9 +25,7 @@ import re
 import tomllib
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-# the private registry checkout's index/ directory; nothing here guesses where it is
-INDEX = pathlib.Path(os.environ["KERN_INDEX_DIR"]).expanduser().resolve() if os.environ.get("KERN_INDEX_DIR") else None
-MISSING = "kernel index missing; set KERN_INDEX_DIR to the private checkout's index directory"
+INDEX = REPO / "kernel_index"
 BLOB_REPO = "Pegainfer/kern-kernels"
 FAMILY_KEYS = ["name", "kind", "sm", "abi", "upstream", "license", "license_blob", "toolchain", "rebuild",
                "abi_source", "abi_capture", "imported"]
@@ -51,8 +49,6 @@ def blob_path(sha256):
 
 
 def root():
-    if INDEX is None:
-        raise FileNotFoundError(MISSING)
     return INDEX
 
 
@@ -62,14 +58,14 @@ def path(family):
 
 def families():
     if not root().is_dir():
-        raise FileNotFoundError(MISSING)
+        raise FileNotFoundError(f"no kernel index at {root()}")
     return sorted(p.stem for p in root().glob("*.toml"))
 
 
 def load(family):
     p = path(family)
     if not p.exists():
-        raise KeyError(f"kernel family `{family}`: no {p.name}; set KERN_INDEX_DIR to the private checkout’s index directory or import it (tools/kernels/import_*.py)")
+        raise KeyError(f"kernel family `{family}`: no {p.name}; import it (tools/kernels/import_*.py)")
     return tomllib.loads(p.read_text())
 
 

@@ -1,0 +1,19 @@
+[family]
+name = "k3_kda_core"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_kda_core.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_kda_core"
+sha256 = "1427037b4fb0aeba6d9a310e9bd04d6dd0a81822f779f5b7bf196821e68808ea"
+entries = ["kern_k3_kda_core"]
+
+[[variant]]
+name = "k3_kda_core+HEADS=24"
+sha256 = "07bc325714e8118f34d0fe30616f773f255b10f015664932e917318e800f5968"
+entries = ["kern_k3_kda_core"]
+defines = { HEADS = 24 }

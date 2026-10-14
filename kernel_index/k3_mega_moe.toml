@@ -1,0 +1,16 @@
+[family]
+name = "k3_mega_moe"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "DeepGEMM sm100 fp8 x fp4 MegaMoE (impls/sm100_fp8_fp4_mega_moe.cuh, upstream sha256 e74a82f9c931ddf7, pegainfer's vendored copy with the K3 situ activation), kern's peer-table SymBuffer fork at tools/k3-mega/ (fork_impl.py)"
+license = "MIT"
+license_blob = "6c73a30c14a2938abaa6afe98ebb19e6d81dac5bd4ace0cb05c61c20afa37b85"
+toolchain = "nvcc 13.0 (kernel-lab), sm_103a, DeepGEMM + CUTLASS headers from pegainfer's vendored DeepGEMM"
+rebuild = "tools/build_k3_mega.sh <out_dir> (also builds k3_mega_layout_dump), then import_cubin"
+abi_source = "tools/gen_k3_moe.py: 18 tensormap packs whose geometry comes from tools/k3-mega/layout_dump"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_mega_moe"
+sha256 = "5b72b0c8d59871db6c0d148f5afeffaff154b3b77fc2d518b13da3b149bcb8b7"
+entries = ["kern_k3_mega_moe_e224_r16_situ", "kern_k3_mega_moe_e224_r1_situ", "kern_k3_mega_moe_e224_r4_situ", "kern_k3_mega_moe_e224_r8_situ"]

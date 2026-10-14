@@ -1,0 +1,19 @@
+[family]
+name = "k3_span_gather"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_span_gather.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_span_gather"
+sha256 = "ad6dd834a1778b1d48674f587df9f3728b4bcb3544dee9389df8d401bfa5a3fa"
+entries = ["kern_k3_span_gather"]
+
+[[variant]]
+name = "k3_span_gather+HEADS=24"
+sha256 = "e8a0235ee32b82454a4843b6d7f02bbe58b53e7b6f0d724403f50055cb21295b"
+entries = ["kern_k3_span_gather"]
+defines = { HEADS = 24 }

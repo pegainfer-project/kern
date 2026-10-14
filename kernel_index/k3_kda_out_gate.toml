@@ -1,0 +1,19 @@
+[family]
+name = "k3_kda_out_gate"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/k3_kda_out_gate.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-09-19"
+
+[[variant]]
+name = "k3_kda_out_gate"
+sha256 = "740b4ceb2d8de833c2c56d4e09ce565dcddcd54d921e34440e104716865ca9c4"
+entries = ["kern_k3_kda_out_gate"]
+
+[[variant]]
+name = "k3_kda_out_gate+HEADS=24"
+sha256 = "125539befe70ecdc46c1bc73f9f2ce3f37dbc90ec798c9f4e1166d7cc1ca746c"
+entries = ["kern_k3_kda_out_gate"]
+defines = { HEADS = 24 }

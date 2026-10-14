@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Put one artifact into the registry: the bytes into the cache (and, with
---upload, the blob store), the facts into $KERN_INDEX_DIR/<family>.toml.
+--upload, the blob store), the facts into kernel_index/<family>.toml.
 
     tools/kernels/import_cubin.py --family trtllm_fmha_ctx_h192_v128 --cubin path/to.cubin \\
         --upstream "flashinfer-cubin 0.6.18, bundle 2d6a5a02…, fmha/trtllm-gen/…" --license Apache-2.0 \\
