@@ -136,6 +136,14 @@ fn digest(m: &Verified) -> u64 {
 /// every group, the joins inside one NCCL group call so their blocking
 /// inits complete together.
 pub fn connect_local(rts: &mut [Runtime]) -> Result<()> {
+    if let Some((i, g, at)) = rts
+        .iter()
+        .enumerate()
+        .flat_map(|(i, rt)| rt.ranks.iter().map(move |(g, &at)| (i, g, at)))
+        .find(|&(i, _, at)| at != i as u64)
+    {
+        bail!(Api, "runtime {i} is member {at} of group `{g}`: connect_local takes every group's members in order");
+    }
     let offers = rts.iter().map(Runtime::offer).collect::<Result<Vec<_>>>()?;
     let groups = rts.first().map(|rt| rt.ranks.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let table: BTreeMap<String, Vec<Offer>> = groups.into_iter().map(|g| (g, offers.clone())).collect();
