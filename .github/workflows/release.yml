@@ -164,15 +164,16 @@ jobs:
             exit 1
           fi
           cat >notes.md <<EOF
-          Prebuilt \`kern\` for Linux x86_64 and aarch64, glibc 2.28 or newer. Needs an
-          NVIDIA driver that supports CUDA 13 (r580 or newer) and cuBLAS 13 on the loader
-          path; no toolkit, no Python.
+          Prebuilt \`kern\` for Linux x86_64 and aarch64, glibc 2.39 or newer (Ubuntu 24.04).
+          Needs an NVIDIA driver that supports CUDA 13 (r580 or newer) and cuBLAS 13 on the
+          loader path; no toolkit, no Python.
 
           Install the latest release, or this one with \`KERN_VERSION=$GITHUB_REF_NAME\`:
 
               curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 
-          The Python runtime and the vLLM and SGLang plugins, for Python 3.10 or newer:
+          The Python runtime and the vLLM and SGLang plugins, for Python 3.10 or newer and
+          glibc 2.28 or newer:
 
               pip install kern-llm==$VERSION
           EOF
