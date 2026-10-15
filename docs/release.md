@@ -60,9 +60,11 @@ pip install kern-llm    # import kern; vllm / sglang serve 时插件自动加载
    `install.sh`，对 tar.gz 与 wheel 做 GitHub build provenance attestation，
    `gh release create --verify-tag`，notes 是固定的一段要求说明 + 自动生成的 commit 列表。
    同名 release 已存在则拒绝，不覆盖资产。
-6. **PyPI**：GitHub release 出了之后，同一批 wheel 用仓库 secret `PYPI_API_TOKEN`
-   上传 `kern-llm`。单独一个 job：token 失效只红这一步，换了 token
-   `gh run rerun <run-id> --failed` 即可，release 不用重发。PyPI 不允许覆盖同版本。
+6. **PyPI**：GitHub release 出了之后，同一批 wheel 用 trusted publishing 上传
+   `kern-llm`：没有 token，PyPI 认的是 `pegainfer-project/kern` 的 `release.yml`
+   在 `pypi` environment 里跑出的 OIDC 身份（pypi.org 项目页 Publishing 里登记）。
+   单独一个 job：这步失败只红它自己，修好后 `gh run rerun <run-id> --failed`，
+   release 不用重发。PyPI 不允许覆盖同版本。
 
 ## 怎么发
 
