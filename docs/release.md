@@ -1,17 +1,25 @@
 # Release：怎么发一个 kern binary，什么时候算发完
 
-kern 的 release 是两个 binary：`kern` 与 `kern-serve`，Linux x86_64 与 aarch64
-各一份，不含 CUDA 库（runtime 在首次使用时 dlopen driver 与 cuBLAS），不含 Python，
-不含模型。目标机器就是一台 Linux CUDA 机：Ubuntu 24.04 或更新。装完能跑什么由 manifest 决定，不在本页范围。
+kern 的 release 是两样东西，Linux x86_64 与 aarch64 各一份，都不含 CUDA 库（runtime
+在首次使用时 dlopen driver 与 cuBLAS），不含模型：
 
-流水线在 `.github/workflows/release.yml`，打包与自检在
-`scripts/package_release.sh`，安装脚本在 `scripts/install.sh`。
+- 两个 binary：`kern` 与 `kern-serve`，不含 Python；目标机器是 Ubuntu 24.04 或更新。
+- PyPI 包 `kern-llm`：一个 abi3 wheel（Python 3.10+，manylinux 2.28），装的是
+  `import kern` 与 vLLM、SGLang 两个插件（`kern_vllm`、`kern_sglang`，entry point 注册，
+  不设 `KERN_MANIFEST` 时不做事）。torch 由引擎带，wheel 不依赖它。
+
+装完能跑什么由 manifest 决定，不在本页范围。
+
+流水线在 `.github/workflows/release.yml`，binary 的打包与自检在
+`scripts/package_release.sh`，wheel 的自检在 `scripts/check_wheel.sh`，安装脚本在
+`scripts/install.sh`。
 
 ## 用户看到的
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
-kern --version          # kern 0.2.0 (<commit>, cuda 13.0)
+kern --version          # kern 0.3.0 (<commit>, cuda 13.0)
+pip install kern-llm    # import kern; vllm / sglang serve 时插件自动加载
 ```
 
 - 网站的 `/install.sh` 是一条 302，指向最新 release 里的 `install.sh`；
@@ -34,8 +42,8 @@ kern --version          # kern 0.2.0 (<commit>, cuda 13.0)
 
 ## 流水线做什么
 
-1. **触发**：push 一个 `v*` tag。改到 workflow 或 `scripts/` 的 PR 也跑 build 与
-   打包（不 publish），所以流水线本身的改动在合并前就被 CI 验过。
+1. **触发**：push 一个 `v*` tag。改到 workflow、`scripts/` 或 `crates/kern-py` 的 PR
+   也跑 build、打包与 wheel（不 publish），所以流水线本身的改动在合并前就被 CI 验过。
 2. **构建**：两个 target 各自在 Ubuntu 24.04 runner 上原生编（aarch64 用
    GitHub 的 arm runner，不交叉），apt 装 protoc 与 libssl-dev，`--locked` 一次编出
    kern-run 与 kern-serve。cudarc 绑定的 CUDA 版本由 Cargo.toml 的
@@ -45,19 +53,25 @@ kern --version          # kern 0.2.0 (<commit>, cuda 13.0)
    tag；`NEEDED` 里没有任何 CUDA 库；`kern verify examples/qwen3-4b.json` 与
    `kern-serve --help` 跑通（无 GPU，证明 loader 满足）。
    任一条不过，release 不出。
-4. **发布**：合并两份 `.sha256` 成一份 `SHA256SUMS`，附上 `install.sh`，
-   对两个 tar.gz 做 GitHub build provenance attestation，`gh release create
-   --verify-tag`，notes 是固定的一段要求说明 + 自动生成的 commit 列表。
+4. **wheel**：两个 arch 各在原生 runner 上用 maturin-action 的 manylinux 2.28 容器编
+   `crates/kern-py`；`check_wheel.sh` 装进干净 venv，查 `kern.__version__` = tag、
+   两个插件包在、两个 entry point 在、扩展模块 `NEEDED` 里没有 CUDA 库。
+5. **发布**：合并两份 `.sha256` 与 wheel 的 sha256 成一份 `SHA256SUMS`，附上
+   `install.sh`，对 tar.gz 与 wheel 做 GitHub build provenance attestation，
+   `gh release create --verify-tag`，notes 是固定的一段要求说明 + 自动生成的 commit 列表。
    同名 release 已存在则拒绝，不覆盖资产。
+6. **PyPI**：GitHub release 出了之后，同一批 wheel 用仓库 secret `PYPI_API_TOKEN`
+   上传 `kern-llm`。单独一个 job：token 失效只红这一步，换了 token
+   `gh run rerun <run-id> --failed` 即可，release 不用重发。PyPI 不允许覆盖同版本。
 
 ## 怎么发
 
 ```bash
 # 1. bump：workspace version 在根 Cargo.toml 的 [workspace.package]
-git commit -am "release: v0.1.0"
+git commit -am "release: v0.3.0"
 git push origin master
 # 2. tag
-git tag -a v0.1.0 -m "kern v0.1.0" && git push origin v0.1.0
+git tag -a v0.3.0 -m "kern v0.3.0" && git push origin v0.3.0
 # 3. 看 Actions 的 Release 跑绿
 gh run watch
 ```
@@ -70,16 +84,21 @@ GitHub runner 没有 GPU，流水线只能证明 binary 起得来。release 发�
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 kern --version                  # commit 与 tag 一致，cuda 13.0
-cd ~/kern-1 && kern test qwen3-4b   # 最后一行 PASS
+cd <kern checkout> && kern test qwen3-4b   # 最后一行 PASS
+pip install kern-llm==0.3.0 && python -c 'import kern; print(kern.__version__)'   # 引擎的 venv 里
 ```
 
-三行都过，release 才算发完。不过就删掉 release 与 tag 重发，0.x 不做 hotfix 版本：
+再在引擎里过一遍 conc1：[vllm.md](vllm.md) 与 [sglang.md](sglang.md) 开头那条命令起
+Qwen3.8-27B，greedy 输出与 `kern run` 逐 token 相同。都过，release 才算发完。
+
+不过时：PyPI 上的版本号用过就不能再传，所以不是删了重发，而是 yank 掉 PyPI 上那一版、
+删掉 GitHub release 与 tag，修好后 bump 一个 patch 版本再发：
 
 ```bash
-gh release delete v0.1.0 --yes --cleanup-tag
+gh release delete v0.3.0 --yes --cleanup-tag   # PyPI 那版在 pypi.org 的项目页 yank
 ```
 
 ## 不做的
 
-macOS、Windows、musl（静态 musl 的 dlopen 不能用）、老 glibc、Homebrew、PyPI、
+macOS、Windows、musl（静态 musl 的 dlopen 不能用）、老 glibc、Homebrew、sdist、
 docker 镜像。

@@ -1,12 +1,13 @@
 name: Release
 
 # A tag `vX.Y.Z` on master builds `kern` and `kern-serve` for Linux x86_64
-# and aarch64 on Ubuntu 24.04, proves each binary starts there without a
-# CUDA toolkit, and publishes a GitHub release with the archives, one
-# SHA256SUMS, the installer, and build provenance. The target is a Linux
-# CUDA box, nothing older than the runner's glibc. A pull request that
-# touches this pipeline runs the build and packaging, never the publish.
-# The GPU gate is manual and comes after: docs/release.md.
+# and aarch64 on Ubuntu 24.04 and the `kern-llm` wheel (abi3, manylinux
+# 2.28) for both, proves each starts there without a CUDA toolkit, and
+# publishes a GitHub release with the archives, the wheels, one SHA256SUMS,
+# the installer and build provenance, then the wheels to PyPI. A pull
+# request that touches this pipeline or kern-py runs the builds and
+# checks, never the publish. The GPU gate is manual and comes after:
+# docs/release.md.
 
 on:
   push:
@@ -15,6 +16,7 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - "scripts/**"
+      - "crates/kern-py/**"
   workflow_dispatch:
 
 permissions:
@@ -70,10 +72,52 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  wheel:
+    name: Wheel ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/kern-py
+          manylinux: "2_28"
+          maturin-version: v1.14.1
+          args: --release --locked --out ../../wheels
+
+      - name: Check
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          fi
+          scripts/check_wheel.sh "$version" wheels/*.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.arch }}
+          path: wheels/*.whl
+          if-no-files-found: error
+          retention-days: 3
+
   publish:
     name: Publish
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, wheel]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -87,7 +131,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: kern-*
+          pattern: "*"
           path: dist
           merge-multiple: true
 
@@ -97,13 +141,16 @@ jobs:
           cd dist
           cat ./*.sha256 >SHA256SUMS
           rm ./*.sha256
+          sha256sum *.whl >>SHA256SUMS
           cp ../scripts/install.sh install.sh
           sha256sum -c SHA256SUMS
           ls -la
 
       - uses: actions/attest-build-provenance@v3
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.whl
 
       - name: Create release
         env:
@@ -123,6 +170,10 @@ jobs:
           Install the latest release, or this one with \`KERN_VERSION=$GITHUB_REF_NAME\`:
 
               curl -fsSL https://kern-baa.pages.dev/install.sh | sh
+
+          The Python runtime and the vLLM and SGLang plugins, for Python 3.10 or newer:
+
+              pip install kern-llm==$VERSION
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
@@ -130,3 +181,21 @@ jobs:
             --title "kern $VERSION" \
             --notes-file notes.md \
             --generate-notes
+
+  pypi:
+    name: PyPI
+    if: github.ref_type == 'tag'
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: wheels
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels/
+          password: ${{ secrets.PYPI_API_TOKEN }}
