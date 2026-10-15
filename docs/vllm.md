@@ -9,8 +9,7 @@ and the profiler endpoint. kern runs the forward pass on memory that vLLM
 allocates.
 
 ```bash
-(cd crates/kern-py && maturin build --release) && pip install target/wheels/kern-*.whl
-pip install python/kern_vllm
+pip install kern-llm
 hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
 KERN_MANIFEST=kern-qwen38/manifests/qwen3.8-27b-vllm.json KERN_KERNELS=kern-qwen38/cubins \
 vllm serve Qwen/Qwen3.8-27B --hf-overrides '{"architectures": ["KernForCausalLM"]}' \
@@ -335,7 +334,7 @@ are published with the model's other artifacts in the HF repo
 strides, the conv kernel, the gemm16 issue) are in
 [qwen38-vllm.md](qwen38-vllm.md).
 
-### The vLLM plugin: `python/kern_vllm`
+### The vLLM plugin: `kern_vllm`
 
 A `vllm.general_plugins` entry point registers the architecture
 `KernForCausalLM`, selected with
@@ -544,5 +543,5 @@ Scripts, logs and both tables: `~/bench_results/2026-10-13-kern-vllm-k3-ab`.
   `positions`, `slot_mapping`, `seq_lens`, `cu_seqlens_q`, `block_table`,
   `hidden`, `head_in`, `logits`; the line table by its domain) and programs
   likewise (`prefill`, `decode_batch`, `head`), as documented at the top of
-  `python/kern_vllm/kern_vllm/model.py`. Another model needs a transform that
+  `crates/kern-py/python/kern_vllm/model.py`. Another model needs a transform that
   produces the same contract.

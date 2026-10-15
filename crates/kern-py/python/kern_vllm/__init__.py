@@ -5,7 +5,7 @@ cache memory, the input buffers, the CUDA graphs, sampling. kern replaces
 the model: its forward is one or more programs of a manifest whose states
 are host states, bound to the pages vLLM allocated for each layer.
 
-    pip install kern kern-vllm
+    pip install kern-llm
     KERN_MANIFEST=<manifest.json> KERN_KERNELS=<cubin dir> \\
       vllm serve <checkpoint> --hf-overrides '{"architectures": ["KernForCausalLM"]}' ...
 

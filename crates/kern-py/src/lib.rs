@@ -4,7 +4,7 @@
 //! buffers, host states, programs, vars — so it is the same for every host.
 //! What a particular engine calls its KV cache, its block table or its
 //! stream lives in that engine's adapter, in Python, next to the engine it
-//! tracks (`python/kern_vllm` for vLLM): an engine that changes its
+//! tracks (`kern_vllm` for vLLM): an engine that changes its
 //! internals changes the adapter, never this crate.
 //!
 //! The host reads the verified manifest as JSON ([`Runtime::manifest`]) to

@@ -3,10 +3,30 @@ requires = ["maturin>=1.8,<2"]
 build-backend = "maturin"
 
 [project]
-name = "kern"
+name = "kern-llm"
+description = "The kern runtime for Python, and the plugins that run a kern manifest as a vLLM or SGLang model"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
 dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA :: 13",
+]
+
+[project.urls]
+Source = "https://github.com/pegainfer-project/kern"
+Documentation = "https://kern-baa.pages.dev"
+
+[project.entry-points."vllm.general_plugins"]
+kern = "kern_vllm:register"
+
+[project.entry-points."sglang.srt.plugins"]
+kern = "kern_sglang:register"
 
 [tool.maturin]
 module-name = "kern._kern"
 python-source = "python"
+python-packages = ["kern_vllm", "kern_sglang"]

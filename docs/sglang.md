@@ -9,8 +9,7 @@ radix cache, the KV and recurrent-state pools, CUDA graphs, sampling and the
 API. kern runs the forward pass on the tensors SGLang allocates.
 
 ```bash
-(cd crates/kern-py && maturin build --release) && pip install target/wheels/kern-*.whl
-pip install python/kern_sglang
+pip install kern-llm
 hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
 KERN_MANIFEST=kern-qwen38/manifests/qwen3.8-27b-rsi-sglang.json KERN_KERNELS=kern-qwen38/cubins \
 sglang serve --model-path Qwen/Qwen3.8-27B \
@@ -66,7 +65,7 @@ function can do anything; kern's puts its class into the model registry
 under the checkpoint's architecture:
 
 ```python
-# python/kern_sglang/kern_sglang/__init__.py
+# crates/kern-py/python/kern_sglang/__init__.py
 def register() -> None:
     if not os.environ.get("KERN_MANIFEST"):
         return
@@ -187,7 +186,7 @@ repo [`Pegainfer/kern-qwen38-sm103`](https://huggingface.co/Pegainfer/kern-qwen3
 `qwen3.8-27b-sglang.json` from the examples base, `qwen3.8-27b-rsi-sglang.json`
 from the loop's, next to its vLLM twin `qwen3.8-27b-rsi-vllm.json`.
 
-### The plugin: `python/kern_sglang`
+### The plugin: `kern_sglang`
 
 The model class does five things:
 
@@ -340,5 +339,5 @@ Scripts, logs and the gate and A/B tables:
   metadata and `track_mamba_states_all_layers` from SGLang's modules, so an
   SGLang bump is checked against the stub probe and the gates above.
 - **Named contract.** As under vLLM, the adapter finds inputs and programs
-  by name, documented at the top of `python/kern_sglang/kern_sglang/model.py`.
+  by name, documented at the top of `crates/kern-py/python/kern_sglang/model.py`.
   Another model needs a transform that produces the same contract.

@@ -263,14 +263,13 @@ cargo build --release
 Inside vLLM, the manifest is the model and vLLM keeps everything else:
 
 ```bash
-(cd crates/kern-py && maturin build --release) && pip install target/wheels/kern-*.whl
-pip install python/kern_vllm
+pip install kern-llm
 hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
 KERN_MANIFEST=kern-qwen38/manifests/qwen3.8-27b-vllm.json KERN_KERNELS=kern-qwen38/cubins \
 vllm serve Qwen/Qwen3.8-27B --hf-overrides '{"architectures": ["KernForCausalLM"]}'
 ```
 
-SGLang works the same way through `python/kern_sglang`: [docs/sglang.md](docs/sglang.md).
+SGLang works the same way through `kern_sglang`, in the same package: [docs/sglang.md](docs/sglang.md).
 `kern <cmd> --help` lists the flags; `crates/kern-run/src/config.rs`
 documents `kern.toml`.
 
@@ -298,7 +297,7 @@ golden-checked in CI:
 | `crates/kern-test` | The `kern test` harness: diff, tap, noise floor, fuzz, perf, verdict (pure, no CUDA) |
 | `crates/kern-run` | The `kern` binary: `run`, `test`, `bench`, `server`, `verify`, `cut`, `kernels` |
 | `crates/kern-serve` | Continuous batching and the OpenAI-compatible endpoint |
-| `crates/kern-py`, `python/` | `import kern`, and the vLLM and SGLang plugins |
+| `crates/kern-py` | `pip install kern-llm`: `import kern`, and the vLLM and SGLang plugins |
 | `tools/` | Capture, kernel mining, manifest generators: all model knowledge lives here |
 | `examples/` | Generated manifests, the artifact a provider ships |
 

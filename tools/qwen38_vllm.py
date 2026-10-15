@@ -1,7 +1,7 @@
 """The Qwen3.8-27B manifest on vLLM's memory.
 
 Rewrites `examples/qwen3.8-27b.json` into a manifest a vLLM model runner
-drives (`python/kern_vllm`): the KV cache and the GDN states become host
+drives (`kern_vllm`): the KV cache and the GDN states become host
 states, one per layer, laid out the way vLLM's hybrid allocator lays them
 out, and the programs stop at the hidden states, since vLLM samples. The
 tables index them as vLLM's ids do: 64-token blocks of every attention

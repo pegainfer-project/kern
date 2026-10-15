@@ -1,7 +1,7 @@
 """The Qwen3.8-27B manifest on SGLang's memory.
 
 Rewrites `examples/qwen3.8-27b.json`, or a manifest derived from it (the
-vLLM optimization loop's), into a manifest an SGLang model runner drives (`python/kern_sglang`), as `qwen38_vllm.py` does for vLLM:
+vLLM optimization loop's), into a manifest an SGLang model runner drives (`kern_sglang`), as `qwen38_vllm.py` does for vLLM:
 the same programs (prefill, decode_batch, head, stopping at the hidden
 states), over SGLang's pools instead of vLLM's pages.
 

@@ -5,7 +5,7 @@ recurrent-state pools, the CUDA graphs, sampling. kern replaces the model:
 its forward is one or more programs of a manifest whose states are host
 states, bound to the tensors SGLang allocated for each layer.
 
-    pip install kern kern-sglang
+    pip install kern-llm
     KERN_MANIFEST=<manifest.json> KERN_KERNELS=<cubin dir> \\
       sglang serve --model-path <checkpoint> --page-size 64 --attention-backend trtllm_mha \\
         --mamba-radix-cache-strategy extra_buffer --disable-prefill-cuda-graph ...
