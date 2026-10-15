@@ -60,7 +60,7 @@ from torch import nn
 
 import kern
 from kern import group
-from kern.host import host_region, region, resolve
+from kern.host import checkpoint, host_region, region, resolve
 from sglang.kernels.ops.mamba.mamba_state_scatter_triton import track_mamba_states_all_layers
 from sglang.srt.distributed import get_tp_group
 from sglang.srt.layers.logits_processor import LogitsProcessor, get_in_autotune_dummy_run
@@ -145,7 +145,8 @@ class KernForCausalLM(nn.Module):
         self.config = config.get_text_config()
         self.group = get_tp_group().cpu_group if m.get("topology") else None
         self.rt = kern.Runtime(os.environ["KERN_MANIFEST"], os.environ["KERN_KERNELS"],
-                               [config._name_or_path], torch.cuda.current_device(),
+                               [checkpoint(config._name_or_path, getattr(config, "_commit_hash", None))],
+                               torch.cuda.current_device(),
                                None if self.group is None else group.topology(m, self.group))
         if self.group is not None:
             group.connect(self.rt, m, self.group)

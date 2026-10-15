@@ -51,7 +51,7 @@ from torch import nn
 
 import kern
 from kern import group
-from kern.host import DTYPES, host_region, region, resolve
+from kern.host import DTYPES, checkpoint, host_region, region, resolve
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.distributed import get_tp_group, tensor_model_parallel_all_gather
 from vllm.forward_context import get_forward_context
@@ -183,7 +183,8 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         self.m = m
         self.group = get_tp_group().cpu_group if m.get("topology") else None
         self.rt = kern.Runtime(os.environ["KERN_MANIFEST"], os.environ["KERN_KERNELS"],
-                               [vllm_config.model_config.model], torch.cuda.current_device(),
+                               [checkpoint(vllm_config.model_config.model, vllm_config.model_config.revision)],
+                               torch.cuda.current_device(),
                                None if self.group is None else group.topology(m, self.group))
         if self.group is not None:
             group.connect(self.rt, m, self.group)
