@@ -137,6 +137,15 @@ struct Finish {
     handoff: bool,
 }
 
+impl Finish {
+    /// Complete a request on P, preserving why its first token stopped it.
+    fn notes(&self, tok: u32) -> [Note; 2] {
+        let cause = self.stop.classify(tok, |_| false);
+        let why = if cause.is_some() { FinishReason::Stop } else { FinishReason::Length };
+        [Note::Emit { id: self.id, tok }, Note::Finish { id: self.id, why, cause }]
+    }
+}
+
 /// What reaches the head from the stages, the decode tier and the front.
 enum Event {
     /// The last stage's tokens for the oldest item in flight.
@@ -909,9 +918,9 @@ impl PpHead {
                 self.note(Note::Retire(r.id))?;
                 continue;
             }
-            let why = if r.stop.classify(tok, |_| false).is_some() { FinishReason::Stop } else { FinishReason::Length };
-            self.note(Note::Emit { id: r.id, tok })?;
-            self.note(Note::Finish { id: r.id, why, cause: None })?;
+            for note in r.notes(tok) {
+                self.note(note)?;
+            }
         }
         Ok(())
     }
@@ -928,5 +937,105 @@ impl PpHead {
             self.apply(outs)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pegainfer_frontend::engine::{spawn_scheduler, EosPolicy, Request, StopCause, Terminal};
+    use pegainfer_frontend::sampler::SamplingParams;
+
+    /// Exercise the actual head completion notes through Front and the ledger,
+    /// without loading a model. The bridge appends a compatibility EOS for a
+    /// Stop terminal without a typed cause; losing that cause is observable on
+    /// this stream even though its token/count fields still say one token.
+    fn first_token(stop: StopPolicy, tok: u32) -> (Vec<u32>, Terminal) {
+        let (notes, incoming) = mpsc::channel();
+        let head = move |call| {
+            let Call::Submit(q) = call else { return Ok(()) };
+            notes.send(Note::Admit { id: q.id, cached: 0 })?;
+            let done = Finish { at: 0, id: q.id, stop: q.request.stop_policy, handoff: false };
+            for note in done.notes(tok) {
+                notes.send(note)?;
+            }
+            Ok(())
+        };
+        let mut live = spawn_scheduler("first-token-stop", Front::new(incoming, head, 1));
+        let mut steps = live.handle.take_steps().unwrap();
+        let control = live.handle.submit(Request {
+            prompt_tokens: vec![3; 16],
+            params: SamplingParams::default(),
+            history_tokens: None,
+            stop_policy: stop,
+            max_tokens: 1,
+            lora_adapter: None,
+            kv_transfer_params: None,
+            logprobs: None,
+            prompt_logprobs: None,
+            trace_parent: None,
+            client_label: None,
+        });
+        let mut tokens = Vec::new();
+        let mut terminal = None;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while terminal.is_none() && Instant::now() < deadline {
+            if let Ok(step) = steps.try_recv() {
+                for update in step.updates {
+                    assert_eq!(update.id, control.id());
+                    tokens.extend(update.tokens);
+                    if let Some(end) = update.terminal {
+                        assert!(terminal.replace(end).is_none(), "duplicate terminal");
+                    }
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let terminal = terminal.expect("first-token terminal before deadline");
+        drop(live.handle);
+        live.join.join().unwrap();
+        for step in std::iter::from_fn(|| steps.try_recv().ok()) {
+            assert!(step.updates.is_empty(), "output after terminal");
+        }
+        (tokens, terminal)
+    }
+
+    #[test]
+    fn first_token_stop_cause_survives_the_front_stream() {
+        // EOS wins over an explicit stop for the same token; an explicit stop
+        // remains active when EOS is ignored.
+        let cases = [
+            (EosPolicy::Token(2), vec![2, 43], 2, FinishReason::Stop, Some(StopCause::Eos(2))),
+            (EosPolicy::Token(2), vec![43], 43, FinishReason::Stop, Some(StopCause::Token(43))),
+            (EosPolicy::Ignore, vec![43], 43, FinishReason::Stop, Some(StopCause::Token(43))),
+        ];
+        for (eos, stops, tok, reason, stop_cause) in cases {
+            let (tokens, terminal) = first_token(StopPolicy::new(eos, stops), tok);
+            assert_eq!(tokens, vec![tok]);
+            assert!(
+                matches!(terminal, Terminal::Finished {
+                    reason: got_reason, stop_cause: got_cause, prompt_tokens: 16, completion_tokens: 1,
+                } if got_reason == reason && got_cause == stop_cause),
+                "first token {tok}: {terminal:?}, expected {reason:?}/{stop_cause:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_token_non_stop_still_finishes_by_length() {
+        for (eos, tok) in [(EosPolicy::Token(2), 7), (EosPolicy::Ignore, 2)] {
+            let (tokens, terminal) = first_token(StopPolicy::new(eos, vec![43]), tok);
+            assert_eq!(tokens, vec![tok]);
+            assert!(matches!(
+                terminal,
+                Terminal::Finished {
+                    reason: FinishReason::Length,
+                    stop_cause: None,
+                    prompt_tokens: 16,
+                    completion_tokens: 1,
+                }
+            ));
+        }
     }
 }
