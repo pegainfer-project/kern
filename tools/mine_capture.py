@@ -213,14 +213,30 @@ def le_int(hexstr):
 
 
 def analyze_sites(forwards, tokens_per_forward):
-    """按 (symbol, 窗口内出现序号) 对齐 call site，跨 forward 收集
-    grid / 标量 / 指针样本。出现次数跨 forward 不一致的符号对齐不了，
-    单独报告。"""
-    # sym -> forward idx -> [recs in order]
+    """Align call sites by (symbol and parameter count, occurrence in the
+    window) and collect grid, scalar and pointer samples across forwards. A
+    site whose occurrence count differs across forwards cannot be aligned
+    and is reported separately."""
+    # Triton's constexpr specializations compile one symbol into instances
+    # with different ABIs; aligned together, one's params would be read at
+    # indices the other does not have.
+    def n_params(r):
+        return len(r["params"]) if isinstance(r.get("params"), list) else None
+
+    abis = collections.defaultdict(set)
+    for _, f in forwards:
+        for r in f:
+            abis[r["symbol"]].add(n_params(r))
+
+    def key(r):
+        s = r["symbol"]
+        return s if len(abis[s]) == 1 else "%s [%s params]" % (s, n_params(r))
+
+    # site key -> forward idx -> [recs in order]
     occ = collections.defaultdict(lambda: collections.defaultdict(list))
     for fi, (_, f) in enumerate(forwards):
         for r in f:
-            occ[r["symbol"]][fi].append(r)
+            occ[key(r)][fi].append(r)
 
     # 按众数出现次数对齐：切分边界有 ±1 launch 抖动、prefill/decode 序列
     # 也不同，某符号次数非众数的 forward 只对该符号剔除，不整体作废。
