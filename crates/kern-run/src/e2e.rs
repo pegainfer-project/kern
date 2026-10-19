@@ -72,8 +72,8 @@ struct RecordOpts {
     /// Sampler seed; a draw depends on the seed, the row and the step alone
     #[arg(long)]
     seed: u64,
-    /// Output tokens a row samples at most
-    #[arg(long)]
+    /// Output tokens a row samples at most; it stops earlier at a stop token
+    #[arg(long, default_value_t = 16 << 10)]
     max_new: usize,
     /// Where the recording is written
     #[arg(long)]

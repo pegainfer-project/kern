@@ -68,7 +68,8 @@ record 用 kern-serve 那条路渲染：OpenAI JSON → vLLM 的 `ChatRequest` �
 
 record 走同一条循环，只差下一个 token 的来历：按 `--temperature` 在 host 上从这一步的
 分布里采样（`--temperature 0` 即 argmax），随机数只取决于 `(seed, 行号, 步数)`，批次
-怎么组只经由 logits 影响采到的 token；采到 checkpoint 声明的 eos 或到 `--max-new` 停。
+怎么组只经由 logits 影响采到的 token；采到 checkpoint 声明的 eos 或到 `--max-new`（缺省
+16384）停。lease 按上限一次拿足，上限越大同时在场的行越少。
 
 ### plan：怎么组批
 
@@ -146,7 +147,7 @@ schema）。
 ```bash
 kern test e2e-logits record \
   --manifest base.json --kernels kernels/ --weights <checkpoint dir> \
-  --questions standard.parquet --temperature 1.0 --seed 0 --max-new 512 \
+  --questions standard.parquet --temperature 1.0 --seed 0 [--max-new 512] \
   --out base-standard.parquet
 
 kern test e2e-logits \
