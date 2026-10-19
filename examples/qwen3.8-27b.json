@@ -10802,10 +10802,6 @@
    "source": "gdn_decode.cubin",
    "sha256": "1b6df2741965395d1e120c0af12e6c29fddfb26079fa2bd783c20f4b332c54ae"
   },
-  "gemm16": {
-   "source": "gemm16.cubin",
-   "sha256": "01b1c8b227ce191d1f596d055e0f0d5a71666d8ad28cdb12cf7da97d57557f32"
-  },
   "gemma_rms_norm": {
    "source": "gemma_rms_norm.cubin",
    "sha256": "92dda85393585c4cf61f05b425e1aa5a6f85204bde3bb2df1b5631d4dde6111f"
@@ -13707,488 +13703,6 @@
        },
        {
         "i64": 512
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm16_qkv": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "scratch": {
-     "partials": {
-      "dtype": "f32",
-      "shape": [
-       16,
-       14336
-      ]
-     },
-     "arrivals": {
-      "dtype": "i32",
-      "shape": [
-       224
-      ]
-     }
-    },
-    "launches": [
-     {
-      "module": "gemm16",
-      "entry": "kern_gemm16_s8_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "out buffer<f32>",
-       "out buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       224,
-       1,
-       1
-      ],
-      "shared_mem": 82944,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "scratch": "partials"
-       },
-       {
-        "scratch": "arrivals"
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 14336
-       },
-       {
-        "i32": 5120
-       },
-       {
-        "i32": 2
-       },
-       {
-        "i32": 2
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm16_out": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "scratch": {
-     "partials": {
-      "dtype": "f32",
-      "shape": [
-       80,
-       5120
-      ]
-     },
-     "arrivals": {
-      "dtype": "i32",
-      "shape": [
-       80
-      ]
-     }
-    },
-    "launches": [
-     {
-      "module": "gemm16",
-      "entry": "kern_gemm16_s6_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "out buffer<f32>",
-       "out buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       80,
-       5,
-       1
-      ],
-      "shared_mem": 62464,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "scratch": "partials"
-       },
-       {
-        "scratch": "arrivals"
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 5120
-       },
-       {
-        "i32": 6144
-       },
-       {
-        "i32": 5
-       },
-       {
-        "i32": 5
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm16_o": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "scratch": {
-     "partials": {
-      "dtype": "f32",
-      "shape": [
-       80,
-       5120
-      ]
-     },
-     "arrivals": {
-      "dtype": "i32",
-      "shape": [
-       80
-      ]
-     }
-    },
-    "launches": [
-     {
-      "module": "gemm16",
-      "entry": "kern_gemm16_s6_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "out buffer<f32>",
-       "out buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       80,
-       5,
-       1
-      ],
-      "shared_mem": 62464,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "scratch": "partials"
-       },
-       {
-        "scratch": "arrivals"
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 5120
-       },
-       {
-        "i32": 6144
-       },
-       {
-        "i32": 5
-       },
-       {
-        "i32": 5
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm16_lm_head": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "scratch": {
-     "partials": {
-      "dtype": "f32",
-      "shape": [
-       16,
-       248320
-      ]
-     },
-     "arrivals": {
-      "dtype": "i32",
-      "shape": [
-       3880
-      ]
-     }
-    },
-    "launches": [
-     {
-      "module": "gemm16",
-      "entry": "kern_gemm16_s6_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "out buffer<f32>",
-       "out buffer<i32>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       3880,
-       1,
-       1
-      ],
-      "shared_mem": 62464,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "scratch": "partials"
-       },
-       {
-        "scratch": "arrivals"
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 248320
-       },
-       {
-        "i32": 5120
-       },
-       {
-        "i32": 1
-       },
-       {
-        "i32": 1
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm16_in_proj": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "gemm16",
-      "entry": "kern_gemm16_dual_s8_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       128,
-       1,
-       1
-      ],
-      "grid": [
-       258,
-       1,
-       1
-      ],
-      "shared_mem": 82944,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 3
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 4
-       },
-       {
-        "param": 5
-       },
-       {
-        "i32": 16384
-       },
-       {
-        "i32": 96
-       },
-       {
-        "i32": 5120
-       },
-       {
-        "i32": 5
-       },
-       {
-        "i32": 5
-       }
-      ]
-     }
-    ]
-   }
-  },
-  "gemm16_gate_up_silu": {
-   "params": [
-    "in buffer<bf16>",
-    "in buffer<bf16>",
-    "out buffer<bf16>",
-    "i32"
-   ],
-   "impl": {
-    "launches": [
-     {
-      "module": "gemm16",
-      "entry": "kern_gemm16_silu_s4_bf16",
-      "params": [
-       "in buffer<bf16>",
-       "in buffer<bf16>",
-       "out buffer<bf16>",
-       "i32",
-       "i32",
-       "i32"
-      ],
-      "block": [
-       256,
-       1,
-       1
-      ],
-      "grid": [
-       272,
-       1,
-       1
-      ],
-      "shared_mem": 74752,
-      "pdl": true,
-      "args": [
-       {
-        "param": 0
-       },
-       {
-        "param": 1
-       },
-       {
-        "param": 2
-       },
-       {
-        "param": 3
-       },
-       {
-        "i32": 34816
-       },
-       {
-        "i32": 5120
        }
       ]
      }
@@ -56899,8 +56413,8 @@
      ]
     },
     {
-     "label": "l0.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l0.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -56909,16 +56423,40 @@
        "buf": "model.layers.0.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l0.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.0.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -56973,7 +56511,7 @@
     },
     {
      "label": "l0.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -56986,6 +56524,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -57011,8 +56555,8 @@
      ]
     },
     {
-     "label": "l0.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l0.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57021,10 +56565,28 @@
        "buf": "model.layers.0.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l0.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -57074,8 +56636,8 @@
      ]
     },
     {
-     "label": "l1.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l1.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57084,16 +56646,40 @@
        "buf": "model.layers.1.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l1.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.1.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -57150,7 +56736,7 @@
     },
     {
      "label": "l1.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -57163,6 +56749,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -57188,8 +56780,8 @@
      ]
     },
     {
-     "label": "l1.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l1.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57198,10 +56790,28 @@
        "buf": "model.layers.1.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l1.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -57251,8 +56861,8 @@
      ]
     },
     {
-     "label": "l2.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l2.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57261,16 +56871,40 @@
        "buf": "model.layers.2.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l2.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.2.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -57327,7 +56961,7 @@
     },
     {
      "label": "l2.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -57340,6 +56974,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -57365,8 +57005,8 @@
      ]
     },
     {
-     "label": "l2.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l2.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57375,10 +57015,28 @@
        "buf": "model.layers.2.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l2.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -57429,7 +57087,7 @@
     },
     {
      "label": "l3.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57442,6 +57100,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -57539,7 +57203,7 @@
     },
     {
      "label": "l3.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -57552,6 +57216,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -57577,8 +57247,8 @@
      ]
     },
     {
-     "label": "l3.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l3.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57587,10 +57257,28 @@
        "buf": "model.layers.3.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l3.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -57640,8 +57328,8 @@
      ]
     },
     {
-     "label": "l4.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l4.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57650,16 +57338,40 @@
        "buf": "model.layers.4.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l4.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.4.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -57716,7 +57428,7 @@
     },
     {
      "label": "l4.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -57729,6 +57441,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -57754,8 +57472,8 @@
      ]
     },
     {
-     "label": "l4.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l4.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57764,10 +57482,28 @@
        "buf": "model.layers.4.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l4.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -57817,8 +57553,8 @@
      ]
     },
     {
-     "label": "l5.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l5.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57827,16 +57563,40 @@
        "buf": "model.layers.5.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l5.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.5.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -57893,7 +57653,7 @@
     },
     {
      "label": "l5.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -57906,6 +57666,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -57931,8 +57697,8 @@
      ]
     },
     {
-     "label": "l5.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l5.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -57941,10 +57707,28 @@
        "buf": "model.layers.5.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l5.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -57994,8 +57778,8 @@
      ]
     },
     {
-     "label": "l6.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l6.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58004,16 +57788,40 @@
        "buf": "model.layers.6.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l6.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.6.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -58070,7 +57878,7 @@
     },
     {
      "label": "l6.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -58083,6 +57891,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -58108,8 +57922,8 @@
      ]
     },
     {
-     "label": "l6.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l6.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58118,10 +57932,28 @@
        "buf": "model.layers.6.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l6.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -58172,7 +58004,7 @@
     },
     {
      "label": "l7.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58185,6 +58017,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -58282,7 +58120,7 @@
     },
     {
      "label": "l7.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -58295,6 +58133,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -58320,8 +58164,8 @@
      ]
     },
     {
-     "label": "l7.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l7.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58330,10 +58174,28 @@
        "buf": "model.layers.7.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l7.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -58383,8 +58245,8 @@
      ]
     },
     {
-     "label": "l8.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l8.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58393,16 +58255,40 @@
        "buf": "model.layers.8.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l8.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.8.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -58459,7 +58345,7 @@
     },
     {
      "label": "l8.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -58472,6 +58358,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -58497,8 +58389,8 @@
      ]
     },
     {
-     "label": "l8.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l8.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58507,10 +58399,28 @@
        "buf": "model.layers.8.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l8.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -58560,8 +58470,8 @@
      ]
     },
     {
-     "label": "l9.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l9.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58570,16 +58480,40 @@
        "buf": "model.layers.9.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l9.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.9.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -58636,7 +58570,7 @@
     },
     {
      "label": "l9.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -58649,6 +58583,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -58674,8 +58614,8 @@
      ]
     },
     {
-     "label": "l9.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l9.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58684,10 +58624,28 @@
        "buf": "model.layers.9.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l9.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -58737,8 +58695,8 @@
      ]
     },
     {
-     "label": "l10.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l10.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58747,16 +58705,40 @@
        "buf": "model.layers.10.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l10.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.10.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -58813,7 +58795,7 @@
     },
     {
      "label": "l10.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -58826,6 +58808,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -58851,8 +58839,8 @@
      ]
     },
     {
-     "label": "l10.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l10.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58861,10 +58849,28 @@
        "buf": "model.layers.10.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l10.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -58915,7 +58921,7 @@
     },
     {
      "label": "l11.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -58928,6 +58934,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -59025,7 +59037,7 @@
     },
     {
      "label": "l11.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -59038,6 +59050,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -59063,8 +59081,8 @@
      ]
     },
     {
-     "label": "l11.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l11.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59073,10 +59091,28 @@
        "buf": "model.layers.11.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l11.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -59126,8 +59162,8 @@
      ]
     },
     {
-     "label": "l12.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l12.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59136,16 +59172,40 @@
        "buf": "model.layers.12.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l12.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.12.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -59202,7 +59262,7 @@
     },
     {
      "label": "l12.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -59215,6 +59275,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -59240,8 +59306,8 @@
      ]
     },
     {
-     "label": "l12.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l12.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59250,10 +59316,28 @@
        "buf": "model.layers.12.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l12.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -59303,8 +59387,8 @@
      ]
     },
     {
-     "label": "l13.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l13.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59313,16 +59397,40 @@
        "buf": "model.layers.13.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l13.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.13.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -59379,7 +59487,7 @@
     },
     {
      "label": "l13.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -59392,6 +59500,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -59417,8 +59531,8 @@
      ]
     },
     {
-     "label": "l13.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l13.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59427,10 +59541,28 @@
        "buf": "model.layers.13.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l13.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -59480,8 +59612,8 @@
      ]
     },
     {
-     "label": "l14.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l14.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59490,16 +59622,40 @@
        "buf": "model.layers.14.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l14.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.14.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -59556,7 +59712,7 @@
     },
     {
      "label": "l14.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -59569,6 +59725,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -59594,8 +59756,8 @@
      ]
     },
     {
-     "label": "l14.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l14.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59604,10 +59766,28 @@
        "buf": "model.layers.14.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l14.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -59658,7 +59838,7 @@
     },
     {
      "label": "l15.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59671,6 +59851,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -59768,7 +59954,7 @@
     },
     {
      "label": "l15.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -59781,6 +59967,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -59806,8 +59998,8 @@
      ]
     },
     {
-     "label": "l15.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l15.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59816,10 +60008,28 @@
        "buf": "model.layers.15.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l15.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -59869,8 +60079,8 @@
      ]
     },
     {
-     "label": "l16.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l16.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59879,16 +60089,40 @@
        "buf": "model.layers.16.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l16.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.16.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -59945,7 +60179,7 @@
     },
     {
      "label": "l16.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -59958,6 +60192,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -59983,8 +60223,8 @@
      ]
     },
     {
-     "label": "l16.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l16.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -59993,10 +60233,28 @@
        "buf": "model.layers.16.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l16.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -60046,8 +60304,8 @@
      ]
     },
     {
-     "label": "l17.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l17.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60056,16 +60314,40 @@
        "buf": "model.layers.17.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l17.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.17.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -60122,7 +60404,7 @@
     },
     {
      "label": "l17.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -60135,6 +60417,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -60160,8 +60448,8 @@
      ]
     },
     {
-     "label": "l17.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l17.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60170,10 +60458,28 @@
        "buf": "model.layers.17.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l17.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -60223,8 +60529,8 @@
      ]
     },
     {
-     "label": "l18.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l18.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60233,16 +60539,40 @@
        "buf": "model.layers.18.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l18.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.18.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -60299,7 +60629,7 @@
     },
     {
      "label": "l18.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -60312,6 +60642,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -60337,8 +60673,8 @@
      ]
     },
     {
-     "label": "l18.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l18.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60347,10 +60683,28 @@
        "buf": "model.layers.18.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l18.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -60401,7 +60755,7 @@
     },
     {
      "label": "l19.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60414,6 +60768,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -60511,7 +60871,7 @@
     },
     {
      "label": "l19.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -60524,6 +60884,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -60549,8 +60915,8 @@
      ]
     },
     {
-     "label": "l19.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l19.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60559,10 +60925,28 @@
        "buf": "model.layers.19.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l19.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -60612,8 +60996,8 @@
      ]
     },
     {
-     "label": "l20.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l20.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60622,16 +61006,40 @@
        "buf": "model.layers.20.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l20.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.20.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -60688,7 +61096,7 @@
     },
     {
      "label": "l20.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -60701,6 +61109,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -60726,8 +61140,8 @@
      ]
     },
     {
-     "label": "l20.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l20.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60736,10 +61150,28 @@
        "buf": "model.layers.20.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l20.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -60789,8 +61221,8 @@
      ]
     },
     {
-     "label": "l21.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l21.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60799,16 +61231,40 @@
        "buf": "model.layers.21.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l21.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.21.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -60865,7 +61321,7 @@
     },
     {
      "label": "l21.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -60878,6 +61334,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -60903,8 +61365,8 @@
      ]
     },
     {
-     "label": "l21.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l21.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60913,10 +61375,28 @@
        "buf": "model.layers.21.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l21.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -60966,8 +61446,8 @@
      ]
     },
     {
-     "label": "l22.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l22.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -60976,16 +61456,40 @@
        "buf": "model.layers.22.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l22.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.22.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -61042,7 +61546,7 @@
     },
     {
      "label": "l22.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -61055,6 +61559,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -61080,8 +61590,8 @@
      ]
     },
     {
-     "label": "l22.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l22.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61090,10 +61600,28 @@
        "buf": "model.layers.22.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l22.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -61144,7 +61672,7 @@
     },
     {
      "label": "l23.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61157,6 +61685,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -61254,7 +61788,7 @@
     },
     {
      "label": "l23.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -61267,6 +61801,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -61292,8 +61832,8 @@
      ]
     },
     {
-     "label": "l23.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l23.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61302,10 +61842,28 @@
        "buf": "model.layers.23.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l23.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -61355,8 +61913,8 @@
      ]
     },
     {
-     "label": "l24.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l24.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61365,16 +61923,40 @@
        "buf": "model.layers.24.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l24.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.24.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -61431,7 +62013,7 @@
     },
     {
      "label": "l24.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -61444,6 +62026,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -61469,8 +62057,8 @@
      ]
     },
     {
-     "label": "l24.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l24.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61479,10 +62067,28 @@
        "buf": "model.layers.24.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l24.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -61532,8 +62138,8 @@
      ]
     },
     {
-     "label": "l25.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l25.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61542,16 +62148,40 @@
        "buf": "model.layers.25.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l25.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.25.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -61608,7 +62238,7 @@
     },
     {
      "label": "l25.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -61621,6 +62251,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -61646,8 +62282,8 @@
      ]
     },
     {
-     "label": "l25.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l25.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61656,10 +62292,28 @@
        "buf": "model.layers.25.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l25.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -61709,8 +62363,8 @@
      ]
     },
     {
-     "label": "l26.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l26.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61719,16 +62373,40 @@
        "buf": "model.layers.26.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l26.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.26.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -61785,7 +62463,7 @@
     },
     {
      "label": "l26.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -61798,6 +62476,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -61823,8 +62507,8 @@
      ]
     },
     {
-     "label": "l26.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l26.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61833,10 +62517,28 @@
        "buf": "model.layers.26.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l26.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -61887,7 +62589,7 @@
     },
     {
      "label": "l27.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -61900,6 +62602,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -61997,7 +62705,7 @@
     },
     {
      "label": "l27.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -62010,6 +62718,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -62035,8 +62749,8 @@
      ]
     },
     {
-     "label": "l27.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l27.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62045,10 +62759,28 @@
        "buf": "model.layers.27.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l27.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -62098,8 +62830,8 @@
      ]
     },
     {
-     "label": "l28.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l28.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62108,16 +62840,40 @@
        "buf": "model.layers.28.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l28.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.28.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -62174,7 +62930,7 @@
     },
     {
      "label": "l28.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -62187,6 +62943,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -62212,8 +62974,8 @@
      ]
     },
     {
-     "label": "l28.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l28.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62222,10 +62984,28 @@
        "buf": "model.layers.28.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l28.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -62275,8 +63055,8 @@
      ]
     },
     {
-     "label": "l29.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l29.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62285,16 +63065,40 @@
        "buf": "model.layers.29.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l29.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.29.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -62351,7 +63155,7 @@
     },
     {
      "label": "l29.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -62364,6 +63168,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -62389,8 +63199,8 @@
      ]
     },
     {
-     "label": "l29.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l29.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62399,10 +63209,28 @@
        "buf": "model.layers.29.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l29.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -62452,8 +63280,8 @@
      ]
     },
     {
-     "label": "l30.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l30.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62462,16 +63290,40 @@
        "buf": "model.layers.30.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l30.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.30.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -62528,7 +63380,7 @@
     },
     {
      "label": "l30.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -62541,6 +63393,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -62566,8 +63424,8 @@
      ]
     },
     {
-     "label": "l30.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l30.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62576,10 +63434,28 @@
        "buf": "model.layers.30.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l30.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -62630,7 +63506,7 @@
     },
     {
      "label": "l31.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62643,6 +63519,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -62740,7 +63622,7 @@
     },
     {
      "label": "l31.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -62753,6 +63635,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -62778,8 +63666,8 @@
      ]
     },
     {
-     "label": "l31.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l31.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62788,10 +63676,28 @@
        "buf": "model.layers.31.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l31.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -62841,8 +63747,8 @@
      ]
     },
     {
-     "label": "l32.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l32.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62851,16 +63757,40 @@
        "buf": "model.layers.32.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l32.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.32.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -62917,7 +63847,7 @@
     },
     {
      "label": "l32.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -62930,6 +63860,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -62955,8 +63891,8 @@
      ]
     },
     {
-     "label": "l32.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l32.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -62965,10 +63901,28 @@
        "buf": "model.layers.32.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l32.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -63018,8 +63972,8 @@
      ]
     },
     {
-     "label": "l33.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l33.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63028,16 +63982,40 @@
        "buf": "model.layers.33.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l33.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.33.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -63094,7 +64072,7 @@
     },
     {
      "label": "l33.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -63107,6 +64085,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -63132,8 +64116,8 @@
      ]
     },
     {
-     "label": "l33.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l33.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63142,10 +64126,28 @@
        "buf": "model.layers.33.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l33.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -63195,8 +64197,8 @@
      ]
     },
     {
-     "label": "l34.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l34.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63205,16 +64207,40 @@
        "buf": "model.layers.34.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l34.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.34.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -63271,7 +64297,7 @@
     },
     {
      "label": "l34.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -63284,6 +64310,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -63309,8 +64341,8 @@
      ]
     },
     {
-     "label": "l34.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l34.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63319,10 +64351,28 @@
        "buf": "model.layers.34.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l34.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -63373,7 +64423,7 @@
     },
     {
      "label": "l35.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63386,6 +64436,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -63483,7 +64539,7 @@
     },
     {
      "label": "l35.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -63496,6 +64552,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -63521,8 +64583,8 @@
      ]
     },
     {
-     "label": "l35.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l35.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63531,10 +64593,28 @@
        "buf": "model.layers.35.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l35.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -63584,8 +64664,8 @@
      ]
     },
     {
-     "label": "l36.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l36.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63594,16 +64674,40 @@
        "buf": "model.layers.36.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l36.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.36.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -63660,7 +64764,7 @@
     },
     {
      "label": "l36.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -63673,6 +64777,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -63698,8 +64808,8 @@
      ]
     },
     {
-     "label": "l36.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l36.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63708,10 +64818,28 @@
        "buf": "model.layers.36.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l36.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -63761,8 +64889,8 @@
      ]
     },
     {
-     "label": "l37.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l37.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63771,16 +64899,40 @@
        "buf": "model.layers.37.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l37.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.37.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -63837,7 +64989,7 @@
     },
     {
      "label": "l37.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -63850,6 +65002,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -63875,8 +65033,8 @@
      ]
     },
     {
-     "label": "l37.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l37.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63885,10 +65043,28 @@
        "buf": "model.layers.37.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l37.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -63938,8 +65114,8 @@
      ]
     },
     {
-     "label": "l38.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l38.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -63948,16 +65124,40 @@
        "buf": "model.layers.38.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l38.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.38.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -64014,7 +65214,7 @@
     },
     {
      "label": "l38.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -64027,6 +65227,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -64052,8 +65258,8 @@
      ]
     },
     {
-     "label": "l38.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l38.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64062,10 +65268,28 @@
        "buf": "model.layers.38.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l38.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -64116,7 +65340,7 @@
     },
     {
      "label": "l39.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64129,6 +65353,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -64226,7 +65456,7 @@
     },
     {
      "label": "l39.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -64239,6 +65469,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -64264,8 +65500,8 @@
      ]
     },
     {
-     "label": "l39.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l39.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64274,10 +65510,28 @@
        "buf": "model.layers.39.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l39.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -64327,8 +65581,8 @@
      ]
     },
     {
-     "label": "l40.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l40.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64337,16 +65591,40 @@
        "buf": "model.layers.40.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l40.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.40.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -64403,7 +65681,7 @@
     },
     {
      "label": "l40.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -64416,6 +65694,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -64441,8 +65725,8 @@
      ]
     },
     {
-     "label": "l40.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l40.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64451,10 +65735,28 @@
        "buf": "model.layers.40.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l40.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -64504,8 +65806,8 @@
      ]
     },
     {
-     "label": "l41.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l41.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64514,16 +65816,40 @@
        "buf": "model.layers.41.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l41.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.41.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -64580,7 +65906,7 @@
     },
     {
      "label": "l41.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -64593,6 +65919,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -64618,8 +65950,8 @@
      ]
     },
     {
-     "label": "l41.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l41.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64628,10 +65960,28 @@
        "buf": "model.layers.41.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l41.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -64681,8 +66031,8 @@
      ]
     },
     {
-     "label": "l42.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l42.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64691,16 +66041,40 @@
        "buf": "model.layers.42.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l42.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.42.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -64757,7 +66131,7 @@
     },
     {
      "label": "l42.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -64770,6 +66144,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -64795,8 +66175,8 @@
      ]
     },
     {
-     "label": "l42.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l42.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64805,10 +66185,28 @@
        "buf": "model.layers.42.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l42.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -64859,7 +66257,7 @@
     },
     {
      "label": "l43.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -64872,6 +66270,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -64969,7 +66373,7 @@
     },
     {
      "label": "l43.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -64982,6 +66386,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -65007,8 +66417,8 @@
      ]
     },
     {
-     "label": "l43.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l43.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65017,10 +66427,28 @@
        "buf": "model.layers.43.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l43.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -65070,8 +66498,8 @@
      ]
     },
     {
-     "label": "l44.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l44.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65080,16 +66508,40 @@
        "buf": "model.layers.44.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l44.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.44.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -65146,7 +66598,7 @@
     },
     {
      "label": "l44.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -65159,6 +66611,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -65184,8 +66642,8 @@
      ]
     },
     {
-     "label": "l44.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l44.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65194,10 +66652,28 @@
        "buf": "model.layers.44.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l44.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -65247,8 +66723,8 @@
      ]
     },
     {
-     "label": "l45.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l45.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65257,16 +66733,40 @@
        "buf": "model.layers.45.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l45.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.45.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -65323,7 +66823,7 @@
     },
     {
      "label": "l45.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -65336,6 +66836,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -65361,8 +66867,8 @@
      ]
     },
     {
-     "label": "l45.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l45.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65371,10 +66877,28 @@
        "buf": "model.layers.45.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l45.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -65424,8 +66948,8 @@
      ]
     },
     {
-     "label": "l46.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l46.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65434,16 +66958,40 @@
        "buf": "model.layers.46.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l46.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.46.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -65500,7 +67048,7 @@
     },
     {
      "label": "l46.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -65513,6 +67061,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -65538,8 +67092,8 @@
      ]
     },
     {
-     "label": "l46.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l46.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65548,10 +67102,28 @@
        "buf": "model.layers.46.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l46.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -65602,7 +67174,7 @@
     },
     {
      "label": "l47.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65615,6 +67187,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -65712,7 +67290,7 @@
     },
     {
      "label": "l47.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -65725,6 +67303,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -65750,8 +67334,8 @@
      ]
     },
     {
-     "label": "l47.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l47.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65760,10 +67344,28 @@
        "buf": "model.layers.47.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l47.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -65813,8 +67415,8 @@
      ]
     },
     {
-     "label": "l48.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l48.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65823,16 +67425,40 @@
        "buf": "model.layers.48.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l48.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.48.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -65889,7 +67515,7 @@
     },
     {
      "label": "l48.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -65902,6 +67528,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -65927,8 +67559,8 @@
      ]
     },
     {
-     "label": "l48.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l48.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -65937,10 +67569,28 @@
        "buf": "model.layers.48.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l48.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -65990,8 +67640,8 @@
      ]
     },
     {
-     "label": "l49.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l49.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66000,16 +67650,40 @@
        "buf": "model.layers.49.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l49.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.49.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -66066,7 +67740,7 @@
     },
     {
      "label": "l49.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -66079,6 +67753,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -66104,8 +67784,8 @@
      ]
     },
     {
-     "label": "l49.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l49.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66114,10 +67794,28 @@
        "buf": "model.layers.49.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l49.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -66167,8 +67865,8 @@
      ]
     },
     {
-     "label": "l50.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l50.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66177,16 +67875,40 @@
        "buf": "model.layers.50.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l50.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.50.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -66243,7 +67965,7 @@
     },
     {
      "label": "l50.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -66256,6 +67978,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -66281,8 +68009,8 @@
      ]
     },
     {
-     "label": "l50.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l50.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66291,10 +68019,28 @@
        "buf": "model.layers.50.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l50.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -66345,7 +68091,7 @@
     },
     {
      "label": "l51.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66358,6 +68104,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -66455,7 +68207,7 @@
     },
     {
      "label": "l51.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -66468,6 +68220,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -66493,8 +68251,8 @@
      ]
     },
     {
-     "label": "l51.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l51.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66503,10 +68261,28 @@
        "buf": "model.layers.51.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l51.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -66556,8 +68332,8 @@
      ]
     },
     {
-     "label": "l52.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l52.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66566,16 +68342,40 @@
        "buf": "model.layers.52.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l52.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.52.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -66632,7 +68432,7 @@
     },
     {
      "label": "l52.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -66645,6 +68445,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -66670,8 +68476,8 @@
      ]
     },
     {
-     "label": "l52.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l52.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66680,10 +68486,28 @@
        "buf": "model.layers.52.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l52.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -66733,8 +68557,8 @@
      ]
     },
     {
-     "label": "l53.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l53.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66743,16 +68567,40 @@
        "buf": "model.layers.53.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l53.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.53.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -66809,7 +68657,7 @@
     },
     {
      "label": "l53.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -66822,6 +68670,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -66847,8 +68701,8 @@
      ]
     },
     {
-     "label": "l53.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l53.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66857,10 +68711,28 @@
        "buf": "model.layers.53.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l53.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -66910,8 +68782,8 @@
      ]
     },
     {
-     "label": "l54.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l54.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -66920,16 +68792,40 @@
        "buf": "model.layers.54.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l54.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.54.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -66986,7 +68882,7 @@
     },
     {
      "label": "l54.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -66999,6 +68895,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -67024,8 +68926,8 @@
      ]
     },
     {
-     "label": "l54.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l54.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67034,10 +68936,28 @@
        "buf": "model.layers.54.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l54.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -67088,7 +69008,7 @@
     },
     {
      "label": "l55.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67101,6 +69021,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -67198,7 +69124,7 @@
     },
     {
      "label": "l55.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -67211,6 +69137,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -67236,8 +69168,8 @@
      ]
     },
     {
-     "label": "l55.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l55.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67246,10 +69178,28 @@
        "buf": "model.layers.55.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l55.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -67299,8 +69249,8 @@
      ]
     },
     {
-     "label": "l56.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l56.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67309,16 +69259,40 @@
        "buf": "model.layers.56.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l56.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.56.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -67375,7 +69349,7 @@
     },
     {
      "label": "l56.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -67388,6 +69362,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -67413,8 +69393,8 @@
      ]
     },
     {
-     "label": "l56.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l56.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67423,10 +69403,28 @@
        "buf": "model.layers.56.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l56.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -67476,8 +69474,8 @@
      ]
     },
     {
-     "label": "l57.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l57.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67486,16 +69484,40 @@
        "buf": "model.layers.57.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l57.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.57.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -67552,7 +69574,7 @@
     },
     {
      "label": "l57.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -67565,6 +69587,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -67590,8 +69618,8 @@
      ]
     },
     {
-     "label": "l57.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l57.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67600,10 +69628,28 @@
        "buf": "model.layers.57.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l57.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -67653,8 +69699,8 @@
      ]
     },
     {
-     "label": "l58.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l58.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67663,16 +69709,40 @@
        "buf": "model.layers.58.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l58.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.58.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -67729,7 +69799,7 @@
     },
     {
      "label": "l58.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -67742,6 +69812,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -67767,8 +69843,8 @@
      ]
     },
     {
-     "label": "l58.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l58.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67777,10 +69853,28 @@
        "buf": "model.layers.58.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l58.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -67831,7 +69925,7 @@
     },
     {
      "label": "l59.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67844,6 +69938,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -67941,7 +70041,7 @@
     },
     {
      "label": "l59.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -67954,6 +70054,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -67979,8 +70085,8 @@
      ]
     },
     {
-     "label": "l59.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l59.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -67989,10 +70095,28 @@
        "buf": "model.layers.59.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l59.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -68042,8 +70166,8 @@
      ]
     },
     {
-     "label": "l60.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l60.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68052,16 +70176,40 @@
        "buf": "model.layers.60.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l60.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.60.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -68118,7 +70266,7 @@
     },
     {
      "label": "l60.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -68131,6 +70279,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -68156,8 +70310,8 @@
      ]
     },
     {
-     "label": "l60.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l60.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68166,10 +70320,28 @@
        "buf": "model.layers.60.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l60.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -68219,8 +70391,8 @@
      ]
     },
     {
-     "label": "l61.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l61.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68229,16 +70401,40 @@
        "buf": "model.layers.61.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l61.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.61.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -68295,7 +70491,7 @@
     },
     {
      "label": "l61.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -68308,6 +70504,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -68333,8 +70535,8 @@
      ]
     },
     {
-     "label": "l61.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l61.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68343,10 +70545,28 @@
        "buf": "model.layers.61.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l61.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -68396,8 +70616,8 @@
      ]
     },
     {
-     "label": "l62.in_proj_qkvz_ba",
-     "op": "gemm16_in_proj",
+     "label": "l62.in_proj_qkvz",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68406,16 +70626,40 @@
        "buf": "model.layers.62.linear_attn.in_proj_qkvz.weight"
       },
       {
-       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
+       "buf": "qkvz"
       },
       {
-       "buf": "qkvz"
+       "var": "tokens"
+      },
+      {
+       "i32": "GDN_QKVZ_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l62.in_proj_ba",
+     "op": "gemm",
+     "args": [
+      {
+       "buf": "x"
+      },
+      {
+       "buf": "model.layers.62.linear_attn.in_proj_ba.weight"
       },
       {
        "buf": "ba"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GDN_BA_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -68472,7 +70716,7 @@
     },
     {
      "label": "l62.out_proj",
-     "op": "gemm16_out",
+     "op": "gemm",
      "args": [
       {
        "buf": "core_attn_out"
@@ -68485,6 +70729,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "GDN_V_DIM"
       }
      ]
     },
@@ -68510,8 +70760,8 @@
      ]
     },
     {
-     "label": "l62.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l62.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68520,10 +70770,28 @@
        "buf": "model.layers.62.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l62.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -68574,7 +70842,7 @@
     },
     {
      "label": "l63.qkv_proj",
-     "op": "gemm16_qkv",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68587,6 +70855,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "QKV_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },
@@ -68684,7 +70958,7 @@
     },
     {
      "label": "l63.o_proj",
-     "op": "gemm16_o",
+     "op": "gemm",
      "args": [
       {
        "buf": "gated"
@@ -68697,6 +70971,12 @@
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      },
+      {
+       "i32": "Q_DIM"
       }
      ]
     },
@@ -68722,8 +71002,8 @@
      ]
     },
     {
-     "label": "l63.gate_up_silu",
-     "op": "gemm16_gate_up_silu",
+     "label": "l63.gate_up",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68732,10 +71012,28 @@
        "buf": "model.layers.63.mlp.gate_up_proj.weight"
       },
       {
-       "buf": "act"
+       "buf": "gate_up"
       },
       {
        "var": "tokens"
+      },
+      {
+       "i32": "GATE_UP_DIM"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
+      }
+     ]
+    },
+    {
+     "label": "l63.silu_mul",
+     "op": "silu_mul",
+     "args": [
+      {
+       "buf": "act"
+      },
+      {
+       "buf": "gate_up"
       }
      ]
     },
@@ -68786,7 +71084,7 @@
     },
     {
      "label": "lm_head",
-     "op": "gemm16_lm_head",
+     "op": "gemm",
      "args": [
       {
        "buf": "x"
@@ -68799,6 +71097,12 @@
       },
       {
        "var": "seqs"
+      },
+      {
+       "i32": "VOCAB_SIZE"
+      },
+      {
+       "i32": "HIDDEN_SIZE"
       }
      ]
     },

@@ -207,56 +207,12 @@ def attn_splits(m):
     return m
 
 
-# decode_batch GEMMs on the handwritten M <= 16 kernel
-# (tools/kernels-src/gemm16.cu), reading the same row-major weight prefill
-# and the single-sequence decode hand to cuBLAS; in_proj_qkvz + in_proj_ba
-# are the dual launch below. Per shape: (N, K, split-K count at M <= 8 and
-# at M > 8 — cuBLASLt's own choices, which the kernel reproduces bit for bit
-# — and the pipeline depth measured fastest). down_proj (5120 x 17408, 13
-# or 17 splits) stays on cuBLAS: 37.3 vs 33.3 µs standalone.
-GEMM16 = {   # label suffix: (op name, N, K, splits at M <= 8, splits at M > 8, stages, chunks per CTA: "one" or "all")
-    ".qkv_proj": ("gemm16_qkv", QKV_WIDTH, 5120, 2, 2, 8, "all"),
-    ".out_proj": ("gemm16_out", 5120, ATTN_WIDTH, 5, 5, 6, "one"),
-    ".o_proj": ("gemm16_o", 5120, ATTN_WIDTH, 5, 5, 6, "one"),
-    ".gate_up": ("gemm16_gate_up", 2 * MLP_WIDTH, 5120, 1, 1, 8, "one"),
-    "lm_head": ("gemm16_lm_head", 248320, 5120, 1, 1, 6, "one"),
-}
-
-
-def gemm16(m):
-    """decode_batch GEMMs named in GEMM16 run the handwritten kernel."""
-    cubin = index.variant("gemm16").module
-    for suffix, (name, n, k, lo, hi, stages, chunks) in GEMM16.items():
-        smax = max(lo, hi) if chunks == "one" else 1
-        m["ops"][name] = dict(
-            params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
-            impl=dict(
-                scratch={"partials": {"dtype": "f32", "shape": [smax * 16, n]},
-                         "arrivals": {"dtype": "i32", "shape": [n // 64]}},
-                launches=[dict(
-                    **cubin, entry=f"kern_gemm16_s{stages}_bf16",
-                    params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "out buffer<f32>",
-                            "out buffer<i32>", "i32", "i32", "i32", "i32", "i32"],
-                    block=[128, 1, 1], grid=[n // 64, smax, 1], shared_mem=stages * 10240 + 1024,
-                    args=[{"param": 0}, {"param": 1}, {"param": 2}, {"scratch": "partials"}, {"scratch": "arrivals"},
-                          {"param": 3}, {"i32": n}, {"i32": k}, {"i32": lo}, {"i32": hi}])]))
-        for c in m["programs"]["decode_batch"]["calls"]:
-            if not c["op"].startswith("gemm") or not c["label"].endswith(suffix):
-                continue
-            w = c["args"][1]["buf"]
-            assert m["buffers"][w]["shape"] == [n, k], (c["label"], m["buffers"][w]["shape"])
-            c["op"] = name
-            c["args"] = c["args"][:4]  # a, w, c, m; n and k are the op's constants
-    return m
-
-
 # Every launch of these ops executes griddepcontrol.wait before touching
 # what the previous launch produced (the handwritten sources, and the
 # TRTLLM-GEN decode kernel, whose SASS has ACQBULK + PREEXIT), so the
-# runtime may launch them programmatically early: the GEMMs stream their
-# first weight tiles under the previous kernel's tail, the small kernels
-# skip the launch gap. cuBLAS externs and the captured embedding / argmax
-# stay plain launches.
+# runtime may launch them programmatically early and they skip the launch
+# gap. cuBLAS externs and the captured embedding / argmax stay plain
+# launches.
 PDL_OPS = ("gemma_norm", "gemma_fused_norm", "silu_mul", "sigmoid_mul", "gdn_conv", "gdn_step", "attn_prep",
            "attn_batch")
 
@@ -264,77 +220,10 @@ PDL_OPS = ("gemma_norm", "gemma_fused_norm", "silu_mul", "sigmoid_mul", "gdn_con
 def pdl(m):
     """Mark the launches that wait for their predecessor themselves."""
     for name, op in m["ops"].items():
-        if name in PDL_OPS or name.startswith("gemm16"):
+        if name in PDL_OPS:
             for launch in op["impl"]["launches"]:
                 assert "module" in launch or "cubin" in launch, (name, launch)
                 launch["pdl"] = True
-    return m
-
-
-def gemm16_in_proj(m):
-    """decode_batch's in_proj_qkvz + in_proj_ba pairs become one launch of
-    the dual kernel: the 96-row ba weight rides along as two more CTAs of
-    32-row blocks that run its 5 chunks in place (cuBLASLt picks 5 for ba at
-    M = 1 and M = 16)."""
-    cubin = index.variant("gemm16").module
-    n1, n2, k = QKVZ_WIDTH, BA_WIDTH, 5120
-    m["ops"]["gemm16_in_proj"] = dict(
-        params=["in buffer<bf16>", "in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "out buffer<bf16>", "i32"],
-        impl=dict(launches=[dict(
-            **cubin, entry="kern_gemm16_dual_s8_bf16",
-            params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>",
-                    "i32", "i32", "i32", "i32", "i32", "i32"],
-            block=[128, 1, 1], grid=[n1 // 64 + -(-n2 // 64), 1, 1], shared_mem=8 * 10240 + 1024, pdl=True,
-            args=[{"param": 0}, {"param": 1}, {"param": 3}, {"param": 2}, {"param": 4}, {"param": 5},
-                  {"i32": n1}, {"i32": n2}, {"i32": k}, {"i32": 5}, {"i32": 5}])]))
-    calls = m["programs"]["decode_batch"]["calls"]
-    out = []
-    i = 0
-    while i < len(calls):
-        c = calls[i]
-        if c["label"].endswith(".in_proj_qkvz") and i + 1 < len(calls) and calls[i + 1]["label"].endswith(".in_proj_ba"):
-            q, b = c, calls[i + 1]
-            assert q["args"][0] == b["args"][0] and q["args"][3] == b["args"][3], (q["label"], b["label"])
-            w1, w2 = q["args"][1]["buf"], b["args"][1]["buf"]
-            assert m["buffers"][w1]["shape"] == [n1, k] and m["buffers"][w2]["shape"] == [n2, k]
-            out.append(dict(label=q["label"].replace("qkvz", "qkvz_ba"), op="gemm16_in_proj",
-                            args=[q["args"][0], q["args"][1], b["args"][1], q["args"][2], b["args"][2], q["args"][3]]))
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    m["programs"]["decode_batch"]["calls"] = out
-    return m
-
-
-def gemm16_silu(m):
-    """decode_batch's gate_up + silu_mul pairs become one launch of the fused
-    kernel (gemm16.cu, `gemm16_silu`): the up half is rounded to bf16 in
-    shared memory and the gate warps apply silu_mul's exact ops."""
-    cubin = index.variant("gemm16").module
-    n, k = 2 * MLP_WIDTH, 5120
-    m["ops"]["gemm16_gate_up_silu"] = dict(
-        params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32"],
-        impl=dict(launches=[dict(
-            **cubin, entry="kern_gemm16_silu_s4_bf16",
-            params=["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32"],
-            block=[256, 1, 1], grid=[MLP_WIDTH // 64, 1, 1], shared_mem=4 * (2 * 8192 + 2048) + 1024, pdl=True,
-            args=[{"param": 0}, {"param": 1}, {"param": 2}, {"param": 3}, {"i32": n}, {"i32": k}])]))
-    calls = m["programs"]["decode_batch"]["calls"]
-    out = []
-    i = 0
-    while i < len(calls):
-        c = calls[i]
-        if c["op"] == "gemm16_gate_up" and i + 1 < len(calls) and calls[i + 1]["op"] == "silu_mul":
-            gu, si = c, calls[i + 1]
-            assert si["args"][1] == gu["args"][2], (gu["label"], si["label"])
-            out.append(dict(label=gu["label"] + "_silu", op="gemm16_gate_up_silu",
-                            args=[gu["args"][0], gu["args"][1], si["args"][0], gu["args"][3]]))
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    m["programs"]["decode_batch"]["calls"] = out
     return m
 
 
@@ -357,7 +246,6 @@ def prune(m):
 
 
 PASSES = {"gdn": fuse_gdn, "repin": repin_handwritten, "attn": fuse_attn, "elem": elementwise, "splits": attn_splits,
-          "gemm16": gemm16, "in_proj": gemm16_in_proj, "silu": gemm16_silu,
           "pdl": pdl}
 
 

@@ -94,18 +94,12 @@ sha in the generator, sources in the HF repo):
 
 One sequence per call stays bit-identical to the previous manifest.
 
-## gemm16 in `decode_batch`
+## `decode_batch` GEMMs
 
-The base `decode_batch` declares 128 groups (sequences), but its `gemm16_*`
-kernels compute at most 16 rows. Under vLLM a 32-request decode batch produced
-garbage from row 17 on. The hosted manifest replaces them with cuBLASLt `gemm`:
-
-| base | hosted |
-|---|---|
-| `gemm16_in_proj` | two `gemm` |
-| `gemm16_gate_up_silu` | `gemm` + `silu_mul` |
-| `gemm16_qkv`, `gemm16_o`, `gemm16_out` | `gemm` |
-
-gemm16 is bit-identical to cuBLASLt at M ≤ 16, so numerics do not change. The
-base manifest still has the mismatch; whether kern-serve hits it with more
-than 16 concurrent sequences has not been checked.
+`decode_batch` runs every GEMM on cuBLASLt, like `decode`. Until 2026-10-19
+it ran the handwritten `gemm16_*` kernels, which compute at most 16 rows,
+under a program that declares 128 sequences: rows from 17 on came out wrong
+(under vLLM a 32-request batch produced garbage from row 17; e2e_logits
+found the same in the base at 17 sequences). The hosted generator only fuses
+each GDN layer's `in_proj_qkvz` + `in_proj_ba` into one gemm over the
+stacked weight (`one_in_proj`).

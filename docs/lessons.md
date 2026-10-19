@@ -3,6 +3,18 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-10-19，下游绕过去的 bug，源头要么修掉，要么进 roadmap
+
+qwen3.8 的 `decode_batch` 声明最多 128 条序列，里面的 `gemm16_*` 只算 16 行（9 月 8 日起）。
+9 月 26 日做 vLLM 托管版时撞上（32 条的 batch 从第 17 行起出乱码），只在托管版生成器里换回
+cuBLASLt，基线 manifest 原样留着，设计文档里写了一句"kern-serve 会不会踩到没查过"，没进
+roadmap。之后没有任何门禁跑到 bs > 16：`kern test` 只喂一条序列，kern-serve 的门禁是 conc1
+与 `kern run` 一致，plain qwen3.8 只在 `--max-seqs 16` 下测过。三周后 e2e_logits 的 smoke
+（17 条）第一次跑到 b = 17，下标 16 那条 logits 整行是 0。
+
+规则：在下游绕过一个源头的 bug，同一个提交里修源头；修不了就进 `docs/roadmap.md`，设计文档里
+的一句"没查过"不算记下。一个 kernel 只能算 M 行，就别让声明更宽的 program 调它。
+
 ## 2026-10-11，优化一个 kernel 之前，先看上游怎么写
 
 优化 kernel A 之前，先查 FlashInfer / TRT-LLM / vLLM 等是怎么实现类似 kernel 的。

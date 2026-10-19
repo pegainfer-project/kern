@@ -142,25 +142,23 @@ def conv_call(call):
             [{"expr": {"add": ["seqs", 1]}}]}
 
 
-def wide(call):
-    """A gemm16 call (at most 16 rows) as the cuBLASLt gemm it is bit-identical
-    to, so a decode step takes every sequence vLLM batches."""
-    a, rows = call["args"], {"var": "tokens"}
-    gemm = lambda label, x, w, y, n, k: {"label": label, "op": "gemm", "args": [x, w, y, rows, {"i32": n}, {"i32": k}]}
-    layer = call["label"].rsplit(".", 1)[0]
-    match call["op"]:
-        case "gemm16_in_proj":
-            return [gemm(f"{layer}.in_proj_qkvzba", a[0], {"buf": in_proj(layer_of(call))}, {"buf": "qkvzba"},
-                         QKVZBA_WIDTH, HIDDEN)]
-        case "gemm16_gate_up_silu":
-            return [gemm(f"{layer}.gate_up", a[0], a[1], {"buf": "gate_up"}, 2 * MLP_WIDTH, HIDDEN),
-                    {"label": f"{layer}.silu_mul", "op": "silu_mul", "args": [a[2], {"buf": "gate_up"}]}]
-        case "gemm16_qkv":
-            return [gemm(call["label"], a[0], a[1], a[2], 14336, HIDDEN)]
-        case "gemm16_o" | "gemm16_out":
-            return [gemm(call["label"], a[0], a[1], a[2], HIDDEN, 6144)]
-        case _:
-            return [call]
+def one_in_proj(calls):
+    """Each GDN layer's in_proj_qkvz + in_proj_ba gemms as one gemm over the
+    stacked weight into `qkvzba` rows (`fused_in_proj`)."""
+    out = []
+    for c in calls:
+        if c["label"].endswith(".in_proj_ba") and out and out[-1]["label"].endswith(".in_proj_qkvz"):
+            q = out.pop()
+            assert q["args"][0] == c["args"][0] and q["args"][3] == c["args"][3], (q["label"], c["label"])
+            layer = q["label"].rsplit(".", 1)[0]
+            out.append({"label": f"{layer}.in_proj_qkvzba", "op": "gemm", "args": [
+                q["args"][0], {"buf": in_proj(layer_of(q))}, {"buf": "qkvzba"}, q["args"][3],
+                {"i32": QKVZBA_WIDTH}, {"i32": HIDDEN}]})
+        else:
+            out.append(c)
+    fused = [layer_of(c) for c in out if c["label"].endswith(".in_proj_qkvzba")]
+    assert fused == GDN_LAYERS, fused
+    return out
 
 
 def in_proj(layer):
@@ -169,7 +167,7 @@ def in_proj(layer):
 
 def fused_in_proj(m):
     """One weight per GDN layer for qkvz and ba, the four checkpoint tensors
-    stacked. Decode reads it in one gemm into `qkvzba` rows (`wide`), and
+    stacked. Decode reads it in one gemm into `qkvzba` rows (`one_in_proj`), and
     the conv and step kernels take that row stride, `ba` at its column
     16384; a small separate ba gemm is a launch and a tail for 1 MB. Prefill
     keeps its two gemms, over the two row ranges of the same weight."""
@@ -286,11 +284,11 @@ def hosted(m):
         calls = [conv_call(c) if c["op"] == "conv_fwd" else c for c in map(rebind, headless(p["calls"]))]
         return {**p, "calls": calls}
 
+    decode = step(m["programs"]["decode_batch"])
     m["programs"] = {
         "load": m["programs"]["load"],
         "prefill": step(m["programs"]["prefill"]),
-        "decode_batch": {**step(m["programs"]["decode_batch"]), "calls": [
-            c for call in step(m["programs"]["decode_batch"])["calls"] for c in wide(call)]},
+        "decode_batch": {**decode, "calls": one_in_proj(decode["calls"])},
         "head": {"calls": [{"label": "lm_head", "op": "gemm", "args": [
             {"buf": "head_in"}, {"buf": "lm_head.weight"}, {"buf": "logits"},
             {"var": "seqs"}, {"i32": 248320}, {"i32": 5120}]}]},

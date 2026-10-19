@@ -331,7 +331,7 @@ The base manifest stays the source of truth: optimizations go there and the
 hosted one is regenerated. The generated manifest and the one kernel it adds
 are published with the model's other artifacts in the HF repo
 `Pegainfer/kern-qwen38-sm103`, not checked in. The concrete rewrites (offsets,
-strides, the conv kernel, the gemm16 issue) are in
+strides, the conv kernel, the fused in_proj) are in
 [qwen38-vllm.md](qwen38-vllm.md).
 
 ### The vLLM plugin: `kern_vllm`
