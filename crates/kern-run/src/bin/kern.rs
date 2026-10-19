@@ -55,7 +55,10 @@ enum Cmd {
     },
     /// A/B a kernel swap: a target's `reference` (A) against its
     /// `manifest` (B). Exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE
+    #[command(args_conflicts_with_subcommands = true)]
     Test {
+        #[command(subcommand)]
+        suite: Option<Suite>,
         /// Target in kern.toml (needed when it declares several)
         target: Option<String>,
         #[command(flatten)]
@@ -86,6 +89,14 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum Suite {
+    /// A candidate scored along a baseline recording's tokens, judged by
+    /// mean KL. Exit 0 PASS, 1 FAIL, 2 error
+    #[command(name = "e2e-logits")]
+    E2eLogits(Box<kern_run::e2e::E2eOpts>),
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -97,6 +108,13 @@ fn main() -> Result<()> {
         .without_time()
         .init();
     let cli = Cli::parse();
+    if let Cmd::Test { suite: Some(Suite::E2eLogits(o)), .. } = cli.cmd {
+        let code = kern_run::e2e::run(*o).unwrap_or_else(|e| {
+            eprintln!("error: {e:#}");
+            2
+        });
+        std::process::exit(code);
+    }
     let cfg = match &cli.cmd {
         Cmd::Verify { .. } | Cmd::Cut { .. } => None,
         _ => Config::find(cli.config.as_deref())?,
@@ -109,7 +127,7 @@ fn main() -> Result<()> {
             let (_, target) = cfg.one(Some(&target))?;
             kern_run::server::run(target, &args)
         }
-        Cmd::Test { target, mut opts } => {
+        Cmd::Test { target, mut opts, .. } => {
             // `kern test b.json ...`: the positional is the candidate itself
             let target = match target {
                 Some(t) if Path::new(&t).is_file() => {

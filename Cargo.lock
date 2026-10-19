@@ -2264,9 +2264,12 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tokenizers 0.23.2",
+ "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "vllm-chat",
+ "vllm-text",
 ]
 
 [[package]]

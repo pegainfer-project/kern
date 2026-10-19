@@ -25,7 +25,7 @@ use kern_manifest::values;
 use kern_manifest::{Protocol, Verified};
 
 use crate::compare::{coalesce, outside, BufCmp, Cmp, LogitRow};
-use crate::diff::{access, constants, frontier_inputs, live_bytes, row_elems, Diff, Span};
+use crate::diff::{access, constants, frontier_inputs, live_bytes, logits_of, row_elems, Diff, Span};
 use crate::report::{cap, kb, row, Finding, Floor, Noise};
 use crate::workload::{self, Rng, Workload};
 use crate::{At, Options, Side, Vars};
@@ -338,17 +338,6 @@ pub(crate) fn image<S: Side>(c: &mut S, run: &Run<S::Buf>) -> Result<()> {
     Ok(())
 }
 
-/// Buffers a program writes on both sides whose last name segment is
-/// `logits*` (`logits`, `logits_blk`, `decode.target_head.logits`): the
-/// end-to-end oracle.
-fn logits_of(ma: &Manifest, mb: &Manifest, prog: &str) -> Vec<String> {
-    access(ma, prog, 0..ma.programs[prog].calls.len())
-        .writes
-        .into_iter()
-        .filter(|n| n.rsplit('.').next().is_some_and(|last| last.starts_with("logits")) && alike(ma, mb, n))
-        .collect()
-}
-
 /// Two declarations, field for field.
 fn declares_same<T: serde::Serialize>(a: &T, b: &T) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
@@ -369,8 +358,9 @@ fn read_logits<S: Side>(
     e: &Vars,
     label: &str,
 ) -> Result<Vec<LogitsAt<S::Buf>>> {
-    logits_of(ma, mb, prog)
+    logits_of(ma, prog)
         .into_iter()
+        .filter(|n| alike(ma, mb, n))
         .map(|n| {
             let len = live_bytes(ma, &n, e);
             let bufs = (0..c.ranks()).map(|q| Ok((len, c.save(q, &n, 0..len)?))).collect::<Result<_>>()?;

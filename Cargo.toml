@@ -11,9 +11,10 @@ members = [
     "tools/dsv41/attention/ar_trace",
     "tools/dsv41/moe/runtime_replay",
 ]
-# A bare `cargo build` / `test` / `clippy` is the runtime: kern-serve pulls the
-# pegainfer/vLLM serving stack (protoc, libssl, ~500 crates) and the dsv41
-# harnesses need a GPU, so both are built by name. kern-py is a Python
+# A bare `cargo build` / `test` / `clippy` is the runtime and `kern`, whose
+# e2e_logits renders chats through vLLM's renderers (libssl). kern-serve pulls
+# the rest of the pegainfer/vLLM serving stack (protoc, ~500 crates) and the
+# dsv41 harnesses need a GPU, so both are built by name. kern-py is a Python
 # extension, built by maturin where a Python is.
 default-members = ["crates/kern-manifest", "crates/kern-pool", "crates/kern-runtime", "crates/kern-test", "crates/kern-run"]
 
@@ -36,10 +37,12 @@ kern-run = { path = "crates/kern-run" }
 pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "18d0c29df4e9ffcda46c2900c498dc43c0bc6e2e" }
 vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
 vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
+vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
 
 anyhow = "1"
-# Recorded references are ragged tables (a row per token position, list
-# columns for the top-k), which parquet holds and pandas / duckdb read as is.
+# Recordings are ragged tables (a row per conversation, list columns for its
+# tokens and per-position top-k), which parquet holds and pandas / duckdb read
+# as is.
 arrow-array = "=60.0.0"
 arrow-schema = "=60.0.0"
 parquet = { version = "=60.0.0", default-features = false, features = ["arrow", "snap"] }

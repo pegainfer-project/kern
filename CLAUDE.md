@@ -114,6 +114,11 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
   Acceptance is reasonable agreement, not bit-exactness. At a divergence, read
   the top-1 / top-2 margin before calling it a bug; a near-tie that flips is
   kernel noise, a confident token that flips is a bug.
+- `kern test e2e-logits` is the end-to-end numerics gate: `record` samples a
+  baseline from the production manifest over a `Pegainfer/kern-prompts`
+  split, the candidate is teacher-forced along those tokens in batches
+  through its own decode path, and it passes when mean KL(baseline ‖
+  candidate) ≤ `--kl` (design, commands and calibration in `docs/test.md`).
 - `kern test <target>` is one command and, on the qwen3-4b fixture, a 7 s
   PASS: record A, replay B span by span, noise floor, perf, verdict in one
   report, so a kernel swap is never discussed without its report. `kern bench

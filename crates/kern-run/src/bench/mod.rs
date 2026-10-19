@@ -36,7 +36,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Config, Target};
-use crate::{le_bytes_i32, Vars};
+use crate::Vars;
 use workload::{Plan, Scenario, Shape, Workload};
 
 /// The report schema. Readers check it before they read anything else.
@@ -261,29 +261,6 @@ fn signature(m: &Manifest, program: &str, index: usize, vars: &Vars) -> Value {
     json!({"op":c.op,"args":args,"vars":vars})
 }
 
-/// One call staged for `leases`, tables included: a scenario's batch
-/// changes the leases from call to call, so every table is rewritten
-/// with the rows it is about to be read with.
-fn stage(
-    rt: &mut Runtime,
-    p: &Protocol,
-    leases: &[Lease],
-    positions: &[usize],
-    rows: usize,
-    ids: &[i64],
-) -> Result<Vars> {
-    let vars = crate::stage(rt, p, leases, positions, rows, ids)?;
-    for t in &p.page_tables {
-        rt.write_input_at(&t.name, &le_bytes_i32(&crate::page_rows(t, leases, leases.len())?), &vars)?;
-    }
-    // Line tables use their declared maximum column stride, even when
-    // only a prefix of columns is active.
-    for t in &p.line_tables {
-        rt.write_input_at(&t.name, &le_bytes_i32(&crate::line_rows(t, leases, p.groups.max as usize)?), &vars)?;
-    }
-    Ok(vars)
-}
-
 fn corpus(tokenizer: &std::path::Path, seed: u64) -> Result<Vec<i64>> {
     let tok = tokenizers::Tokenizer::from_file(tokenizer).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
     let topics = [
@@ -339,7 +316,7 @@ fn source(rt: &mut Runtime, p: &Protocol, length: usize, corpus: &[i64], seq: us
     let mut pos = 0;
     while pos < length {
         let q = (length - pos).min(p.rows.max as usize);
-        let vars = stage(rt, p, std::slice::from_ref(&lease), &[pos], q, &tokens(corpus, seq, pos, q))?;
+        let vars = crate::stage_batch(rt, p, std::slice::from_ref(&lease), &[pos], q, &tokens(corpus, seq, pos, q))?;
         if !rt.is_captured(&chunk, &vars) {
             rt.capture(&chunk, &vars)?;
         }
@@ -514,7 +491,7 @@ fn measure(
     }
     let input: Vec<i64> =
         shape.context.iter().enumerate().flat_map(|(i, &pos)| tokens(corpus, seq(i), pos, shape.rows)).collect();
-    let vars = stage(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
+    let vars = crate::stage_batch(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
     let program = r.probe.program(&r.rt, &s.program, &vars, samples)?;
     let whole = output_fingerprints(&r.rt, p, shape.groups)?;
     let free = if ablating { ablate(r, &s.program, &vars, samples)? } else { Vec::new() };
@@ -523,7 +500,7 @@ fn measure(
         true => {
             let at = Instant::now();
             // `Probe::program` left the persistent state at its pre-image.
-            stage(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
+            crate::stage_batch(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
             let (cases, of_call) = isolate_calls(&r.rt, &r.probe, &s.program, &vars, samples)
                 .with_context(|| format!("{}: isolating calls", s.id))?;
             let walked = output_fingerprints(&r.rt, p, shape.groups)?;
@@ -663,7 +640,7 @@ impl Bench {
             1 => String::new(),
             n => format!(" · rank {q} slowest of {n}"),
         };
-        timed("program", program_line(&stats(&slow.program.graph_us), calls.len()) + &ranks, started);
+        timed("program", program_line(&stats(&slow.program.graph_us), calls.len()) + ranks.as_str(), started);
         let attributed: Vec<(String, f64)> =
             calls.iter().zip(&slow.program.attributed_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
         let shares = mix(&attributed);

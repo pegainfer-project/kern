@@ -101,6 +101,16 @@ pub struct Access {
     pub state_writes: BTreeSet<String>,
 }
 
+/// Buffers `prog` writes whose last name segment is `logits*` (`logits`,
+/// `logits_blk`, `decode.target_head.logits`): the end-to-end oracle.
+pub fn logits_of(m: &Manifest, prog: &str) -> Vec<String> {
+    access(m, prog, 0..m.programs[prog].calls.len())
+        .writes
+        .into_iter()
+        .filter(|n| n.rsplit('.').next().is_some_and(|last| last.starts_with("logits")))
+        .collect()
+}
+
 /// What a buffer argument stands for: itself, or for a `peer` buffer the
 /// exported buffer or state it holds the group's addresses of. A kernel
 /// given the peers reads and writes every rank's copy of the target, this

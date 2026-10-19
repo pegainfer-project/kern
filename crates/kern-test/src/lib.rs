@@ -39,6 +39,9 @@
 //! peers). Recording and comparison are rank-local: rank q of B against
 //! rank q of A, findings named by rank.
 //!
+//! The e2e_logits suite ([`e2e`]) is the other half: a candidate scored
+//! along a baseline recording's own tokens, judged by mean KL.
+//!
 //! The crate knows no CUDA. Logic is `fn(data) -> data` over the manifest
 //! ([`diff`], [`workload`], [`compare`], [`report`]); every effect goes
 //! through [`Side`]. `kern` implements it over the runtime; the crate's
@@ -49,10 +52,10 @@
 
 pub mod compare;
 pub mod diff;
+pub mod e2e;
 mod harness;
 mod replay;
 pub mod report;
-pub mod trace;
 pub mod workload;
 
 use std::collections::BTreeMap;
@@ -175,10 +178,6 @@ pub struct Options {
     /// any logits row, and still PASS with logit evidence; an argmax flip
     /// within it is a tie, one beyond it a FAIL.
     pub logit_kl: f64,
-    /// The recorded-reference judge's limits on the KL distribution over
-    /// every position, median and 99th percentile; `logit_kl` when unset.
-    pub logit_kl_p50: f64,
-    pub logit_kl_p99: f64,
     /// Prefill chunk; 0 = drawn from the seed.
     pub chunk: u64,
     /// Replays for span timing (the minimum is reported).

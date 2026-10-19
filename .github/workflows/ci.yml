@@ -44,8 +44,9 @@ jobs:
 
       - name: Clippy
         # The workspace's default members: the runtime compiles anywhere,
-        # cudarc loads libcuda at run time. kern-serve needs protoc and
-        # libssl-dev and is built by the release pipeline.
+        # cudarc loads libcuda at run time; kern-run needs libssl-dev for
+        # the chat renderers. kern-serve also needs protoc and is built by
+        # the release pipeline.
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test

@@ -4,11 +4,7 @@
 //! the seeded workload recorded on A, replayed on B, noise floor, perf
 //! and the verdict, written over [`kern_test::Side`]. This module
 //! resolves the flags against `kern.toml`, loads A, records, drops A,
-//! loads B, replays; and prints or archives the report. With a recorded
-//! reference (`--reference` naming a parquet file, `kern_test::trace`)
-//! nothing but B is loaded: B is fed the file's corpus and judged
-//! against the distributions on file; `--record` writes B's own into
-//! one. The side is
+//! loads B, replays; and prints or archives the report. The side is
 //! [`Ranks`]: the manifest on one GPU, or on one GPU per rank of its
 //! topology, each rank a [`Caller`] over its own runtime.
 
@@ -25,7 +21,6 @@ use kern_manifest::{Protocol, Verified};
 use kern_runtime::{Capacity, HostWeights, Resident, Runtime, Scratch};
 use kern_test::compare::{Cmp, LogitStats, TOP};
 use kern_test::report::{plural, row, Report, Verdict};
-use kern_test::trace::Trace;
 use kern_test::{At, Options, Side, Vars};
 use serde_json::json;
 
@@ -33,26 +28,12 @@ use serde_json::json;
 /// `[test]` in kern.toml, then from the defaults.
 #[derive(Args, Clone)]
 pub struct TestOpts {
-    /// Reference: manifest A (assumed correct), or a parquet file of
-    /// recorded distributions (`--record`)
+    /// Reference: manifest A (assumed correct)
     #[arg(long)]
     pub reference: Option<PathBuf>,
     /// Candidate manifest B
     #[arg(long)]
     pub manifest: Option<PathBuf>,
-    /// Record B's next-token distributions over a corpus into this
-    /// parquet file, as the producer named after B's file; an existing
-    /// file supplies the corpus and keeps its other producers
-    #[arg(long)]
-    record: Option<PathBuf>,
-    /// The corpus for a new `--record` file: JSON `{"tail": N, "prompts":
-    /// [text, ...]}` (N positions per prompt fed one token at a time),
-    /// tokenized with the target's tokenizer
-    #[arg(long)]
-    corpus: Option<PathBuf>,
-    /// Only the first N prompts of the recorded reference
-    #[arg(long)]
-    prompts: Option<usize>,
     /// Directory of cubins for both manifests; steps resolve by their pinned
     /// sha256, so one dir holds every version (file names are labels)
     #[arg(long)]
@@ -81,14 +62,6 @@ pub struct TestOpts {
     /// flip within it is a tie, one beyond it a FAIL (default 0.01)
     #[arg(long)]
     logit_kl: Option<f64>,
-    /// Against a recorded reference with one producer: the median of KL
-    /// over every position judged may not exceed this, flip or no flip
-    /// (default: --logit-kl, so it never binds)
-    #[arg(long)]
-    logit_kl_p50: Option<f64>,
-    /// Same for the 99th percentile (default: --logit-kl)
-    #[arg(long)]
-    logit_kl_p99: Option<f64>,
     /// CUDA device ordinals, one per rank of the manifest's topology (a
     /// single ordinal starts the ranks there, consecutively); default 0
     #[arg(long, value_delimiter = ',')]
@@ -138,23 +111,14 @@ pub struct TestOpts {
 /// an opinion about.
 struct Opts {
     inputs: Inputs,
-    mode: Mode,
+    reference: PathBuf,
     prompt: Option<String>,
     gpus: Vec<usize>,
-    /// `--capacity` as given; a recorded reference sizes itself.
     capacity: Option<u64>,
     out: Option<PathBuf>,
     diff_only: bool,
     json: bool,
     harness: Options,
-}
-
-/// What B is held against: manifest A live, a recorded reference on
-/// file, or nothing (B records one).
-enum Mode {
-    Ab(PathBuf),
-    Judge { file: PathBuf, prompts: Option<usize> },
-    Record { file: PathBuf, corpus: Option<PathBuf> },
 }
 
 impl TestOpts {
@@ -168,30 +132,18 @@ impl TestOpts {
             ..Default::default()
         };
         let inputs = Inputs::resolve(given, cfg, t)?;
-        let mode = match (self.record, inputs.reference.clone()) {
-            (Some(file), _) => Mode::Record { file, corpus: self.corpus },
-            (None, Some(r)) if Trace::is_parquet(&r) => Mode::Judge { file: r, prompts: self.prompts },
-            (None, Some(a)) => Mode::Ab(a),
-            (None, None) => bail!(
-                "{:#}",
-                crate::inputs::need(cfg, "reference")
-                    .context("kern test needs a reference: manifest A, or a recorded parquet")
-            ),
+        let Some(reference) = inputs.reference.clone() else {
+            bail!("{:#}", crate::inputs::need(cfg, "reference").context("kern test needs a reference: manifest A"))
         };
         let test = cfg.map(|c| &c.test);
         let logit_kl = self.logit_kl.or_else(|| test.and_then(|x| x.logit_kl)).unwrap_or(0.01);
         let harness = Options {
-            a: match &mode {
-                Mode::Ab(a) => a.display().to_string(),
-                Mode::Judge { file, .. } | Mode::Record { file, .. } => file.display().to_string(),
-            },
+            a: reference.display().to_string(),
             b: inputs.manifest.display().to_string(),
             prompt: None,
             prefill: self.prefill,
             decode_steps: self.decode_steps.or_else(|| test.and_then(|x| x.decode_steps)).unwrap_or(32),
             logit_kl,
-            logit_kl_p50: self.logit_kl_p50.or_else(|| test.and_then(|x| x.logit_kl_p50)).unwrap_or(logit_kl),
-            logit_kl_p99: self.logit_kl_p99.or_else(|| test.and_then(|x| x.logit_kl_p99)).unwrap_or(logit_kl),
             chunk: self.chunk,
             iters: self.iters,
             graph_step: !self.no_graph_step,
@@ -202,7 +154,7 @@ impl TestOpts {
             seed: self.seed.or_else(|| test.and_then(|x| x.seed)).unwrap_or(0x5eed),
         };
         Ok(Opts {
-            mode,
+            reference,
             prompt: self.prompt.or_else(|| test.and_then(|x| x.prompt.clone())),
             gpus: match self.gpu.is_empty() {
                 true => vec![inputs.gpu],
@@ -417,15 +369,6 @@ pub fn logit_of(l: kern_runtime::Logit) -> LogitStats {
     )
 }
 
-/// The GPU of each rank: the list as given, or `n` from the one given.
-fn gpus_of(given: &[usize], n: usize) -> Result<Vec<usize>> {
-    match given {
-        [g] => Ok((*g..*g + n).collect()),
-        gs if gs.len() == n => Ok(gs.to_vec()),
-        gs => bail!("the manifest runs as {n} ranks; --gpu names {} devices", gs.len()),
-    }
-}
-
 /// Load the manifest on every rank's GPU, bind each rank's weights (over
 /// what the last side left resident on it, if anything), connect the
 /// peers, run what the manifest runs once.
@@ -436,57 +379,13 @@ fn load_side(
     host_weights: &HostWeights,
     resident: Option<Vec<Resident>>,
 ) -> Result<Ranks> {
-    let n = crate::ranks_of(m)?;
-    let gpus = gpus_of(&o.gpus, n)?;
-    let resident: Vec<Option<Resident>> = match resident {
-        Some(r) if r.len() == n => r.into_iter().map(Some).collect(),
-        Some(r) => bail!("{} ranks left their weights resident; this side runs {n}", r.len()),
-        None => (0..n).map(|_| None).collect(),
-    };
     // The test drives one sequence (`Caller` leases one and writes its
     // lines into every table column), so one slot is all the per-sequence
     // states need. Sizing them for the manifest's whole batch made every
     // whole-state read of a span copy 128 slots: on qwen3.8-27b (154 MB of
     // GDN state per slot) a run grew past 700 GB of host memory.
     let capacity = Capacity { tokens: Some(capacity), seqs: 1, landings: 0 };
-    let loaded: Vec<Result<crate::Sent<Runtime>>> = std::thread::scope(|s| {
-        let handles: Vec<_> = gpus
-            .iter()
-            .zip(resident)
-            .enumerate()
-            .map(|(q, (&gpu, resident))| {
-                let topo = crate::topology_of(m, q);
-                s.spawn(move || -> Result<crate::Sent<Runtime>> {
-                    let topology = m.topology.is_some().then_some(&topo);
-                    let mut rt = match resident {
-                        Some(r) => Runtime::load_over(
-                            m,
-                            o.inputs.kernels.as_deref(),
-                            gpu,
-                            Some(capacity),
-                            topology,
-                            host_weights,
-                            r,
-                        ),
-                        None => Runtime::load_with_host_weights(
-                            m,
-                            o.inputs.kernels.as_deref(),
-                            gpu,
-                            Some(capacity),
-                            topology,
-                            host_weights,
-                        ),
-                    }
-                    .with_context(|| format!("rank {q} on gpu {gpu}"))?;
-                    o.inputs.weights.bind(&mut rt).with_context(|| format!("rank {q}: binding weights"))?;
-                    Ok(crate::Sent(rt))
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().expect("a rank's load thread panicked")).collect()
-    });
-    let mut rts: Vec<Runtime> = loaded.into_iter().map(|r| r.map(|s| s.0)).collect::<Result<_>>()?;
-    crate::connect_peers(m, &mut rts)?;
+    let rts = crate::load_ranks(m, &o.inputs, &o.gpus, capacity, host_weights, resident)?;
     Ok(Ranks { ranks: rts.into_iter().map(Caller::new).collect::<Result<_>>()? })
 }
 
@@ -541,10 +440,7 @@ fn execute(mut o: Opts) -> Result<i32> {
         .and_then(|m| m.self_hosted())
         .with_context(|| format!("B ({}) failed verification", o.harness.b))?;
     Protocol::check(&mb).with_context(|| format!("B ({}) does not fit the serving protocol", o.harness.b))?;
-    let a = match &o.mode {
-        Mode::Ab(a) => a.clone(),
-        _ => return on_trace(o, mb, t_start),
-    };
+    let a = o.reference.clone();
     let ja = std::fs::read_to_string(&a).with_context(|| format!("reading {}", a.display()))?;
     let ma = Verified::from_json(&ja)
         .and_then(|m| m.self_hosted())
@@ -584,7 +480,7 @@ fn execute(mut o: Opts) -> Result<i32> {
         let t = Instant::now();
         let r = load_side(m, &o, capacity, &host_weights, resident).with_context(|| format!("loading {side}"))?;
         let s = t.elapsed().as_secs_f32();
-        let gpus = gpus_of(&o.gpus, r.ranks())?;
+        let gpus = crate::gpus_of(&o.gpus, r.ranks())?;
         let kept = match r.kept_bytes() {
             0 => String::new(),
             b => format!(" · {:.1} GiB of weights kept from A", b as f64 / (1u64 << 30) as f64),
@@ -606,94 +502,4 @@ fn execute(mut o: Opts) -> Result<i32> {
     rec.load_s = load_a + load_b;
     let report = kern_test::replay(&o.harness, rec, &mut side_b, &mut |lines: &[String]| out.show(lines))?;
     finish(&o, report)
-}
-
-/// The corpus of a new recording: prompts of text through the tokenizer.
-fn corpus_of(o: &Opts, path: &std::path::Path) -> Result<Trace> {
-    #[derive(serde::Deserialize)]
-    struct Corpus {
-        tail: usize,
-        prompts: Vec<String>,
-    }
-    let c: Corpus =
-        serde_json::from_str(&std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?)
-            .with_context(|| format!("{}: expected {{\"tail\": N, \"prompts\": [text, ...]}}", path.display()))?;
-    let tk = o.inputs.tokenizer().context("a corpus of text needs a tokenizer")?;
-    let tokenizer = tokenizers::Tokenizer::from_file(tk).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
-    let prompts = c.prompts.iter().map(|s| tokens_of(&tokenizer, s)).collect::<Result<_>>()?;
-    Trace::corpus(prompts, c.tail)
-}
-
-/// B alone, against or into a recorded reference.
-fn on_trace(o: Opts, mb: Verified, t_start: Instant) -> Result<i32> {
-    let out = Out { json: o.json };
-    let (file, mut trace, record) = match &o.mode {
-        Mode::Record { file, corpus } => {
-            let t = match (file.is_file(), corpus) {
-                (true, Some(_)) => bail!("{} exists and has its corpus; drop --corpus to add to it", file.display()),
-                (true, None) => Trace::read(file)?,
-                (false, Some(c)) => corpus_of(&o, c)?,
-                (false, None) => bail!("{} does not exist: --corpus gives a new recording its prompts", file.display()),
-            };
-            (file.clone(), t, true)
-        }
-        Mode::Judge { file, prompts } => {
-            let t = Trace::read(file)?;
-            (file.clone(), prompts.map_or(t.clone(), |n| t.take(n)), false)
-        }
-        Mode::Ab(_) => unreachable!("execute keeps A/B"),
-    };
-    let b = o.harness.b.clone();
-    out.show(&[row("kern test", format!("{b} {} {}", if record { "→" } else { "against" }, file.display()), None)]);
-    // room for the longest prompt in whole pages, plus a step
-    let longest = trace.prompts.iter().map(Vec::len).max().unwrap_or(0) as u64;
-    let capacity = o.capacity.unwrap_or_else(|| (longest + 1024).next_multiple_of(1024).max(4096));
-    let t = Instant::now();
-    let mut side = load_side(&mb, &o, capacity, &HostWeights::new(), None).context("loading B")?;
-    let gpus = gpus_of(&o.gpus, side.ranks())?;
-    out.show(&[row(
-        "load",
-        format!(
-            "B: {} on gpu {} · capacity {capacity}",
-            plural(side.ranks(), "rank"),
-            gpus.iter().map(|g| g.to_string()).collect::<Vec<_>>().join(",")
-        ),
-        Some(t.elapsed().as_secs_f32()),
-    )]);
-    if record {
-        let producer = o.inputs.manifest.file_stem().map_or("b".to_string(), |s| s.to_string_lossy().into_owned());
-        kern_test::trace::record(&mut side, &mut trace, &producer, &mut |lines: &[String]| out.show(lines))?;
-        trace.write(&file)?;
-        out.show(&[row(
-            "out",
-            format!(
-                "{} · producers {}",
-                file.display(),
-                trace.producers.keys().cloned().collect::<Vec<_>>().join(", ")
-            ),
-            Some(t_start.elapsed().as_secs_f32()),
-        )]);
-        return Ok(0);
-    }
-    let report = kern_test::trace::judge(
-        &mut side,
-        &trace,
-        &file.display().to_string(),
-        &b,
-        kern_test::trace::KlLimits {
-            max: o.harness.logit_kl,
-            p50: o.harness.logit_kl_p50,
-            p99: o.harness.logit_kl_p99,
-        },
-        &mut |lines: &[String]| out.show(lines),
-    )?;
-    if let Some(p) = &o.out {
-        std::fs::write(p, serde_json::to_string_pretty(&json!({"summary": report.summary, "detail": report.detail}))?)?;
-        out.show(&[row("out", p.display().to_string(), None)]);
-    }
-    out.show(&report.summary.verdict.lines());
-    if o.json {
-        println!("{}", serde_json::to_string_pretty(&report.summary)?);
-    }
-    Ok(report.code())
 }

@@ -1,5 +1,172 @@
 # kern test：一次 kernel 替换的证据
 
+kern test v2 由一个个套件组成，现在只有一个：**e2e_logits**——候选沿基线录下的 token
+逐位置重新打分，平均 KL 不超过阈值就 PASS。原来基于 span 的 A/B（本文后半，从
+"基于 span 的 A/B"起）暂存不动，`kern test <target>` 照旧是它；它原来的"录好的参考"
+一节被 e2e_logits 取代、已删。设计定于 2026-10-19（背景：博客《在 agent 时代如何快速
+验证 kernel 对精度的影响》与 `Pegainfer/kern-prompts` 数据集）。
+
+## e2e_logits
+
+### 为什么是它
+
+- 模型输出的是分布，不是 token；只比 token 漏掉大部分变化，所以比 logits。
+- 局部误差预测不了端到端：P 先乘 448 再转 fp8，第一层误差是 bf16 的五六倍，端到端却和
+  bf16 差不多；直接转 fp8 局部只大一点，端到端随上下文变差。span 级差异只回答"哪一刀
+  变了"，回答不了"能不能合"——它留给以后的归因工具。
+- 每次都和同一份基线比，不和上一版比：每版都在阈值内，十版叠起来可能已经偏远。
+- 误差有两种长法：沿 decode 一步步累积（循环状态），或随上下文深度变大（注意力权重的
+  舍入）。所以输出要长、上下文要深，而且 decode 必须真的走 decode 路径。
+
+### 三份数据
+
+```
+问题集 ──record（基线 manifest，采样生成，录一次）──> 基线文件
+基线文件 ──test（候选 manifest，teacher forcing）──> 判定（+ 候选文件，同一 schema）
+```
+
+**问题集**（`Pegainfer/kern-prompts`，一行一条对话）：`messages`（OpenAI chat JSON）、
+`tools`（OpenAI tool schema JSON 或 null）、`source`（唯一键）。
+
+**录制文件**：一个文件一个 producer，一行对应问题集的一行。
+
+| 列 | 类型 | 含义 |
+|---|---|---|
+| `source` | string | 连回问题集 |
+| `prompt` | list\<int32\> | 渲染后的 prompt token |
+| `output` | list\<int32\> | 续写的 token：基线自己采样的，候选照抄基线 |
+| `top_ids` | list\<list\<int32\>\> | 第 k 项是预测 `output[k]` 那一步的 top-20 id |
+| `top_logprobs` | list\<list\<float32\>\> | 与 `top_ids` 一一对应，温度之前的原始分布 |
+
+文件 metadata：`producer`（manifest 文件名与 sha256）、`questions`（问题集文件的
+sha256）、`temperature`、`seed`、`max_new`。
+
+有意不放：`messages`（`source` 连得回去）；"其他"那一桶（1 减 top-20 之和）；原文词的
+logprob（不判 perplexity）；producer 列（一个文件一个 producer）。候选文件的 `prompt`
+和 `output` 照抄基线，两个文件逐位置对齐。
+
+### 渲染
+
+record 用 kern-serve 那条路渲染：OpenAI JSON → vLLM 的 `ChatRequest` → 按 checkpoint 目录
+`config.json` 的 `model_type` 选渲染器 → token。录出来的 prompt 与线上逐 token 一致，
+`crates/` 里仍然没有一行 chat template。代价是 `kern` binary 依赖 vLLM 的前端 crate
+（`vllm-chat`、`vllm-text`），构建和运行都要 libssl（不要 protoc）。test 只读 token，
+不渲染。
+
+### 打分路径（teacher forcing）
+
+一行 prompt P 个 token、output N 个：
+
+1. prefill：prompt 按 chunk 走 chunk program，最后一个位置的分布预测 `output[0]`
+   （chunk program 不交 token 的 manifest，最后一个 prompt token 改走 decode，同
+   `kern run`）；
+2. decode 第 k 步：喂 `output[k−1]`，跑 decode program，分布预测 `output[k]`。
+
+和自由生成只差喂进去的 token 是谁的；KV、循环状态都是候选自己一步步算的，中途不注入
+任何东西，所以 decode 累积的误差原样出现，output 多长就测多深。博客附录里 GSM8K 的上界
+正是定义在"基线自己采样出的前缀"上的逐步 KL，teacher forcing 量的就是它。
+
+record 走同一条循环，只差下一个 token 的来历：按 `--temperature` 在 host 上从这一步的
+分布里采样（`--temperature 0` 即 argmax），随机数只取决于 `(seed, 行号, 步数)`，批次
+怎么组只经由 logits 影响采到的 token；采到 checkpoint 声明的 eos 或到 `--max-new` 停。
+
+### plan：怎么组批
+
+```
+waiting = 所有行，按 output 长度从长到短（record：问题集顺序）
+loop:
+    pool 给得出 lease（prompt + N − 1，record 为 prompt + max_new − 1）就放 waiting 头部的行进来，
+        整段 prefill，chunk 取 protocol 的 rows 上限
+    所有在场的行各喂下一个 token，跑一步 decode，program 由 Protocol::forward(b, Rows::Const(1)) 选
+    喂完的行退场，释放 lease
+```
+
+- prefill 与 decode 不混在一个 call；不补 bucket、不捕 graph（那是 kern-serve 的事，由
+  它的 e2e 门禁管）；chunk 大小不是参数。
+- 按长度排序只为墙钟：长行和许多短行同批跑，不会最后剩它用 bs=1 磨完。
+- 覆盖靠时间表自然产生：行陆续退场，batch 从满降到 1，`forward()` 随之换到上限更小的
+  program；prompt 长度各异，chunk 尾长各异；长 decode 跨过很多页。报告列出跑到过的
+  program。
+- 池子是设备剩下的全部（`Capacity.tokens = None`）。lease 给不出时，有行在场就等它们
+  退场；池子空着也给不出（超过一行页表，或比整个池子还大）就报错并点名那一行，不跳过：
+  一行不该悄悄从分数里消失。代价是池子成为上限时批次随显存而变，分数随之有噪声级的
+  变化。
+
+### judge：怎么判
+
+每个位置：KL(基线 ‖ 候选)，在基线的 top-20 上逐项算，其余合成"其他"一桶。候选的
+完整 logits 就在手上，所以每个基线 id 的候选概率都是确切的。
+
+```
+mean KL ≤ --kl  →  PASS，否则 FAIL
+```
+
+- 只用平均值：博客附录的上界管住的就是逐步 KL 的平均；处处慢慢变差、只有深上下文
+  一截坏得厉害，都会抬高它，不像中位数会被稀释。风险是单个离群位置；真遇到再把 p99
+  加回来。
+- 阈值是人给的数，没有默认值：没有放之四海皆准的 KL 阈值。标定照博客：生产 manifest
+  对基线的距离是正常差异，人为制造的坏变体（GDN 状态只留 4 位尾数、P 直接转 fp8）
+  必须红，阈值定在中间；过程与数字记进本文，带日期和机器。
+- 消融掉的：band 文件与 `d_band`（"可信 manifest"本身就是以前通过测试的候选，循环
+  定义；一次采样乘 2 也是拍的）、翻转率进判定（凡是它分得开的变体 KL 也分得开，反之
+  不然）、有把握的翻转这条兜底（实验里从未触发）、KL 中位数和 p99、按 source /
+  按 margin 分档、单 producer 时的固定阈值族。
+
+报告除了判定行，按**上下文深度**与 **decode 步数**两个维度分组给 mean KL（误差的两种
+长法），再给翻转数与最坏的几个翻转（位置、margin、KL）。`--out` 写候选文件（同一
+schema）。
+
+### 标定（Qwen3.8-27B，2026-10-19，tray03 GB300）
+
+基线 `examples/qwen3.8-27b.json`，温度 1.0、seed 0、`--max-new 512`；变体来自博客实验
+（`attn/`、`state/`），只换注意力 P 的精度或 GDN 状态的尾数位。mean KL：
+
+| 候选 | smoke（17 行，7080 位置） | standard（96 行，42673 位置） |
+|---|---|---|
+| 基线自己 | 2.3e-12，两遍逐字节相同 | 2.8e-12 |
+| `state-m7`（状态 ≈ bf16，正常差异） | 5.3e-4 | 4.4e-4 |
+| `attn-bf16`（naive 注意力，正常差异） | 5.2e-4 | 没跑完 |
+| `attn-e4m3`（P 直接转 fp8，坏） | 6.0e-4 | 没跑完 |
+| `state-m4`（状态 4 位尾数，坏） | 2.6e-3 | 2.0e-3 |
+
+- **阈值 `--kl 1e-3`，暂定**：比正常差异高约 2 倍，比 m4 低约 2 倍。对自己的 1e-12 是基线
+  文件里 logprob 存成 f32 的舍入。e4m3 分开之前 T1 不算关，阈值也可能要动。
+- m4 随 decode 步数变坏（standard：step 0 1.4e-3 · 1–63 6.0e-4 · 64+ 2.2e-3）。
+- e4m3 在 smoke 上分不出来：它坏在 prefill（step 0 是 bf16 的 7 倍）和深上下文，smoke
+  每行只有一个 prefill 位置、prompt 最长 15k，被平均掉了。standard 上能不能分开还没测：
+  两个 attn 变体用的是博客里的 naive 注意力，平方代价，跑了 12 分钟没出结果，停了。
+- 耗时：standard 录基线 163 s，打分一次 163–205 s（其中驱动约 150 s）。smoke 单独跑一次
+  29 s：启动与校验 3 s，加载 11 s（几乎全是把 221 GiB 剩余显存切成 2 MiB 块建 state 池，
+  权重 0.6 s），驱动 10 s（decode 6.2 s、prefill 2.3 s，都是 GPU 时间；读 logits 0.3 s，
+  host 打分 1.4 s），退出释放 5 s。驱动是 GPU 时间，host 不是瓶颈。
+- 第一次跑就抓到 `decode_batch` 在 17 条序列时第 17 条全错（`lessons.md` 2026-10-19）。
+
+### 用法
+
+```bash
+kern test e2e-logits record \
+  --manifest base.json --kernels kernels/ --weights <checkpoint dir> \
+  --questions standard.parquet --temperature 1.0 --seed 0 --max-new 512 \
+  --out base-standard.parquet
+
+kern test e2e-logits \
+  --manifest cand.json --kernels kernels/ --weights <checkpoint dir> \
+  --reference base-standard.parquet --kl 1e-3 [--gpu 0] [--out cand-standard.parquet]
+```
+
+只有命令行参数，不读 kern.toml，没有默认路径。带 topology 的 manifest 跑法同下文"多
+rank"：一个 rank 一张卡（`--gpu 0,1,2,3`，或 `--gpu 0` 从它起连续取，缺省 0），所有
+rank 喂同一批序列、同时发射，lease 全 rank 都拿到才算拿到，分布从 rank 0 读。
+stderr 出进度，stdout 一行一个事实、最后一行是判定，退出码 0 PASS / 1 FAIL / 2 出错（用法、输入、设备）。
+
+### 不在这个套件里
+
+span A/B、噪声地板、归因（暂存）；perf（`kern bench`）；设备上的采样 kernel、跑两遍
+逐位相同、spec 的 verify program（以后各自成套件）；bucket 补齐与 graph 下的数值
+（kern-serve 的 e2e 门禁）。
+
+## 基于 span 的 A/B（暂存）
+
 `kern test` 拿两份 manifest——A（参考，**默认正确**）和 B（候选）——
 产出一份 test report：换掉的东西在哪、每个 span 数值上等不等价、随机输入
 下是否一致、快了多少。老 program 就是 oracle；manifest 里**没有阈值**。
@@ -375,62 +542,15 @@ Engram 表在 HBM）对 B300 的 148-SM 实例**：整块快照时，换 `dsv41_
 `input_ids` / `anchor_token` 加 `index_into embed.weight`。存档
 `~/bench_results/2026-09-15-dsv41-e2e-swap/`。
 
-## 录好的参考：`--record` 一份 parquet，`--reference` 指向它
-
-A/B 的判据是"上一版 kern"，换核不换数值时它最强（位一致就是位一致）；
-改精度（f32 → bf16、fp8）时它说不了话，因为 A 自己也只是一种舍入。第二种
-参考是**录好的分布**：固定一批真实文本，记下参考实现在每个打分位置上的
-下一词分布（top-20 的 id 与 logprob，加原文那个词的 logprob），落成一个
-parquet 文件；之后判候选只装 B，不再需要 A 在场，也不再录 span。
-
-```bash
-kern test a.json --record ref.parquet --corpus corpus.json --kernels … --weights … --tokenizer …
-kern test b.json --reference ref.parquet --kernels … --weights …            # loop 里用的
-kern test b.json --reference ref.parquet --prompts 16                       # 快判：前 16 段
-```
-
-- **语料**是 `{"tail": N, "prompts": [text, …]}`，`--record` 到一个不存在的文件时
-  用目标的 tokenizer 切成 token 存进去；文件存在就用它的语料、追加（或覆盖）
-  这个 manifest 作为一个 producer（名字是 manifest 文件名）。多个 producer 在
-  同一个文件里。
-- **打分位置**：每段 prompt 末尾 `tail + 1` 个位置。前面的 token 一次
-  走 chunk program（prefill 路径，打分一次），后 `tail` 个逐个喂（decode 路径，
-  在 prefill 建的状态上打分 `tail` 次；prefill-only 的 manifest 走一行的
-  chunk）。chunk 大小是实现自己的事，不进文件。原文固定，所以位置逐个对得上。
-- **表**：一行一个 token 位置（`prompt` / `pos` / `id`，`producer` 为 null），
-  打过分的位置每个 producer 再加一行（`producer` / `ref_logprob` / `top_ids` /
-  `top_logprob`）；`tail` 在文件 metadata 里。pandas / duckdb 直接读。
-- **判定**：每个位置算 B 对每个 producer 的 argmax 翻转、参考的 margin
-  （top-1 − top-2 logprob）、KL(参考‖B)（参考的 top-20 上逐项，其余并成一桶）、
-  参考 argmax 在 B 里的名次。producer ≥ 2 时先算它们两两的分歧作为 **band**
-  （翻转处的最大 margin、翻转率、KL p50 / p99，KL 有 1e-6 的地板：文件里的
-  logprob 是 f32）。margin 高于 band 两倍的翻转是有信心的翻转，对任一 producer 出现就
-  当场 FAIL 并停止；否则 B 只要对**最近的一个** producer 在带内（翻转率、KL p50 / p99
-  不超过 band 的 2 倍）就 PASS，对每一个都超出才 FAIL。2 倍的道理：band 是两个实现距离
-  的一次采样，B 是同类实现的另一次采样，同一分布的第二个样本落在第一个之外是常态，
-  margin 取的又是极值；只有一个
-  producer 时退回 `--logit-kl`：翻转且 KL 超限 FAIL，全部 KL 在限内 PASS，
-  KL 超限但没翻 INCONCLUSIVE；另有 `--logit-kl-p50` / `--logit-kl-p99`
-  （默认等于 `--logit-kl`，即不起作用）管全体位置的 KL 分布：中位数或 p99
-  超限直接 FAIL，不看有没有翻转。把 `--logit-kl` 放宽去原谅递归模型放大出的
-  个别位置时，靠这两个把"处处慢性变差"挡住。报告按 `prefill` / `decode` 各一行给 rows、
-  翻转数、KL p50 / p99 / max；`flip` 行逐个列翻转（prompt、pos、两边 token、
-  margin、KL、原文词的 logprob 两边各多少），`--out` 存每个位置每个 producer
-  的一行，`--json` 同前。
-- 与 A/B 的关系：`--reference` 按文件内容认 parquet（`PAR1` 魔数），给
-  manifest 就是 A/B。A/B 回答"这一刀换了什么、噪声地板、快了多少"，录好的
-  参考回答"整体分布还在不在线上实现的分歧范围内"；两者都要时各跑一次。
-
 ## 位置
 
 - 静态 diff、frontier、录制、重放、比较、报告全在 `crates/kern-test`
   （`diff.rs` / `compare.rs` / `workload.rs` / `report.rs` / `harness.rs`
-  录 A、`replay.rs` 放 B 并判定，`trace.rs` 录好的参考：parquet 读写、
-  喂语料、打分、band 与判定，`lib.rs` 的 `Side` trait 是与设备之间唯
-  一的边界）；`kern test` 子命令、`Side` 的真实现（`Ranks`：每 rank 一个
+  录 A、`replay.rs` 放 B 并判定，`lib.rs` 的 `Side` trait 是与设备之间唯
+  一的边界；e2e_logits 的纯逻辑在 `e2e.rs`：schema、组批、采样、打分、判定）；`kern test` 子命令、`Side` 的真实现（`Ranks`：每 rank 一个
   `Caller`，`Buf = Scratch`）和 kern.toml 解析在
   `crates/kern-run/src/test.rs`（caller 契约在 `crates/kern-run/src/lib.rs`，
-  和 `kern run` 共用）。
+  和 `kern run` 共用）；e2e_logits 的命令行与驱动循环在 `crates/kern-run/src/e2e.rs`。
 - runtime 只加了不在服务路径上的原语：`run_range`（按 call 区间
   eager 执行）、`read_buffer_prefix` / `write_buffer` / `read_state_at` /
   `write_state_at`、`save_* / load_*`（设备侧暂存的 D2D

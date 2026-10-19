@@ -5,12 +5,15 @@
 //! one [`Lease`] of the runtime's token slots for its whole life and
 //! staging every call through the protocol's fills. Nothing here names a
 //! buffer, a program or a var. `kern run` (generation) and `kern test`
-//! (A/B evidence) both drive the runtime through it.
+//! (A/B evidence) both drive the runtime through it; `kern test e2e-logits`
+//! drives many sequences at once ([`e2e`]).
 
 #![deny(unsafe_code)]
 
 pub mod bench;
+pub mod chat;
 pub mod config;
+pub mod e2e;
 pub mod inputs;
 pub mod probe;
 pub mod run;
@@ -31,7 +34,7 @@ use kern_manifest::protocol::{Axis, Filled, Forward, LineTable, PageTable, Rows}
 use kern_manifest::types::{BufferKind, Fill};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
-use kern_runtime::{connect_local, GroupRank, Runtime, Topology};
+use kern_runtime::{connect_local, Capacity, GroupRank, HostWeights, Resident, Runtime, Topology};
 
 /// What `kern --version` prints: the crate version, the commit it was built
 /// from, and the CUDA API the runtime binds; the three facts a bug report
@@ -212,10 +215,10 @@ pub fn arrivals(m: &kern_manifest::types::Manifest, p: &Protocol) -> Vec<String>
 }
 
 /// Stage one call (see [`fills`]). Returns the call's vars.
-fn stage(
+fn stage<L: Borrow<Lease>>(
     rt: &mut Runtime,
     p: &Protocol,
-    leases: &[Lease],
+    leases: &[L],
     positions: &[usize],
     rows: usize,
     ids: &[i64],
@@ -227,14 +230,45 @@ fn stage(
     Ok(vars)
 }
 
+/// One call staged for `leases`, tables included: a batch changes its
+/// leases from call to call, so every table is rewritten with the rows it
+/// is about to be read with.
+fn stage_batch<L: Borrow<Lease>>(
+    rt: &mut Runtime,
+    p: &Protocol,
+    leases: &[L],
+    positions: &[usize],
+    rows: usize,
+    ids: &[i64],
+) -> Result<Vars> {
+    let vars = stage(rt, p, leases, positions, rows, ids)?;
+    for t in &p.page_tables {
+        rt.write_input_at(&t.name, &le_bytes_i32(&page_rows(t, leases, leases.len())?), &vars)?;
+    }
+    // Line tables use their declared maximum column stride, even when
+    // only a prefix of columns is active.
+    for t in &p.line_tables {
+        rt.write_input_at(&t.name, &le_bytes_i32(&line_rows(t, leases, line_cols(p, t))?), &vars)?;
+    }
+    Ok(vars)
+}
+
 /// `rows` rows of a page table: row `i` from lease `i`, the last lease
 /// repeating past the ones given.
-fn page_rows(t: &PageTable, leases: &[Lease], rows: usize) -> Result<Vec<i32>> {
+fn page_rows<L: Borrow<Lease>>(t: &PageTable, leases: &[L], rows: usize) -> Result<Vec<i32>> {
     let mut v = Vec::with_capacity(rows * t.width);
     for r in 0..rows {
-        leases[r.min(leases.len() - 1)].extend_row(&t.name, &mut v)?;
+        leases[r.min(leases.len() - 1)].borrow().extend_row(&t.name, &mut v)?;
     }
     Ok(v)
+}
+
+/// The columns a line table is laid out with: its axis's bound.
+fn line_cols(p: &Protocol, t: &LineTable) -> usize {
+    match t.axis {
+        Axis::Ranks => p.ranks.as_ref().map_or(1, |b| b.max) as usize,
+        _ => p.groups.max as usize,
+    }
 }
 
 /// A line table whole: cell `[line, col]` carries column `col`'s lease's
@@ -290,6 +324,74 @@ fn connect_peers(m: &Verified, rts: &mut [Runtime]) -> Result<()> {
         return Ok(());
     }
     connect_local(rts).context("connecting the ranks")
+}
+
+/// The GPU of each rank: the list as given, or `n` from the one given.
+fn gpus_of(given: &[usize], n: usize) -> Result<Vec<usize>> {
+    match given {
+        [g] => Ok((*g..*g + n).collect()),
+        gs if gs.len() == n => Ok(gs.to_vec()),
+        gs => bail!("the manifest runs as {n} ranks; --gpu names {} devices", gs.len()),
+    }
+}
+
+/// The manifest on every rank's GPU (`gpus` as [`gpus_of`] reads it), each
+/// rank's weights bound over what the last side left resident on it, if
+/// anything, and the peers connected.
+fn load_ranks(
+    m: &Verified,
+    inputs: &Inputs,
+    gpus: &[usize],
+    capacity: Capacity,
+    host_weights: &HostWeights,
+    resident: Option<Vec<Resident>>,
+) -> Result<Vec<Runtime>> {
+    let n = ranks_of(m)?;
+    let gpus = gpus_of(gpus, n)?;
+    let resident: Vec<Option<Resident>> = match resident {
+        Some(r) if r.len() == n => r.into_iter().map(Some).collect(),
+        Some(r) => bail!("{} ranks left their weights resident; this side runs {n}", r.len()),
+        None => (0..n).map(|_| None).collect(),
+    };
+    let loaded: Vec<Result<Sent<Runtime>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = gpus
+            .iter()
+            .zip(resident)
+            .enumerate()
+            .map(|(q, (&gpu, resident))| {
+                let topo = topology_of(m, q);
+                s.spawn(move || -> Result<Sent<Runtime>> {
+                    let topology = m.topology.is_some().then_some(&topo);
+                    let mut rt = match resident {
+                        Some(r) => Runtime::load_over(
+                            m,
+                            inputs.kernels.as_deref(),
+                            gpu,
+                            Some(capacity),
+                            topology,
+                            host_weights,
+                            r,
+                        ),
+                        None => Runtime::load_with_host_weights(
+                            m,
+                            inputs.kernels.as_deref(),
+                            gpu,
+                            Some(capacity),
+                            topology,
+                            host_weights,
+                        ),
+                    }
+                    .with_context(|| format!("rank {q} on gpu {gpu}"))?;
+                    inputs.weights.bind(&mut rt).with_context(|| format!("rank {q}: binding weights"))?;
+                    Ok(Sent(rt))
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().expect("a rank's load thread panicked")).collect()
+    });
+    let mut rts: Vec<Runtime> = loaded.into_iter().map(|r| r.map(|s| s.0)).collect::<Result<_>>()?;
+    connect_peers(m, &mut rts)?;
+    Ok(rts)
 }
 
 /// A rank that has not returned in this long is hung: a collective
@@ -373,11 +475,7 @@ impl Caller {
             rt.write_input(&t.name, &le_bytes_i32(&rows))?;
         }
         for t in &protocol.line_tables {
-            let cols = match t.axis {
-                Axis::Ranks => protocol.ranks.as_ref().map_or(1, |b| b.max),
-                _ => protocol.groups.max,
-            };
-            rt.write_input(&t.name, &le_bytes_i32(&line_rows(t, one, cols as usize)?))?;
+            rt.write_input(&t.name, &le_bytes_i32(&line_rows(t, one, line_cols(&protocol, t))?))?;
         }
         run_once(&rt, &protocol)?;
         Ok(Caller { rt, protocol, lease, pos: 0 })
