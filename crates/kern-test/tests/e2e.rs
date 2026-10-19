@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use kern_test::e2e::{self, Judgment, Plan, Position, Recording, Row, Step, Top, TOP};
+use kern_test::e2e::{self, Judgment, Plan, Position, Recording, Row, Sampling, Step, Top, TOP};
 
 /// splitmix64 over a counter: the tests' only randomness, seeded.
 struct Rand(u64);
@@ -101,16 +101,23 @@ fn kl_counts_the_rest_as_one_bucket() {
 }
 
 #[test]
-fn sampling_draws_the_softmax_at_its_temperature() {
-    // token 1 is three times as likely as token 0 at temperature 1, √3 at 2
-    let row = [0.0f32, 3f32.ln()];
-    let share = |t: f64| {
-        let ones = (0..100).flat_map(|r| (0..100).map(move |k| e2e::sample(&row, t, 7, r, k))).filter(|&x| x == 1);
-        ones.count() as f64 / 1e4
+fn sampling_draws_the_softmax_at_its_temperature_within_top_k_and_top_p() {
+    // probabilities 0.1, 0.3, 0.6 at temperature 1
+    let row = [0.0f32, 3f32.ln(), 6f32.ln()];
+    let shares = |t: f64, k: usize, p: f64| {
+        let s = Sampling::new(t, k, p).unwrap();
+        let mut n = [0usize; 3];
+        (0..100).for_each(|r| (0..100).for_each(|i| n[e2e::sample(&row, s, 7, r, i) as usize] += 1));
+        n.map(|c| c as f64 / 1e4)
     };
-    let (cold, warm) = (share(1.0), share(2.0));
-    assert!((cold - 0.75).abs() < 0.02 && (warm - 3f64.sqrt() / (1.0 + 3f64.sqrt())).abs() < 0.02, "{cold} {warm}");
-    assert_eq!(share(0.0), 1.0);
+    let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.02);
+    let warm = [1.0, 3f64.sqrt(), 6f64.sqrt()].map(|w| w / (1.0 + 3f64.sqrt() + 6f64.sqrt()));
+    assert!(near(shares(1.0, 0, 1.0), [0.1, 0.3, 0.6]), "{:?}", shares(1.0, 0, 1.0));
+    assert!(near(shares(2.0, 0, 1.0), warm), "{:?}", shares(2.0, 0, 1.0));
+    assert!(near(shares(1.0, 2, 1.0), [0.0, 1.0 / 3.0, 2.0 / 3.0]), "{:?}", shares(1.0, 2, 1.0));
+    assert_eq!((shares(1.0, 0, 0.5), shares(1.0, 0, 0.7)[0]), ([0.0, 0.0, 1.0], 0.0));
+    assert_eq!(shares(0.0, 0, 1.0), [0.0, 0.0, 1.0]);
+    assert!(Sampling::new(1.0, 0, 0.0).is_err() && Sampling::new(-1.0, 0, 1.0).is_err());
 }
 
 /// The plan carried out against a pool of `budget` token slots that every

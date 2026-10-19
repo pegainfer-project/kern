@@ -39,7 +39,7 @@ kern test v2 由一个个套件组成，现在只有一个：**e2e_logits**—�
 | `top_logprobs` | list\<list\<float32\>\> | 与 `top_ids` 一一对应，温度之前的原始分布 |
 
 文件 metadata：`producer`（manifest 文件名与 sha256）、`questions`（问题集文件的
-sha256）、`temperature`、`seed`、`max_new`。
+sha256）、`temperature`、`top_k`、`top_p`、`seed`、`max_new`。
 
 有意不放：`messages`（`source` 连得回去）；"其他"那一桶（1 减 top-20 之和）；原文词的
 logprob（不判 perplexity）；producer 列（一个文件一个 producer）。候选文件的 `prompt`
@@ -66,8 +66,10 @@ record 用 kern-serve 那条路渲染：OpenAI JSON → vLLM 的 `ChatRequest` �
 任何东西，所以 decode 累积的误差原样出现，output 多长就测多深。博客附录里 GSM8K 的上界
 正是定义在"基线自己采样出的前缀"上的逐步 KL，teacher forcing 量的就是它。
 
-record 走同一条循环，只差下一个 token 的来历：按 `--temperature` 在 host 上从这一步的
-分布里采样（`--temperature 0` 即 argmax），随机数只取决于 `(seed, 行号, 步数)`，批次
+record 走同一条循环，只差下一个 token 的来历：在 host 上照 checkpoint 的
+`generation_config.json` 采样——先除温度，再留概率最高的 `top_k` 个，再从中留累计占
+`top_p` 的最小前缀，在剩下的里抽；`--temperature` / `--top-k` / `--top-p` 覆盖它，温度 0
+即 argmax。线上就是这么抽的，录出来的输出才像线上。随机数只取决于 `(seed, 行号, 步数)`，批次
 怎么组只经由 logits 影响采到的 token；采到 checkpoint 声明的 eos 或到 `--max-new`（缺省
 16384）停。lease 按上限一次拿足，上限越大同时在场的行越少。
 
@@ -147,7 +149,7 @@ schema）。
 ```bash
 kern test e2e-logits record \
   --manifest base.json --kernels kernels/ --weights <checkpoint dir> \
-  --questions standard.parquet --temperature 1.0 --seed 0 [--max-new 512] \
+  --questions standard.parquet --seed 0 [--temperature 1.0 --top-k 20 --top-p 0.95] [--max-new 512] \
   --out base-standard.parquet
 
 kern test e2e-logits \

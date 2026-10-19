@@ -297,24 +297,61 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The token drawn at output position `step` of `row` from a logits row
-/// at `temperature`; 0 is the argmax. The draw is a function of `(seed,
-/// row, step)` alone.
-pub fn sample(logits: &[f32], temperature: f64, seed: u64, row: usize, step: usize) -> i64 {
-    if temperature == 0.0 {
+/// How a baseline draws its tokens: the checkpoint's `generation_config`
+/// sampler. `top_k` 0 keeps every token; `temperature` 0 is the argmax.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sampling {
+    pub temperature: f64,
+    pub top_k: usize,
+    pub top_p: f64,
+}
+
+impl Sampling {
+    pub fn new(temperature: f64, top_k: usize, top_p: f64) -> Result<Sampling> {
+        ensure!(temperature >= 0.0, "temperature {temperature} is negative");
+        ensure!(top_p > 0.0 && top_p <= 1.0, "top_p {top_p} is outside (0, 1]");
+        Ok(Sampling { temperature, top_k, top_p })
+    }
+}
+
+/// The token drawn at output position `step` of `row` from a logits row:
+/// temperature, then the `top_k` most likely, then the smallest prefix of
+/// those holding `top_p` of their mass. The draw is a function of `(seed,
+/// row, step)` and the logits alone.
+pub fn sample(logits: &[f32], s: Sampling, seed: u64, row: usize, step: usize) -> i64 {
+    if s.temperature == 0.0 {
         return argmax(logits) as i64;
     }
+    let by = |i: &usize, j: &usize| logits[*j].total_cmp(&logits[*i]).then(i.cmp(j));
+    let mut idx: Vec<usize> = (0..logits.len()).collect();
+    let k = if s.top_k == 0 { idx.len() } else { s.top_k.min(idx.len()) };
+    if k < idx.len() {
+        idx.select_nth_unstable_by(k, by);
+        idx.truncate(k);
+    }
+    idx.sort_by(by);
+    let max = logits[idx[0]] as f64;
+    let w: Vec<f64> = idx.iter().map(|&i| ((logits[i] as f64 - max) / s.temperature).exp()).collect();
+    let total: f64 = w.iter().sum();
+    let kept = w
+        .iter()
+        .scan(0.0, |acc, &x| {
+            let before = *acc;
+            *acc += x;
+            Some(before)
+        })
+        .take_while(|&before| before < s.top_p * total)
+        .count();
+    let w = &w[..kept];
     let u = (mix(mix(mix(seed) ^ row as u64) ^ step as u64) >> 11) as f64 / (1u64 << 53) as f64;
-    let max = logits.iter().map(|&x| x as f64).fold(f64::NEG_INFINITY, f64::max);
-    let w: Vec<f64> = logits.iter().map(|&x| ((x as f64 - max) / temperature).exp()).collect();
     let mut left = u * w.iter().sum::<f64>();
-    for (i, &x) in w.iter().enumerate() {
+    for (&i, &x) in idx.iter().zip(w) {
         if left < x {
             return i as i64;
         }
         left -= x;
     }
-    argmax(logits) as i64
+    idx[kept - 1] as i64
 }
 
 /// What the shell does next; [`Plan::step`] hands them out in order.

@@ -26,7 +26,7 @@ use kern_manifest::{Protocol, Verified};
 use kern_pool::{Denied, Lease};
 use kern_runtime::{Capacity, HostWeights, Runtime};
 use kern_test::diff::{live_bytes, logits_of};
-use kern_test::e2e::{self, Judgment, Plan, Position, Recording, Row, Step};
+use kern_test::e2e::{self, Judgment, Plan, Position, Recording, Row, Sampling, Step};
 use kern_test::report::{plural, row, Verdict};
 use sha2::{Digest, Sha256};
 
@@ -66,9 +66,15 @@ struct RecordOpts {
     /// The question set: parquet with `source`, `messages`, `tools`
     #[arg(long)]
     questions: PathBuf,
-    /// Sampling temperature; 0 is greedy
+    /// Sampling temperature, 0 greedy (default: the checkpoint's generation_config.json)
     #[arg(long)]
-    temperature: f64,
+    temperature: Option<f64>,
+    /// Draw among the k most likely tokens, 0 all of them (default: generation_config.json, else 0)
+    #[arg(long)]
+    top_k: Option<usize>,
+    /// Draw within the smallest set holding this much mass (default: generation_config.json, else 1)
+    #[arg(long)]
+    top_p: Option<f64>,
     /// Sampler seed; a draw depends on the seed, the row and the step alone
     #[arg(long)]
     seed: u64,
@@ -119,6 +125,7 @@ fn record(o: RecordOpts) -> Result<()> {
             "no --weights directory has a config.json: the chat renderer is picked by its `model_type`"
         })?;
     let renderer = Renderer::load(&dir)?;
+    let sampling = sampling_of(&dir, &o)?;
     let prompts: Vec<Vec<i64>> = questions
         .iter()
         .map(|q| renderer.prompt(&q.messages, q.tools.as_deref()).with_context(|| format!("rendering `{}`", q.source)))
@@ -127,11 +134,11 @@ fn record(o: RecordOpts) -> Result<()> {
     println!("{}", row("record", format!("{} over {}", d.producer, plural(questions.len(), "question")), None));
     let mut plan = Plan::sampled(&prompts, o.max_new, &inputs.stop_tokens, d.groups, d.chunk_rows, d.chunk_scores)?;
     let names: Vec<String> = questions.iter().map(|q| q.source.clone()).collect();
-    let (temperature, seed) = (o.temperature, o.seed);
+    let seed = o.seed;
     let scored = d.drive(
         &mut plan,
         &names,
-        |r, k, logits| (e2e::top(logits), e2e::sample(logits, temperature, seed, r, k)),
+        |r, k, logits| (e2e::top(logits), e2e::sample(logits, sampling, seed, r, k)),
         |s| Some(s.1),
     )?;
     let rows: Vec<Row> = scored
@@ -147,7 +154,9 @@ fn record(o: RecordOpts) -> Result<()> {
     let meta = BTreeMap::from([
         ("producer".to_string(), d.producer.clone()),
         ("questions".to_string(), format!("sha256:{}", sha256(&o.questions)?)),
-        ("temperature".to_string(), o.temperature.to_string()),
+        ("temperature".to_string(), sampling.temperature.to_string()),
+        ("top_k".to_string(), sampling.top_k.to_string()),
+        ("top_p".to_string(), sampling.top_p.to_string()),
         ("seed".to_string(), o.seed.to_string()),
         ("max_new".to_string(), o.max_new.to_string()),
     ]);
@@ -204,6 +213,25 @@ fn test(load: &Load, reference: &Path, limit: f64, out: Option<&Path>) -> Result
     let code = i32::from(!j.pass());
     Verdict::new(code, j.summary(), t0.elapsed().as_secs_f32()).lines().iter().for_each(|l| println!("{l}"));
     Ok(code)
+}
+
+/// The flags over the checkpoint's `generation_config.json`; `do_sample:
+/// false` there is the argmax.
+fn sampling_of(dir: &Path, o: &RecordOpts) -> Result<Sampling> {
+    let path = dir.join("generation_config.json");
+    let g: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).with_context(|| format!("{} is not JSON", path.display()))?,
+        Err(_) => serde_json::Value::Null,
+    };
+    let greedy = g.get("do_sample").and_then(serde_json::Value::as_bool) == Some(false);
+    let temperature = o
+        .temperature
+        .or(greedy.then_some(0.0))
+        .or_else(|| g.get("temperature").and_then(serde_json::Value::as_f64))
+        .with_context(|| format!("no --temperature and no `temperature` in {}", path.display()))?;
+    let top_k = o.top_k.or_else(|| g.get("top_k").and_then(serde_json::Value::as_u64).map(|k| k as usize)).unwrap_or(0);
+    let top_p = o.top_p.or_else(|| g.get("top_p").and_then(serde_json::Value::as_f64)).unwrap_or(1.0);
+    Sampling::new(temperature, top_k, top_p)
 }
 
 impl Load {
