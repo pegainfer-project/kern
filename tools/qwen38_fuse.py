@@ -2,7 +2,7 @@
 
 Rewrites `examples/qwen3.8-27b.json` in place: each pass below swaps a
 run of captured vLLM ops in the decode programs for one handwritten kernel
-(tools/kernels-src/*.cu, pinned by sha256 through `handwritten.hw`). The
+(tools/kernels-src/*.cu, pinned by sha256 through `kernel_index/`). The
 prefill program is left as captured. Every pass is a pure function of the
 manifest; the numerics it must reproduce are written at the top of the
 kernel source it introduces.
@@ -18,7 +18,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import handwritten  # noqa: E402
+from kernels import index  # noqa: E402
 from kern_manifest import normalize, resolve_constants  # noqa: E402
 from qwen_constants import name_constants  # noqa: E402
 
