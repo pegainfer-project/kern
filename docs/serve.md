@@ -882,13 +882,16 @@ restart the gateway with the prefill.
 P is the K3 manifest's PP8 prefill (896 experts, chunk 8192, 16 sequences a
 call, fp8 KV, KDA state in SGLang's layout) on two trays; D is SGLang with the
 kern decode plugin, TP8 / DCP8, on two others; `kv_cache_dtype` fp8_e4m3 on
-both. The reference is the same D behind SGLang's own TP8 prefill (2026-10-19).
+both. The reference is the same D behind SGLang's own TP8 prefill (mega
+kernel, radix cache, HiCache), its KV over the same RDMA.
 
 | check | kern P | SGLang P |
 |---|---|---|
 | conc1 TTFT, cold, 8k / 32k / 128k tokens | 0.82 / 1.71 / 5.15 s (P alone: 0.74 / 1.67 / 5.10 s) | — |
 | 32 cold prompts of 16k at once | last first token at 11.3 s, 46k tok/s; a stage's 8192-row item 135–165 ms | — |
-| AgentX c32, 900 s (`inferencex-agentx-mvp`, 256k) | 1073 requests, 0 errors; 1.14 req/s, 850 out tok/s; TTFT p50 / p90 2.9 / 7.4 s; ITL p50 18.8 ms; P prefix hit 92.7% | 989, 0 errors; 1.05 req/s, 734 out tok/s; TTFT 5.6 / 18.5 s; ITL 17.5 ms; hit 72.3% |
+| AgentX c32, 900 s (`inferencex-agentx-mvp`, 256k) | 1120 requests, 0 errors; 1.19 req/s, 888 out tok/s, goodput 1.15; TTFT p50 / p90 / p99 1.0 / 2.6 / 11.5 s; ITL p50 19.3 ms; P prefix hit 90.3% | 930, 0 errors; 0.99 req/s, 717 out tok/s, goodput 0.44; TTFT 6.4 / 24.7 / 75.3 s; ITL 16.9 ms; hit 70.4% |
+| AgentX c64 | 1742, 0 errors; 1.85 req/s, 1484 out tok/s; TTFT 2.5 / 14.7 / 33.9 s; ITL 31.0 ms; hit 88.9% | stopped: 59 queued, 4.5M tokens pending at P |
+| AgentX c96 | 1993, 0 errors; 2.12 req/s, 1711 out tok/s; TTFT 16.8 / 45.4 / 58.3 s; ITL 32.7 ms; hit 85.6% | — |
 | gsm8k 5-shot, c64 (flexible / strict) | 0.9704 / 0.9712 | 0.9712 / 0.9719 |
 | gsm8k 0-shot, all 1319 | 1289 | 1287 |
 | MATH-500, 200 of them, 0-shot | 197 | 199 |
@@ -897,6 +900,14 @@ both. The reference is the same D behind SGLang's own TP8 prefill (2026-10-19).
 
 - D's step time at the same running count is the reference's (16–23 running:
   19.3 against 19.2 ms); ITL is higher because a faster P keeps D fuller.
+- From c64 on, D is what limits: its 64 running requests (`max_running_requests`,
+  one mamba slot each) are taken, and at c96 a request waits 19.5 s on average
+  for one before its KV is asked for, while P's stage 0 is busy 45% of the
+  time at c64.
+- A send of more than D's relayout buffer (`max_prefill_tokens` rows) falls
+  back to an RDMA per token, which a prefix hit makes common; cut on SGLang's
+  grid it does not (c64 before the cut: 1.45 req/s, TTFT p50 22 s, D waiting
+  21 s for a request's KV).
 - Two cold runs of the same kern P differ by as much as it differs from the
   reference (gsm8k 0-shot first 256: 254 and 251; MATH first 100: 97 and 97).
 - A prompt whose cached prefix is hit can take a different first token than
