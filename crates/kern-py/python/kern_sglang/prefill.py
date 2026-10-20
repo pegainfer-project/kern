@@ -64,6 +64,7 @@ from sglang.srt import runtime_context as rc
 from sglang.srt.configs.hybrid_arch import mambaish_config
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.disaggregation.base.conn import KVArgs, KVPoll, StateType
+from sglang.srt.disaggregation.common.staging_buffer import compute_grid_segments
 from sglang.srt.disaggregation.mooncake.conn import MooncakeKVBootstrapServer, MooncakeKVManager, MooncakeKVSender
 from sglang.srt.disaggregation.utils import (
     DisaggregationMode,
@@ -280,14 +281,17 @@ class Stage:
                 self.meta.output_ids[aux][0] = token
                 self.meta.cached_tokens[aux].zero_()
                 self.meta.bootstrap_room[aux, 0] = room
-            # The decode side holds the prefix it already has; the rest goes, whole pages.
+            # The decode side holds the prefix it already has; the rest goes, whole pages,
+            # in pieces its relayout buffer holds, past which each token is an RDMA of its own.
             page = self.mgr.kv_args.page_size
-            skip = s.pop_decode_prefix_len() // page
-            left = np.asarray(pages[skip:-(-length // page)], dtype=np.int32)
+            base = s.pop_decode_prefix_len() // page * page
             if self.hybrid and slot is None:
                 return self.end(room, "a hybrid pool's request with no state slot")
-            s.init(len(left), aux)
-            s.send(left, [[slot]] if self.hybrid else None, num_kv_tokens=length - skip * page)
+            n = s.get_max_transfer_tokens()
+            s.init(-(-length // page) - base // page, aux)
+            for a, b in compute_grid_segments(base, length, base, n) if n else [(base, length)]:
+                s.send(np.asarray(pages[a // page:-(-b // page)], dtype=np.int32),
+                       [[slot]] if self.hybrid and b == length else None, num_kv_tokens=b - a)
             return None
         if poll == KVPoll.Success:
             return self.end(room, "")
