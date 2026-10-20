@@ -17,6 +17,33 @@ PR #50 的 review 找出的问题几乎都出在这里。原因是同一个：�
 | 流水线 | pp head（stage 0）↔ stage 1..n | `Job::Item { acts, rows, vars }` / `Job::Push` ↔ `Report::Tokens` / `Report::Pushed` | 整条流水线只有一个 pool，在 head；stage 执行 acts 和 push | 每个 stage 一条 TCP；stream 顺序 |
 | P/D | P head、P front ↔ D head；P 的每个 stage → D 的显存 | `Ask { Reserve, Start, Abort }` ↔ `Tell { Pools, Placed, Grant, Busy, Room, Refuse, Tokens }`；`Push` 经镜像写进 D 的 pool | D 的 seat 和 placement 在 D head；交接阶段在 P head（`Tiers`）；解码中的 relay 在 P front（`Clients`） | 一条 TCP，P 侧只有 head 一个写者，front 的 abort 经 head 转发；placement 按 epoch 在连接上先于用到它的 `Grant` 告知，镜像只接受下一个 epoch，seat 的 epoch 超过镜像的 push 被拒 |
 
+### SGLang P/D (`sglang-pd`)
+
+A fourth boundary, between a kern pipeline serving as SGLang's prefill and an
+unmodified SGLang decode instance behind `sgl-model-gateway`.
+
+| Edge | Messages | Owner | Order |
+|---|---|---|---|
+| gateway → P head | `POST /generate { input_ids, bootstrap_host, bootstrap_port, bootstrap_room }` ↔ `{ output_ids: [first], meta_info }` or a 5xx; `/health`, `/server_info`, `/model_info` at registration | the room is the gateway's; a room is one live request's at a time (400 otherwise) | the gateway sends the same body to D at once and reads D's answer only after P's |
+| P head → stage | `Table { sglang: { port, consensus, slots } }` ↔ `Report::Ready` once; then `Job::Open { req, room }` at admission, `Job::Transfer { req, room, pages, len, at }` behind the item that writes the last rows ↔ `Report::Sent { req, failure }` | every room's state and its lease are the head's (`rooms::Rooms`); a stage's transport only keeps what it was told until its send ends | the stage's one TCP connection, frames from the watch and the transport behind one lock |
+| stage → D | SGLang's own: bootstrap server (on the head), ZMQ handshake per pp rank, RDMA writes of the stage's layers into D's pages, aux (first token) from the last stage only | D's pages are D's; P's pages are the room's lease | a stage sends after the item before the transfer has landed on its device |
+
+Invariants it adds or restates:
+
+- **S1.** No page of a transfer is leased to another request until every
+  stage's send of it ended: the RDMA write is off the compute stream, so the
+  item order that protects kern's own push does not.
+- **S4.** Every room ends exactly once: its reply carries the last stage's
+  first token, and is a failure exactly when some stage's send failed.
+- **L2.** Once nothing is admitted, no room, held lease, job or send is left;
+  the head logs `quiescent` with its counts when it gets there.
+- The head serves only once every stage said `Ready`, so a decode instance
+  never asks the bootstrap server for a pp rank that is not registered.
+
+`tests/sim.rs` `rooms` drives the real `Rooms` over real leases with every
+stage an inbox and its sends ending, sent or failed, in any order; a head that
+hands the lease back as the transfer is issued is the mutant it must catch.
+
 ## 不变量
 
 下面每一条都写成检查器可以逐步判定的形式。

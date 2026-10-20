@@ -800,6 +800,64 @@ K3 一条会话的 slot 58.6 MB 抵 265 页，slot 先用光，128 GiB 下 c32 �
 c128 89.9%。另试过"被续上的旧轮直接丢、只 park 最新一轮"：c128 好（92.0%）、c32/c64 差
 （95.9 / 95.6%），park 一律走 P2 的次序。
 
+## Prefill for SGLang's own P/D (`sglang-pd`, 2026-10-20, tray07 4×GB300)
+
+A cut manifest's pipeline serves as the prefill instance of SGLang's P/D: an
+unmodified SGLang decode instance pulls nothing from kern, every kern stage
+pushes its own layers into it through SGLang's own transfer code (Mooncake over
+RDMA), and `sgl-model-gateway --pd-disaggregation` routes to both. Built with
+`--features sglang-pd` (embeds Python; the default build has none of it),
+started with `--sglang-ip <addr> [--sglang-ib-device <dev>]` on every stage and
+`--sglang-bootstrap-port <port>` on the head, in an environment where
+`import sglang` works and `kern_sglang` (kern-py's Python package) is on the
+path.
+
+- **Who does what.** Every stage is one of SGLang's prefill pp ranks: it embeds
+  `kern_sglang.prefill.Stage`, which publishes the runtime context SGLang's
+  disaggregation code reads, starts the transfer engine, registers every
+  mapped 64 MiB chunk of the stage's pooled states on its own (a range over
+  several chunks is not one RDMA registration), and builds `KVArgs` from the
+  naming contract the decode plugin reads (`k.l<L>` / `v.l<L>` /
+  `mla.l<L>`). The head also runs the bootstrap server; what pp rank 0
+  broadcasts at start goes to the other stages in their tables and they replay
+  it. One Rust thread per stage owns the Python side and holds the GIL only for
+  a call; the issuing thread and the watch hand it messages and never wait.
+- **The head decides** (`rooms.rs`, pure): a room opens on every stage at
+  admission; once the item carrying the prompt's last rows is issued every
+  stage gets its pages and sends when that item has landed on its device;
+  the lease stays with the room until every stage said how its send ended,
+  then the reply goes out (one token, the first, or a 5xx naming the failed
+  stage) and the lease goes to the cache. A send is RDMA off the compute
+  stream, so unlike kern's own P/D push, nothing on the device orders it before
+  a later item reusing the pages.
+- **The first token** is written into the room's metadata by the last stage,
+  from its own answer to the item; the other stages' `send_aux` is a no-op
+  (the decode side waits for every rank's success and the slot's bytes, not
+  for who wrote them). Nothing is broadcast to the stages.
+- **Layout.** SGLang's MHA pool keeps K and V apart, a page per layer of each;
+  kern's Qwen3 manifests interleave them per page. `tools/qwen3_sglang_kv.py`
+  splits each layer's `kv.<L>` into `k.l<L>` / `v.l<L>` (only stride arguments
+  change; `kern run` gives the same 48 greedy tokens before and after) and the
+  decode side runs `--page-size 16`, kern's page.
+
+Gate: Qwen3-4B cut at layer 18 (PP2, GPUs 2 and 3), SGLang decode TP1 (GPU 1),
+gateway in PD mode, SGLang without P/D (GPU 0) as the reference; greedy, 64
+tokens, `ignore_eos`, prose prompts as `input_ids`.
+
+| check | result |
+|---|---|
+| conc1, 16 prompts (38–68 tokens) | first token 16/16 equal to the reference; 2/16 equal through 64 tokens; the other 14 part at token 3–58, every one at a reference top-1/top-2 margin of 0–0.125 (8 take the reference's second token, 6 are exact ties) |
+| conc8, 128 unique prompts (651 tokens mean) | 128/128 complete, no error; 40 req/s, p50 0.18 s, p99 0.38 s; first token 128/128 equal to the reference at the same concurrency |
+| conc32, 512 unique prompts (653 tokens mean) | 512/512 complete, no error; 115 req/s, 7.4k output tok/s, p50 0.23 s, p99 0.44 s; first token 506/512, the six others at margins 0–0.125 |
+| quiescent | head logs `active=0 due=0 rooms=0 rooms_held=0` after every burst; 26k pages kept by the cache, so sends crossed chunk boundaries |
+| default build | conc1 completions byte-identical to master's binary (PP2 and single process); at conc8 one request of 32 flips between runs of master against itself as well |
+| `tests/sim.rs` (`rooms`) | 2000 schedules clean (each reuses a page, 1991 fail some send); a head giving the lease back as the transfer is issued is caught (S1) in 465 of 500 |
+
+Stage start-up adds ~7 s for `import sglang` and the context and ~3–4 s for
+the transfer engine and registering the stage's 4320 chunks. The gateway drops
+a prefill worker it saw go down and does not take it back when it returns:
+restart the gateway with the prefill.
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
