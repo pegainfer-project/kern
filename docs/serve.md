@@ -843,6 +843,14 @@ path.
   from its own answer to the item; the other stages' `send_aux` is a no-op
   (the decode side waits for every rank's success and the slot's bytes, not
   for who wrote them). Nothing is broadcast to the stages.
+- **Prompts.** The gateway hands the head the client's body on the client's
+  route. A `/generate` with `input_ids` is taken as it is; `/v1/chat/completions`,
+  `/v1/completions` and a `/generate` with `text` become token ids through
+  SGLang's own server code embedded in the head (`kern_sglang.prompt`: its
+  tokenizer manager's model and tokenizer loading, its template manager and
+  OpenAI handlers, under the published server arguments), so the prefill reads
+  the ids the decode side tokenizes for itself. The answer is one token, never
+  streamed; the gateway streams the decode side's.
 - **Layout.** SGLang's MHA pool keeps K and V apart, a page per layer of each;
   kern's Qwen3 manifests interleave them per page. `tools/qwen3_sglang_kv.py`
   splits each layer's `kv.<L>` into `k.l<L>` / `v.l<L>` (only stride arguments

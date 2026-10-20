@@ -191,7 +191,8 @@ class Stage:
         of the stage, `{name: (address, page or slot bytes, bytes reserved)}`; `chunks` every
         mapped chunk under them; `slots` the requests that may be sending at once.
         `args` is a JSON object of the decode side's server arguments that must hold here
-        too: `kv_cache_dtype`, which it checks against its own."""
+        too: `kv_cache_dtype`, which it checks against its own, and what shapes a prompt's
+        tokens (`kern_sglang.prompt`)."""
         self.last = rank == size - 1
         # The address a rank registers for the decode side to reach it.
         os.environ["SGLANG_HOST_IP"] = ip
