@@ -216,6 +216,21 @@ tray03 4×GB300 实测 captured burst **3.75 µs/barrier**、eager run+sync
 15.8 µs；`--drop r` 让 r 缺席，其余 rank 2 s 内报"等 r 超时"而不是挂住；
 换成 multicast bulk copy 的同名 kernel 装载即被拒。
 
+**Same-host POSIX handles.** With `KERN_LOCAL_IPC_DIR` set, every VMM
+allocation is created with a POSIX file-descriptor handle instead (fabric is
+not tried), so ranks in separate processes on a host without an IMEX channel
+can still connect. `PeerHandle::Posix` has the same 72-byte wire form; its 64
+bytes are a locator (magic, boot-id digest, the exporter's pid and nonce, an
+export key), and the importer fetches the descriptor from the exporter's
+broker over a Unix socket in that directory with `SCM_RIGHTS`
+(`local_ipc.rs`). Every rank of the host sets the same directory; the runtime
+creates it 0700 and refuses one another uid can reach, both ends check the
+peer's uid, and a locator from another host is refused at import. Gates
+(2026-10-20, HGX B300 without an IMEX channel, where both fail without the
+variable): `crates/kern-py/tests/test_group.py`, two processes all-reducing
+exactly over POSIX descriptors, and `push_states --cross`, a pool's chunks
+pushed into a second process, every byte identical.
+
 **TMA 描述符与簇 launch**：pack 里的 `tensormap` 字段在装载时对
 finished 指针（buffer 基址 + call offset）`cuTensorMapEncodeTiled` 成
 128 字节镜像，拷进 pack 镜像的字段偏移处，launch 时整个 pack 按值塞进参数

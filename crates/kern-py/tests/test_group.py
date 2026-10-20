@@ -11,6 +11,9 @@ rank; every element of every round is then an exact sum of small integers.
 Needs two free GPUs, nvcc, and the `kern` wheel installed:
 
     python3 -m unittest discover -s crates/kern-py/tests -p test_group.py
+
+On a host without an IMEX channel (an HGX B300) only the ranks that share
+POSIX descriptors through `KERN_LOCAL_IPC_DIR` can connect.
 """
 import hashlib
 import json
@@ -153,7 +156,7 @@ class Group(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
-    def test_two_ranks_connect_over_gloo_and_all_reduce_exactly(self):
+    def all_reduce(self) -> None:
         ctx = mp.get_context("spawn")
         out = ctx.Queue()
         procs = [ctx.Process(target=rank, args=(r, self.root, out)) for r in range(WORLD)]
@@ -163,6 +166,16 @@ class Group(unittest.TestCase):
         for p in procs:
             p.join(timeout=60)
         self.assertEqual(results, {r: [] for r in range(WORLD)})
+
+    def test_two_ranks_connect_over_gloo_and_all_reduce_exactly(self):
+        self.all_reduce()
+
+    def test_two_ranks_share_posix_descriptors_when_kern_local_ipc_dir_is_set(self):
+        os.environ["KERN_LOCAL_IPC_DIR"] = f"{self.root}/ipc"
+        try:
+            self.all_reduce()
+        finally:
+            del os.environ["KERN_LOCAL_IPC_DIR"]
 
     def test_a_rank_without_fabric_handles_refuses_to_offer_and_names_the_imex_channel(self):
         import kern

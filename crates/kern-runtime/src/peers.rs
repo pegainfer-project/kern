@@ -65,7 +65,8 @@ impl Offer {
                     "`{name}` has no fabric handle, so no other process can map it: the device allocated it \
                      without one (KERN_NO_FABRIC is set, the device has no fabric support, or cuMemCreate \
                      refused a fabric handle because no IMEX channel is visible; a container needs \
-                     --device /dev/nvidia-caps-imex-channels/channel0)"
+                     --device /dev/nvidia-caps-imex-channels/channel0); processes on one host can set \
+                     KERN_LOCAL_IPC_DIR to share POSIX descriptors instead"
                 ))
             })?;
             entry(&mut out, name, &b);
