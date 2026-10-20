@@ -862,9 +862,9 @@ impl PpHead {
         let f = Finish { at, id: a.id, stop: a.stop, handoff: a.handoff, room: a.room };
         match (a.room, self.sglang.as_mut()) {
             (true, Some(s)) => {
-                let (pages, len) = (a.lease.page_ids().to_vec(), a.ids.len());
+                let (pages, slot, len) = (a.lease.page_ids().to_vec(), a.lease.seq_slot(), a.ids.len());
                 let held = Held { lease: a.lease, ids: a.ids, parts: a.parts };
-                let outs = s.rooms.transfer(a.id.raw(), held, pages, len, at)?;
+                let outs = s.rooms.transfer(a.id.raw(), held, pages, slot, len, at)?;
                 self.rooms(outs)?;
             }
             _ => match a.parts {

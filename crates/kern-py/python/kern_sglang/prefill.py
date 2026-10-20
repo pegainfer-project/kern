@@ -17,18 +17,22 @@ runs; what they would have set up is set up here:
 - the transfer engine over the stage's memory. A pooled state is one
   reserved address range over 64 MiB chunks, each its own allocation, and
   RDMA registers memory by allocation, so every mapped chunk is registered
-  on its own (`chunks`). SGLang sends a run of consecutive pages as one
-  transfer, which the engine cuts into slices that must each lie in one
-  registration, so a run is also cut where a chunk starts (`within`).
+  on its own (`chunks`). The engine cuts a transfer into slices that must
+  each lie in one registration, and neither a run of pages nor a token's
+  row nor a sequence's slot stops at a chunk's end, so every transfer is
+  cut where its source crosses one (`within`).
 - `KVArgs` from the manifest's naming contract, the one the decode plugin
   reads (`model.py`): pooled states `k.l<L>` and `v.l<L>` are a layer's keys
   and values in SGLang's MHA layout, a page of either the bytes SGLang moves
   for that page and layer; `mla.l<L>` a layer's latent (MLA pools). The
   stage's layers are the ones its states name, in order. Recurrent states
-  (`conv.l<L>`, `ssm.l<L>`) make the decode pool hybrid, which pairs layers
-  by id, so their presence publishes the KV layer ids; sending them is not
-  written yet. Head counts and the metadata layout come from SGLang's own
-  model config, as its scheduler derives them.
+  make the decode pool hybrid: `conv.l<L>` is a layer's conv window and
+  `ssm.l<L>` its recurrent state, a slot of either the bytes of SGLang's
+  per-slot tensor at this stage's TP of 1. A hybrid pool pairs entries by
+  layer id, so both the KV and the state entries carry theirs, and the
+  state goes as SGLang's mamba component, resliced for the decode side's
+  TP by SGLang. Head counts, the state's shapes and the metadata layout
+  come from SGLang's own model config, as its scheduler derives them.
 
 Every rank sends the request's metadata on its last chunk and the decode
 side reads it field by field from the one slot every rank writes into, so
@@ -42,18 +46,25 @@ the call: `open` when the head admits a request, then `advance` until it
 answers, once the item that wrote the request's last rows has landed on
 the device.
 """
+import bisect
 import json
+import math
 import re
 from pathlib import Path
 
 import numpy as np
 import torch
 from sglang.srt import runtime_context as rc
+from sglang.srt.configs.hybrid_arch import mambaish_config
 from sglang.srt.configs.model_config import ModelConfig
-from sglang.srt.disaggregation.base.conn import KVArgs, KVPoll
-from sglang.srt.disaggregation.mooncake import conn as mooncake_conn
+from sglang.srt.disaggregation.base.conn import KVArgs, KVPoll, StateType
 from sglang.srt.disaggregation.mooncake.conn import MooncakeKVBootstrapServer, MooncakeKVManager, MooncakeKVSender
-from sglang.srt.disaggregation.utils import DisaggregationMode, MetadataBuffers, get_dsa_seed_metadata_dim
+from sglang.srt.disaggregation.utils import (
+    DisaggregationMode,
+    MetadataBuffers,
+    append_state_component,
+    get_dsa_seed_metadata_dim,
+)
 from sglang.srt.distributed.device_communicators.mooncake_transfer_engine import init_mooncake_transfer_engine
 from sglang.srt.runtime_context import get_disagg
 from sglang.srt.server_args import ServerArgs
@@ -93,25 +104,59 @@ class Group:
         return tuple(v) if isinstance(v, list) else v
 
 
-def within(per: int):
-    """SGLang's grouping of consecutive pages into one transfer each, a group
-    also ending where a chunk of `per` pages ends."""
+def within(chunks: list):
+    """Transfer blocks `(source, destination, bytes)` cut wherever the source
+    crosses from one of `chunks` into the next."""
+    bounds = sorted({int(p) for p, _ in chunks} | {int(p) + int(n) for p, n in chunks})
 
-    def group(src: np.ndarray, dst: np.ndarray):
-        if src.size == 0 or dst.size == 0:
-            return [], []
-        if src.size != dst.size:
-            raise ValueError(f"{src.size} source pages for {dst.size} destination pages")
-        brk = np.where((np.diff(src) != 1) | (np.diff(dst) != 1) | (src[1:] % per == 0))[0] + 1
-        return [g.tolist() for g in np.split(src, brk)], [g.tolist() for g in np.split(dst, brk)]
+    def cut(blocks):
+        out = []
+        for s, d, n in blocks:
+            s, d, n = int(s), int(d), int(n)
+            i = bisect.bisect_right(bounds, s)
+            while i < len(bounds) and bounds[i] < s + n:
+                m = bounds[i] - s
+                out.append((s, d, m))
+                s, d, n, i = s + m, d + m, n - m, i + 1
+            out.append((s, d, n))
+        return out
 
-    return group
+    return cut
+
+
+def mamba(kinds: dict, states: dict, cfg: ModelConfig) -> dict:
+    """The stage's recurrent states as SGLang's mamba component: per entry,
+    conv windows then recurrent states, each in layer order, its address,
+    bytes, slot bytes, the axis it is sliced along for the decode side's TP
+    (its length, the rows before it, the conv window's sub-blocks) and its
+    layer, from the shapes SGLang's model config gives a TP of 1."""
+    shape = mambaish_config(cfg).mamba2_cache_params.shape
+    if len(shape.conv) != 1:
+        raise NotImplementedError(f"{len(shape.conv)} conv windows a layer")
+    axis = getattr(shape, "conv_slice_axis", 0)
+    per = {
+        "conv": (shape.conv[0], axis, getattr(shape, "conv_shard_groups", None)),
+        "ssm": (shape.temporal, 0, None),
+    }
+    if [l for l, _ in kinds.get("conv", [])] != [l for l, _ in kinds.get("ssm", [])]:
+        raise ValueError(f"conv layers {kinds.get('conv')} and ssm layers {kinds.get('ssm')} differ")
+    out = {k: [] for k in ("ptrs", "lens", "items", "dims", "outer", "groups", "ids")}
+    for kind, (dims, ax, groups) in per.items():
+        for l, name in kinds[kind]:
+            ptr, item, reserved = states[name]
+            if item % math.prod(dims):
+                raise ValueError(f"`{name}`: a slot of {item} bytes is not SGLang's {kind} shape {tuple(dims)}")
+            for k, v in zip(out, (ptr, reserved, item, dims[ax], math.prod(dims[:ax]), groups, l)):
+                out[k].append(v)
+    return out
 
 
 def manager(chunks: list, last: bool):
     """`MooncakeKVManager` registering `chunks` (every mapped chunk of the
-    stage's states, `(address, bytes)`) instead of whole states, and whose
-    `send_aux` on any stage but the last writes nothing."""
+    stage's states, `(address, bytes)`) instead of whole states, cutting
+    every transfer at their boundaries, and whose `send_aux` on any stage
+    but the last writes nothing."""
+    cut = within(chunks)
 
     class Manager(MooncakeKVManager):
         def _registerable_regions(self):
@@ -122,6 +167,9 @@ def manager(chunks: list, last: bool):
             ptrs, lens = zip(*self._registerable_regions())
             if (ret := self.engine.batch_register(list(ptrs), list(lens))) != 0:
                 raise RuntimeError(f"registering {len(ptrs)} regions with the transfer engine failed ({ret})")
+
+        def _transfer_data(self, session, blocks):
+            return super()._transfer_data(session, cut(blocks))
 
         if not last:
             def send_aux(self, req, prefill_aux_index, dst_aux_ptrs):
@@ -151,16 +199,10 @@ class Stage:
         init_mooncake_transfer_engine(hostname=ip, gpu_id=0, ib_device=ib_device)
 
         kinds = layers(states)
-        if any(k in kinds for k in RECURRENT):
-            raise NotImplementedError("sending recurrent state (`conv` / `ssm`) to SGLang is not written")
+        hybrid = any(k in kinds for k in RECURRENT)
         kv = [s for kind in KV for _, s in kinds.get(kind, [])]
         ids = [l for kind in KV for l, _ in kinds.get(kind, [])]
-        chunk = {int(n) for _, n in chunks}
-        item = {int(states[s][1]) for s in kv}
-        if len(chunk) != 1 or len(item) != 1 or next(iter(chunk)) % next(iter(item)):
-            raise NotImplementedError(f"pages of {sorted(item)} bytes over chunks of {sorted(chunk)} bytes")
-        mooncake_conn.group_concurrent_contiguous = within(next(iter(chunk)) // next(iter(item)))
-        first = min(ids)
+        first = min(l for ls in kinds.values() for l, _ in ls)
         self.meta = MetadataBuffers(
             slots, hidden_size=16, hidden_states_dtype=torch.float32,
             max_sampling_mask_tokens=sa.sampling_mask_max_tokens,
@@ -169,11 +211,13 @@ class Stage:
         a = KVArgs()
         a.engine_rank, a.pp_rank, a.system_dp_rank, a.rust_http_port = 0, rank, 0, None
         a.kv_cache_dtype_str = rc.get_model().kv_cache_dtype
-        a.prefill_start_layer, a.prefill_end_layer = first, max(ids) + 1
+        # A hybrid pool counts its KV layers among the full-attention ones.
+        full = cfg.hf_text_config.full_attention_layer_ids if hybrid else range(first)
+        a.prefill_start_layer, a.prefill_end_layer = sum(l < first for l in full), max(ids) + 1
         a.kv_data_ptrs = [states[s][0] for s in kv]
         a.kv_item_lens = [states[s][1] for s in kv]
         a.kv_data_lens = [states[s][2] for s in kv]
-        a.kv_layer_ids = []
+        a.kv_layer_ids = ids if hybrid else []
         a.num_draft_entries = 0
         a.kv_head_num = a.total_kv_head_num = cfg.get_total_num_kv_heads()
         a.page_size = page
@@ -181,8 +225,13 @@ class Stage:
         a.ib_device, a.gpu_id = ib_device, 0
         a.state_types, a.state_data_ptrs, a.state_data_lens, a.state_item_lens = [], [], [], []
         a.state_dim_per_tensor, a.state_slice_outer_counts, a.state_layer_ids, a.state_conv_shard_groups = [], [], [], []
-        a.is_hybrid_mla_backend, a.mla_compression_ratios = False, None
-        self.mgr = manager(chunks, self.last)(a, DisaggregationMode.PREFILL, sa, "mla" in kinds)
+        a.is_hybrid_mla_backend, a.mla_compression_ratios = hybrid and "mla" in kinds, None
+        if hybrid:
+            m = mamba(kinds, states, cfg)
+            append_state_component(a, StateType.MAMBA, m["ptrs"], m["lens"], m["items"], m["dims"], m["groups"],
+                                   m["outer"], m["ids"])
+        self.hybrid = hybrid
+        self.mgr = manager(chunks, self.last)(a, DisaggregationMode.PREFILL, sa, "mla" in kinds and not hybrid)
         self.consensus = json.loads(json.dumps(self.group.sent))
         self.addr = f"{ip}:{bootstrap_port}"
         self.senders: dict[int, MooncakeKVSender] = {}
@@ -193,10 +242,11 @@ class Stage:
         """Meet the decode side in `room`: SGLang's sender bootstraps while the prompt runs."""
         self.senders[room] = MooncakeKVSender(self.mgr, self.addr, room)
 
-    def advance(self, room: int, pages: list[int], length: int, token: int | None) -> str | None:
-        """Move the send of `room` on: `pages` hold `length` positions, `token`
-        is the first token on the last stage. None while it goes on; once it
-        ended, "" when sent, else why it failed, and the room is let go."""
+    def advance(self, room: int, pages: list[int], slot: int | None, length: int, token: int | None) -> str | None:
+        """Move the send of `room` on: `pages` hold `length` positions and
+        `slot` the request's recurrent state, `token` is the first token on
+        the last stage. None while it goes on; once it ended, "" when sent,
+        else why it failed, and the room is let go."""
         s = self.senders[room]
         poll = s.poll()
         if room not in self.sending and poll == KVPoll.WaitingForInput:
@@ -210,10 +260,13 @@ class Stage:
                 self.meta.cached_tokens[aux].zero_()
                 self.meta.bootstrap_room[aux, 0] = room
             # The decode side holds the prefix it already has; the rest goes, whole pages.
-            skip = s.pop_decode_prefix_len() // self.mgr.kv_args.page_size
-            left = np.asarray(pages[skip:-(-length // self.mgr.kv_args.page_size)], dtype=np.int32)
+            page = self.mgr.kv_args.page_size
+            skip = s.pop_decode_prefix_len() // page
+            left = np.asarray(pages[skip:-(-length // page)], dtype=np.int32)
+            if self.hybrid and slot is None:
+                return self.end(room, "a hybrid pool's request with no state slot")
             s.init(len(left), aux)
-            s.send(left)
+            s.send(left, [[slot]] if self.hybrid else None, num_kv_tokens=length - skip * page)
             return None
         if poll == KVPoll.Success:
             return self.end(room, "")

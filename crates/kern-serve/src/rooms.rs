@@ -33,13 +33,16 @@ use serde::{Deserialize, Serialize};
 use crate::pd::Req;
 
 /// What every stage sends for one request: the prompt's `len` positions in
-/// `pages`, into bootstrap room `room`, the request's first token entry
-/// `at` of the last stage's answer to the item that carried its last rows.
+/// `pages` and the state in sequence slot `slot` (none when the manifest
+/// has no per-sequence state), into bootstrap room `room`, the request's
+/// first token entry `at` of the last stage's answer to the item that
+/// carried its last rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transfer {
     pub req: Req,
     pub room: u64,
     pub pages: Vec<i32>,
+    pub slot: Option<i32>,
     pub len: usize,
     pub at: usize,
 }
@@ -103,16 +106,25 @@ impl<H> Rooms<H> {
     }
 
     /// `req`'s last rows are issued from `held`, its `pages` holding `len`
-    /// positions and its token entry `at` of the item's answer: every stage
-    /// sends them, and `held` stays here until every send ended.
-    pub fn transfer(&mut self, req: Req, held: H, pages: Vec<i32>, len: usize, at: usize) -> Result<Vec<Out<H>>> {
+    /// positions, its state in `slot`, and its token entry `at` of the
+    /// item's answer: every stage sends them, and `held` stays here until
+    /// every send ended.
+    pub fn transfer(
+        &mut self,
+        req: Req,
+        held: H,
+        pages: Vec<i32>,
+        slot: Option<i32>,
+        len: usize,
+        at: usize,
+    ) -> Result<Vec<Out<H>>> {
         let Some(r) = self.live.get_mut(&req) else { bail!("request {req} is prefilled with no room open") };
         if r.transferred {
             bail!("request {req} is prefilled twice");
         }
         r.transferred = true;
         r.held = Some(held);
-        Ok(vec![Out::Transfer(Transfer { req, room: r.room, pages, len, at })])
+        Ok(vec![Out::Transfer(Transfer { req, room: r.room, pages, slot, len, at })])
     }
 
     /// The first token of `req`, from the last stage's answer.

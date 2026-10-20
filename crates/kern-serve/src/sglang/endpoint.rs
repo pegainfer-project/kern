@@ -181,7 +181,7 @@ fn run(stage: Py<PyAny>, mut ledger: Ledger, rx: mpsc::Receiver<Msg>, sent: &mut
             }
             let mut ended = Vec::new();
             for (room, t, tok) in ready {
-                let r: Option<String> = s.call_method1("advance", (room, t.pages, t.len, tok))?.extract()?;
+                let r: Option<String> = s.call_method1("advance", (room, t.pages, t.slot, t.len, tok))?.extract()?;
                 if let Some(why) = r {
                     ended.push((t.req, Some(why).filter(|w| !w.is_empty())));
                 }

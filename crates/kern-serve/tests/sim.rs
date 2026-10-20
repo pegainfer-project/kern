@@ -1032,7 +1032,7 @@ mod rooms {
                         false => Some(lease),
                     };
                     self.unanswered.insert(req);
-                    let outs = self.rooms.transfer(req, held, pages.clone(), pages.len(), 0);
+                    let outs = self.rooms.transfer(req, held, pages.clone(), None, pages.len(), 0);
                     self.apply(outs.map_err(|e| format!("{e:#}"))?)
                 }
                 Step::First(req) => {
