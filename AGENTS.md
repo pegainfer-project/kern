@@ -58,7 +58,7 @@ the schema golden, lints) belongs in CI, not here.
   manifest (`pp/`); prefill/decode disaggregation, a pipeline head handing
   prompts to decode tiers (`pd/`). Outside `default-members`: it needs
   protoc and the pegainfer/vLLM serving stack, so it builds by name where
-  those are (the kernel-lab container, the release runner).
+  those are (the kernel-lab container, CI, the release runner).
 - `crates/kern-py` — `import kern`, the runtime for a Python host (a
   cdylib built by maturin), and the `kern_vllm` / `kern_sglang` plugins that
   run a manifest as vLLM's or SGLang's model; shipped as the `kern-llm`

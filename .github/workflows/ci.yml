@@ -5,9 +5,29 @@ on:
     branches: [master]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+# Every Rust job builds the workspace but kern-py (a Python extension, built
+# by maturin in the release pipeline), kern-serve included, so each installs
+# protoc and OpenSSL. Rust caches are written from master only: a PR reads
+# master's and never pushes a copy of its own into the 10 GB repository cap.
+
 jobs:
   docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -25,34 +45,11 @@ jobs:
         working-directory: docs
         run: npm run build
 
-  manifest:
+  tools:
     runs-on: ubuntu-latest
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Format check
-        run: cargo fmt --check
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Clippy
-        # The workspace's default members: the runtime compiles anywhere,
-        # cudarc loads libcuda at run time; kern-run needs libssl-dev for
-        # the chat renderers. kern-serve also needs protoc and is built by
-        # the release pipeline.
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test
-        # The runtime's tests are host-side (Pool, Prefix, Host, values); the
-        # GPU gate is `kern test`.
-        run: cargo test -p kern-manifest -p kern-pool -p kern-runtime -p kern-test
 
       - name: Performance evidence regression tests
         run: python3 -m unittest discover -s tools -p test_profile.py
@@ -91,6 +88,49 @@ jobs:
             exit 1
           fi
 
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude kern-py --all-targets --locked -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: Test
+        # Host-side only: tests that need a GPU are `#[ignore]`d, and the GPU
+        # gate is `kern test`.
+        run: cargo test --workspace --exclude kern-py --locked
+
       - name: Schema golden check
         run: |
           cargo run -q -p kern-manifest --example gen_schema > /tmp/manifest-v7.schema.json
@@ -104,10 +144,9 @@ jobs:
     # is enforced: a `pub(crate)` cannot cross a crate boundary, so that class
     # is exact. `dead_public` and `unnecessary_public` stay an audit tool until
     # the public surface is trimmed; see Gates in AGENTS.md. Hawk is built
-    # against one exact rustc; bump both together. Hawk compiles the whole
-    # workspace, kern-serve included, so the job needs the serving stack's
-    # build dependencies and keeps its target directory between runs.
+    # against one exact rustc; bump both together.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       HAWK_VERSION: "0.1.14"
       HAWK_RUST: "1.98.1"
@@ -125,6 +164,7 @@ jobs:
         with:
           workspaces: ". -> target/hawk"
           key: hawk-${{ env.HAWK_VERSION }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Install cargo-hawk
         run: |
@@ -138,6 +178,12 @@ jobs:
           cargo hawk --version
 
       - name: Restricted visibility is the tightest that compiles
+        # Hawk's check and its doctest pass disagree on RUSTC_BOOTSTRAP, which
+        # build scripts such as proc-macro2's track, so each pass dirtied the
+        # other's whole dependency tree and the cache never held. Pinning it
+        # leaves only the workspace crates to recheck.
+        env:
+          RUSTC_BOOTSTRAP: 1
         run: |
           cargo +"$HAWK_RUST" hawk check --color always --target-dir target/hawk \
             -A hawk::dead_public -A hawk::unnecessary_public \

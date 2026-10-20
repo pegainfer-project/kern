@@ -165,7 +165,7 @@ fn main() -> anyhow::Result<()> {
                         rt.run_range("round", &dv, 0, end)?;
                         if rank == 0 {
                             let raw = rt.read_buffer_prefix("draft_tokens", 40)?;
-                            let pred: Vec<i64> = raw.chunks_exact(8).map(|v| i64::from_le_bytes(v.try_into().unwrap())).collect();
+                            let pred: Vec<i64> = raw.as_chunks::<8>().0.iter().map(|v| i64::from_le_bytes(*v)).collect();
                             proposals.push(serde_json::json!({"anchor_position": processed, "anchor_id": token, "draft_ids": pred}));
                         }
                         gate.wait();
