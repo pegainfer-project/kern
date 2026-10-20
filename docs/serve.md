@@ -877,6 +877,38 @@ the transfer engine and registering the stage's 4320 chunks. The gateway drops
 a prefill worker it saw go down and does not take it back when it returns:
 restart the gateway with the prefill.
 
+### Kimi-K3, 1P1D (2026-10-20, 4 trays of 4×GB300, RoCE)
+
+P is the K3 manifest's PP8 prefill (896 experts, chunk 8192, 16 sequences a
+call, fp8 KV, KDA state in SGLang's layout) on two trays; D is SGLang with the
+kern decode plugin, TP8 / DCP8, on two others; `kv_cache_dtype` fp8_e4m3 on
+both. The reference is the same D behind SGLang's own TP8 prefill (2026-10-19).
+
+| check | kern P | SGLang P |
+|---|---|---|
+| conc1 TTFT, cold, 8k / 32k / 128k tokens | 0.82 / 1.71 / 5.15 s (P alone: 0.74 / 1.67 / 5.10 s) | — |
+| 32 cold prompts of 16k at once | last first token at 11.3 s, 46k tok/s; a stage's 8192-row item 135–165 ms | — |
+| AgentX c32, 900 s (`inferencex-agentx-mvp`, 256k) | 1073 requests, 0 errors; 1.14 req/s, 850 out tok/s; TTFT p50 / p90 2.9 / 7.4 s; ITL p50 18.8 ms; P prefix hit 92.7% | 989, 0 errors; 1.05 req/s, 734 out tok/s; TTFT 5.6 / 18.5 s; ITL 17.5 ms; hit 72.3% |
+| gsm8k 5-shot, c64 (flexible / strict) | 0.9704 / 0.9712 | 0.9712 / 0.9719 |
+| gsm8k 0-shot, all 1319 | 1289 | 1287 |
+| MATH-500, 200 of them, 0-shot | 197 | 199 |
+| needle, 64k–257k tokens, 20 | 20 | 20 |
+| two-turn gsm8k, 256 chats, second turn graded | 252 with the first turns held in P's cache (227 hits), 251 cold; first token equal in 238 | — |
+
+- D's step time at the same running count is the reference's (16–23 running:
+  19.3 against 19.2 ms); ITL is higher because a faster P keeps D fuller.
+- Two cold runs of the same kern P differ by as much as it differs from the
+  reference (gsm8k 0-shot first 256: 254 and 251; MATH first 100: 97 and 97).
+- A prompt whose cached prefix is hit can take a different first token than
+  the same prompt cold: its tail is a call of its own (a different row count,
+  so other GEMM tiles), the noise of chunked prefill. In 32 cold / hit pairs
+  read off the live logits, the 4 that flipped had cold top-1 / top-2 margins
+  of 0.08 or less, and no pair above 0.13 flipped; a hit itself is
+  bit-identical to computing the prefix and then the tail on one lease.
+- A recurrent state is checkpointed where a prompt ends, so a prompt sent
+  again whole finds no state to resume one token earlier and runs cold; a
+  prompt that extends an earlier one (the next turn) hits.
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
