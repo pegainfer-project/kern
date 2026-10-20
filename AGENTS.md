@@ -8,38 +8,75 @@ decoding trick belongs in a generator under `tools/` or in the manifest itself,
 never in `crates/`. When a change to `crates/` wants a model-specific branch,
 the design is wrong, not the model.
 
-`docs/` is the design record (mostly Chinese); code, comments and commit
-messages are English. `docs/manifest.md`, `runtime.md`, `serve.md`,
-`spec-decode.md`, `test.md`, `registry.md` are the contracts; `docs/roadmap.md` is what is
-being built and the gate that closes each item; `docs/lessons.md` is what went
-wrong before and the rule each incident left behind — read it before a gate.
+Everything is written in English: code, comments, commit messages and docs.
+`docs/site/` is the public documentation (VitePress, built into the website);
+the files at the root of `docs/` are the design record, indexed by purpose in
+`docs/README.md`. Its contracts (`manifest.md`, `runtime.md`, `pool.md`,
+`protocol.md`, `serve.md`, `test.md`, `bench.md`, `spec-decode.md`,
+`registry.md`, `vllm.md`, `sglang.md`) say what the code promises;
+`docs/roadmap.md` is what is being built and the gate that closes each item;
+`docs/lessons.md` is what went wrong before and the rule each incident left
+behind — read it before a gate.
 
 Only judgment lives in this file. Anything a machine can check (formatting,
 the schema golden, lints) belongs in CI, not here.
 
 ## Orientation
 
-- `crates/kern-manifest` — types, schema, `verify`. Verification collects every
-  diagnostic; it never stops at the first.
-- `crates/kern-pool` — the states' accounting: chunks, pages and slots,
-  leases, the checkpoint table, the host tier. Pure host code with no CUDA;
-  every decision comes back as a plan the runtime executes.
-- `crates/kern-runtime` — loads a verified manifest, allocates, lowers programs
-  to flat launch lists, runs them. The only crate that touches CUDA.
-- `crates/kern-test` — the `kern test` harness: static diff, tap, noise
-  floor, fuzz, perf, verdict, spoken to a `Side`. Pure host code with no
-  CUDA; its tests drive a fake side.
-- `crates/kern-run` — the `kern` binary (`run` / `test` / `kernels`),
-  `kern.toml`, the real `Side` over `Runtime`.
-- `crates/kern-serve` — the pegainfer/vLLM front end plus `KernScheduler`.
-  A workspace member outside `default-members`: builds where protoc and
-  libssl-dev are (the kernel-lab container, the release runner), by name.
+- `crates/kern-manifest` — the manifest as types and schema (`types`), the
+  load-time `verify`, which collects every diagnostic and never stops at the
+  first, the serving `protocol` a driver reads off a manifest, and `cut`,
+  which splits a manifest into pipeline stages. Pure host code.
+- `crates/kern-pool` — the states' accounting: physical chunks (`chunks`),
+  token and sequence slots handed out as leases (`pages`), frozen page chains
+  (`store`), the prefix radix index (`prefix`), the pinned host tier
+  (`host`), positions dealt over a group (`deal`). Pure host code with no
+  CUDA; every decision comes back as a plan the runtime executes.
+- `crates/kern-runtime` — the only crate that touches CUDA. Loads a verified
+  manifest (`load`, `weights`, `derive`, `cubin`), lowers programs to flat
+  launch lists (`compile`) and runs them (`exec`); runs kern-pool's plans
+  (`lease`, `park`, `push`); joins ranks over exported memory and NCCL
+  (`peers`, `nccl`); provides the cuBLAS externs (`cublas`); runs inside
+  another engine's process on its memory and stream (`host`). `harness`,
+  `compare` and `profile` serve the test and bench tools, never the serving
+  path.
+- `crates/kern-test` — the `kern test` harness as a library: static diff of
+  two manifests (`diff`), A recorded span by span with its noise floor
+  (`harness`), B replayed and fuzzed against it (`replay`), perf and the
+  verdict in one report (`report`), all spoken to a `Side`; and the
+  e2e-logits scoring (`e2e`). Pure host code with no CUDA; its tests drive a
+  fake side.
+- `crates/kern-run` — the `kern` binary: `run`, `test` (and `test
+  e2e-logits`), `bench`, `kernels`, `verify`, `cut`, and `server`, which
+  launches kern-serve. Around it: `kern.toml` (`config`), where inputs and
+  weights come from (`inputs`, `weights`), chats rendered through vLLM's
+  renderers (`chat`), and the real `Side` over `Runtime`.
+- `crates/kern-serve` — the OpenAI-compatible server: pegainfer's frontend
+  over `KernScheduler` (`scheduler`), which decides every rank's pool in one
+  place (`ranks`) while each GPU is a process of its own (`executor`, and
+  `watch` to fail the group fast); pipeline-stage prefill over a cut
+  manifest (`pp/`); prefill/decode disaggregation, a pipeline head handing
+  prompts to decode tiers (`pd/`). Outside `default-members`: it needs
+  protoc and the pegainfer/vLLM serving stack, so it builds by name where
+  those are (the kernel-lab container, the release runner).
+- `crates/kern-py` — `import kern`, the runtime for a Python host (a
+  cdylib built by maturin), and the `kern_vllm` / `kern_sglang` plugins that
+  run a manifest as vLLM's or SGLang's model; shipped as the `kern-llm`
+  wheel. Outside `default-members`.
+- `tools/` — where model knowledge lives: kernel capture and lifting
+  (`kernel-capture/`, `capture_*`), the registry's tooling (`kernels/`),
+  hand-written kernel sources (`kernels-src/`), manifest generators
+  (`gen_*.py`, `dsv41/`), and gates that are not models (`toy/`, manifests
+  with an exact oracle; `e2e/`, the whole serving path per tray). A new
+  model's manifest work lives in a repo of its own, as K3 does in
+  `kern-k3-pp-prefill`.
 - `tools/dsv41/**/Cargo.toml` — GPU harnesses over the runtime's public API;
   workspace members, built by name.
-- `tools/` — capture, extract, export, manifest generators. Model knowledge
-  lives here.
 - `kernel_index/` — the kernel registry's facts, one TOML per family
   (`docs/registry.md`); the bytes live in the HF blob store.
+- `examples/` and `kern.toml` — the fixture manifests and the targets that
+  name them with their kernels and weights; `kern test qwen3-4b` runs from
+  here. `schema/` holds the manifest schema golden.
 - GPU tests need a free GPU on a shared tray: `nvidia-smi` before `kern test`.
 
 ## What we prefer
@@ -55,11 +92,12 @@ should move into a pure function that returns a plan; the shell only stages,
 runs and reads back. `Pool` / `Lease` in `kern-pool` are the model: pure host
 code that `Runtime` wraps.
 
-**A type exists because something was checked when it was built.** `Lease`,
-`Contract`, `Policy`, `Topology`: constructed by a `check` / `new` that returns
-`Result`; after that the invariant travels with the type and nothing
-downstream re-checks it. Parse, don't validate. A plain `Vec<i64>` of slots is
-a smell; a `Lease` that can only hand out its own slots is the fix.
+**A type exists because something was checked when it was built.**
+`Verified`, `Protocol`, `Lease`: only `verify`, `Protocol::check` and the
+`Pool` make one, each returning `Result`; after that the invariant travels
+with the type and nothing downstream re-checks it. Parse, don't validate. A
+plain `Vec<i64>` of slots is a smell; a `Lease` that can only hand out its own
+slots is the fix.
 
 **Errors say who acts.** `kern_runtime::Error` is grouped by who has to fix it
 (provider, artifact, caller). A message names the manifest object in backticks
@@ -127,9 +165,10 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
   of a 2k chunk over an empty cache, 95% of 512 rows over 32k of hit), so a
   workload names the shapes the service actually sees, never one
   representative one.
-- kern-serve: conc1 output is identical to `kern run`; `--spec` acceptance
-  rate does not collapse under load. Measured numbers go into `docs/serve.md`
-  with date and machine, or they did not happen.
+- kern-serve: conc1 output is identical to `kern run`; on a manifest whose
+  step is a speculative round, acceptance rate does not collapse under load.
+  Measured numbers go into `docs/serve.md` with date and machine, or they did
+  not happen.
 - Visibility is the tightest that compiles. The CI `hawk` job
   ([astral-sh/hawk](https://github.com/astral-sh/hawk)) denies
   `hawk::unnecessary_restricted_visibility`: a `pub(crate)` or `pub(super)`
@@ -145,7 +184,9 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
 ## Commits
 
 `<area>: <what is true after the commit, lowercase, no period>`. Area is the
-crate or the feature: `runtime:`, `kern-serve:`, `manifest:`, `test:`,
-`k3:`, `docs:`. The subject states the new fact, not the activity
-(`runtime: own the token slots, hand them out as leases`). The body carries
-the why and the gate result if one was measured. One idea per commit.
+crate or the feature: `runtime:`, `kern-serve:`, `manifest:`, `pool:`,
+`test:`, `kern-py:`, `release:`, `docs:`. The subject states the new fact,
+not the activity (`runtime: own the token slots, hand them out as leases`).
+The body carries the why and the gate result if one was measured. One idea
+per commit. A PR is squash-merged, so its title is the commit subject and
+follows the same form.
