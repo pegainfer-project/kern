@@ -21,6 +21,9 @@
 //! client ended exactly once, with the greedy chain when it finished, and
 //! nothing is held anywhere. A violation is shrunk to the shortest
 //! schedule that still shows it.
+//!
+//! [`rooms`] simulates the pipeline as SGLang's prefill instead: the
+//! head's rooms, every stage's sends, the leases they read.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -881,4 +884,284 @@ fn an_abort_from_the_front_comes_behind_the_heads_start() {
     let reached = reach(cfg, 3000, "FrontSweep | abort");
     eprintln!("of 3000 schedules, {reached} have the front abort a decoding request");
     assert!(reached > 20, "{reached} of 3000");
+}
+
+/// The pipeline as SGLang's prefill: the head's real [`Rooms`] over real
+/// leases of a pool too small for every prompt at once, so a page goes to
+/// the next prompt as soon as a room lets it go. Every stage is an inbox
+/// of the head's jobs and the sends it has going; a send ends, sent or
+/// failed, at any step, and the last stage's first token comes back at any
+/// step after the transfer. Checked at every step: a stage's send reads
+/// only pages its request still owns (S1); a room ends once, with its first
+/// token, failed exactly when a stage's send failed (S4). At quiescence:
+/// every request ended, and no room, lease, job or send is left (L2).
+mod rooms {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+    use std::sync::Arc;
+
+    use kern_manifest::types::Manifest;
+    use kern_pool::{Lease, Pool};
+    use kern_serve::pd::Req;
+    use kern_serve::rooms::{Out, Rooms};
+
+    use super::{first_token, Rand};
+
+    const STAGES: usize = 3;
+    const REQUESTS: usize = 8;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Step {
+        Admit,
+        /// The head issues `req`'s last rows and hands every stage its transfer.
+        Prefill(Req),
+        /// The last stage answers the item that carried `req`'s last rows.
+        First(Req),
+        Recv(usize),
+        /// Stage `s`'s send of `req` ends.
+        Send(usize, Req),
+        Hear,
+    }
+
+    enum Job {
+        Open(Req),
+        Transfer(Req, Vec<i32>),
+    }
+
+    enum Heard {
+        First(Req),
+        Sent(usize, Req, Option<String>),
+    }
+
+    #[derive(Default)]
+    struct Stage {
+        inbox: VecDeque<Job>,
+        open: BTreeSet<Req>,
+        sending: BTreeMap<Req, Vec<i32>>,
+    }
+
+    struct Sim {
+        pool: Arc<Pool>,
+        rooms: Rooms<Option<Lease>>,
+        /// The mutant: the lease goes back as the transfer is issued, as
+        /// kern's own P/D does behind a push on the stream.
+        early: bool,
+        rand: Rand,
+        waiting: VecDeque<(Req, usize)>,
+        admitted: BTreeMap<Req, Lease>,
+        unanswered: BTreeSet<Req>,
+        stages: Vec<Stage>,
+        heard: VecDeque<Heard>,
+        /// The request each leased page is written for.
+        owner: BTreeMap<i32, Req>,
+        /// The request each page was last leased to.
+        last: BTreeMap<i32, Req>,
+        failed: BTreeSet<Req>,
+        ended: BTreeMap<Req, Option<String>>,
+        log: Vec<String>,
+    }
+
+    impl Sim {
+        fn new(seed: u64, early: bool) -> Sim {
+            let plain = include_str!("../../kern-manifest/tests/fixtures/plain.json");
+            let plain = Manifest::from_json(plain).unwrap();
+            let mut rand = Rand(seed);
+            let waiting = (1..=REQUESTS as Req).map(|r| (r, 1 + rand.next(40))).collect();
+            Sim {
+                pool: Arc::new(Pool::new(&plain, 64, 1024, 16, Some(96)).unwrap().0),
+                rooms: Rooms::new(STAGES),
+                early,
+                rand,
+                waiting,
+                admitted: BTreeMap::new(),
+                unanswered: BTreeSet::new(),
+                stages: (0..STAGES).map(|_| Stage::default()).collect(),
+                heard: VecDeque::new(),
+                owner: BTreeMap::new(),
+                last: BTreeMap::new(),
+                failed: BTreeSet::new(),
+                ended: BTreeMap::new(),
+                log: Vec::new(),
+            }
+        }
+
+        fn enabled(&self) -> Vec<Step> {
+            let mut v = Vec::new();
+            if self.waiting.front().is_some_and(|&(_, n)| self.pool.lease(n).is_ok()) {
+                v.push(Step::Admit);
+            }
+            v.extend(self.admitted.keys().map(|&r| Step::Prefill(r)));
+            v.extend(self.unanswered.iter().map(|&r| Step::First(r)));
+            for (s, st) in self.stages.iter().enumerate() {
+                if !st.inbox.is_empty() {
+                    v.push(Step::Recv(s));
+                }
+                v.extend(st.sending.keys().map(|&r| Step::Send(s, r)));
+            }
+            if !self.heard.is_empty() {
+                v.push(Step::Hear);
+            }
+            v
+        }
+
+        fn step(&mut self, s: Step) -> Result<(), String> {
+            self.log.push(format!("{s:?}"));
+            match s {
+                Step::Admit => {
+                    let (req, n) = self.waiting.pop_front().expect("enabled");
+                    let lease = self.pool.lease(n).expect("enabled");
+                    for &p in lease.page_ids() {
+                        if let Some(o) = self.owner.insert(p, req) {
+                            return Err(format!("page {p} leased to request {req} while request {o} holds it"));
+                        }
+                        if self.last.insert(p, req).is_some() {
+                            self.log.push(format!("page {p} reused"));
+                        }
+                    }
+                    self.admitted.insert(req, lease);
+                    let outs = self.rooms.open(req, 1000 + req).map_err(|e| format!("{e:#}"))?;
+                    self.apply(outs)
+                }
+                Step::Prefill(req) => {
+                    let lease = self.admitted.remove(&req).expect("enabled");
+                    let pages = lease.page_ids().to_vec();
+                    let held = match self.early {
+                        true => {
+                            self.free(req, lease);
+                            None
+                        }
+                        false => Some(lease),
+                    };
+                    self.unanswered.insert(req);
+                    let outs = self.rooms.transfer(req, held, pages.clone(), pages.len(), 0);
+                    self.apply(outs.map_err(|e| format!("{e:#}"))?)
+                }
+                Step::First(req) => {
+                    self.unanswered.remove(&req);
+                    self.heard.push_back(Heard::First(req));
+                    Ok(())
+                }
+                Step::Recv(s) => {
+                    let st = &mut self.stages[s];
+                    match st.inbox.pop_front().expect("enabled") {
+                        Job::Open(req) => {
+                            st.open.insert(req);
+                        }
+                        Job::Transfer(req, pages) => {
+                            if !st.open.remove(&req) {
+                                return Err(format!("stage {s}: a transfer of request {req} with no room open"));
+                            }
+                            st.sending.insert(req, pages);
+                        }
+                    }
+                    Ok(())
+                }
+                Step::Send(s, req) => {
+                    let pages = self.stages[s].sending.remove(&req).expect("enabled");
+                    let taken = pages.iter().find_map(|p| self.owner.get(p).filter(|&&o| o != req).map(|o| (p, o)));
+                    if let Some((p, o)) = taken {
+                        return Err(format!("S1: stage {s} sends request {req}'s page {p}, which request {o} writes"));
+                    }
+                    let failure = (self.rand.next(5) == 0).then(|| format!("room {} failed", 1000 + req));
+                    if failure.is_some() {
+                        self.failed.insert(req);
+                        self.log.push(format!("stage {s}'s send of request {req} failed"));
+                    }
+                    self.heard.push_back(Heard::Sent(s, req, failure));
+                    Ok(())
+                }
+                Step::Hear => {
+                    let outs = match self.heard.pop_front().expect("enabled") {
+                        Heard::First(req) => self.rooms.first(req, first_token(req)),
+                        Heard::Sent(s, req, failure) => self.rooms.sent(req, s, failure),
+                    };
+                    self.apply(outs.map_err(|e| format!("{e:#}"))?)
+                }
+            }
+        }
+
+        fn apply(&mut self, outs: Vec<Out<Option<Lease>>>) -> Result<(), String> {
+            for o in outs {
+                match o {
+                    Out::Open { req, .. } => self.stages.iter_mut().for_each(|s| s.inbox.push_back(Job::Open(req))),
+                    Out::Transfer(t) => {
+                        for s in &mut self.stages {
+                            s.inbox.push_back(Job::Transfer(t.req, t.pages.clone()));
+                        }
+                    }
+                    Out::Reply { req, tok, failure } => {
+                        let failed = self.failed.contains(&req);
+                        if (tok, failure.is_some()) != (first_token(req), failed) {
+                            return Err(format!("S4: request {req} ends ({tok}, {failure:?}), failed {failed}"));
+                        }
+                        if self.ended.insert(req, failure).is_some() {
+                            return Err(format!("S4: request {req} ended twice"));
+                        }
+                    }
+                    Out::Release { req, held } => {
+                        if let Some(lease) = held {
+                            self.free(req, lease);
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn free(&mut self, req: Req, lease: Lease) {
+            self.owner.retain(|_, o| *o != req);
+            drop(lease);
+        }
+
+        /// L2: everything ended and nothing held.
+        fn settled(&self) -> Result<(), String> {
+            let work: usize = self.stages.iter().map(|s| s.inbox.len() + s.open.len() + s.sending.len()).sum();
+            let held = (self.rooms.live(), self.rooms.held(), self.pool.used(), work);
+            match (self.ended.len(), held) {
+                (REQUESTS, (0, 0, 0, 0)) => Ok(()),
+                (n, _) => Err(format!("L2: {n} of {REQUESTS} ended, held (rooms, leases, pages, stage work) {held:?}")),
+            }
+        }
+    }
+
+    /// The schedule of `seed`: its steps, and the first violation.
+    fn run(seed: u64, early: bool) -> (Vec<String>, Option<String>) {
+        let mut sim = Sim::new(seed, early);
+        let mut pick = Rand(seed ^ 0x9E37_79B9_7F4A_7C15);
+        for _ in 0..10_000 {
+            let v = sim.enabled();
+            if v.is_empty() {
+                let end = sim.settled().err();
+                return (sim.log, end);
+            }
+            if let Err(e) = sim.step(v[pick.next(v.len())]) {
+                return (sim.log, Some(e));
+            }
+        }
+        (sim.log, Some("no quiescence in 10000 steps".into()))
+    }
+
+    #[test]
+    fn a_room_holds_its_lease_until_every_stage_sent_and_ends_once() {
+        let (mut reused, mut failed) = (0, 0);
+        for seed in 1..=2000 {
+            let (log, v) = run(seed, false);
+            if let Some(v) = v {
+                panic!("seed {seed}: {v}\n{}", log.join("\n"));
+            }
+            reused += usize::from(log.iter().any(|l| l.ends_with("reused")));
+            failed += usize::from(log.iter().any(|l| l.ends_with("failed")));
+        }
+        eprintln!("of 2000 schedules, {reused} reuse a page, {failed} fail a send");
+        assert!(reused > 200 && failed > 200, "(reusing, failing) = {:?} of 2000", (reused, failed));
+    }
+
+    /// The control on the checks: a head that gives the lease back as the
+    /// transfer is issued, as a push on the stream allows, lets a stage
+    /// send pages the next prompt writes.
+    #[test]
+    fn a_lease_given_back_at_the_transfer_is_caught() {
+        let caught = (1..=500).filter(|&seed| run(seed, true).1.is_some_and(|v| v.starts_with("S1"))).count();
+        eprintln!("of 500 schedules, {caught} catch a page reused mid-send");
+        assert!(caught > 50, "{caught} of 500");
+    }
 }

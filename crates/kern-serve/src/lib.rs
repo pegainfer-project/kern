@@ -20,6 +20,7 @@ pub mod logline;
 pub mod pd;
 mod pp;
 pub mod ranks;
+pub mod rooms;
 mod scheduler;
 mod watch;
 
