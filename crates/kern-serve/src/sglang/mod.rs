@@ -48,11 +48,13 @@ pub struct Sglang {
     pub bootstrap_port: u16,
 }
 
-/// What the head's table tells each stage: the bootstrap server's port,
-/// what pp rank 0 broadcast to the others when it started, and how many
-/// sends may be in flight at once.
+/// What the head's table tells each stage: where the bootstrap server
+/// listens (the head's address, every rank registers there), what pp rank
+/// 0 broadcast to the others when it started, and how many sends may be in
+/// flight at once.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bootstrap {
+    pub host: String,
     pub port: u16,
     pub consensus: Vec<serde_json::Value>,
     pub slots: usize,

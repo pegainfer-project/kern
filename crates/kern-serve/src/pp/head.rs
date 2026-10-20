@@ -357,7 +357,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let transport = match &h.sglang {
         None => None,
         Some(s) => {
-            let boot = Bootstrap { port: s.bootstrap_port, consensus: Vec::new(), slots: h.max_seqs + 1 };
+            let boot =
+                Bootstrap { host: s.ip.clone(), port: s.bootstrap_port, consensus: Vec::new(), slots: h.max_seqs + 1 };
             let tx = tx.clone();
             let sent: sglang::Sent = Box::new(move |req, failure| {
                 tx.send(Event::Sent { stage: 0, req, failure }).map_err(|_| anyhow::anyhow!("the head is gone"))

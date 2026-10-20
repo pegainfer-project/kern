@@ -112,6 +112,7 @@ pub(crate) fn start(
                 let kw = PyDict::new(py);
                 kw.set_item("model_path", s.model_path.to_string_lossy())?;
                 kw.set_item("ip", &s.ip)?;
+                kw.set_item("bootstrap_host", &boot.host)?;
                 kw.set_item("bootstrap_port", boot.port)?;
                 kw.set_item("ib_device", &s.ib_device)?;
                 kw.set_item("rank", rank.stage)?;

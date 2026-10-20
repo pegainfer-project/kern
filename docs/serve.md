@@ -823,7 +823,7 @@ path.
   (`conv.l<L>` / `ssm.l<L>`, a hybrid model such as Kimi-K3) make the decode
   pool hybrid: each request's sequence slot goes as SGLang's mamba state,
   resliced by SGLang for the decode side's TP. The head also runs the bootstrap
-  server; what pp rank 0
+  server, where every stage registers whatever host it runs on; what pp rank 0
   broadcasts at start goes to the other stages in their tables and they replay
   it. One Rust thread per stage owns the Python side and holds the GIL only for
   a call; the issuing thread and the watch hand it messages and never wait.
