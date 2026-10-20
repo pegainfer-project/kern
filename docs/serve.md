@@ -830,7 +830,9 @@ path.
   server, where every stage registers whatever host it runs on; what pp rank 0
   broadcasts at start goes to the other stages in their tables and they replay
   it. One Rust thread per stage owns the Python side and holds the GIL only for
-  a call; the issuing thread and the watch hand it messages and never wait.
+  a call; the issuing thread and the watch hand it messages and never wait. A
+  stage that loses one of SGLang's threads (they end only by raising) exits,
+  and the head fails the group.
 - **The head decides** (`rooms.rs`, pure): a room opens on every stage at
   admission; once the item carrying the prompt's last rows is issued every
   stage gets its pages and sends when that item has landed on its device;

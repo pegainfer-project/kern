@@ -44,13 +44,18 @@ success and the slot's bytes, never for who wrote them).
 Calls come from one Rust thread per stage process, holding the GIL only for
 the call: `open` when the head admits a request, then `advance` until it
 answers, once the item that wrote the request's last rows has landed on
-the device.
+the device. SGLang's own threads (bootstrap, transfer) end only by raising,
+and SGLang counts a prefill whose thread raised as dead, so a stage that
+loses one exits, and the head fails the group (`die`).
 """
 import bisect
 import json
 import math
 import os
 import re
+import sys
+import threading
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -72,6 +77,12 @@ from sglang.srt.server_args import ServerArgs
 
 KV = ("k", "v", "mla")
 RECURRENT = ("conv", "ssm")
+
+
+def die(e: threading.ExceptHookArgs) -> None:
+    traceback.print_exception(e.exc_type, e.exc_value, e.exc_traceback, file=sys.stderr)
+    print(f"kern_sglang: thread `{e.thread.name if e.thread else '?'}` died, the stage exits", file=sys.stderr, flush=True)
+    os._exit(1)
 
 
 def layers(states: dict) -> dict[str, list[tuple[int, str]]]:
@@ -194,6 +205,7 @@ class Stage:
         too: `kv_cache_dtype`, which it checks against its own, and what shapes a prompt's
         tokens (`kern_sglang.prompt`)."""
         self.last = rank == size - 1
+        threading.excepthook = die
         # The address a rank registers for the decode side to reach it.
         os.environ["SGLANG_HOST_IP"] = ip
         sa = ServerArgs(**json.loads(args) | dict(
