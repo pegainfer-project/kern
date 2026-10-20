@@ -29,6 +29,15 @@
 //! a [`Push`] after the item that writes a prompt's last rows; each stage
 //! answers it `Pushed` once it has landed.
 //!
+//! Serving as SGLang's prefill (`sglang`), the stages are SGLang's prefill
+//! pp ranks: the table also carries where the head's bootstrap server is
+//! and what its rank 0 told the others, the head sends every stage an
+//! [`Job::Open`] when it admits a request and a [`Job::Transfer`] after the
+//! item that writes its last rows, and each stage answers the transfer
+//! [`Report::Sent`] once its send to the decode instance ended. A stage
+//! says [`Report::Ready`] once its transport is up, before the head joins
+//! stage 1, so the head serves only once every pp rank can be found.
+//!
 //! The second kind joins each stage to the next, and carries item
 //! numbers both ways. Every arriving buffer of a stage (`kern_run::arrivals`:
 //! the inputs nobody on the host stages) has [`LANDINGS`] exported twins
@@ -70,6 +79,8 @@ use serde::{Deserialize, Serialize};
 use crate::logline::now_us;
 use crate::pd::{Pools, Push, Req, Shape};
 use crate::ranks::Act;
+use crate::rooms::Transfer;
+use crate::sglang::Bootstrap;
 
 /// How long a stage waits for its neighbour to deliver or take an item.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -111,6 +122,9 @@ pub struct Table {
     pub next: Option<(String, Landings)>,
     pub decode: Vec<Pools>,
     pub host: (u64, u64),
+    /// Serving as SGLang's prefill: where its bootstrap server is and what
+    /// pp rank 0 told the others.
+    pub sglang: Option<Bootstrap>,
 }
 
 /// What the head sends a stage, in issue order.
@@ -125,6 +139,13 @@ pub enum Job {
         epoch: u64,
         placement: String,
     },
+    /// Request `req` was admitted for SGLang's bootstrap room `room`.
+    Open {
+        req: Req,
+        room: u64,
+    },
+    /// Send a request's pages into its room, behind the item just issued.
+    Transfer(Transfer),
 }
 
 /// What a stage tells the head: the last stage every item's tokens, every
@@ -133,6 +154,15 @@ pub enum Job {
 pub enum Report {
     Tokens(Vec<i64>),
     Pushed(Req),
+    /// The stage's SGLang transport is up: its pp rank is known to the
+    /// bootstrap server. Once, before anything else.
+    Ready,
+    /// The send of a request into its room ended, failed for the reason
+    /// given if it did.
+    Sent {
+        req: Req,
+        failure: Option<String>,
+    },
 }
 
 /// Where a stage's watch thread reports.

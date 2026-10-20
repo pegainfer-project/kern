@@ -62,6 +62,12 @@ pub enum Note {
         cause: Option<StopCause>,
     },
     Retire(RequestId),
+    /// Ended without an answer, for the reason given: a client that waits
+    /// on the head alone (SGLang's router) hears why.
+    Fail {
+        id: RequestId,
+        why: String,
+    },
     /// Starting on decode tier `tier`: its tokens are the front's to relay.
     Decode {
         id: RequestId,
@@ -175,7 +181,7 @@ impl Clients {
                 self.open.remove(&id);
                 vec![Write::Finish { id, why, cause }]
             }
-            Note::Retire(id) => {
+            Note::Retire(id) | Note::Fail { id, .. } => {
                 self.open.remove(&id);
                 vec![Write::Retire(id)]
             }

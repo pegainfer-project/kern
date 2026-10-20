@@ -20,6 +20,14 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+axum = { version = "0.8", optional = true }
+pyo3 = { version = "=0.29.2", optional = true }
+
+[features]
+# Serve a cut manifest as the prefill instance of SGLang's own P/D, its
+# transport SGLang's Python code embedded in every stage process.
+sglang-pd = ["dep:axum", "dep:pyo3"]
+
 [dev-dependencies]
 vllm-chat.workspace = true
 vllm-tokenizer = { workspace = true, features = ["test-utils"] }
