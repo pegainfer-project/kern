@@ -807,7 +807,11 @@ unmodified SGLang decode instance pulls nothing from kern, every kern stage
 pushes its own layers into it through SGLang's own transfer code (Mooncake over
 RDMA), and `sgl-model-gateway --pd-disaggregation` routes to both. Built with
 `--features sglang-pd` (embeds Python; the default build has none of it),
-started with `--sglang-ip <addr> [--sglang-ib-device <dev>]` on every stage and
+started with `--sglang-ip <addr> [--sglang-ib-device <dev>]
+[--sglang-args <json>]` on every stage (the decode side's SGLang server
+arguments that must hold on the prefill too: `kv_cache_dtype`, as SGLang names
+what the manifest's pages hold, which the decode side checks, and what shapes a
+prompt's tokens, such as `trust_remote_code` and `chat_template`) and
 `--sglang-bootstrap-port <port>` on the head, in an environment where
 `import sglang` works and `kern_sglang` (kern-py's Python package) is on the
 path.

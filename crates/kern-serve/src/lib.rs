@@ -153,6 +153,14 @@ pub struct ServeOpts {
     #[cfg(feature = "sglang-pd")]
     #[arg(long, default_value_t = 8998)]
     pub sglang_bootstrap_port: u16,
+
+    /// SGLang server arguments, a JSON object, every stage's as the decode
+    /// side has them: `kv_cache_dtype` for what the manifest's pages hold
+    /// (the decode side refuses a mismatch), and whatever shapes a prompt's
+    /// tokens (`trust_remote_code`, `chat_template`, the parsers)
+    #[cfg(feature = "sglang-pd")]
+    #[arg(long, default_value = "{}", requires = "sglang_ip")]
+    pub sglang_args: String,
 }
 
 #[cfg(feature = "sglang-pd")]
@@ -162,6 +170,7 @@ fn sglang_of(o: &ServeOpts, model_path: &Path) -> Option<sglang::Sglang> {
         ib_device: o.sglang_ib_device.clone(),
         model_path: model_path.to_path_buf(),
         bootstrap_port: o.sglang_bootstrap_port,
+        args: o.sglang_args.clone(),
     })
 }
 

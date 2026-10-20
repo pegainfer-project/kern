@@ -38,14 +38,16 @@ use crate::rooms::Transfer;
 
 /// Where a stage's SGLang transport lives: the address its transfer engine
 /// (and, on the head, the bootstrap server, at `bootstrap_port`) listens
-/// on, its RDMA device (SGLang picks one when none is named), and the
-/// checkpoint directory SGLang reads the model's config from.
+/// on, its RDMA device (SGLang picks one when none is named), the
+/// checkpoint directory SGLang reads the model's config from, and the
+/// decode side's server arguments that must hold here too, as JSON.
 #[derive(Debug, Clone)]
 pub struct Sglang {
     pub ip: String,
     pub ib_device: Option<String>,
     pub model_path: PathBuf,
     pub bootstrap_port: u16,
+    pub args: String,
 }
 
 /// What the head's table tells each stage: where the bootstrap server

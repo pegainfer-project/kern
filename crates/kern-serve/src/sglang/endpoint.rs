@@ -115,6 +115,7 @@ pub(crate) fn start(
                 kw.set_item("bootstrap_host", &boot.host)?;
                 kw.set_item("bootstrap_port", boot.port)?;
                 kw.set_item("ib_device", &s.ib_device)?;
+                kw.set_item("args", &s.args)?;
                 kw.set_item("rank", rank.stage)?;
                 kw.set_item("size", rank.stages)?;
                 kw.set_item("page", page)?;

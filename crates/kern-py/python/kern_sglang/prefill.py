@@ -184,18 +184,21 @@ def manager(chunks: list, last: bool):
 
 class Stage:
     def __init__(self, model_path: str, ip: str, bootstrap_host: str, bootstrap_port: int, ib_device: str,
-                 rank: int, size: int, page: int, states: dict, chunks: list, slots: int,
+                 args: str, rank: int, size: int, page: int, states: dict, chunks: list, slots: int,
                  consensus: list | None):
         """`ip` is this stage's address, `bootstrap_host` rank 0's, where the bootstrap server
         runs and every rank registers (SGLang's server host); `states` is every pooled state
         of the stage, `{name: (address, page or slot bytes, bytes reserved)}`; `chunks` every
-        mapped chunk under them; `slots` the requests that may be sending at once."""
+        mapped chunk under them; `slots` the requests that may be sending at once.
+        `args` is a JSON object of the decode side's server arguments that must hold here
+        too: `kv_cache_dtype`, which it checks against its own."""
         self.last = rank == size - 1
         # The address a rank registers for the decode side to reach it.
         os.environ["SGLANG_HOST_IP"] = ip
-        sa = ServerArgs(model_path=model_path, host=bootstrap_host, pp_size=size, page_size=page,
-                        disaggregation_mode="prefill", disaggregation_transfer_backend="mooncake",
-                        disaggregation_ib_device=ib_device, disaggregation_bootstrap_port=bootstrap_port)
+        sa = ServerArgs(**json.loads(args) | dict(
+            model_path=model_path, host=bootstrap_host, pp_size=size, page_size=page,
+            disaggregation_mode="prefill", disaggregation_transfer_backend="mooncake",
+            disaggregation_ib_device=ib_device, disaggregation_bootstrap_port=bootstrap_port))
         rc.publish(sa, role="scheduler", ranks=rc.SpawnRanks(world_rank=rank, gpu_id=0))
         self.group = Group(size, rank, consensus)
         rc.get_parallel().override_permanently(pp_group=self.group)
