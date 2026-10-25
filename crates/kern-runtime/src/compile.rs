@@ -299,7 +299,8 @@ pub(crate) fn shaped_bytes(
 
 /// Resolve every op: match each launch's entry + declared param layout
 /// against the loaded modules (or an extern built-in), pin the module's
-/// hash, opt into >48KB dynamic shared memory, allocate scratch.
+/// hash, opt each function into the largest >48KB dynamic shared memory
+/// any of its launches needs, allocate scratch.
 pub(crate) fn resolve_ops(
     manifest: &Manifest,
     modules: &[LoadedModule],
@@ -309,6 +310,9 @@ pub(crate) fn resolve_ops(
     vars_max: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, ResolvedOp>> {
     let mut ops = BTreeMap::new();
+    // One function serves every op that launches its entry, each with its
+    // own shared memory: the opt-in is the largest any of them asks for.
+    let mut shared = BTreeMap::new();
     for (name, op) in &manifest.ops {
         let mut launches = Vec::new();
         for (li, l) in op.imp.launches.iter().enumerate() {
@@ -393,21 +397,10 @@ pub(crate) fn resolve_ops(
                     &sha[..12]
                 );
             };
-            // Opt in to >48KB dynamic shared memory where the launch needs it.
             if let (LaunchImpl::Cubin { func, .. }, Some(sm)) = (&r, &k.shared_mem) {
                 let bytes = sm.eval(vars_max).map_err(|e| Error::Manifest(format!("op `{name}`: {e}")))?;
-                if bytes > 48 * 1024 {
-                    cuda_check(
-                        unsafe {
-                            sys::cuFuncSetAttribute(
-                                *func,
-                                sys::CUfunction_attribute::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-                                bytes as i32,
-                            )
-                        },
-                        "cuFuncSetAttribute",
-                    )?;
-                }
+                let most = shared.entry(*func as usize).or_insert((*func, 0));
+                most.1 = most.1.max(bytes);
             }
             launches.push(r);
         }
@@ -417,6 +410,18 @@ pub(crate) fn resolve_ops(
             scratch.insert(sname.clone(), alloc(stream, bytes)?);
         }
         ops.insert(name.clone(), ResolvedOp { launches, scratch });
+    }
+    for (func, bytes) in shared.into_values().filter(|&(_, bytes)| bytes > 48 * 1024) {
+        cuda_check(
+            unsafe {
+                sys::cuFuncSetAttribute(
+                    func,
+                    sys::CUfunction_attribute::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                    bytes as i32,
+                )
+            },
+            "cuFuncSetAttribute",
+        )?;
     }
     Ok(ops)
 }
