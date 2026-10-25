@@ -66,12 +66,10 @@ the schema golden, lints) belongs in CI, not here.
 - `tools/` — where model knowledge lives: kernel capture and lifting
   (`kernel-capture/`, `capture_*`), the registry's tooling (`kernels/`),
   hand-written kernel sources (`kernels-src/`), manifest generators
-  (`gen_*.py`, `dsv41/`), and gates that are not models (`toy/`, manifests
+  (`gen_*.py`), and gates that are not models (`toy/`, manifests
   with an exact oracle; `e2e/`, the whole serving path per tray). A new
   model's manifest work lives in a repo of its own, as K3 does in
-  `kern-k3-pp-prefill`.
-- `tools/dsv41/**/Cargo.toml` — GPU harnesses over the runtime's public API;
-  workspace members, built by name.
+  `kern-k3-pp-prefill` and DeepSeek V4.1 Flash in `kern-dsv41-flash`.
 - `kernel_index/` — the kernel registry's facts, one TOML per family
   (`docs/registry.md`); the bytes live in the HF blob store.
 - `examples/` and `kern.toml` — the fixture manifests and the targets that

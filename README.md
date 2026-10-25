@@ -281,6 +281,7 @@ kernel sources and builds it pins, and the manifests. kern stays model-agnostic.
 | Repository | Model | How it is served |
 | --- | --- | --- |
 | [pegainfer-project/kern-k3-pp-prefill](https://github.com/pegainfer-project/kern-k3-pp-prefill) | Kimi-K3, full size (896 experts) | P/D on `kern-serve`: prefill as eight pipeline stages, decode as TP8 / EP8 / DCP8 groups. One prefill pipeline with two decode groups on 24 GB300s served the AgentX 256k workload at 64 concurrent sessions: ITL p50 23.4 ms, 103.5 output tok/s per GPU (2026-10-11) |
+| [pegainfer-project/kern-dsv41-flash](https://github.com/pegainfer-project/kern-dsv41-flash) | DeepSeek V4.1 Flash | One GB300 tray as DP4 attention + EP4 MoE on `kern-serve`: `prefill`, `decode_batch` and a five-draft/six-verify `round`; every kernel builds from a clone to its pinned hash |
 
 ## Inside
 

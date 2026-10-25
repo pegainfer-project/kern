@@ -1,5 +1,11 @@
 # DeepSeek-V4.1-Flash kernel 选型与接入规划
 
+> The generator, kernel sources, oracles and harnesses this log describes under
+> `tools/dsv41/` now live in
+> [kern-dsv41-flash](https://github.com/pegainfer-project/kern-dsv41-flash),
+> which builds every module from source and pins its hash. This file stays as
+> the record.
+
 日期：2026-09-10。状态：源码调研，尚未做 GPU benchmark 或数值验证。
 
 目标是在 4×GB300 上统一采用 DP4 attention + EP4 MoE，先选定文本 backbone 的

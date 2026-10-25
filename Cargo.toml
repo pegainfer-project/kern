@@ -8,14 +8,12 @@ members = [
     "crates/kern-run",
     "crates/kern-serve",
     "crates/kern-py",
-    "tools/dsv41/attention/ar_trace",
-    "tools/dsv41/moe/runtime_replay",
 ]
 # A bare `cargo build` / `test` / `clippy` is the runtime and `kern`, whose
 # e2e_logits renders chats through vLLM's renderers (libssl). kern-serve pulls
-# the rest of the pegainfer/vLLM serving stack (protoc, ~500 crates) and the
-# dsv41 harnesses need a GPU, so both are built by name. kern-py is a Python
-# extension, built by maturin where a Python is.
+# the rest of the pegainfer/vLLM serving stack (protoc, ~500 crates), so it is
+# built by name. kern-py is a Python extension, built by maturin where a Python
+# is.
 default-members = ["crates/kern-manifest", "crates/kern-pool", "crates/kern-runtime", "crates/kern-test", "crates/kern-run"]
 
 [workspace.package]

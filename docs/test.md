@@ -541,7 +541,8 @@ Engram 表在 HBM）对 B300 的 148-SM 实例**：整块快照时，换 `dsv41_
 扁平 piece 181 s → `changed` 的 host 端按字跳零 113 s（1 GB 的 bitmap 逐块扫
 是 20–40 ms 一次，三千多次就是 record 那 65 s）。剩下的 record 22.7 s 主要是
 16 万段各一次同步 D2D（`save` 每段一次分配加拷贝）。gen 的 manifest 之前没给
-`input_ids` 声明 vocab 域（workload 抽不到 token），`tools/dsv41/gen.py` 现在给
+`input_ids` 声明 vocab 域（workload 抽不到 token），DSv4.1 的 `gen.py`（今在
+[kern-dsv41-flash](https://github.com/pegainfer-project/kern-dsv41-flash)）现在给
 `input_ids` / `anchor_token` 加 `index_into embed.weight`。存档
 `~/bench_results/2026-09-15-dsv41-e2e-swap/`。
 
