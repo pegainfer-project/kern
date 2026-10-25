@@ -108,7 +108,8 @@ cut                          cut      流水线的一段：id、第几段、共�
     `cublas_bf16_tn_f32` / `cublaslt_fp8_tn` / `cublaslt_fp8_tn_f32`，NCCL collective `nccl_allreduce_{f32,bf16}` /
     `nccl_allgather_{f32,bf16}` / `nccl_reducescatter_{f32,bf16}` / `nccl_alltoall_{f32,bf16}`，见 runtime.md），没有 module 也没有几何。其余字段：
     `params`（该 launch 自己的 ABI；**不写 = 同接口**）、
-    `block`/`grid`（grid 用下述表达式集合；可选 `shared_mem`，上限 227KB
+    `block`/`grid`（grid 用下述表达式集合，某一维为 0 时该 launch 什么都不做——
+    按行分块时超出本次行数的块；verifier 只拒绝在 var 上界仍为 0、永远不发射的 grid；可选 `shared_mem`，上限 227KB
     opt-in；可选 `cluster: [x, y, z]` 线程块簇，grid 每轴必须是它的倍数，
     runtime 走 `cuLaunchKernelEx`；可选 `pdl: true` 程序化依赖启动：runtime
     给 launch 加 `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`，
@@ -165,8 +166,10 @@ cut                          cut      流水线的一段：id、第几段、共�
   里。
 
 **表达式**是封闭集合：常量、var 名（裸字符串，和 shape 一个写法）、
-`{"ceil_div": [e, c]}`、`{"mul": [e, c]}`、`{"add": [e, c]}`——这不是语言，
-是填空模板，永远不会加控制流。grid、`shared_mem`、domain 的界都用它；call 的标量实参
+`{"ceil_div": [e, c]}`、`{"mul": [e, c]}`、`{"add": [e, c]}`、
+`{"clamp": [e, start, len]}`（`min(max(e - start, 0), len)`：行 `start..start+len`
+里落在 `e` 以下的行数，按行分块的第 k 块写 `{"clamp": ["tokens", k·len, len]}`；
+`len` 为 0 是错误）——这不是语言，是填空模板，永远不会加控制流。grid、`shared_mem`、domain 的界都用它；call 的标量实参
 除 `{"var": "tokens"}` 和字面量外还可以是 `{"expr": {"mul": ["tokens", 32]}}`
 （prefill 逼出来的：head-norm 的"总 head 数"参数 = tokens×heads）或
 `{"rank": "ep"}`。call 实参里 var 要带 `var` 标签，因为它和 buffer 名混在

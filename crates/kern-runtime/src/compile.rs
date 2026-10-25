@@ -33,6 +33,7 @@ pub(crate) enum CExpr {
     CeilDiv(Box<CExpr>, u64),
     Add(Box<CExpr>, Box<CExpr>),
     Mul(Box<CExpr>, u64),
+    Clamp(Box<CExpr>, u64, u64),
 }
 
 /// A program's var values in manifest var order, the index space every
@@ -80,6 +81,7 @@ impl CExpr {
             CExpr::CeilDiv(e, c) => Ok(e.eval(vars)?.checked_add(c - 1).ok_or_else(overflow)? / c),
             CExpr::Mul(e, c) => e.eval(vars)?.checked_mul(*c).ok_or_else(overflow),
             CExpr::Add(a, b) => a.eval(vars)?.checked_add(b.eval(vars)?).ok_or_else(overflow),
+            CExpr::Clamp(e, start, len) => Ok(e.eval(vars)?.saturating_sub(*start).min(*len)),
         }
     }
 
@@ -88,7 +90,7 @@ impl CExpr {
         match self {
             CExpr::Const(_) => {}
             CExpr::Var(i) => used[*i] = true,
-            CExpr::CeilDiv(e, _) | CExpr::Mul(e, _) => e.mark(used),
+            CExpr::CeilDiv(e, _) | CExpr::Mul(e, _) | CExpr::Clamp(e, ..) => e.mark(used),
             CExpr::Add(a, b) => {
                 a.mark(used);
                 b.mark(used);
@@ -846,6 +848,7 @@ fn compile_expr(e: &Expr, vars: &BTreeMap<&str, usize>) -> Result<CExpr> {
         }
         Expr::Mul { mul: (inner, c) } => CExpr::Mul(Box::new(compile_expr(inner, vars)?), *c),
         Expr::Add { add: (a, b) } => CExpr::Add(Box::new(compile_expr(a, vars)?), Box::new(compile_expr(b, vars)?)),
+        Expr::Clamp { clamp: (inner, start, len) } => CExpr::Clamp(Box::new(compile_expr(inner, vars)?), *start, *len),
     })
 }
 

@@ -497,6 +497,10 @@ impl Runtime {
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];
+                // A tile past the call's rows: nothing to launch.
+                if grid.contains(&0) {
+                    return Ok(());
+                }
                 let smem = match shared_mem {
                     Some(e) => e.eval(vars)? as u32,
                     None => 0,

@@ -674,9 +674,56 @@
             "add"
           ],
           "type": "object"
+        },
+        {
+          "description": "`min(max(e - start, 0), len)`: how many of rows `start..start + len`\nlie below `e`, e.g. `{\"clamp\": [\"tokens\", 4096, 4096]}` is the\nsecond 4096-row tile of a call over `tokens` rows.",
+          "properties": {
+            "clamp": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Expr"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "description": "Name of a numeric constant declared in constants.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "description": "Name of a numeric constant declared in constants.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "clamp"
+          ],
+          "type": "object"
         }
       ],
-      "description": "A scalar expression: a constant, a var name, `{\"ceil_div\": [e, c]}`, `{\"mul\": [e, c]}` or `{\"add\": [e, e]}`, e.g. `{\"ceil_div\": [\"tokens\", 128]}`."
+      "description": "A scalar expression: a constant, a var name, `{\"ceil_div\": [e, c]}`, `{\"mul\": [e, c]}`, `{\"add\": [e, e]}` or `{\"clamp\": [e, start, len]}`, e.g. `{\"ceil_div\": [\"tokens\", 128]}`."
     },
     "ExternLaunch": {
       "additionalProperties": false,

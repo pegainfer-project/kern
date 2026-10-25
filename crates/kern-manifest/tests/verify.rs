@@ -138,6 +138,30 @@ fn a_launch_runs_in_the_range_of_a_declared_var() {
 }
 
 #[test]
+fn a_launch_tiles_its_rows_with_clamp() {
+    let tile = |start: u64| serde_json::json!([{ "clamp": ["tokens", start, 64] }, 1, 1]);
+    let mut v = base();
+    // The second tile is empty while `tokens` <= 64: a grid of 0 there is the point.
+    v["ops"]["embed"]["impl"]["launches"][0]["grid"] = tile(64);
+    check(v.clone()).unwrap();
+    v["ops"]["embed"]["impl"]["launches"][0]["grid"] = tile(128);
+    assert_err(v.clone(), "grid.x: evaluates to 0 at var upper bounds");
+    v["ops"]["embed"]["impl"]["launches"][0]["grid"] = serde_json::json!([{ "clamp": ["tokens", 0, 0] }, 1, 1]);
+    assert_err(v, "clamp to zero length");
+}
+
+#[test]
+fn clamp_counts_the_tile_rows_below_its_operand() {
+    for (e, start, len) in
+        (0..300u64).flat_map(|e| [0, 1, 64, 128].map(|s| (e, s))).flat_map(|(e, s)| [1, 7, 64].map(|l| (e, s, l)))
+    {
+        let x = Expr::Clamp { clamp: (Box::new(Expr::Var("t".into())), start, len) };
+        let rows = (start..start + len).filter(|&r| r < e).count() as u64;
+        assert_eq!(x.eval(&BTreeMap::from([("t".to_string(), e)])), Ok(rows), "clamp({e}, {start}, {len})");
+    }
+}
+
+#[test]
 fn unknown_module() {
     let mut v = base();
     v["ops"]["embed"]["impl"]["launches"][0]["module"] = "ghost".into();

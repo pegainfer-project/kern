@@ -586,7 +586,11 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                     for (axis, e) in ["x", "y", "z"].iter().zip(&k.grid) {
                         let ectx = format!("{ctx}: grid.{axis}");
                         check_expr(e, m, &mut used_vars, &mut errs, &ectx);
+                        // A grid of 0 launches nothing (a tile past the call's
+                        // rows); one that is 0 even at the vars' upper bounds
+                        // never launches at all.
                         match e.eval(&vars_max) {
+                            Ok(0) => errs.push(format!("{ectx}: evaluates to 0 at var upper bounds")),
                             Ok(v) => {
                                 let limit = if *axis == "x" { MAX_GRID_X } else { MAX_GRID_YZ };
                                 if v > limit {
@@ -594,9 +598,6 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                                 }
                             }
                             Err(err) => errs.push(format!("{ectx}: {err}")),
-                        }
-                        if let Ok(0) = e.eval(&vars_min) {
-                            errs.push(format!("{ectx}: evaluates to 0 at var lower bounds"));
                         }
                     }
                     if let Some(e) = &k.shared_mem {
@@ -1257,6 +1258,12 @@ fn check_expr(e: &Expr, m: &Manifest, used_vars: &mut BTreeSet<String>, errs: &m
         Expr::Add { add: (a, b) } => {
             check_expr(a, m, used_vars, errs, ctx);
             check_expr(b, m, used_vars, errs, ctx);
+        }
+        Expr::Clamp { clamp: (inner, _, len) } => {
+            if *len == 0 {
+                errs.push(format!("{ctx}: clamp to zero length"));
+            }
+            check_expr(inner, m, used_vars, errs, ctx);
         }
     }
 }

@@ -1470,7 +1470,7 @@ impl RegistryRef {
     }
 }
 
-/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}`, `{"mul": [e, c]}` or `{"add": [e, e]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
+/// A scalar expression: a constant, a var name, `{"ceil_div": [e, c]}`, `{"mul": [e, c]}`, `{"add": [e, e]}` or `{"clamp": [e, start, len]}`, e.g. `{"ceil_div": ["tokens", 128]}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Expr {
@@ -1484,6 +1484,10 @@ pub enum Expr {
     Mul { mul: (Box<Expr>, u64) },
     /// `a + b`, e.g. `{"add": [{"ceil_div": ["tokens", 64]}, "seqs"]}`.
     Add { add: (Box<Expr>, Box<Expr>) },
+    /// `min(max(e - start, 0), len)`: how many of rows `start..start + len`
+    /// lie below `e`, e.g. `{"clamp": ["tokens", 4096, 4096]}` is the
+    /// second 4096-row tile of a call over `tokens` rows.
+    Clamp { clamp: (Box<Expr>, u64, u64) },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1510,6 +1514,7 @@ impl Expr {
             }
             Expr::Mul { mul: (inner, c) } => inner.eval(vars)?.checked_mul(*c).ok_or(EvalError::Overflow),
             Expr::Add { add: (a, b) } => a.eval(vars)?.checked_add(b.eval(vars)?).ok_or(EvalError::Overflow),
+            Expr::Clamp { clamp: (inner, start, len) } => Ok(inner.eval(vars)?.saturating_sub(*start).min(*len)),
         }
     }
 }
