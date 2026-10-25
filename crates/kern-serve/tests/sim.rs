@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use kern_manifest::types::Manifest;
-use kern_pool::{Kind, Placement, Pool, Pooled};
+use kern_pool::{Kind, Placement, Pool, Pooled, Remap};
 use kern_serve::front::{Clients, Note, Write};
 use kern_serve::pd::{Ask, Decoder, Gate, Out, Push, Refusal, Req, Run, Seat, Tell, Tiers};
 use kern_serve::ranks::{Act, Answer, Order};
@@ -56,11 +56,22 @@ fn stop() -> StopPolicy {
 }
 
 /// Ranks that land every remap the moment they hear it and answer every
-/// row with [`next`].
-struct Fake;
+/// row with [`next`]. What they landed is where D's chunks really are, so
+/// what D tells P is checked against it, never taken for it.
+#[derive(Default)]
+struct Fake {
+    landed: Vec<Vec<Remap>>,
+}
 
 impl Run for Fake {
     fn run(&mut self, orders: Vec<Order>) -> anyhow::Result<Vec<Answer>> {
+        self.landed.resize_with(orders.len(), Vec::new);
+        for (q, o) in orders.iter().enumerate() {
+            self.landed[q].extend(o.acts.iter().filter_map(|a| match a {
+                Act::Remap(m) => Some(m.clone().remap()),
+                _ => None,
+            }));
+        }
         Ok(orders
             .iter()
             .map(|o| {
@@ -281,6 +292,8 @@ struct Sim {
     p_pool: Arc<Pool>,
     /// Stages yet to push, by request.
     in_flight: BTreeMap<Req, usize>,
+    /// Each D rank's placement before anything landed.
+    start: Vec<Placement>,
     left: usize,
     log: Vec<String>,
 }
@@ -303,7 +316,7 @@ impl Sim {
             let max_tokens = [1, 2, 3, 5, 9][rand.next(5)];
             clients.insert(req, Client { prompt, max_tokens, tokens: Vec::new(), end: None, gone: false });
         }
-        let d = Decoder::new(replicated_of(m.clone(), W, 1, cfg.slots), Fake, cfg.seats).unwrap();
+        let d = Decoder::new(replicated_of(m.clone(), W, 1, cfg.slots), Fake::default(), cfg.seats).unwrap();
         let pools = d.pools(vec![String::new(); W], kern_serve::pd::shapes(&m));
         let mirror: Vec<(Placement, u64)> = pools.placements.iter().map(|h| (placement(h), 0)).collect();
         Sim {
@@ -332,6 +345,7 @@ impl Sim {
             firsts: BTreeMap::new(),
             p_pool: Arc::new(Pool::new(&plain, 64, 1024, 16, None).unwrap().0),
             in_flight: BTreeMap::new(),
+            start: pools.placements.iter().map(|h| placement(h)).collect(),
             left: cfg.leave,
             log: Vec::new(),
         }
@@ -579,9 +593,8 @@ impl Sim {
                 p.req, seat.epoch, seat.rank
             )));
         }
-        let truth = self.d.pools(vec![String::new(); W], BTreeMap::new()).placements;
         for seat in &p.seats {
-            let now = placement(&truth[seat.rank]);
+            let now = self.landed(seat.rank)?;
             for &a in &self.geo.arenas[s] {
                 let bad = self
                     .geo
@@ -600,6 +613,15 @@ impl Sim {
         }
         self.head.events.push_back(Event::Pushed { stage: s, req: p.req });
         Ok(())
+    }
+
+    /// D rank `q`'s placement as the rank has it: the start, then every
+    /// remap it landed.
+    fn landed(&self, q: usize) -> Checked<Placement> {
+        let remaps = self.d.exec().landed.get(q).map_or(&[][..], Vec::as_slice);
+        remaps.iter().try_fold(self.start[q].clone(), |p, r| {
+            p.apply(r, 128).map_err(|e| Violation::DecodeDied(format!("rank {q} lands a remap: {e:#}")))
+        })
     }
 
     fn died<T>(r: anyhow::Result<T>) -> Checked<T> {
