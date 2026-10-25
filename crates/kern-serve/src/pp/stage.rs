@@ -7,9 +7,13 @@
 //! in or wakes from, in the block the head's table sizes. The last stage answers every
 //! item with its tokens. With a decode tier, the stage mirrors its pools
 //! at start and runs every push the head sends behind the item before it.
+//! Serving as SGLang's prefill, the stage starts its pp rank's transport
+//! from the table, says so, and hands it every room the head opens and
+//! every transfer, the latter once the item before has landed: its own
+//! answer's first token with it on the last stage.
 
-use std::net::TcpListener;
-use std::sync::mpsc;
+use std::net::{TcpListener, TcpStream};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -18,9 +22,10 @@ use kern_run::{Vars, Weights};
 use kern_runtime::{Capacity, Runtime};
 use tracing::{error, info};
 
-use super::{arrivals, connect, recv, send, Answer, Flow, Hello, Job, Next, Prev, Report, Table, LANDINGS};
+use super::{arrivals, connect, recv, send, Answer, Flow, Hello, Job, Next, Prev, Report, Sink, Table, LANDINGS};
 use crate::pd::{mirror::Mirrors, shapes};
 use crate::ranks::{Act, Moves};
+use crate::sglang::{self, Msg, Rank, Sglang};
 use kern_pool::Copies;
 
 /// How a stage loads and where its head listens.
@@ -31,6 +36,8 @@ pub struct Stage {
     pub capacity: Option<u64>,
     pub max_seqs: usize,
     pub eager: bool,
+    /// Serve as one of SGLang's prefill pp ranks, as the head does.
+    pub sglang: Option<Sglang>,
 }
 
 /// How long a stage keeps trying to reach a head that is not up yet.
@@ -73,6 +80,22 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         table.pages,
         rt.pages_total()
     );
+    let w = Arc::new(Mutex::new(head.try_clone()?));
+    let rank = Rank { stage: cut.stage as usize, stages: cut.stages as usize };
+    let transport = match (table.sglang, &o.sglang) {
+        (None, None) => None,
+        (Some(boot), Some(s)) => {
+            let sent: sglang::Sent = Box::new({
+                let w = w.clone();
+                move |req, failure| say(&w, &Report::Sent { req, failure })
+            });
+            let (tx, _) = sglang::start(s, &rt, rank, &boot, sent)?;
+            say(&w, &Report::Ready)?;
+            Some(tx)
+        }
+        (Some(_), None) => bail!("the head serves as SGLang's prefill; this stage runs without `--sglang-ip`"),
+        (None, Some(_)) => bail!("this stage runs with `--sglang-ip`; the head does not serve as SGLang's prefill"),
+    };
     let next = match (table.next, last) {
         (Some((addr, h)), false) => Some(Next::connect(&rt, &addr, &h, || {})?),
         (None, true) => None,
@@ -113,8 +136,17 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         }
     });
 
-    let mut w = head.try_clone()?;
-    let report = Box::new(move |r: Report| send(&mut w, &r));
+    let report: Sink = match transport.clone() {
+        None => Box::new(move |r| say(&w, &r)),
+        Some(t) => Box::new(move |r| {
+            let to = |m| t.send(m).map_err(|_| anyhow::anyhow!("the sglang transport is gone"));
+            match r {
+                Report::Pushed(req) => to(Msg::Landed(req)),
+                Report::Tokens(v) => to(Msg::Tokens(v.clone())).and_then(|()| say(&w, &Report::Tokens(v))),
+                r => say(&w, &r),
+            }
+        }),
+    };
     let mut flow = Flow::new(cut.stage, Some(prev), next, report, last);
     let holds = (rt.pages_total() > 0, rt.seq_slots() > 0);
     for job in jobs {
@@ -131,6 +163,16 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
             super::Job::Place { tier, rank, epoch, placement } => {
                 let m = mirrors.get_mut(tier).with_context(|| format!("a placement of decode tier {tier}, of none"))?;
                 m.place(&rt, rank, epoch, &placement)?;
+                continue;
+            }
+            super::Job::Open { req, room } => {
+                hand(transport.as_ref(), Msg::Open { req, room })?;
+                continue;
+            }
+            super::Job::Transfer(t) => {
+                let req = t.req;
+                hand(transport.as_ref(), Msg::Transfer(t))?;
+                flow.pushed(&rt, req)?;
                 continue;
             }
         };
@@ -157,6 +199,17 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         flow.issued(&rt, &vars, vars.get(&p.rows.var).copied().unwrap_or(0), answer)?;
     }
     Ok(())
+}
+
+/// Tell the head `r`: the watch and the transport both do, a frame each.
+fn say(w: &Mutex<TcpStream>, r: &Report) -> Result<()> {
+    send(&mut w.lock().expect("a writer panicked mid-frame"), r)
+}
+
+/// Hand the stage's SGLang transport `m`.
+fn hand(transport: Option<&mpsc::Sender<Msg>>, m: Msg) -> Result<()> {
+    let t = transport.context("a room from a head this stage does not serve SGLang's prefill for")?;
+    t.send(m).map_err(|_| anyhow::anyhow!("the sglang transport is gone"))
 }
 
 /// Run one of the head's acts on this stage's states, the kinds it

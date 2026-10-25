@@ -70,7 +70,7 @@ use nccl::NcclId;
 pub use park::{host_split, Landing, Room, Waking};
 use peers::PeerSlot;
 pub use peers::{connect_local, Offer};
-pub use push::{MappedPool, PoolHandle, Rows, Split};
+pub use push::{MappedPool, PoolHandle, Rows, Split, StateMemory};
 pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
 
 /// The CUDA API this binary binds (`13000` is 13.0): fixed by the `cudarc`

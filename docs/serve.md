@@ -800,6 +800,126 @@ K3 一条会话的 slot 58.6 MB 抵 265 页，slot 先用光，128 GiB 下 c32 �
 c128 89.9%。另试过"被续上的旧轮直接丢、只 park 最新一轮"：c128 好（92.0%）、c32/c64 差
 （95.9 / 95.6%），park 一律走 P2 的次序。
 
+## Prefill for SGLang's own P/D (`sglang-pd`, 2026-10-20, tray07 4×GB300)
+
+A cut manifest's pipeline serves as the prefill instance of SGLang's P/D: an
+unmodified SGLang decode instance pulls nothing from kern, every kern stage
+pushes its own layers into it through SGLang's own transfer code (Mooncake over
+RDMA), and `sgl-model-gateway --pd-disaggregation` routes to both. Built with
+`--features sglang-pd` (embeds Python; the default build has none of it),
+started with `--sglang-ip <addr> [--sglang-ib-device <dev>]
+[--sglang-args <json>]` on every stage (the decode side's SGLang server
+arguments that must hold on the prefill too: `kv_cache_dtype`, as SGLang names
+what the manifest's pages hold, which the decode side checks, and what shapes a
+prompt's tokens, such as `trust_remote_code` and `chat_template`) and
+`--sglang-bootstrap-port <port>` on the head, in an environment where
+`import sglang` works and `kern_sglang` (kern-py's Python package) is on the
+path.
+
+- **Who does what.** Every stage is one of SGLang's prefill pp ranks: it embeds
+  `kern_sglang.prefill.Stage`, which publishes the runtime context SGLang's
+  disaggregation code reads, starts the transfer engine, registers every
+  mapped 64 MiB chunk of the stage's pooled states on its own (a range over
+  several chunks is not one RDMA registration) and cuts every transfer where
+  its source crosses a chunk (neither a page nor a token's row nor a sequence's
+  slot need divide 64 MiB), and builds `KVArgs` from the naming contract the
+  decode plugin reads (`k.l<L>` / `v.l<L>` / `mla.l<L>`). Recurrent states
+  (`conv.l<L>` / `ssm.l<L>`, a hybrid model such as Kimi-K3) make the decode
+  pool hybrid: each request's sequence slot goes as SGLang's mamba state,
+  resliced by SGLang for the decode side's TP. The head also runs the bootstrap
+  server, where every stage registers whatever host it runs on; what pp rank 0
+  broadcasts at start goes to the other stages in their tables and they replay
+  it. One Rust thread per stage owns the Python side and holds the GIL only for
+  a call; the issuing thread and the watch hand it messages and never wait. A
+  stage that loses one of SGLang's threads (they end only by raising) exits,
+  and the head fails the group.
+- **The head decides** (`rooms.rs`, pure): a room opens on every stage at
+  admission; once the item carrying the prompt's last rows is issued every
+  stage gets its pages and sends when that item has landed on its device;
+  the lease stays with the room until every stage said how its send ended,
+  then the reply goes out (one token, the first, or a 5xx naming the failed
+  stage) and the lease goes to the cache. A send is RDMA off the compute
+  stream, so unlike kern's own P/D push, nothing on the device orders it before
+  a later item reusing the pages.
+- **The first token** is written into the room's metadata by the last stage,
+  from its own answer to the item; the other stages' `send_aux` is a no-op
+  (the decode side waits for every rank's success and the slot's bytes, not
+  for who wrote them). Nothing is broadcast to the stages.
+- **Prompts.** The gateway hands the head the client's body on the client's
+  route. A `/generate` with `input_ids` is taken as it is; `/v1/chat/completions`,
+  `/v1/completions` and a `/generate` with `text` become token ids through
+  SGLang's own server code embedded in the head (`kern_sglang.prompt`: its
+  tokenizer manager's model and tokenizer loading, its template manager and
+  OpenAI handlers, under the published server arguments), so the prefill reads
+  the ids the decode side tokenizes for itself. The answer is one token, never
+  streamed; the gateway streams the decode side's.
+- **Layout.** SGLang's MHA pool keeps K and V apart, a page per layer of each;
+  kern's Qwen3 manifests interleave them per page. `tools/qwen3_sglang_kv.py`
+  splits each layer's `kv.<L>` into `k.l<L>` / `v.l<L>` (only stride arguments
+  change; `kern run` gives the same 48 greedy tokens before and after) and the
+  decode side runs `--page-size 16`, kern's page.
+
+Gate: Qwen3-4B cut at layer 18 (PP2, GPUs 2 and 3), SGLang decode TP1 (GPU 1),
+gateway in PD mode, SGLang without P/D (GPU 0) as the reference; greedy, 64
+tokens, `ignore_eos`, prose prompts as `input_ids`.
+
+| check | result |
+|---|---|
+| conc1, 16 prompts (38–68 tokens) | first token 16/16 equal to the reference; 2/16 equal through 64 tokens; the other 14 part at token 3–58, every one at a reference top-1/top-2 margin of 0–0.125 (8 take the reference's second token, 6 are exact ties) |
+| conc8, 128 unique prompts (651 tokens mean) | 128/128 complete, no error; 40 req/s, p50 0.18 s, p99 0.38 s; first token 128/128 equal to the reference at the same concurrency |
+| conc32, 512 unique prompts (653 tokens mean) | 512/512 complete, no error; 115 req/s, 7.4k output tok/s, p50 0.23 s, p99 0.44 s; first token 506/512, the six others at margins 0–0.125 |
+| quiescent | head logs `active=0 due=0 rooms=0 rooms_held=0` after every burst; 26k pages kept by the cache, so sends crossed chunk boundaries |
+| default build | conc1 completions byte-identical to master's binary (PP2 and single process); at conc8 one request of 32 flips between runs of master against itself as well |
+| `tests/sim.rs` (`rooms`) | 2000 schedules clean (each reuses a page, 1991 fail some send); a head giving the lease back as the transfer is issued is caught (S1) in 465 of 500 |
+
+Stage start-up adds ~7 s for `import sglang` and the context and ~3–4 s for
+the transfer engine and registering the stage's 4320 chunks. The gateway drops
+a prefill worker it saw go down and does not take it back when it returns:
+restart the gateway with the prefill.
+
+### Kimi-K3, 1P1D (2026-10-20, 4 trays of 4×GB300, RoCE)
+
+P is the K3 manifest's PP8 prefill (896 experts, chunk 8192, 16 sequences a
+call, fp8 KV, KDA state in SGLang's layout) on two trays; D is SGLang with the
+kern decode plugin, TP8 / DCP8, on two others; `kv_cache_dtype` fp8_e4m3 on
+both. The reference is the same D behind SGLang's own TP8 prefill (mega
+kernel, radix cache, HiCache), its KV over the same RDMA.
+
+| check | kern P | SGLang P |
+|---|---|---|
+| conc1 TTFT, cold, 8k / 32k / 128k tokens | 0.82 / 1.71 / 5.15 s (P alone: 0.74 / 1.67 / 5.10 s) | — |
+| 32 cold prompts of 16k at once | last first token at 11.3 s, 46k tok/s; a stage's 8192-row item 135–165 ms | — |
+| AgentX c32, 900 s (`inferencex-agentx-mvp`, 256k) | 1120 requests, 0 errors; 1.19 req/s, 888 out tok/s, goodput 1.15; TTFT p50 / p90 / p99 1.0 / 2.6 / 11.5 s; ITL p50 19.3 ms; P prefix hit 90.3% | 930, 0 errors; 0.99 req/s, 717 out tok/s, goodput 0.44; TTFT 6.4 / 24.7 / 75.3 s; ITL 16.9 ms; hit 70.4% |
+| AgentX c64 | 1742, 0 errors; 1.85 req/s, 1484 out tok/s; TTFT 2.5 / 14.7 / 33.9 s; ITL 31.0 ms; hit 88.9% | stopped: 59 queued, 4.5M tokens pending at P |
+| AgentX c96 | 1993, 0 errors; 2.12 req/s, 1711 out tok/s; TTFT 16.8 / 45.4 / 58.3 s; ITL 32.7 ms; hit 85.6% | — |
+| gsm8k 5-shot, c64 (flexible / strict) | 0.9704 / 0.9712 | 0.9712 / 0.9719 |
+| gsm8k 0-shot, all 1319 | 1289 | 1287 |
+| MATH-500, 200 of them, 0-shot | 197 | 199 |
+| needle, 64k–257k tokens, 20 | 20 | 20 |
+| two-turn gsm8k, 256 chats, second turn graded | 252 with the first turns held in P's cache (227 hits), 251 cold; first token equal in 238 | — |
+
+- D's step time at the same running count is the reference's (16–23 running:
+  19.3 against 19.2 ms); ITL is higher because a faster P keeps D fuller.
+- From c64 on, D is what limits: its 64 running requests (`max_running_requests`,
+  one mamba slot each) are taken, and at c96 a request waits 19.5 s on average
+  for one before its KV is asked for, while P's stage 0 is busy 45% of the
+  time at c64.
+- A send of more than D's relayout buffer (`max_prefill_tokens` rows) falls
+  back to an RDMA per token, which a prefix hit makes common; cut on SGLang's
+  grid it does not (c64 before the cut: 1.45 req/s, TTFT p50 22 s, D waiting
+  21 s for a request's KV).
+- Two cold runs of the same kern P differ by as much as it differs from the
+  reference (gsm8k 0-shot first 256: 254 and 251; MATH first 100: 97 and 97).
+- A prompt whose cached prefix is hit can take a different first token than
+  the same prompt cold: its tail is a call of its own (a different row count,
+  so other GEMM tiles), the noise of chunked prefill. In 32 cold / hit pairs
+  read off the live logits, the 4 that flipped had cold top-1 / top-2 margins
+  of 0.08 or less, and no pair above 0.13 flipped; a hit itself is
+  bit-identical to computing the prefix and then the tail on one lease.
+- A recurrent state is checkpointed where a prompt ends, so a prompt sent
+  again whole finds no state to resume one token earlier and runs cold; a
+  prompt that extends an earlier one (the next turn) hits.
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、

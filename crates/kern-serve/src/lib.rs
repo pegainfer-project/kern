@@ -8,7 +8,8 @@
 //! `executor::Executors`, one process per GPU running what it decided.
 //! A cut manifest is served by `pp` instead, one process per stage, its
 //! head behind a [`front::Front`], and may hand each prompt to a decode
-//! tier ([`pd`]). The crate's public
+//! tier ([`pd`]), or serve as the prefill instance of SGLang's own P/D
+//! (feature `sglang-pd`, [`rooms`]). The crate's public
 //! surface is [`serve`], its option structs, and the accounting,
 //! protocols and packing policy its tests drive.
 
@@ -20,13 +21,15 @@ pub mod logline;
 pub mod pd;
 mod pp;
 pub mod ranks;
+pub mod rooms;
 mod scheduler;
+mod sglang;
 mod watch;
 
 pub use pp::pack;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -132,6 +135,48 @@ pub struct ServeOpts {
     /// group holds, reserved and running
     #[arg(long, conflicts_with = "head")]
     pub decode_listen: Option<String>,
+
+    /// Serve a cut manifest as the prefill instance of SGLang's P/D, every
+    /// stage one of its prefill pp ranks, its transfer engine at this
+    /// address: given to every stage, the head answering SGLang's router
+    #[cfg(feature = "sglang-pd")]
+    #[arg(long)]
+    pub sglang_ip: Option<String>,
+
+    /// The RDMA device SGLang's transfer engine sends from (default: SGLang's pick)
+    #[cfg(feature = "sglang-pd")]
+    #[arg(long, requires = "sglang_ip")]
+    pub sglang_ib_device: Option<String>,
+
+    /// On the head: where SGLang's bootstrap server listens, as the
+    /// router's `--prefill <url> <port>` names it
+    #[cfg(feature = "sglang-pd")]
+    #[arg(long, default_value_t = 8998)]
+    pub sglang_bootstrap_port: u16,
+
+    /// SGLang server arguments, a JSON object, every stage's as the decode
+    /// side has them: `kv_cache_dtype` for what the manifest's pages hold
+    /// (the decode side refuses a mismatch), and whatever shapes a prompt's
+    /// tokens (`trust_remote_code`, `chat_template`, the parsers)
+    #[cfg(feature = "sglang-pd")]
+    #[arg(long, default_value = "{}", requires = "sglang_ip")]
+    pub sglang_args: String,
+}
+
+#[cfg(feature = "sglang-pd")]
+fn sglang_of(o: &ServeOpts, model_path: &Path) -> Option<sglang::Sglang> {
+    o.sglang_ip.clone().map(|ip| sglang::Sglang {
+        ip,
+        ib_device: o.sglang_ib_device.clone(),
+        model_path: model_path.to_path_buf(),
+        bootstrap_port: o.sglang_bootstrap_port,
+        args: o.sglang_args.clone(),
+    })
+}
+
+#[cfg(not(feature = "sglang-pd"))]
+fn sglang_of(_: &ServeOpts, _: &Path) -> Option<sglang::Sglang> {
+    None
 }
 
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
@@ -150,6 +195,11 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     log_manifest(&manifest);
     let model_path = weights.dirs().remove(0);
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
+    let sglang = sglang_of(&o, &model_path);
+    anyhow::ensure!(
+        sglang.is_none() || manifest.cut.is_some(),
+        "SGLang's prefill is served by a pipeline; this manifest is not cut"
+    );
 
     if manifest.cut.is_some() {
         anyhow::ensure!(o.rank.is_none(), "a pipeline stage's place is its cut manifest's; `--rank` is a topology's");
@@ -165,6 +215,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
                 capacity: o.capacity,
                 max_seqs: o.max_seqs,
                 eager: o.eager,
+                sglang,
             };
             return pp::stage::run(manifest, &weights, stage);
         }
@@ -181,8 +232,20 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             decode: o.decode.clone(),
             host_bytes: (o.host_gib * (1u64 << 30) as f64) as u64,
             host_turn: o.host_turn,
+            sglang: sglang.clone(),
         };
+        #[cfg(feature = "sglang-pd")]
+        let stages = manifest.cut.as_ref().map_or(1, |c| c.stages as usize);
         let load = move || pp::head::spawn(manifest, weights, head);
+        #[cfg(feature = "sglang-pd")]
+        if sglang.is_some() {
+            let info = sglang::http::Info { served_model_name: served_name, model_path, stages };
+            return sglang::http::serve(load, o.port, info);
+        }
+        let load = move || {
+            let f = load()?;
+            Ok((front::Front::new(f.notes, f.caller, f.pages), f.facts))
+        };
         return launch(load, served_name, model_path, o.port);
     }
 

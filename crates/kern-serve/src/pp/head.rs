@@ -56,6 +56,13 @@
 //! fewer seats as it last said ([`pick`]: every grant and every step tells
 //! the tier's [`Load`]). Every stage mirrors every tier's pools, and a push
 //! names its tier.
+//!
+//! Serving as SGLang's prefill (`--sglang-ip`, [`crate::sglang`]) a request
+//! carries the bootstrap room SGLang's router gave it, and each stage sends
+//! its own layers into that room from its own pages: the room opens on
+//! every stage at admission, every stage gets the request's pages once the
+//! item writing its last rows is issued, and the lease is the room's until
+//! every stage's send ended ([`Rooms`]), the reply to the client with it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{TcpListener, TcpStream};
@@ -74,10 +81,12 @@ use tracing::{debug, error, info};
 use super::cache::Cache;
 use super::pack::{goes_out, pack, passed, Bounds, Waiting};
 use super::{connect, recv, send, Flow, Hello, Item, Job, Next, Report, Table};
-use crate::front::{Call, Front, Note};
+use crate::front::{Call, Note};
 use crate::pd::mirror::Mirrors;
 use crate::pd::{cover, shapes, Gate, Load, Out, Pools, Push, Refusal, Req, Tell, Tiers};
+use crate::rooms::{self, Rooms};
 use crate::scheduler::Facts;
+use crate::sglang::{self, Bootstrap, Msg, Rank, Sglang};
 
 /// How long the head keeps trying to reach a decode tier still loading.
 const CONNECT: Duration = Duration::from_secs(600);
@@ -106,6 +115,8 @@ pub struct Head {
     pub host_bytes: u64,
     /// Tokens of pages the host tier holds per host slot.
     pub host_turn: u64,
+    /// Serve as SGLang's prefill, its bootstrap server on this process.
+    pub sglang: Option<Sglang>,
 }
 
 /// An admitted prompt with rows still to send.
@@ -124,6 +135,8 @@ struct Active {
     parts: bool,
     /// Handed off to the decode tier once prefilled.
     handoff: bool,
+    /// Sent into an SGLang bootstrap room once prefilled.
+    room: bool,
     /// Items gone out without it since it last had rows in one.
     passed: usize,
 }
@@ -135,6 +148,7 @@ struct Finish {
     id: RequestId,
     stop: StopPolicy,
     handoff: bool,
+    room: bool,
 }
 
 impl Finish {
@@ -153,6 +167,12 @@ enum Event {
     Pushed {
         stage: usize,
         req: Req,
+    },
+    /// Stage `stage`'s send of `req` into its room ended.
+    Sent {
+        stage: usize,
+        req: Req,
+        failure: Option<String>,
     },
     /// A decode tier's words but its tokens, which go to the front.
     Tell {
@@ -175,6 +195,20 @@ struct Pd {
     d: TcpStream,
     pools: Pools,
     mirrors: Mirrors,
+}
+
+/// What a room holds until every stage's send ended: the lease, and what
+/// the cache keeps it as.
+struct Held {
+    lease: Lease,
+    ids: Vec<i64>,
+    parts: bool,
+}
+
+/// The head as SGLang's prefill: its rooms, and its own transport.
+struct Sgl {
+    rooms: Rooms<Held>,
+    own: mpsc::Sender<Msg>,
 }
 
 /// Rows fed since the stats line was last logged.
@@ -218,11 +252,25 @@ struct PpHead {
     cache: Cache,
     window: Window,
     flow: Flow,
+    sglang: Option<Sgl>,
+    /// Whether anything was admitted or held at the end of the last turn.
+    busy: bool,
 }
 
+/// What a loaded head hands its front: the notes it writes, how to call
+/// it, its pool's pages, and the facts the HTTP side serves.
+pub(crate) struct Fed {
+    pub notes: mpsc::Receiver<Note>,
+    pub caller: Caller,
+    pub pages: u64,
+    pub facts: Facts,
+}
+
+pub(crate) type Caller = Box<dyn FnMut(Call) -> Result<()> + Send>;
+
 /// Load the head on a thread of its own, which feeds the pipeline for the
-/// process's life, and hand back its front once it is ready.
-pub fn spawn(m: Verified, weights: Weights, h: Head) -> Result<(Front, Facts)> {
+/// process's life, and hand back what its front needs once it is ready.
+pub(crate) fn spawn(m: Verified, weights: Weights, h: Head) -> Result<Fed> {
     let (notes, front_notes) = mpsc::channel();
     let (ready, loaded) = mpsc::channel();
     std::thread::Builder::new()
@@ -238,8 +286,9 @@ pub fn spawn(m: Verified, weights: Weights, h: Head) -> Result<(Front, Facts)> {
         })
         .context("spawning the head's thread")?;
     let (facts, calls, pages) = loaded.recv().context("the head's thread died loading")??;
-    let head = move |c: Call| calls.send(Event::Call(c)).map_err(|_| anyhow::anyhow!("the pipeline head is gone"));
-    Ok((Front::new(front_notes, head, pages), facts))
+    let caller =
+        Box::new(move |c: Call| calls.send(Event::Call(c)).map_err(|_| anyhow::anyhow!("the pipeline head is gone")));
+    Ok(Fed { notes: front_notes, caller, pages, facts })
 }
 
 /// Wait for every other stage, load stage 0 at the pages they all have,
@@ -301,6 +350,24 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let context = p.context.as_ref().map_or(usize::MAX, |c| c.max as usize);
     let bounds = Bounds { rows: chunk, seqs: prefill.groups as usize, context };
     let (tx, events) = mpsc::channel();
+    ensure!(
+        h.sglang.is_none() || h.decode.is_empty(),
+        "a head serving as SGLang's prefill hands prompts to SGLang's decode, not to `--decode`"
+    );
+    let transport = match &h.sglang {
+        None => None,
+        Some(s) => {
+            let boot =
+                Bootstrap { host: s.ip.clone(), port: s.bootstrap_port, consensus: Vec::new(), slots: h.max_seqs + 1 };
+            let tx = tx.clone();
+            let sent: sglang::Sent = Box::new(move |req, failure| {
+                tx.send(Event::Sent { stage: 0, req, failure }).map_err(|_| anyhow::anyhow!("the head is gone"))
+            });
+            let rank = Rank { stage: 0, stages: cut.stages as usize };
+            let (own, consensus) = sglang::start(s, &rt, rank, &boot, sent)?;
+            Some((own, Bootstrap { consensus, ..boot }))
+        }
+    };
     let mut states = vec![shapes(&rt.manifest)];
     states.extend(hellos.values().map(|(x, ..)| x.states.clone()));
     let decode: Vec<Pd> = (h.decode.iter().enumerate())
@@ -308,18 +375,32 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         .collect::<Result<_>>()?;
     let next_of = |s: u64| hellos.get(&(s + 1)).map(|(x, _, reach)| (reach.clone(), x.arrivals.clone()));
     let pools: Vec<Pools> = decode.iter().map(|p| p.pools.clone()).collect();
-    let tables: Vec<Table> =
-        (1..cut.stages).map(|s| Table { pages, next: next_of(s), decode: pools.clone(), host }).collect();
+    let boot = transport.as_ref().map(|(_, b)| b.clone());
+    let tables: Vec<Table> = (1..cut.stages)
+        .map(|s| Table { pages, next: next_of(s), decode: pools.clone(), host, sglang: boot.clone() })
+        .collect();
     let first = next_of(0).expect("stage 1 said hello");
     let mut stages = Vec::new();
     for ((s, (_, mut w, _)), table) in hellos.into_iter().zip(tables) {
         send(&mut w, &table)?;
-        std::thread::spawn({
-            let (r, tx) = (w.try_clone()?, tx.clone());
-            move || listen(s, r, tx, s == cut.stages - 1)
-        });
-        stages.push(w);
+        stages.push((s, w));
     }
+    if boot.is_some() {
+        for (s, w) in &mut stages {
+            match recv::<Report>(w)? {
+                Some(Report::Ready) => info!(stage = *s, "stage's sglang transport up"),
+                r => bail!("stage {s} answered its table with {r:?}, not its sglang transport up"),
+            }
+        }
+    }
+    let stages: Vec<TcpStream> = stages
+        .into_iter()
+        .map(|(s, w)| {
+            let (r, tx) = (w.try_clone()?, tx.clone());
+            std::thread::spawn(move || listen(s, r, tx, s == cut.stages - 1));
+            Ok(w)
+        })
+        .collect::<Result<_>>()?;
     reserve(&mut rt, host)?;
     let next = Next::connect(&rt, &first.0, &first.1, {
         let tx = tx.clone();
@@ -328,11 +409,15 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         }
     })?;
     let tx_calls = tx.clone();
-    let report: super::Sink = Box::new(move |r| match r {
-        Report::Pushed(req) => {
+    let own = transport.as_ref().map(|(own, _)| own.clone());
+    let report: super::Sink = Box::new(move |r| match (r, &own) {
+        (Report::Pushed(req), None) => {
             tx.send(Event::Pushed { stage: 0, req }).map_err(|_| anyhow::anyhow!("the head is gone"))
         }
-        Report::Tokens(_) => bail!("the head answers no items"),
+        (Report::Pushed(req), Some(own)) => {
+            own.send(Msg::Landed(req)).map_err(|_| anyhow::anyhow!("the sglang transport is gone"))
+        }
+        (r, _) => bail!("the head's watch reports pushes only, not {r:?}"),
     });
 
     let step_name = step.as_ref().map_or("-", |f| f.name.as_str()).to_string();
@@ -363,6 +448,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         cache,
         window: Window { since: Instant::now(), fed: 0 },
         flow: Flow::new(0, None, Some(next), report, false),
+        sglang: transport.map(|(own, _)| Sgl { rooms: Rooms::new(cut.stages as usize), own }),
+        busy: false,
     })
 }
 
@@ -450,6 +537,8 @@ fn listen(stage: u64, mut r: TcpStream, tx: mpsc::Sender<Event>, last: bool) {
             Ok(Some(Report::Tokens(t))) if last => Event::Answer(t),
             Ok(Some(Report::Tokens(_))) => break "a stage other than the last answered an item".to_string(),
             Ok(Some(Report::Pushed(req))) => Event::Pushed { stage: stage as usize, req },
+            Ok(Some(Report::Sent { req, failure })) => Event::Sent { stage: stage as usize, req, failure },
+            Ok(Some(Report::Ready)) => break "a stage said its transport is up twice".to_string(),
             Ok(None) => break "stage closed its connection; the pipeline is gone".to_string(),
             Err(e) => break format!("stage connection: {e:#}"),
         };
@@ -471,9 +560,10 @@ impl PpHead {
         }
     }
 
-    /// Prompts leased and not finished.
+    /// Prompts leased and not finished: a room's until every send ended.
     fn live(&self) -> usize {
-        self.active.len() + self.due.iter().map(Vec::len).sum::<usize>()
+        let held = self.sglang.as_ref().map_or(0, |s| s.rooms.held());
+        self.active.len() + self.due.iter().flatten().filter(|f| !f.room).count() + held
     }
 
     fn note(&self, n: Note) -> Result<()> {
@@ -533,8 +623,26 @@ impl PpHead {
                         false => None,
                     };
                     let stop = q.request.stop_policy.clone();
-                    let a = Active { id, lease, ids, pos: start, stop, mark, snap, parts, handoff, passed: 0 };
+                    let params = self.sglang.as_ref().and(q.request.kv_transfer_params.as_ref());
+                    let room = params.and_then(|p| p["bootstrap_room"].as_u64());
+                    let a = Active {
+                        id,
+                        lease,
+                        ids,
+                        pos: start,
+                        stop,
+                        mark,
+                        snap,
+                        parts,
+                        handoff,
+                        room: room.is_some(),
+                        passed: 0,
+                    };
                     self.active.push_back(a);
+                    if let (Some(room), Some(s)) = (room, self.sglang.as_mut()) {
+                        let outs = s.rooms.open(id.raw(), room)?;
+                        self.rooms(outs)?;
+                    }
                     if let Some(t) = tier {
                         self.tiers.admitted(t, id.raw());
                     }
@@ -606,6 +714,48 @@ impl PpHead {
         Ok(())
     }
 
+    /// Carry out what the rooms decided, in order.
+    fn rooms(&mut self, outs: Vec<rooms::Out<Held>>) -> Result<()> {
+        let gone = || anyhow::anyhow!("the sglang transport is gone");
+        for o in outs {
+            match o {
+                rooms::Out::Open { req, room } => {
+                    let job = Job::Open { req, room };
+                    for w in &mut self.stages {
+                        send(w, &job)?;
+                    }
+                    self.own()?.send(Msg::Open { req, room }).map_err(|_| gone())?;
+                }
+                rooms::Out::Transfer(t) => {
+                    let (req, job) = (t.req, Job::Transfer(t.clone()));
+                    for w in &mut self.stages {
+                        send(w, &job)?;
+                    }
+                    self.own()?.send(Msg::Transfer(t)).map_err(|_| gone())?;
+                    self.flow.pushed(&self.rt, req)?;
+                }
+                rooms::Out::Reply { req, tok, failure: None } => {
+                    let id = RequestId::new(req);
+                    self.note(Note::Emit { id, tok })?;
+                    self.note(Note::Finish { id, why: FinishReason::Length, cause: None })?;
+                }
+                rooms::Out::Reply { req, failure: Some(why), .. } => {
+                    error!(request = req, "sending to sglang's decode: {why}");
+                    self.note(Note::Fail { id: RequestId::new(req), why })?;
+                }
+                rooms::Out::Release { held, .. } => match held.parts {
+                    true => drop(held.lease),
+                    false => self.cache.retire(&mut self.rt, held.lease, &held.ids),
+                },
+            }
+        }
+        Ok(())
+    }
+
+    fn own(&self) -> Result<&mpsc::Sender<Msg>> {
+        Ok(&self.sglang.as_ref().context("a room on a head not serving as SGLang's prefill")?.own)
+    }
+
     /// Every stage, the head among them, pushes its states for `p` into
     /// its decode tier, behind the item just issued.
     fn push(&mut self, p: &Push) -> Result<()> {
@@ -652,7 +802,7 @@ impl PpHead {
             let f = self.step.clone().expect("checked");
             self.send_item(&f, &[(&a.lease, a.pos, &a.ids[a.pos..])])?;
             self.prefilled(&a)?;
-            let done = self.leave(a, 0);
+            let done = self.leave(a, 0)?;
             self.due.push_back(vec![done]);
         }
         Ok(())
@@ -698,7 +848,7 @@ impl PpHead {
         for (i, at) in finished {
             let a = self.active.remove(i).expect("planned");
             self.prefilled(&a)?;
-            due.push(self.leave(a, at));
+            due.push(self.leave(a, at)?);
         }
         due.sort_unstable_by_key(|f| f.at);
         self.due.push_back(due);
@@ -707,13 +857,23 @@ impl PpHead {
 
     /// A prompt whose last rows are out, its token entry `at` of the item's
     /// reply: its lease becomes an entry, or goes back to the pool when the
-    /// next turn parts from it before its end.
-    fn leave(&mut self, a: Active, at: usize) -> Finish {
-        match a.parts {
-            true => drop(a.lease),
-            false => self.cache.retire(&mut self.rt, a.lease, &a.ids),
+    /// next turn parts from it before its end; sent into a room, the room
+    /// holds it until then.
+    fn leave(&mut self, a: Active, at: usize) -> Result<Finish> {
+        let f = Finish { at, id: a.id, stop: a.stop, handoff: a.handoff, room: a.room };
+        match (a.room, self.sglang.as_mut()) {
+            (true, Some(s)) => {
+                let (pages, slot, len) = (a.lease.page_ids().to_vec(), a.lease.seq_slot(), a.ids.len());
+                let held = Held { lease: a.lease, ids: a.ids, parts: a.parts };
+                let outs = s.rooms.transfer(a.id.raw(), held, pages, slot, len, at)?;
+                self.rooms(outs)?;
+            }
+            _ => match a.parts {
+                true => drop(a.lease),
+                false => self.cache.retire(&mut self.rt, a.lease, &a.ids),
+            },
         }
-        Finish { at, id: a.id, stop: a.stop, handoff: a.handoff }
+        Ok(f)
     }
 
     /// A prompt whose last rows were just issued: handed off, it is pushed
@@ -805,7 +965,26 @@ impl PpHead {
             self.note(Note::Pages(used))?;
         }
         self.log_stats();
+        self.log_quiescent();
         Ok(())
+    }
+
+    /// One line when the last request held ends: anything held then but
+    /// the cache's entries is a leak.
+    fn log_quiescent(&mut self) {
+        let busy = self.live() + self.waiting.len() > 0;
+        if self.busy && !busy {
+            info!(
+                active = self.active.len(),
+                due = self.due.len(),
+                rooms = self.sglang.as_ref().map(|s| s.rooms.live()),
+                rooms_held = self.sglang.as_ref().map(|s| s.rooms.held()),
+                pages_used = self.rt.pages_used(),
+                checkpoints = self.cache.entries(),
+                "quiescent"
+            );
+        }
+        self.busy = busy;
     }
 
     /// One line per 5 s window in which rows went out, as the single-process
@@ -879,6 +1058,11 @@ impl PpHead {
                 let outs = self.tiers.pushed(req, stage)?;
                 return self.apply(outs);
             }
+            Event::Sent { stage, req, failure } => {
+                let s = self.sglang.as_mut().context("a send ended on a head not serving as SGLang's prefill")?;
+                let outs = s.rooms.sent(req, stage, failure)?;
+                return self.rooms(outs);
+            }
             Event::Tell { tier, t } => {
                 let outs = self.tiers.hear(tier, t)?;
                 return self.apply(outs);
@@ -909,6 +1093,12 @@ impl PpHead {
                 bail!("the last stage handed back {} tokens, no token {}", t.len(), r.at)
             };
             let tok = tok as u32;
+            if r.room {
+                let s = self.sglang.as_mut().context("a room on a head not serving as SGLang's prefill")?;
+                let outs = s.rooms.first(r.id.raw(), tok)?;
+                self.rooms(outs)?;
+                continue;
+            }
             if r.handoff {
                 let outs = self.tiers.first(r.id.raw(), tok)?;
                 self.apply(outs)?;
@@ -943,6 +1133,7 @@ impl PpHead {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::front::Front;
     use pegainfer_frontend::engine::{spawn_scheduler, EosPolicy, Request, StopCause, Terminal};
     use pegainfer_frontend::sampler::SamplingParams;
 
@@ -955,7 +1146,7 @@ mod tests {
         let head = move |call| {
             let Call::Submit(q) = call else { return Ok(()) };
             notes.send(Note::Admit { id: q.id, cached: 0 })?;
-            let done = Finish { at: 0, id: q.id, stop: q.request.stop_policy, handoff: false };
+            let done = Finish { at: 0, id: q.id, stop: q.request.stop_policy, handoff: false, room: false };
             for note in done.notes(tok) {
                 notes.send(note)?;
             }

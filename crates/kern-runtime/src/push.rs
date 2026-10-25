@@ -283,6 +283,22 @@ impl Split {
     }
 }
 
+/// A pooled state's memory as a transport that registers device memory
+/// reaches it (RDMA): where its page or slot `i` is, `ptr + i * object`,
+/// and every mapped chunk under it, `(address, bytes)` in position order.
+/// Each chunk is an allocation of its own, which is the unit such a
+/// transport registers: a range over several of them is not one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateMemory {
+    pub state: String,
+    pub kind: Kind,
+    pub ptr: u64,
+    pub object: u64,
+    /// Bytes reserved, mapped or not.
+    pub reserved: u64,
+    pub chunks: Vec<(u64, u64)>,
+}
+
 impl Runtime {
     /// Every pooled state's chunks and layout, for another runtime to
     /// mirror ([`Runtime::map_pool`]): fabric handles where the device
@@ -296,6 +312,37 @@ impl Runtime {
             .map(|a| Layout { state: a.state.clone(), kind: a.kind, object: a.object, positions: a.positions })
             .collect();
         Ok(PoolHandle { chunk: self.pool.chunk(), unit: self.pool.unit(), chunks: self.chunks.export()?, states })
+    }
+
+    /// Every pooled state's memory where load mapped it. Only a pool that
+    /// never remapped is exposed: a remap moves chunks under a registration
+    /// that cannot follow them.
+    pub fn pooled_memory(&self) -> Result<Vec<StateMemory>> {
+        if self.pool.remapped() {
+            bail!(Api, "the pool has remapped its chunks; only the layout load made can be exposed");
+        }
+        let (placement, chunk) = (self.pool.placement(), self.pool.chunk());
+        Ok(self
+            .pool
+            .pooled()
+            .iter()
+            .enumerate()
+            .map(|(a, p)| {
+                let ptr = self.states[&p.state].ptr;
+                let chunks = (0..p.positions)
+                    .filter(|&x| placement.at(a, x).is_some())
+                    .map(|x| (ptr + x as u64 * chunk, chunk))
+                    .collect();
+                StateMemory {
+                    state: p.state.clone(),
+                    kind: p.kind,
+                    ptr,
+                    object: p.object,
+                    reserved: p.positions as u64 * chunk,
+                    chunks,
+                }
+            })
+            .collect())
     }
 
     /// Which chunk backs every position of every pooled state now: what a

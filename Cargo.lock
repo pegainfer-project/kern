@@ -2295,6 +2295,7 @@ name = "kern-serve"
 version = "0.3.1"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "hex",
  "kern-manifest",
@@ -2302,6 +2303,7 @@ dependencies = [
  "kern-run",
  "kern-runtime",
  "pegainfer-frontend",
+ "pyo3",
  "serde",
  "serde_json",
  "tokio",
