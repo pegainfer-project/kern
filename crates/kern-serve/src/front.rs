@@ -249,6 +249,7 @@ impl Clients {
             num_running_reqs: running as u64,
             num_waiting_reqs: (self.open.len() - running) as u64,
             spec_decode: None,
+            prefix_cache: None,
         }
     }
 }
