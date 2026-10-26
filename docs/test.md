@@ -368,7 +368,10 @@ CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_bl
    快照的 run 留一份 run 之前的全量 state 镜像（prefill chunk 0 = 全零，
    decode step 0 = A prefill 之后的 state，各一份），重放序列切换 run 时
    两边整体写回——各层 write-set 不相交，这份镜像就是该 run 每一刀的
-   pre-state。这样参考自己
+   pre-state。只读不写的 state 不在 write-set 里（qwen3.8 的 KV 由
+   `attn_prep` 写、`attn` 读），所以 noise 重放和 B 的 replay 走同一条路：
+   每个 run 从镜像起，span 之间的 call 照跑，span 读到的就是 A 读到的
+   （#63）。这样参考自己
    逐位可复现，band 为零；仍不 clean 才是 A 真的不确定（atomics 之类），
    此时 B 按这条带子判（`--no-noise` 跳过）。早先没有复位时 A 自比差
    上百 MB，band 无限宽，B 在 state 上的真错误全躲在带内。

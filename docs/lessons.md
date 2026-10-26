@@ -3,6 +3,17 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-10-26，noise 重放只回写 span 自己的 write-set，只读的 state 读到的是 run 起点的镜像
+
+#63：qwen3.8 换 attention 核，noise 段 0/48 clean，每个 attention span 100% 元素不同、max 16k ulp，
+而同一份报告里 A 端到端自比 KL 0，A 对 B 的 local 差 ≤ 0.75。noise 重放每个 kept span 只写回它
+自己 write-set 的 pre-image，state 其余部分是 run 起点的镜像；attention span 只读 KV，写它的是前一个
+call `attn_prep`，不在 span 里，于是 chunk 0 读到全零的 KV。qwen3-4b 夹具的 attention 自己写 KV
+（inout state），108/108 clean，没暴露。
+
+规则：A 的 noise 重放和 B 的 replay 走同一个 walk：每个 run 从镜像起，span 之间的 call 照跑。
+夹具里的状态要有"一个 op 写、下一个 op 读"的形状（`Fixture::split`）；只有 inout 的夹具测不出这一类。
+
 ## 2026-10-19，下游绕过去的 bug，源头要么修掉，要么进 roadmap
 
 qwen3.8 的 `decode_batch` 声明最多 128 条序列，里面的 `gemm16_*` 只算 16 行（9 月 8 日起）。

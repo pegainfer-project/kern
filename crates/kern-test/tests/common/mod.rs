@@ -57,6 +57,10 @@ pub struct Fixture {
     pub slab: bool,
     /// No `decode` program: a prefill-only manifest, whose steps are one-row chunks.
     pub prefill_only: bool,
+    /// `mix` as two calls, the way a cache is written by one op and read
+    /// by the next: `mix_write` updates the state, `mix_read` (launching
+    /// this entry) reads it and writes the output.
+    pub split: Option<&'static str>,
 }
 
 impl Default for Fixture {
@@ -74,6 +78,7 @@ impl Default for Fixture {
             wide_act: false,
             slab: false,
             prefill_only: false,
+            split: None,
         }
     }
 }
@@ -115,6 +120,9 @@ impl Fixture {
     pub fn prefill_only(self) -> Self {
         Fixture { prefill_only: true, ..self }
     }
+    pub fn split(self, e: &'static str) -> Self {
+        Fixture { split: Some(e), ..self }
+    }
 
     pub fn manifest(&self) -> Verified {
         let op = |params: &[&str], entry: &str| serde_json::json!({"params": params, "impl": {"launches": [{"entry": format!("extern:{entry}")}]}});
@@ -133,13 +141,34 @@ impl Fixture {
         if let Some((_, e)) = self.alt {
             ops.insert("scale_alt".into(), op(scale_params, e));
         }
-        ops.insert(
-            "mix".into(),
-            op(
-                &["in buffer<f32>", "in buffer<i64>", "in buffer<i32>", "inout state", "i32", "out buffer<f32>"],
-                self.mix,
-            ),
-        );
+        match self.split {
+            Some(e) => {
+                ops.insert(
+                    "mix_write".into(),
+                    op(&["in buffer<f32>", "in buffer<i64>", "in buffer<i32>", "inout state", "i32"], "mix_write"),
+                );
+                ops.insert(
+                    "mix_read".into(),
+                    op(&["in buffer<i64>", "in buffer<i32>", "in state", "i32", "out buffer<f32>"], e),
+                );
+            }
+            None => {
+                ops.insert(
+                    "mix".into(),
+                    op(
+                        &[
+                            "in buffer<f32>",
+                            "in buffer<i64>",
+                            "in buffer<i32>",
+                            "inout state",
+                            "i32",
+                            "out buffer<f32>",
+                        ],
+                        self.mix,
+                    ),
+                );
+            }
+        }
         ops.insert("head".into(), op(&["in buffer<f32>", "out buffer<bf16>", "out buffer<i64>"], self.head));
         let mut calls = vec![serde_json::json!({"op": "embed", "args": [{"buf": "token_ids"}, {"buf": "hidden"}]})];
         for l in 0..LAYERS {
@@ -155,9 +184,17 @@ impl Fixture {
                 args.extend([serde_json::json!({"buf": "slab"}), serde_json::json!({"i32": l})]);
             }
             calls.push(serde_json::json!({"op": sc, "args": args}));
-            calls.push(serde_json::json!({"op": "mix", "args": [
-                {"buf": "act"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"state": "kv"}, {"i32": l},
-                {"buf": "hidden"}]}));
+            match self.split {
+                Some(_) => calls.extend([
+                    serde_json::json!({"op": "mix_write", "args": [
+                        {"buf": "act"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"state": "kv"}, {"i32": l}]}),
+                    serde_json::json!({"op": "mix_read", "args": [
+                        {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"state": "kv"}, {"i32": l}, {"buf": "hidden"}]}),
+                ]),
+                None => calls.push(serde_json::json!({"op": "mix", "args": [
+                    {"buf": "act"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"state": "kv"}, {"i32": l},
+                    {"buf": "hidden"}]})),
+            }
         }
         calls.push(serde_json::json!({"op": "head", "args": [
             {"buf": "hidden"}, {"buf": self.logits}, {"buf": "next_token"}]}));
@@ -349,6 +386,34 @@ impl Rank {
                         }
                     }
                 }
+            }
+            "extern:mix_write" => {
+                let act = f32s(&self.bufs[&buf(0)][..t * D * 4]);
+                let slots = i64s(&self.bufs[&buf(1)][..t * 8]);
+                let Arg::State { state, .. } = &args[3] else { panic!("expected a state arg") };
+                let Arg::I32 { i32: layer } = args[4] else { panic!("expected the layer") };
+                let st = self.states.get_mut(state).unwrap();
+                for (r, &slot) in slots.iter().enumerate() {
+                    let c = (slot as usize * LAYERS + layer as usize) * D * 4;
+                    let cur: Vec<f32> = f32s(&st[c..c + D * 4]).iter().zip(&act[r * D..]).map(|(x, a)| x + a).collect();
+                    st[c..c + D * 4].copy_from_slice(&bytes_f32(&cur));
+                }
+            }
+            e if e.starts_with("extern:mix_read") => {
+                let slots = i64s(&self.bufs[&buf(0)][..t * 8]);
+                let Arg::State { state, .. } = &args[2] else { panic!("expected a state arg") };
+                let Arg::I32 { i32: layer } = args[3] else { panic!("expected the layer") };
+                let cell = |slot: i64| (slot as usize * LAYERS + layer as usize) * D * 4;
+                let st = &self.states[state];
+                let mut h = vec![0f32; t * D];
+                for (r, &slot) in slots.iter().enumerate() {
+                    let cur = f32s(&st[cell(slot)..cell(slot) + D * 4]);
+                    let prev = if slot > 0 { f32s(&st[cell(slot - 1)..cell(slot - 1) + D * 4]) } else { vec![0.0; D] };
+                    for d in 0..D {
+                        h[r * D + d] = cur[d] + 0.5 * prev[d];
+                    }
+                }
+                self.bufs.get_mut(&buf(4)).unwrap()[..t * D * 4].copy_from_slice(&bytes_f32(&h));
             }
             e if e.starts_with("extern:mix") => {
                 let act = f32s(&self.bufs[&buf(0)][..t * D * 4]);
