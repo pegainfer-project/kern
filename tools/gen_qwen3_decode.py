@@ -48,6 +48,11 @@ packed struct / TMA descriptor，不可 rebind）：
 - 无损 oracle：greedy 投机解码逐 token 等于普通 decode，输出 byte-match 即
   全链路正确；接错 tap/头只会掉接受率。
 
+decode 的 token 由 `sample` op 出（tools/sampling.py：FlashInfer 的
+softmax / top-k / top-p / min-p 链 + 手写 glue，温度 0 走 argmax），
+参数来自五个 `[seqs]` 采样 fill；投机 manifest 不带采样 fill，round 仍是
+argmax（kern-serve 对它拒绝非 greedy 请求）。
+
 跑法：python3 tools/gen_qwen3_decode.py \
     [primary launches.jsonl] [spec dump dir]
 """
@@ -62,6 +67,7 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from qwen_weights import qwen3  # noqa: E402
 from kern_manifest import DumpIndex, normalize, program, SCHEMA_VERSION  # noqa: E402
+import sampling  # noqa: E402
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import mine_capture as mc
@@ -448,6 +454,7 @@ HUB_SILU = {
 def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
     pf_sym, pf_block, pf_smem = pf
     causal_cubin, causal_sha = pins["causal"]
+    sampled = not spec
 
     def mp(tag):
         """`cubin` + `sha256` of the dump module a mined launch pins."""
@@ -471,6 +478,7 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         # 上界要多付 ~600 MB）
         "logits": {"dtype": "bf16", "shape": ["seqs", VOCAB], "kind": "workspace"},
         "next_token": {"dtype": "i64", "shape": ["seqs"], "kind": "output", "fill": "tokens"},
+        **(sampling.fills() if sampled else {}),
     }
     for name, shape in {
         "residual": ["tokens", HIDDEN],
@@ -709,6 +717,9 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
         },
     }
 
+    if sampled:
+        kernels["sample"] = sampling.op(VOCAB, MAX_SEQS)
+        del kernels["argmax"]
     if spec:
         draft_cubin, draft_sha = pins["draft"]
         # draft attention：又一份同接口实现——non-causal 编译（DFlash 的
@@ -924,8 +935,8 @@ def build(by, eps, scale, pf, pins, spec=False, silu="mined"):
             # decode 的 tokens = seqs：x 的前 seqs 行各出一行 logits
             ds.append(gemm("lm_head", "x", lm_head_w, "logits",
                            S, VOCAB, HIDDEN))
-            ds.append(d("sample", "argmax",
-                        [buf("logits"), buf("next_token"), i32(VOCAB)]))
+            ds.append(d("sample", "sample", sampling.args()) if sampled else
+                      d("sample", "argmax", [buf("logits"), buf("next_token"), i32(VOCAB)]))
         elif tail == "verify":
             # 8·seqs 行 logits + 同样多行 argmax（argmax 行数 = env tokens）
             ds.append(gemm("lm_head", "x", lm_head_w, "logits_blk",

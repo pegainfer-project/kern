@@ -17,7 +17,7 @@ fn qwen3_decode_mined_verifies() {
     let p = Protocol::check(&m).unwrap_or_else(|e| panic!("{e}"));
     let shapes: Vec<(&str, u64)> = p.forwards.iter().map(|f| (f.name.as_str(), f.groups)).collect();
     assert_eq!(shapes, [("decode", 1), ("decode_batch", 256), ("prefill", 1)]);
-    assert_eq!(p.fills.len(), 6);
+    assert_eq!((p.fills.len(), p.samples()), (11, true));
     // decode: embed + l0 norm + 36 layers x 12 + lm_head + sample; attention's
     // reduce launch and argmax's two stages live inside their op impls.
     assert_eq!(m.programs["decode"].calls.len(), 2 + 36 * 12 + 2);

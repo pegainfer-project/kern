@@ -1,0 +1,13 @@
+[family]
+name = "sample_glue"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "tools/kernels-src/sample_glue.cu"
+license = "kern (LICENSE)"
+toolchain = "nvcc Build cuda_13.0.r13.0/compiler.36424714_0, -arch=sm_103a"
+imported = "2026-10-26"
+
+[[variant]]
+name = "sample_glue"
+sha256 = "040872b15ccf997a9bb5ffbb13a1a56e9385d8df3f5a3a11238f98ad80144c84"
+entries = ["kern_sample_cast_bf16", "kern_sample_prep", "kern_sample_select"]

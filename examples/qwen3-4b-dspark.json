@@ -69,10 +69,12 @@
  },
  "vars": {
   "tokens": {
-   "max": "MAX_TOKENS", "axis": "rows"
+   "max": "MAX_TOKENS",
+   "axis": "rows"
   },
   "seqs": {
-   "max": "MAX_SEQS", "axis": "groups"
+   "max": "MAX_SEQS",
+   "axis": "groups"
   }
  },
  "states": {

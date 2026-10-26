@@ -20,8 +20,10 @@ and `build.sh` compiles them to one cubin.
 
 ## The chain a manifest runs
 
-Per step, every parameter a per-row array, every kernel in place on the
-`[rows, vocab]` f32 probs buffer the lm_head writes:
+`tools/sampling.py` builds it as the generators' `sample` op, with the glue
+of `tools/kernels-src/sample_glue.cu` around it. Per step, every parameter
+a per-row array, every kernel in place on the `[rows, vocab]` f32 probs
+buffer the lm_head writes:
 
 1. `OnlineSoftmaxFusedKernel(probs, probs, temperature[rows], 1.0, vocab)`,
    grid `rows`, dynamic smem `sizeof(OnlineSoftmaxTempStorage<1024>)`.

@@ -62,10 +62,12 @@
  },
  "vars": {
   "tokens": {
-   "max": "MAX_TOKENS", "axis": "rows"
+   "max": "MAX_TOKENS",
+   "axis": "rows"
   },
   "seqs": {
-   "max": "MAX_SEQS", "axis": "groups"
+   "max": "MAX_SEQS",
+   "axis": "groups"
   }
  },
  "states": {
@@ -266,6 +268,46 @@
    "domain": {
     "index_into": "model.embed_tokens.weight"
    }
+  },
+  "temperature": {
+   "dtype": "f32",
+   "shape": [
+    "seqs"
+   ],
+   "kind": "input",
+   "fill": "temperature"
+  },
+  "top_k": {
+   "dtype": "i32",
+   "shape": [
+    "seqs"
+   ],
+   "kind": "input",
+   "fill": "top_k"
+  },
+  "top_p": {
+   "dtype": "f32",
+   "shape": [
+    "seqs"
+   ],
+   "kind": "input",
+   "fill": "top_p"
+  },
+  "min_p": {
+   "dtype": "f32",
+   "shape": [
+    "seqs"
+   ],
+   "kind": "input",
+   "fill": "min_p"
+  },
+  "seed": {
+   "dtype": "i64",
+   "shape": [
+    "seqs"
+   ],
+   "kind": "input",
+   "fill": "seed"
   },
   "residual": {
    "dtype": "bf16",
@@ -4329,6 +4371,10 @@
    "source": "hf:Pegainfer/kern-kernels/blobs/868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7",
    "sha256": "868e93ae6e46e36a11c56af1fae49aeff9fcdfdc79f64ca99475a309e721e9e7"
   },
+  "flashinfer_sampling": {
+   "source": "hf:Pegainfer/kern-kernels/blobs/b5f9fa7b311d580a5689fbaa219db92b9aa40132c709d9623a5e0607cb49a055",
+   "sha256": "b5f9fa7b311d580a5689fbaa219db92b9aa40132c709d9623a5e0607cb49a055"
+  },
   "reduce_segments": {
    "source": "reduce_segments.cubin",
    "sha256": "9efa493af6c900015da509df9cc753616fd451b4f63f9bf58dcdbc69c37f1b76"
@@ -4336,6 +4382,10 @@
   "reshape_and_cache": {
    "source": "reshape_and_cache.cubin",
    "sha256": "1e5912bed482f8555e91a145a3cff4a1ce9b0c4240e23aa21b184c32d4716f13"
+  },
+  "sample_glue": {
+   "source": "hf:Pegainfer/kern-kernels/blobs/040872b15ccf997a9bb5ffbb13a1a56e9385d8df3f5a3a11238f98ad80144c84",
+   "sha256": "040872b15ccf997a9bb5ffbb13a1a56e9385d8df3f5a3a11238f98ad80144c84"
   },
   "unified_causal": {
    "source": "unified_causal.cubin",
@@ -5537,25 +5587,82 @@
     ]
    }
   },
-  "argmax": {
+  "sample": {
    "params": [
     "in buffer<bf16>",
-    "out buffer<i64>"
+    "in buffer<i32>",
+    "in buffer<f32>",
+    "in buffer<i32>",
+    "in buffer<f32>",
+    "in buffer<f32>",
+    "in buffer<i64>",
+    "out buffer<i64>",
+    "i32"
    ],
    "impl": {
     "scratch": {
      "pmax": {
       "dtype": "f32",
       "shape": [
-       "tokens",
+       "seqs",
        64
       ]
      },
      "pidx": {
       "dtype": "i32",
       "shape": [
-       "tokens",
+       "seqs",
        64
+      ]
+     },
+     "greedy": {
+      "dtype": "i64",
+      "shape": [
+       "seqs"
+      ]
+     },
+     "probs": {
+      "dtype": "f32",
+      "shape": [
+       "seqs",
+       151936
+      ]
+     },
+     "chain_temperature": {
+      "dtype": "f32",
+      "shape": [
+       "seqs"
+      ]
+     },
+     "chain_top_k": {
+      "dtype": "i32",
+      "shape": [
+       "seqs"
+      ]
+     },
+     "offset": {
+      "dtype": "u64",
+      "shape": [
+       "seqs"
+      ]
+     },
+     "states": {
+      "dtype": "u32",
+      "shape": [
+       50,
+       776
+      ]
+     },
+     "drawn": {
+      "dtype": "i32",
+      "shape": [
+       "seqs"
+      ]
+     },
+     "valid": {
+      "dtype": "u8",
+      "shape": [
+       "seqs"
       ]
      }
     },
@@ -5575,7 +5682,7 @@
        1
       ],
       "grid": [
-       "tokens",
+       "seqs",
        64,
        1
       ],
@@ -5590,7 +5697,7 @@
         "scratch": "pidx"
        },
        {
-        "i32": "VOCAB_SIZE"
+        "i32": 151936
        }
       ]
      },
@@ -5609,7 +5716,7 @@
        1
       ],
       "grid": [
-       "tokens",
+       "seqs",
        1,
        1
       ],
@@ -5621,10 +5728,351 @@
         "scratch": "pidx"
        },
        {
-        "param": 1
+        "scratch": "greedy"
        },
        {
         "i32": 64
+       }
+      ]
+     },
+     {
+      "module": "sample_glue",
+      "entry": "kern_sample_cast_bf16",
+      "params": [
+       "in buffer<bf16>",
+       "out buffer<f32>",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       "seqs",
+       149,
+       1
+      ],
+      "args": [
+       {
+        "param": 0
+       },
+       {
+        "scratch": "probs"
+       },
+       {
+        "i32": 151936
+       }
+      ]
+     },
+     {
+      "module": "sample_glue",
+      "entry": "kern_sample_prep",
+      "params": [
+       "in buffer<f32>",
+       "in buffer<i32>",
+       "in buffer<i32>",
+       "out buffer<f32>",
+       "out buffer<i32>",
+       "out buffer<u64>",
+       "out buffer<u32>",
+       "i32",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 2
+       },
+       {
+        "param": 3
+       },
+       {
+        "param": 1
+       },
+       {
+        "scratch": "chain_temperature"
+       },
+       {
+        "scratch": "chain_top_k"
+       },
+       {
+        "scratch": "offset"
+       },
+       {
+        "scratch": "states"
+       },
+       {
+        "param": 8
+       },
+       {
+        "i32": 151936
+       },
+       {
+        "i32": 38800
+       }
+      ]
+     },
+     {
+      "module": "flashinfer_sampling",
+      "entry": "_ZN10flashinfer8sampling24OnlineSoftmaxFusedKernelILj1024ELj4EfLb0EEEvPT1_S3_S3_S2_j",
+      "params": [
+       "inout buffer<f32>",
+       "inout buffer<f32>",
+       "in buffer<f32>",
+       "f32",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       "seqs",
+       1,
+       1
+      ],
+      "shared_mem": 304,
+      "args": [
+       {
+        "scratch": "probs"
+       },
+       {
+        "scratch": "probs"
+       },
+       {
+        "scratch": "chain_temperature"
+       },
+       {
+        "f32": 1.0
+       },
+       {
+        "i32": 151936
+       }
+      ]
+     },
+     {
+      "module": "flashinfer_sampling",
+      "entry": "_ZN10flashinfer8sampling34RadixTopKRenormProbKernel_MultiCTAILj1024ELj4ELb0ELb1EfiEEvPT3_S3_PT4_jjjPNS0_13RadixRowStateEjj",
+      "params": [
+       "inout buffer<f32>",
+       "inout buffer<f32>",
+       "in buffer<i32>",
+       "i32",
+       "i32",
+       "i32",
+       "inout buffer<u32>",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       {
+        "mul": [
+         {
+          "clamp": [
+           "seqs",
+           0,
+           50
+          ]
+         },
+         3
+        ]
+       },
+       1,
+       1
+      ],
+      "shared_mem": 204672,
+      "args": [
+       {
+        "scratch": "probs"
+       },
+       {
+        "scratch": "probs"
+       },
+       {
+        "scratch": "chain_top_k"
+       },
+       {
+        "i32": 0
+       },
+       {
+        "i32": 151936
+       },
+       {
+        "param": 8
+       },
+       {
+        "scratch": "states"
+       },
+       {
+        "i32": 50648
+       },
+       {
+        "i32": 3
+       }
+      ]
+     },
+     {
+      "module": "flashinfer_sampling",
+      "entry": "_ZN10flashinfer8sampling20TopPRenormProbKernelILj1024ELN3cub18CUB_300104_SM_103020BlockReduceAlgorithmE2ELj4EfEEvPT2_S6_Pffj",
+      "params": [
+       "inout buffer<f32>",
+       "inout buffer<f32>",
+       "in buffer<f32>",
+       "f32",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       "seqs",
+       1,
+       1
+      ],
+      "shared_mem": 324,
+      "args": [
+       {
+        "scratch": "probs"
+       },
+       {
+        "scratch": "probs"
+       },
+       {
+        "param": 4
+       },
+       {
+        "f32": 0.0
+       },
+       {
+        "i32": 151936
+       }
+      ]
+     },
+     {
+      "module": "flashinfer_sampling",
+      "entry": "_ZN10flashinfer8sampling26MinPSamplingFromProbKernelILj1024ELN3cub18CUB_300104_SM_103018BlockScanAlgorithmE2ELNS3_20BlockReduceAlgorithmE2ELj4ELb1EfiEEvPT4_PfPT5_PbSA_fjPmmSC_mjj",
+      "params": [
+       "inout buffer<f32>",
+       "in buffer<f32>",
+       "out buffer<i32>",
+       "out buffer<u8>",
+       "i64",
+       "f32",
+       "i32",
+       "in buffer<i64>",
+       "i64",
+       "in buffer<u64>",
+       "i64",
+       "i32",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       "seqs",
+       1,
+       1
+      ],
+      "shared_mem": 2080,
+      "args": [
+       {
+        "scratch": "probs"
+       },
+       {
+        "param": 5
+       },
+       {
+        "scratch": "drawn"
+       },
+       {
+        "scratch": "valid"
+       },
+       {
+        "i64": 0
+       },
+       {
+        "f32": 0.0
+       },
+       {
+        "i32": 151936
+       },
+       {
+        "param": 6
+       },
+       {
+        "i64": 0
+       },
+       {
+        "scratch": "offset"
+       },
+       {
+        "i64": 0
+       },
+       {
+        "i32": 1
+       },
+       {
+        "i32": 1
+       }
+      ]
+     },
+     {
+      "module": "sample_glue",
+      "entry": "kern_sample_select",
+      "params": [
+       "in buffer<f32>",
+       "in buffer<i32>",
+       "in buffer<i64>",
+       "out buffer<i64>",
+       "i32"
+      ],
+      "block": [
+       1024,
+       1,
+       1
+      ],
+      "grid": [
+       1,
+       1,
+       1
+      ],
+      "args": [
+       {
+        "param": 2
+       },
+       {
+        "scratch": "drawn"
+       },
+       {
+        "scratch": "greedy"
+       },
+       {
+        "param": 7
+       },
+       {
+        "param": 8
        }
       ]
      }
@@ -26011,13 +26459,34 @@
     },
     {
      "label": "sample",
-     "op": "argmax",
+     "op": "sample",
      "args": [
       {
        "buf": "logits"
       },
       {
+       "buf": "seq_lens"
+      },
+      {
+       "buf": "temperature"
+      },
+      {
+       "buf": "top_k"
+      },
+      {
+       "buf": "top_p"
+      },
+      {
+       "buf": "min_p"
+      },
+      {
+       "buf": "seed"
+      },
+      {
        "buf": "next_token"
+      },
+      {
+       "var": "seqs"
       }
      ]
     }
@@ -36242,13 +36711,34 @@
     },
     {
      "label": "sample",
-     "op": "argmax",
+     "op": "sample",
      "args": [
       {
        "buf": "logits"
       },
       {
+       "buf": "seq_lens"
+      },
+      {
+       "buf": "temperature"
+      },
+      {
+       "buf": "top_k"
+      },
+      {
+       "buf": "top_p"
+      },
+      {
+       "buf": "min_p"
+      },
+      {
+       "buf": "seed"
+      },
+      {
        "buf": "next_token"
+      },
+      {
+       "var": "seqs"
       }
      ]
     }
