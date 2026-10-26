@@ -32,7 +32,7 @@ kern-run = { path = "crates/kern-run" }
 # the chat renderers, picked by the checkpoint's model_type. `vllm-chat` and
 # `vllm-tokenizer` (its test tokenizer) are the same vLLM rev pegainfer pins,
 # so the renderer tests read the crate the server runs.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "f6910714a9662c119c21811aa5f6fe2815d820dd" }
+pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "ca25b80fa4491509ccef418467b37d4d6fd64e9b" }
 vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
 vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
 vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
