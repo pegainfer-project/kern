@@ -161,7 +161,7 @@ pub struct Mapping {
 }
 
 impl Mapping {
-    fn of(r: &Remap) -> Mapping {
+    pub(crate) fn of(r: &Remap) -> Mapping {
         Mapping {
             unmap: r.unmap.clone(),
             map: r.map.clone(),
@@ -470,7 +470,7 @@ impl Ranks {
         let local = self
             .accounts
             .iter()
-            .map(|a| a.pool.max_seq_tokens().min((a.pool.total() - a.pad.pages()) * page))
+            .map(|a| a.pool.max_seq_tokens().min((a.pool.pages_max() - a.pad.pages()) * page))
             .min()
             .unwrap_or(0);
         local * self.dealt.map_or(1, |il| il.members() as usize)
