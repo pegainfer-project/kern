@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, ensure, Context, Result};
 use kern_manifest::types::Fill;
 use kern_manifest::{Protocol, Verified};
+use kern_pool::Pool;
 use kern_run::Weights;
 use kern_runtime::{Budget, Capacity, GroupRank, Landing, Offer, Runtime, Topology};
 use serde::{Deserialize, Serialize};
@@ -171,16 +172,34 @@ fn join(
     Ok(())
 }
 
+/// Every rank loaded and joined, before anyone accounts for them: the
+/// pool each rank's budget makes, in rank order, and the executors.
+pub struct Joined {
+    pub protocol: Protocol,
+    pub groups: Groups,
+    pub pools: Vec<Pool>,
+    /// The host tier reserved on every rank, in (host pages, host slots).
+    pub host: (u64, u64),
+    pub exec: Executors,
+}
+
+impl Joined {
+    /// The group scheduler's accounting over every rank.
+    pub fn ranks(self) -> Result<(Ranks, Executors)> {
+        Ok((Ranks::new(self.protocol, self.groups, self.pools, self.host)?, self.exec))
+    }
+}
+
 /// Load rank 0, wait at `listen` for every other rank (none for a
-/// manifest of one), connect them all, and build every rank's
-/// accounting from the budgets they report.
+/// manifest of one), connect them all, and build every rank's pool from
+/// the budget it reports.
 pub fn head(
     m: &Verified,
     weights: &Weights,
     o: &Load,
     listen: Option<&str>,
     (host_bytes, host_turn): (u64, u64),
-) -> Result<(Ranks, Executors)> {
+) -> Result<Joined> {
     let groups = world(m)?;
     let n = groups.ranks();
     let listener = match (n, listen) {
@@ -238,9 +257,9 @@ pub fn head(
     }
     join(&mut rt, &p, groups, &members(m, groups, 0, &offers), host)?;
     let pools = budgets.iter().map(|b| b.pool(m)).collect::<kern_pool::Result<Vec<_>>>()?;
-    let ranks = Ranks::new(p.clone(), groups, pools, host)?;
     info!(ranks = n, group = groups.size(), "ranks connected");
-    Ok((ranks, Executors { local: Executor::new(0, rt, p), remote, pools: exported }))
+    let exec = Executors { local: Executor::new(0, rt, p.clone()), remote, pools: exported };
+    Ok(Joined { protocol: p, groups, pools, host, exec })
 }
 
 /// Serve rank `q` for the head at `head` until the head is gone.

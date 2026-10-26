@@ -800,6 +800,44 @@ K3 一条会话的 slot 58.6 MB 抵 265 页，slot 先用光，128 GiB 下 c32 �
 c128 89.9%。另试过"被续上的旧轮直接丢、只 park 最新一轮"：c128 好（92.0%）、c32/c64 差
 （95.9 / 95.6%），park 一律走 P2 的次序。
 
+## prefill tier：每个 rank 自己的 varlen batch（`dp.rs`，2026-10-25，tray02 4×GB300）
+
+一个 manifest 只有一个"喂多少行算多少行"的程序、没有按固定行数 step 的程序，就是 prefill tier（`dp::fits`），
+走 `dp.rs` 而不是组调度器：**每个 rank 一个 `Pool` 和一个 `Prefix`**，每步每个 rank 用 `pack` 把自己的
+常驻 prompt 打成一个 varlen 调用（行上限 = manifest 的 `rows.max`，序列上限 = `--max-seqs`），各 rank 各自的
+vars 走 `kern_run::fills`，四个 item 一次 `Executors::run`；没活的 rank 喂一行 `valid = 0` 的 pad。组调度器
+给同一步的每个 rank 等长的 cu_seqlens，所以 EP4 之前是一个 rank 干活三个 pad；MegaMoE 跨 rank 只要求同一程序、
+同一 token 上界、每层一次 launch，每个 rank 的 block M 和 `tokens` 可以不同。
+
+放置：所有 rank 里最长的已保留前缀所在的 rank，否则 (待 prefill 行数, 已用页, rank) 最小者。prompt 的最后几行
+进去就出 token、`retire` 成 checkpoint 进 `Prefix`（按整个 prompt 做键，`history_tokens` 处的快照还没有）；
+池 `Busy` 就丢最冷的 checkpoint 再试。请求上限是 `max_seq_tokens`（页表一行能寻址的）限于 `pages_max()`，
+**不是 `pool.total()`**：那是现在存在的页数，页和 slot 互换 chunk，它会跟着 KV 的高水位走（第一次 3k–752k
+的跑里 256 条有 66 条被按 406k–544k 的"上限"拒掉，vllm-bench 还把 stream 里的 `finish_reason=error` 算成功）。
+
+DeepSeek V4.1 Flash prefill manifest（`--prefill-only --capacity 32768 --max-seqs 56 --context 1048576
+--engram device`，`kern bench` 单卡 32768 行 381.6 ms），DP4/EP4，vllm-bench 随机 token id、输出 1 个 token：
+
+| 负载 | 客户端 tok/s | TTFT mean / median / p99 | server |
+|---|---:|---|---|
+| c512, 32k × 1024 | 298.9k（稳态窗口） | 41.3 / 51.3 / 59.1 s | 331–332k rows/s，step 394–396 ms，每 rank 55 条排队 |
+| c512, 16k–32k × 1024 | 316.9k | 31.4 / 33.2 / 64.9 s | 328–331k rows/s |
+| c512, 3k–32k × 1024 | 308.3k | 23.5 / 26.3 / 47.5 s | 每步仍是 4 × 32768 行 |
+| c16, 128k × 64 | 310.7k | 6.1 / 6.6 / 9.2 s | step 410 → 520 ms（32k 行下的上下文长到 96k） |
+| c128, 3k–752k × 256 | 276.6k | 139 / 137 / 299 s | 315k → 255k rows/s，step 415 → 540 ms，0 拒绝 |
+| c1, 32k × 8 | 75.1k | 435 ms | 一个 rank 一步 395 ms + ~40 ms 线上 |
+| c512, 1k × 4096 | 238.2k | 2.1 / 2.0 / 4.1 s | 每 rank 只跑 24 条：slot 吃掉了页，见下 |
+
+332k rows/s = 4 × 32768 / 0.395 s：serving 外壳比 `kern bench` 的单卡 step 多 14 ms。12 条 700–20000 token 的
+prompt 单独跑和打包跑首 token 12/12 一致；前缀命中 `cached_tokens` = 保留的整条长度，首 token 不变，TTFT 300 → 32 ms。
+
+**slot 对页**：这个 manifest 每个 sequence slot 0.70 GiB（43 个 sliding window + compressor，按 `--context`
+算），一页 128 token 只有 0.11 MiB；59.9 GiB 的预算里 57 个 slot 占 40 GiB，KV 剩 152917 页。保留的 checkpoint
+占着 slot，新序列缺 slot 时池从空闲页里切（一个 slot = 6300 页 = 806k token 的 KV），所以几千条短 prompt 的前缀
+保留把 KV 换成了 slot：c512 × 1k 时每 rank 只剩 ~3200 页。短于 ~800k token 的前缀保留是亏的；策略（每 rank 限
+checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats 行打 `pages=used/live slots=used/live`。
+没做：`history_tokens` 处的快照、host tier、P→D handoff（executor rank 不收 `Push`）。
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、

@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+mod dp;
 mod executor;
 pub mod front;
 pub mod logline;
@@ -203,16 +204,30 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     }
     anyhow::ensure!(o.decode.is_empty(), "`--decode` hands prompts off from a pipeline head; this manifest is not cut");
     if let Some(at) = &o.decode_listen {
-        let (ranks, exec) = executor::head(&manifest, &weights, &load, o.listen.as_deref(), (0, 0))?;
+        let (ranks, exec) = executor::head(&manifest, &weights, &load, o.listen.as_deref(), (0, 0))?.ranks()?;
         let pools = exec.pools()?;
         return pd::tier::serve(ranks, exec, pools, pd::shapes(&manifest), at, o.max_seqs);
     }
     let host = ((o.host_gib * (1u64 << 30) as f64) as u64, o.host_turn);
-    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes: host.0 };
     let listen = o.listen.clone();
+    // A manifest with nothing to step with is a prefill tier: every rank
+    // its own batch (`dp`); any other runs the group scheduler.
+    if dp::fits(&Protocol::check(&manifest)?) {
+        let policy = dp::Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs };
+        let load = move || -> Result<(dp::Dp, scheduler::Facts)> {
+            let t0 = Instant::now();
+            let joined = executor::head(&manifest, &weights, &load, listen.as_deref(), host)?;
+            info!(model = %manifest.model, ranks = joined.groups.ranks(), load_s = logline::secs(t0.elapsed()), "ranks loaded");
+            let sched = dp::Dp::new(joined, policy)?;
+            let facts = sched.facts();
+            Ok((sched, facts))
+        };
+        return launch(load, served_name, model_path, o.port);
+    }
+    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes: host.0 };
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
         let t0 = Instant::now();
-        let (ranks, exec) = executor::head(&manifest, &weights, &load, listen.as_deref(), host)?;
+        let (ranks, exec) = executor::head(&manifest, &weights, &load, listen.as_deref(), host)?.ranks()?;
         info!(model = %manifest.model, ranks = ranks.groups().ranks(), load_s = logline::secs(t0.elapsed()), "ranks loaded");
         let sched = KernScheduler::new(ranks, exec, policy)?;
         let facts = sched.facts();
