@@ -36,8 +36,12 @@
 //!   rank, from the most loaded one — and each bucket's forward is
 //!   CUDA-graph-captured once; padding rows write into a page leased for
 //!   them on each rank that nobody reads;
-//! - greedy only: the manifest's `argmax` is the sampler. Non-greedy
-//!   sampling params are logged once and served greedily;
+//! - the manifest draws each sequence's token over its sampling fills,
+//!   staged from the request (`Cell::sampling`: its parameters, a seed
+//!   drawn at admission without one). A manifest without them is greedy:
+//!   a request that asks for a draw is refused at the endpoint
+//!   (`refuse.rs`), and one made non-greedy by the generation config's
+//!   defaults is logged once and served greedily;
 //! - a speculative round is a forward of several rows per sequence whose
 //!   `tokens` output is `[groups, rows]` and whose `count` output says how
 //!   many of a sequence's the device accepted: the rows past the count
@@ -97,7 +101,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{bail, Result};
-use kern_manifest::protocol::{Forward, Rows};
+use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::Protocol;
 use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
 use pegainfer_frontend::engine::{
@@ -203,6 +207,8 @@ struct Seq {
     /// which is what `finish` checks against.
     emitted: usize,
     max_tokens: usize,
+    /// How its tokens are drawn.
+    sampling: Sampling,
     /// The request's EOS and explicit stop ids, as the frontend lowered
     /// them (`ignore_eos` arrives as a policy without an EOS).
     stop: StopPolicy,
@@ -591,13 +597,14 @@ impl KernScheduler {
         let prompt = q.request.prompt_tokens.len();
         let max_tokens = q.request.max_tokens;
         let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
-        if !q.request.params.is_greedy() && !self.warned_sampling {
+        let sampling = crate::ranks::sampling(&q.request.params);
+        if !q.request.params.is_greedy() && !self.ranks.protocol().samples() && !self.warned_sampling {
             warn!(
                 request = %id,
                 temperature = q.request.params.temperature,
                 top_p = q.request.params.top_p,
                 top_k = q.request.params.top_k,
-                "non-greedy sampling params; this engine samples greedily (argmax in the manifest); further requests are not warned about"
+                "non-greedy sampling params, but this manifest takes no sampling fills: served greedily; further requests are not warned about"
             );
             self.warned_sampling = true;
         }
@@ -621,14 +628,14 @@ impl KernScheduler {
             (!self.every_page).then_some(q.request.history_tokens).flatten().filter(|&m| m > start && m <= n_pre);
         let first = match mark {
             Some(m) => {
-                let first = self.prefill(&f, &row, &ids[..m], start)?;
+                let first = self.prefill(&f, &row, &ids[..m], start, sampling)?;
                 self.keep_prompt(&mut row, &ids[..m], id)?;
                 match m < n_pre {
-                    true => self.prefill(&f, &row, &ids[..n_pre], m)?,
+                    true => self.prefill(&f, &row, &ids[..n_pre], m, sampling)?,
                     false => first,
                 }
             }
-            None => self.prefill(&f, &row, &ids[..n_pre], start)?,
+            None => self.prefill(&f, &row, &ids[..n_pre], start, sampling)?,
         };
         self.stats.prefill_ns += t0.elapsed().as_nanos();
         self.stats.prefill_tokens += (n_pre - start) as u64;
@@ -658,6 +665,7 @@ impl KernScheduler {
             generated: 0,
             emitted: 0,
             max_tokens,
+            sampling,
             stop: q.request.stop_policy.clone(),
             row,
             prompt_len: prompt,
@@ -810,13 +818,20 @@ impl KernScheduler {
     /// Chunked single-sequence prefill of `ids[start..]` at positions
     /// `start..` of `row` (`start` is the row's prefix) through `f`; the
     /// first generated token when `f` hands it back.
-    fn prefill(&mut self, f: &Forward, row: &Row, ids: &[i64], start: usize) -> Result<Option<u32>> {
+    fn prefill(
+        &mut self,
+        f: &Forward,
+        row: &Row,
+        ids: &[i64],
+        start: usize,
+        sampling: Sampling,
+    ) -> Result<Option<u32>> {
         let chunk = self.chunk;
         let mut first = None;
         let mut pos = start;
         while pos < ids.len() {
             let c = (ids.len() - pos).min(chunk);
-            let cells = [Cell { row, ids: ids[pos..pos + c].to_vec(), pos }];
+            let cells = [Cell { row, ids: ids[pos..pos + c].to_vec(), pos, sampling }];
             let mut st = self.ranks.stage(&cells, c, |_| 1)?;
             let out = self.run(&mut st, f)?;
             pos += c;
@@ -843,7 +858,7 @@ impl KernScheduler {
         let cells: Vec<Cell> = self
             .running
             .iter()
-            .map(|s| Cell { row: &s.row, ids: vec![s.next as i64; rows as usize], pos: s.pos })
+            .map(|s| Cell { row: &s.row, ids: vec![s.next as i64; rows as usize], pos: s.pos, sampling: s.sampling })
             .collect();
         let mut st = self.ranks.stage(&cells, rows as usize, |k| bucket(k).min(max_seqs))?;
         drop(cells);

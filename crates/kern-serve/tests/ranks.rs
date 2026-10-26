@@ -5,11 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use kern_manifest::protocol::Values;
+use kern_manifest::protocol::{Sampling, Values};
 use kern_manifest::types::Manifest;
 use kern_manifest::{verify, Protocol};
 use kern_pool::{Denied, Pool};
-use kern_serve::ranks::{Act, Answer, Cell, Groups, Order, Ranks, Row};
+use kern_serve::ranks::{sampling, Act, Answer, Cell, Groups, Order, Ranks, Row};
+use pegainfer_frontend::sampler::SamplingParams;
 
 mod common;
 use common::{dealt, replicated, Rand};
@@ -25,8 +26,25 @@ fn pool(slots: usize) -> Pool {
 }
 
 fn ranks(slots: [usize; 4], host: (u64, u64)) -> Ranks {
-    let p = Protocol::check(&verify(manifest()).unwrap()).unwrap();
+    ranks_of(manifest(), slots, host)
+}
+
+fn ranks_of(m: Manifest, slots: [usize; 4], host: (u64, u64)) -> Ranks {
+    let p = Protocol::check(&verify(m).unwrap()).unwrap();
     Ranks::new(p, Groups::new(4, 4).unwrap(), slots.map(pool).into(), host).unwrap()
+}
+
+/// The same manifest drawing each sequence's token over the sampling fills.
+fn sampled() -> Manifest {
+    let mut m = serde_json::to_value(manifest()).unwrap();
+    let fills = [("temperature", "f32"), ("top_k", "i32"), ("top_p", "f32"), ("min_p", "f32"), ("seed", "i64")];
+    for (name, dtype) in fills {
+        m["buffers"][name] = serde_json::json!({"kind": "input", "dtype": dtype, "shape": ["seqs"], "fill": name});
+        let param = serde_json::json!(format!("in buffer<{dtype}>"));
+        m["ops"]["step"]["params"].as_array_mut().unwrap().push(param);
+        m["programs"]["decode"]["calls"][0]["args"].as_array_mut().unwrap().push(serde_json::json!({"buf": name}));
+    }
+    Manifest::from_json(&m.to_string()).unwrap()
 }
 
 /// Ranks that land every remap and transfer as soon as they hear of it.
@@ -111,7 +129,10 @@ fn a_step_gives_every_rank_the_same_program_and_vars_over_its_own_rows() {
     let a = r.lease(20, |q| Some(q.index())).unwrap();
     let b = r.lease(20, |q| Some(if q.index() == 0 { 9 } else { q.index() })).unwrap();
     assert_eq!((a.owner().index(), b.owner().index()), (0, 1));
-    let cells = [Cell { row: &a, ids: vec![7], pos: 3 }, Cell { row: &b, ids: vec![8], pos: 5 }];
+    let cells = [
+        Cell { row: &a, ids: vec![7], pos: 3, sampling: Sampling::GREEDY },
+        Cell { row: &b, ids: vec![8], pos: 5, sampling: Sampling::GREEDY },
+    ];
     let mut st = r.stage(&cells, 1, |k| k).unwrap();
     let f = st.forward(r.protocol(), 1).unwrap();
     let items = st.items(&f);
@@ -185,7 +206,7 @@ fn a_replicated_step_deals_every_position_to_exactly_one_member() {
             .iter()
             .zip(&lens)
             .enumerate()
-            .map(|(i, (row, &l))| Cell { row, ids: vec![100 + i as i64], pos: l - 1 })
+            .map(|(i, (row, &l))| Cell { row, ids: vec![100 + i as i64], pos: l - 1, sampling: Sampling::GREEDY })
             .collect();
         let mut st = r.stage(&cells, 1, |k| k.next_power_of_two()).unwrap();
         let f = st.forward(r.protocol(), 1).unwrap();
@@ -279,7 +300,10 @@ fn a_rank_sent_only_the_tables_that_changed_holds_every_steps_tables() {
             if rows.is_empty() {
                 continue;
             }
-            let cells: Vec<Cell> = rows.iter().map(|(row, pos)| Cell { row, ids: vec![1], pos: *pos }).collect();
+            let cells: Vec<Cell> = rows
+                .iter()
+                .map(|(row, pos)| Cell { row, ids: vec![1], pos: *pos, sampling: Sampling::GREEDY })
+                .collect();
             let mut st = r.stage(&cells, 1, |k| k.next_power_of_two()).unwrap();
             let f = st.forward(r.protocol(), 1).unwrap();
             let items = st.items(&f);
@@ -303,4 +327,51 @@ fn a_rank_sent_only_the_tables_that_changed_holds_every_steps_tables() {
         }
     }
     assert!(sent * 2 < staged, "{sent} of {staged} tables sent");
+}
+
+#[test]
+fn a_request_draws_as_it_asks_or_takes_the_most_likely_token() {
+    assert_eq!(sampling(&SamplingParams::default()), Sampling::GREEDY);
+    let asked =
+        SamplingParams { temperature: 0.7, top_k: 40, top_p: 0.9, min_p: 0.1, seed: Some(3), ignore_eos: false };
+    assert_eq!(sampling(&asked), Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, min_p: 0.1, seed: 3 });
+    // One survivor is the most likely token, whatever the temperature.
+    assert_eq!(sampling(&SamplingParams { top_k: 1, ..asked }), Sampling::GREEDY);
+    // Without a seed, two requests draw apart.
+    let unseeded = SamplingParams { seed: None, ..asked };
+    let (x, y) = (sampling(&unseeded), sampling(&unseeded));
+    assert_eq!((x.temperature, x.top_k, x.seed == y.seed), (0.7, 40, false));
+}
+
+#[test]
+fn a_cell_is_staged_with_its_own_draw_and_a_padding_row_with_the_most_likely_token() {
+    let mut r = ranks_of(sampled(), [4; 4], (0, 0));
+    let a = r.lease(20, |q| Some(q.index())).unwrap();
+    let b = r.lease(20, |q| Some(if q.index() == 0 { 9 } else { q.index() })).unwrap();
+    let hot = Sampling { temperature: 0.8, top_k: 50, top_p: 0.95, min_p: 0.05, seed: 7 };
+    let cells = [
+        Cell { row: &a, ids: vec![7], pos: 3, sampling: hot },
+        Cell { row: &b, ids: vec![8], pos: 5, sampling: Sampling::GREEDY },
+    ];
+    // A bucket of two: each owner's row and a padding row on every rank.
+    let mut st = r.stage(&cells, 1, |_| 2).unwrap();
+    let f = st.forward(r.protocol(), 1).unwrap();
+    let items = st.items(&f);
+    let column = |name: &str| -> Vec<Values> { items.iter().map(|i| i.rows[name].clone()).collect() };
+    let floats = |own: f32, rest: f32| {
+        vec![
+            Values::Floats(vec![own, rest]),
+            Values::Floats(vec![rest; 2]),
+            Values::Floats(vec![rest; 2]),
+            Values::Floats(vec![rest; 2]),
+        ]
+    };
+    let ints = |own: i64| {
+        vec![Values::Ints(vec![own, 0]), Values::Ints(vec![0; 2]), Values::Ints(vec![0; 2]), Values::Ints(vec![0; 2])]
+    };
+    assert_eq!(column("temperature"), floats(0.8, 0.0));
+    assert_eq!(column("top_p"), floats(0.95, 1.0));
+    assert_eq!(column("min_p"), floats(0.05, 0.0));
+    assert_eq!(column("top_k"), ints(50));
+    assert_eq!(column("seed"), ints(7));
 }

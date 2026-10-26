@@ -55,8 +55,14 @@ fixture 的期望随之更新。更早的 #56260 仍在：DSV4/V4.1 历史 tool 
   - decode 按 bucket（1,2,4,8,16,24,32,48,64,96,128,192,256）pad，声明了
     `graph` 的 program 每个 bucket 首次使用时 capture 一张图；pad 行写进
     scheduler 自己租的一页。
-  - greedy：采样就是 manifest 里的 `argmax`。非 greedy 参数 warn 一次后按
-    greedy 服务。停止 token 带着 `stop_cause` 交给 ledger（pegainfer 约定：前端像 vLLM
+  - 采样：manifest 带 sampling fills（temperature / top_k / top_p / min_p /
+    seed，各一个 `[seqs]` 输入）时，每行按自己请求的参数 stage，pad 行 greedy，
+    没给 seed 的请求准入时抽一个。seed 只承诺"同一 batch 布局下重放一致"：
+    FlashInfer 用 `(seed, 行号, 位置)` 起 Philox，行在 batch 里的位置进了随机流，
+    跨布局不保证（2026-10-26，issue #66）。不带 sampling fills 的 manifest 只会
+    argmax：显式要 temperature > 0 的请求在 HTTP 层 400（`refuse.rs`），
+    generation_config 默认值带来的非 greedy 参数 warn 一次后按 greedy 服务。
+    停止 token 带着 `stop_cause` 交给 ledger（pegainfer 约定：前端像 vLLM
     一样把它计入 `completion_tokens`、从文本里剥掉），计入 `max_tokens`。
 - **manifest**（`tools/gen_qwen3_decode.py`）多了一个 var `seqs`（≤256）和
   一个 program：
@@ -841,6 +847,6 @@ checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats �
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
-真采样（temperature/top-p 作为 manifest 内的 `sample` op；投机下是 rejection sampling）、logprobs / echo（要 logprobs 的请求在
+投机 round 下的采样（rejection sampling；投机 manifest 不带 sampling fills，要 draw 的请求 400）、logprobs / echo（要 logprobs 的请求在
 HTTP 层就按 400 拒掉并点名参数，`refuse.rs`，2026-10-26；经 scheduler 的 reject 到 vLLM wire 只会变成 500）、
 bs 2–16 的 split-KV decode、步间 host 空转（token 反馈进图）。

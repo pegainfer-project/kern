@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
 use kern_pool::{Kind, Placement, Pool, Pooled, Remap};
 use kern_serve::front::{Clients, Note, Write};
@@ -423,7 +424,7 @@ impl Sim {
                 let (lease, handoff) = self.head.admitted.remove(&req).expect("enabled");
                 self.say(format!("prompt {}", self.clients[&req].prompt));
                 if handoff {
-                    let outs = self.head.tiers.prefilled(req, &lease, self.clients[&req].prompt);
+                    let outs = self.head.tiers.prefilled(req, &lease, self.clients[&req].prompt, Sampling::GREEDY);
                     self.head.outbox.extend(outs);
                 }
                 // The head's lease goes to its cache: P's pages are not checked here.

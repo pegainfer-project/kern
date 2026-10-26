@@ -71,6 +71,7 @@ struct Seq {
     pos: usize,
     passed: usize,
     stop: pegainfer_frontend::engine::StopPolicy,
+    sampling: Sampling,
     admitted: Instant,
 }
 
@@ -349,8 +350,8 @@ impl Dp {
                 None => r.acts.extend(lease.seq_slot().map(Act::Zero)),
             }
             let q = self.waiting.pop_front().expect("peeked");
-            if !q.request.params.is_greedy() && !self.warned_sampling {
-                warn!(request = %id, "non-greedy sampling params; this tier samples greedily (argmax in the manifest); further requests are not warned about");
+            if !q.request.params.is_greedy() && !self.p.samples() && !self.warned_sampling {
+                warn!(request = %id, "non-greedy sampling params, but this manifest takes no sampling fills: served greedily; further requests are not warned about");
                 self.warned_sampling = true;
             }
             ledger.admit(id);
@@ -367,6 +368,7 @@ impl Dp {
                 pos: start,
                 passed: 0,
                 stop: q.request.stop_policy.clone(),
+                sampling: crate::ranks::sampling(&q.request.params),
                 admitted: Instant::now(),
             });
         }
@@ -390,19 +392,22 @@ impl Dp {
     /// row when the plan is empty.
     fn item(&mut self, q: usize, plan: &[(usize, usize)]) -> Result<Item> {
         let (p, r) = (&self.p, &mut self.ranks[q]);
-        let parts: Vec<(&Lease, usize, &[i64])> = match plan {
-            [] => vec![(&r.pad, 0, &[0][..])],
+        let parts: Vec<(&Lease, usize, &[i64], Sampling)> = match plan {
+            [] => vec![(&r.pad, 0, &[0][..], Sampling::GREEDY)],
             plan => plan
                 .iter()
-                .map(|&(i, n)| (&r.seqs[i].lease, r.seqs[i].pos, &r.seqs[i].ids[r.seqs[i].pos..r.seqs[i].pos + n]))
+                .map(|&(i, n)| {
+                    let s = &r.seqs[i];
+                    (&s.lease, s.pos, &s.ids[s.pos..s.pos + n], s.sampling)
+                })
                 .collect(),
         };
         let leases: Vec<&Lease> = parts.iter().map(|&(l, ..)| l).collect();
-        let positions: Vec<usize> = parts.iter().map(|&(_, pos, _)| pos).collect();
-        let lens: Vec<usize> = parts.iter().map(|(.., ids)| ids.len()).collect();
-        let ids: Vec<i64> = parts.iter().flat_map(|(.., ids)| ids.iter().copied()).collect();
-        let greedy = vec![Sampling::GREEDY; leases.len()];
-        let (vars, values) = kern_run::fills(p, &leases, &positions, &lens, &ids, &greedy);
+        let positions: Vec<usize> = parts.iter().map(|&(_, pos, ..)| pos).collect();
+        let lens: Vec<usize> = parts.iter().map(|(_, _, ids, _)| ids.len()).collect();
+        let ids: Vec<i64> = parts.iter().flat_map(|(_, _, ids, _)| ids.iter().copied()).collect();
+        let samplings: Vec<Sampling> = parts.iter().map(|&(.., s)| s).collect();
+        let (vars, values) = kern_run::fills(p, &leases, &positions, &lens, &ids, &samplings);
         let mut rows: BTreeMap<String, Values> = values
             .into_iter()
             .map(|(f, v)| match (plan.is_empty(), f.fill) {

@@ -153,6 +153,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     log_manifest(&manifest);
     let model_path = weights.dirs().remove(0);
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
+    let samples = Protocol::check_unsampled(&manifest)?.samples();
 
     if manifest.cut.is_some() {
         anyhow::ensure!(o.rank.is_none(), "a pipeline stage's place is its cut manifest's; `--rank` is a topology's");
@@ -186,7 +187,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             host_turn: o.host_turn,
         };
         let load = move || pp::head::spawn(manifest, weights, head);
-        return launch(load, served_name, model_path, o.port);
+        return launch(load, served_name, model_path, o.port, samples);
     }
 
     // Every sequence of a group batch holds a token slot on each of its
@@ -224,7 +225,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             let facts = sched.facts();
             Ok((sched, facts))
         };
-        return launch(load, served_name, model_path, o.port);
+        return launch(load, served_name, model_path, o.port, samples);
     }
     let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes: host.0 };
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
@@ -235,7 +236,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         let facts = sched.facts();
         Ok((sched, facts))
     };
-    launch(load, served_name, model_path, o.port)
+    launch(load, served_name, model_path, o.port, samples)
 }
 
 /// Logs the verified manifest before any GPU work: buffer kinds, module count, and each program's calls.
@@ -284,7 +285,9 @@ fn program_shape(p: &kern_manifest::types::Program) -> String {
 
 /// Run the scheduler `load` builds on a thread of its own, which owns it
 /// (and its GPUs) for its whole life, and serve HTTP once it is ready.
-fn launch<S, L>(load: L, served_name: String, model_path: PathBuf, port: u16) -> Result<()>
+/// Serve `load`'s scheduler on `port`; `samples` is whether its manifest
+/// draws, so the endpoint can refuse a request for a draw it cannot make.
+fn launch<S, L>(load: L, served_name: String, model_path: PathBuf, port: u16, samples: bool) -> Result<()>
 where
     S: Scheduler + 'static,
     L: FnOnce() -> Result<(S, scheduler::Facts)> + Send + 'static,
@@ -339,7 +342,7 @@ where
             None,
             1,
             shutdown,
-            refuse::routes,
+            move |vllm| refuse::routes(vllm, samples),
         )
         .await
     })

@@ -9,6 +9,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use kern_manifest::protocol::Sampling;
 use kern_serve::front::{Call, Front, Note};
 use kern_serve::pd::{Ask, Relay, Req};
 use pegainfer_frontend::engine::{
@@ -89,7 +90,14 @@ fn head(calls: mpsc::Receiver<Call>, notes: mpsc::Sender<Note>, d: mpsc::Sender<
             notes
                 .send(Note::Decode { id, relay: Relay::new(max - 1, q.request.stop_policy.clone()), tier: 0 })
                 .unwrap();
-            d.send(Ask::Start { req: id.raw(), first: FIRST, len: 16, max_tokens: max - 1 }).unwrap();
+            d.send(Ask::Start {
+                req: id.raw(),
+                first: FIRST,
+                len: 16,
+                max_tokens: max - 1,
+                sampling: Sampling::GREEDY,
+            })
+            .unwrap();
         }
     }
 }

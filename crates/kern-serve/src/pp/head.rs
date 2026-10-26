@@ -115,6 +115,7 @@ struct Active {
     ids: Vec<i64>,
     pos: usize,
     stop: StopPolicy,
+    sampling: Sampling,
     /// Where its rows stop until the prompt so far is kept, gone once it is.
     mark: Option<usize>,
     /// Where they stop before that for a snapshot, gone once it is taken.
@@ -533,7 +534,9 @@ impl PpHead {
                         false => None,
                     };
                     let stop = q.request.stop_policy.clone();
-                    let a = Active { id, lease, ids, pos: start, stop, mark, snap, parts, handoff, passed: 0 };
+                    let sampling = crate::ranks::sampling(&q.request.params);
+                    let a =
+                        Active { id, lease, ids, pos: start, stop, sampling, mark, snap, parts, handoff, passed: 0 };
                     self.active.push_back(a);
                     if let Some(t) = tier {
                         self.tiers.admitted(t, id.raw());
@@ -650,7 +653,7 @@ impl PpHead {
         while let Some(i) = self.step.as_ref().and(self.active.iter().position(|a| a.pos == self.chunked(a))) {
             let a = self.active.remove(i).expect("found");
             let f = self.step.clone().expect("checked");
-            self.send_item(&f, &[(&a.lease, a.pos, &a.ids[a.pos..])])?;
+            self.send_item(&f, &[(&a.lease, a.pos, &a.ids[a.pos..], a.sampling)])?;
             self.prefilled(&a)?;
             let done = self.leave(a, 0);
             self.due.push_back(vec![done]);
@@ -664,11 +667,11 @@ impl PpHead {
     fn send_chunk(&mut self, plan: &[(usize, usize)]) -> Result<()> {
         let f = self.prefill.clone();
         let active = std::mem::take(&mut self.active);
-        let parts: Vec<(&Lease, usize, &[i64])> = plan
+        let parts: Vec<(&Lease, usize, &[i64], Sampling)> = plan
             .iter()
             .map(|&(i, n)| {
                 let a = &active[i];
-                (&a.lease, a.pos, &a.ids[a.pos..a.pos + n])
+                (&a.lease, a.pos, &a.ids[a.pos..a.pos + n], a.sampling)
             })
             .collect();
         let sent = self.send_item(&f, &parts);
@@ -722,21 +725,22 @@ impl PpHead {
         if !a.handoff {
             return Ok(());
         }
-        let outs = self.tiers.prefilled(a.id.raw(), &a.lease, a.ids.len());
+        let outs = self.tiers.prefilled(a.id.raw(), &a.lease, a.ids.len(), a.sampling);
         self.apply(outs)
     }
 
-    /// Stage one item of `parts` (a lease, its position, its rows) on every
-    /// stage and on the head. The acts the cache ran on the head since the
-    /// item before go first (the stages run them, the head has); a line
-    /// table goes out only when the item's sequences change it.
-    fn send_item(&mut self, f: &Forward, parts: &[(&Lease, usize, &[i64])]) -> Result<()> {
+    /// Stage one item of `parts` (a lease, its position, its rows, how its
+    /// token is drawn) on every stage and on the head. The acts the cache
+    /// ran on the head since the item before go first (the stages run
+    /// them, the head has); a line table goes out only when the item's
+    /// sequences change it.
+    fn send_item(&mut self, f: &Forward, parts: &[(&Lease, usize, &[i64], Sampling)]) -> Result<()> {
         let leases: Vec<&Lease> = parts.iter().map(|&(l, ..)| l).collect();
-        let positions: Vec<usize> = parts.iter().map(|&(_, pos, _)| pos).collect();
-        let lens: Vec<usize> = parts.iter().map(|(.., ids)| ids.len()).collect();
-        let ids: Vec<i64> = parts.iter().flat_map(|(.., ids)| ids.iter().copied()).collect();
-        let greedy = vec![Sampling::GREEDY; leases.len()];
-        let (vars, values) = kern_run::fills(&self.p, &leases, &positions, &lens, &ids, &greedy);
+        let positions: Vec<usize> = parts.iter().map(|&(_, pos, ..)| pos).collect();
+        let lens: Vec<usize> = parts.iter().map(|(_, _, ids, _)| ids.len()).collect();
+        let ids: Vec<i64> = parts.iter().flat_map(|(_, _, ids, _)| ids.iter().copied()).collect();
+        let samplings: Vec<Sampling> = parts.iter().map(|&(.., s)| s).collect();
+        let (vars, values) = kern_run::fills(&self.p, &leases, &positions, &lens, &ids, &samplings);
         let mut rows: BTreeMap<String, Values> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
         for t in &self.p.page_tables {
             let mut v = Vec::with_capacity(t.width * leases.len());

@@ -85,7 +85,9 @@
 //! checkpoint or a retire answers that nothing was kept, and with no
 //! snapshot there is nothing to restore, park or wake.
 
+use std::collections::hash_map::RandomState;
 use std::collections::BTreeMap;
+use std::hash::{BuildHasher, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -94,6 +96,7 @@ use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::{Checkpoint, Copies, Denied, Host, Interleave, Kept, Lease, Parked, Pool, Remap};
+use pegainfer_frontend::sampler::SamplingParams;
 use serde::{Deserialize, Serialize};
 
 use crate::pp::Item;
@@ -313,11 +316,25 @@ impl<K: Kept> Kept for Group<K> {
     }
 }
 
-/// One row's part of a step: the `per` tokens it feeds at `pos..`.
+/// One row's part of a step: the `per` tokens it feeds at `pos..`, and how
+/// its token is drawn.
 pub struct Cell<'a> {
     pub row: &'a Row,
     pub ids: Vec<i64>,
     pub pos: usize,
+    pub sampling: Sampling,
+}
+
+/// How a request's tokens are drawn, as the manifest's fills take it: the
+/// most likely token when the frontend calls the request greedy, else its
+/// parameters with its seed, or one drawn here so two requests without one
+/// draw apart. The draw is the shell's: nothing past admission is random.
+pub fn sampling(p: &SamplingParams) -> Sampling {
+    if p.is_greedy() {
+        return Sampling::GREEDY;
+    }
+    let seed = p.seed.map_or_else(|| RandomState::new().build_hasher().finish() as i64, |s| s as i64);
+    Sampling { temperature: p.temperature, top_k: p.top_k, top_p: p.top_p, min_p: p.min_p, seed }
 }
 
 /// One rank's pool, host tier and what is queued or in flight on it.
@@ -785,10 +802,10 @@ impl Ranks {
         let held = |n: usize| self.dealt.map_or(n, |il| il.len(n as u64, me as u64) as usize);
         let ids_of = |c: Option<usize>| -> Vec<i64> { c.map_or(vec![0; per], |i| cells[i].ids.clone()) };
         let pos_of = |c: Option<usize>| -> usize { c.map_or(0, |i| cells[i].pos) };
-        let greedy = vec![Sampling::GREEDY; b];
+        let samplings: Vec<Sampling> = l.rows(q).map(|c| c.map_or(Sampling::GREEDY, |i| cells[i].sampling)).collect();
         let mut out: BTreeMap<String, Values> = BTreeMap::new();
         for f in &p.fills {
-            if let Some(v) = Sampling::column(f.fill, &greedy) {
+            if let Some(v) = Sampling::column(f.fill, &samplings) {
                 out.insert(f.name.clone(), v);
                 continue;
             }

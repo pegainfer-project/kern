@@ -1,5 +1,6 @@
-//! A request for logprobs is refused with a 400 before the engine sees it;
-//! every other request reaches the vLLM router as it was sent.
+//! A request for logprobs, or for a draw of a manifest that takes no
+//! sampling fills, is refused with a 400 before the engine sees it; every
+//! other request reaches the vLLM router as it was sent.
 
 use axum::body::{to_bytes, Body};
 use axum::extract::Request;
@@ -19,9 +20,9 @@ fn engine() -> Router {
     Router::new().route(COMPLETIONS, post(echo)).route(CHAT, post(echo)).route("/v1/models", get(|| async { "models" }))
 }
 
-async fn send(path: &str, body: &str) -> (StatusCode, String) {
+async fn send(samples: bool, path: &str, body: &str) -> (StatusCode, String) {
     let req = Request::post(path).header("content-type", "application/json").body(Body::from(body.to_owned())).unwrap();
-    let res = refuse::routes(engine()).oneshot(req).await.unwrap();
+    let res = refuse::routes(engine(), samples).oneshot(req).await.unwrap();
     let status = res.status();
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     (status, String::from_utf8(bytes.to_vec()).unwrap())
@@ -56,7 +57,7 @@ async fn a_request_for_logprobs_is_a_400_naming_the_parameter() {
         (CHAT, r#"{"messages": [], "top_logprobs": 2}"#, "top_logprobs"),
     ];
     for (path, body, name) in cases {
-        let (status, text) = send(path, body).await;
+        let (status, text) = send(true, path, body).await;
         let error: Value = serde_json::from_str(&text).unwrap();
         let message = error["error"]["message"].as_str().unwrap();
         assert_eq!((path, body, status), (path, body, StatusCode::BAD_REQUEST));
@@ -74,9 +75,51 @@ async fn any_other_request_reaches_the_engine_as_sent() {
         (CHAT, "not json: the frontend's to refuse"),
     ];
     for (path, body) in cases {
-        assert_eq!(send(path, body).await, (StatusCode::OK, body.to_owned()));
+        assert_eq!(send(true, path, body).await, (StatusCode::OK, body.to_owned()));
     }
     let models =
-        refuse::routes(engine()).oneshot(Request::get("/v1/models").body(Body::empty()).unwrap()).await.unwrap();
+        refuse::routes(engine(), false).oneshot(Request::get("/v1/models").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(models.status(), StatusCode::OK);
+}
+
+#[test]
+fn a_temperature_asks_for_a_draw_unless_it_is_greedy_or_one_token_survives() {
+    let cases = [
+        (json!({"temperature": 0.8}), Some(0.8)),
+        (json!({"temperature": 1}), Some(1.0)),
+        (json!({"temperature": 0.8, "top_k": 50}), Some(0.8)),
+        (json!({"temperature": 0.8, "top_k": 1}), None),
+        (json!({"temperature": 0}), None),
+        (json!({"temperature": 0.000001}), None),
+        (json!({"temperature": null}), None),
+        (json!({"top_p": 0.9, "seed": 1}), None),
+        (json!({"prompt": "Hi"}), None),
+    ];
+    for (body, asks) in cases {
+        assert_eq!((refuse::asks_draw(&body), &body), (asks, &body));
+    }
+}
+
+#[tokio::test]
+async fn a_draw_is_a_400_where_the_manifest_takes_no_sampling_fills_and_passes_where_it_does() {
+    let drawn = [
+        (COMPLETIONS, r#"{"prompt": "Hi", "max_tokens": 2, "temperature": 0.8}"#),
+        (CHAT, r#"{"messages": [], "temperature": 0.8, "top_p": 0.9}"#),
+    ];
+    for (path, body) in drawn {
+        let (status, text) = send(false, path, body).await;
+        let error: Value = serde_json::from_str(&text).unwrap();
+        let message = error["error"]["message"].as_str().unwrap();
+        assert_eq!((path, status), (path, StatusCode::BAD_REQUEST));
+        assert!(message.contains("temperature of 0.8") && message.contains("temperature 0"), "{path}: {message}");
+        assert_eq!(send(true, path, body).await, (StatusCode::OK, body.to_owned()));
+    }
+    let greedy = [
+        (COMPLETIONS, r#"{"prompt": "Hi", "temperature": 0}"#),
+        (COMPLETIONS, r#"{"prompt": "Hi", "temperature": 0.8, "top_k": 1}"#),
+        (CHAT, r#"{"messages": []}"#),
+    ];
+    for (path, body) in greedy {
+        assert_eq!(send(false, path, body).await, (StatusCode::OK, body.to_owned()));
+    }
 }
