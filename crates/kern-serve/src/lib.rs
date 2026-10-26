@@ -8,9 +8,10 @@
 //! `executor::Executors`, one process per GPU running what it decided.
 //! A cut manifest is served by `pp` instead, one process per stage, its
 //! head behind a [`front::Front`], and may hand each prompt to a decode
-//! tier ([`pd`]). The crate's public
+//! tier ([`pd`]). What the frontend would admit but no manifest can
+//! serve is refused at the HTTP layer ([`refuse`]). The crate's public
 //! surface is [`serve`], its option structs, and the accounting,
-//! protocols and packing policy its tests drive.
+//! protocols, packing policy and refusals its tests drive.
 
 #![deny(unsafe_code)]
 
@@ -21,6 +22,7 @@ pub mod logline;
 pub mod pd;
 mod pp;
 pub mod ranks;
+pub mod refuse;
 mod scheduler;
 mod watch;
 
@@ -328,7 +330,7 @@ where
     rt.block_on(async move {
         // Needs the runtime: it spawns the signal listener.
         let shutdown = vllm::shutdown_token_from_ctrl_c();
-        vllm::serve_with_engine_count(
+        vllm::serve_with_router_extension(
             engine,
             &model_path,
             vec![served_name],
@@ -337,6 +339,7 @@ where
             None,
             1,
             shutdown,
+            refuse::routes,
         )
         .await
     })
