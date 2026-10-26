@@ -1,0 +1,15 @@
+[family]
+name = "flashinfer_sampling"
+kind = "cubin"
+sm = "sm_103a"
+upstream = "FlashInfer v0.7.2 (d84335d8c54e0c8f9f7e22faa15c7e34a58abf94), include/flashinfer/sampling.cuh instantiated by tools/flashinfer-sampling/instantiate.cu (PROVENANCE.md)"
+license = "Apache-2.0"
+license_blob = "cb67c224f503e0a063908950b12f89a7280c6e527dcffac972aa114e4bf3c5de"
+toolchain = "nvcc Build cuda_13.1.r13.1/compiler.37061995_0, -arch=sm_103a -std=c++17 -O3, FlashInfer 0.7.2 headers"
+rebuild = "FLASHINFER_INCLUDE=<flashinfer v0.7.2>/include tools/flashinfer-sampling/build.sh <out.cubin>"
+imported = "2026-10-26"
+
+[[variant]]
+name = "flashinfer_sampling"
+sha256 = "b5f9fa7b311d580a5689fbaa219db92b9aa40132c709d9623a5e0607cb49a055"
+entries = ["_ZN10flashinfer8sampling20TopPRenormProbKernelILj1024ELN3cub18CUB_300104_SM_103020BlockReduceAlgorithmE2ELj4EfEEvPT2_S6_Pffj", "_ZN10flashinfer8sampling24OnlineSoftmaxFusedKernelILj1024ELj4EfLb0EEEvPT1_S3_S3_S2_j", "_ZN10flashinfer8sampling26MinPSamplingFromProbKernelILj1024ELN3cub18CUB_300104_SM_103018BlockScanAlgorithmE2ELNS3_20BlockReduceAlgorithmE2ELj4ELb1EfiEEvPT4_PfPT5_PbSA_fjPmmSC_mjj", "_ZN10flashinfer8sampling34RadixTopKRenormProbKernel_MultiCTAILj1024ELj4ELb0ELb1EfiEEvPT3_S3_PT4_jjjPNS0_13RadixRowStateEjj", "_ZN3cub18CUB_300104_SM_10306detail11EmptyKernelIvEEvv"]

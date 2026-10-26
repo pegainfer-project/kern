@@ -39,5 +39,6 @@ Kimi-K3 的生成器、核源码、harness 与 manifest 在
 
 - `kernel-capture/`：CUPTI 注入库（vendored from pegainfer PR #982 + `t_ns` patch），`CUDA_INJECTION64_PATH` 挂进目标进程。
 - `kernels-src/`：手写核（embedding、argmax、gemma norm、copy_rows、sigmoid_mul、DFlash2 的 conv/select/topk…），其余全部来自 vLLM dump。
+- `flashinfer-sampling/`：FlashInfer 0.7.2 的采样核（softmax/温度 → top-k → top-p → min-p 采样，每行各自的参数和 seed）按原样从头文件实例化成 `flashinfer_sampling` 一族（PROVENANCE.md 写了链、几何和 seed 的含义）；`probe.cu` 用 driver API 按 manifest 的方式驱动 cubin 做门禁。
 - `capture_abi_probe.sh`：诊断用。快速抓某个 attention backend 的 ABI（`ABI_PROBE_BACKEND=FLASH_ATTN` 等），当初用它实锤 FA4/trtllm-gen 不可 rebind。
 - `capture_sglang.sh` + `capture_sglang.py`：跨框架演示——同一注入库 dump SGLang（docker 镜像里跑）。实测 GB300 上 SGLang 几乎全员 struct ABI（trtllm-gen attention + nvjet GEMM + 单 struct 参数的自家 JIT 核），可挖性远差于 vLLM，见 ../docs/kernel-mining.md。
