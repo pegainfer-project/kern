@@ -657,37 +657,45 @@ pub fn record<S: Side>(
         let mut findings = Vec::new();
         let mut state_noise = Vec::new();
         let (mut compared, mut clean) = (0usize, 0usize);
-        let mut cur = None;
-        for &(r, s) in &rec.kept {
-            let run = &rec.runs[r];
-            if cur != Some(r) {
-                image(a, run)?;
-                cur = Some(r);
-            }
-            let sr = &run.spans[s];
-            let rp = replay_span(a, &ma, sr, &run.program, &run.vars, false)?;
-            for q in 0..ranks {
-                let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
-                for (n, c) in &rp.bufs[q] {
-                    compared += 1;
-                    if c.identical() {
-                        clean += 1;
-                    } else {
-                        findings.push(Finding::of_buf(&run.program, &label, n, c));
+        // The walk B takes: every run from A's image, the calls between
+        // spans run, so a span sees what the calls before it wrote to a
+        // state it only reads (a cache written by one op, read by the next).
+        a.reset();
+        for (r, run) in rec.runs.iter().enumerate() {
+            let p = run.program.as_str();
+            image(a, run)?;
+            let e = a.stage(&run.tokens)?;
+            let spans = if rec.kept.iter().any(|&(k, _)| k == r) { &run.spans[..] } else { &[] };
+            let mut ia = 0;
+            for sr in spans {
+                a.run(p, &e, ia..sr.span.a.start)?;
+                ia = sr.span.a.end;
+                let rp = replay_span(a, &ma, sr, p, &e, false)?;
+                for q in 0..ranks {
+                    let label = at_rank(ranks, q, &format!("{} {}", run.label, sr.span.label()));
+                    for (n, c) in &rp.bufs[q] {
+                        compared += 1;
+                        if c.identical() {
+                            clean += 1;
+                        } else {
+                            findings.push(Finding::of_buf(p, &label, n, c));
+                        }
+                        res.entry(p.into())
+                            .or_default()
+                            .entry(n.clone())
+                            .or_default()
+                            .push((label.clone(), c.cmp.clone()));
                     }
-                    res.entry(run.program.clone())
-                        .or_default()
-                        .entry(n.clone())
-                        .or_default()
-                        .push((label.clone(), c.cmp.clone()));
-                }
-                for (name, sc) in &rp.states[q] {
-                    if sc.n_diff > 0 {
-                        noisy_states.insert((run.program.clone(), name.clone()));
-                        state_noise.push(format!("state {name}: {} bytes at {} {label}", sc.n_diff, run.program));
+                    for (name, sc) in &rp.states[q] {
+                        if sc.n_diff > 0 {
+                            noisy_states.insert((p.into(), name.clone()));
+                            state_noise.push(format!("state {name}: {} bytes at {p} {label}", sc.n_diff));
+                        }
                     }
                 }
             }
+            a.run(p, &e, ia..a.calls(p)?)?;
+            a.advance(run.advance);
         }
         let (shown, omitted) = cap(findings.clone(), Finding::severity);
         let report = Noise {

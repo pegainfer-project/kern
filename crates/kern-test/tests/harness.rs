@@ -69,6 +69,19 @@ fn a_reference_that_is_not_deterministic_judges_b_against_its_own_band() {
 }
 
 #[test]
+fn a_span_that_only_reads_a_state_sees_what_the_calls_before_it_wrote() {
+    // The cache is written by `mix_write` and read by `mix_read`, the op
+    // under swap: its span writes no state, so a replay that put back only
+    // the span's own write-set would read the run's start image (zeros at
+    // chunk 0) and call A nondeterministic. A reproduces itself.
+    let (a, b) = (Fixture::default().split("mix_read"), Fixture::default().split("mix_read_same"));
+    let (r, lines) = test(&a, &b, &options()).unwrap();
+    assert_eq!(verdict(&r), (0, "bit-identical at every span".into()), "{lines:#?}");
+    let n = r.summary.noise.as_ref().unwrap();
+    assert_eq!((n.compared, n.clean, n.states.len()), (4, 4, 0), "{n:?}");
+}
+
+#[test]
 fn a_wide_argmax_flip_fails_when_a_reproduces_itself_end_to_end() {
     // A is noisy at its spans (±3% on `scale`) yet lands on the same
     // distribution every time; B swaps the head's argmax. The flip is B's.
