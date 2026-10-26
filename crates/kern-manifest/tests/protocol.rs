@@ -3,8 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use kern_manifest::protocol::{Axis, Bound, Heads, LineTable, PageTable, Positions, ProtocolErrors, Rows, Shards};
-use kern_manifest::types::{Batch, Buffer, Dim, Fill, Op};
+use kern_manifest::protocol::{
+    Axis, Bound, Heads, LineTable, PageTable, Positions, ProtocolErrors, Rows, Sampling, Shards, Values,
+};
+use kern_manifest::types::{Batch, Buffer, Call, Dim, Fill, Op};
 use kern_manifest::{verify, Manifest, Protocol};
 /// A single-rank contract: a prefill chunk that only fills state, a
 /// bs=1 decode and a batched one, a page table and a line table. The
@@ -38,6 +40,39 @@ fn speculative() -> Manifest {
     );
     m
 }
+
+/// The same plus a sampler: the five sampling fills, one per sequence,
+/// read by the decode steps.
+fn sampled() -> Manifest {
+    let mut m = plain();
+    let buf = |s: &str| serde_json::from_str::<Buffer>(s).unwrap();
+    for (name, dtype, fill) in SAMPLING {
+        m.buffers.insert(
+            name.into(),
+            buf(&format!(r#"{{"kind": "input", "dtype": "{dtype}", "shape": ["seqs"], "fill": "{fill}"}}"#)),
+        );
+    }
+    m.ops.insert(
+        "sample".into(),
+        op(&["in buffer<f32>", "in buffer<i32>", "in buffer<f32>", "in buffer<f32>", "in buffer<i64>"]),
+    );
+    let call: Call = serde_json::from_str(
+        r#"{"op": "sample", "args": [{"buf": "temp"}, {"buf": "k"}, {"buf": "p"}, {"buf": "minp"}, {"buf": "seed"}]}"#,
+    )
+    .unwrap();
+    for name in ["decode", "decode_batch"] {
+        m.programs.get_mut(name).unwrap().calls.push(call.clone());
+    }
+    m
+}
+
+const SAMPLING: [(&str, &str, &str); 5] = [
+    ("temp", "f32", "temperature"),
+    ("k", "i32", "top_k"),
+    ("p", "f32", "top_p"),
+    ("minp", "f32", "min_p"),
+    ("seed", "i64", "seed"),
+];
 
 /// A manifest whose batch spans its ranks: the tokens, the line table
 /// and the output over every rank's rows, the rest this rank's own.
@@ -184,9 +219,52 @@ fn a_group_dealing_positions_is_a_replicated_batch() {
 fn encodes_by_dtype() {
     let p = protocol(&plain()).unwrap();
     let (slots, seq_lens) = (p.any(Fill::Slot).unwrap(), p.any(Fill::SeqLen).unwrap());
-    assert_eq!(seq_lens.encode(&[3, -1]), vec![3, 0, 0, 0, 255, 255, 255, 255]);
-    assert_eq!(slots.encode(&[2]), 2i64.to_le_bytes());
+    assert_eq!(seq_lens.encode(&Values::Ints(vec![3, -1])), vec![3, 0, 0, 0, 255, 255, 255, 255]);
+    assert_eq!(slots.encode(&Values::Ints(vec![2])), 2i64.to_le_bytes());
     assert_eq!(seq_lens.decode(&[7, 0, 0, 0]), vec![7]);
+    assert_eq!((Values::Ints(vec![1, 2]).len(), Values::Floats(vec![]).is_empty()), (2, true));
+}
+
+#[test]
+fn sampling_contract() {
+    let p = protocol(&plain()).unwrap();
+    assert!(!p.samples());
+    let p = protocol(&sampled()).unwrap();
+    assert!(p.samples());
+    let fills: Vec<(&str, Fill, Axis, u64)> = Sampling::FILLS
+        .iter()
+        .map(|&f| p.any(f).map(|x| (x.name.as_str(), x.fill, x.axis, x.width)).unwrap())
+        .collect();
+    assert_eq!(
+        fills,
+        [
+            ("temp", Fill::Temperature, Axis::Groups, 1),
+            ("k", Fill::TopK, Axis::Groups, 1),
+            ("p", Fill::TopP, Axis::Groups, 1),
+            ("minp", Fill::MinP, Axis::Groups, 1),
+            ("seed", Fill::Seed, Axis::Groups, 1),
+        ]
+    );
+    // The columns a sampling stages, in each buffer's own element type.
+    let seqs = [Sampling { temperature: 0.5, top_k: 20, top_p: 0.9, min_p: 0.05, seed: -1 }, Sampling::GREEDY];
+    let bytes: Vec<Vec<u8>> =
+        Sampling::FILLS.iter().map(|&f| p.any(f).unwrap().encode(&Sampling::column(f, &seqs).unwrap())).collect();
+    assert_eq!(bytes[0], [0.5f32.to_le_bytes(), 0.0f32.to_le_bytes()].concat());
+    assert_eq!(bytes[1], [20i32.to_le_bytes(), 0i32.to_le_bytes()].concat());
+    assert_eq!(bytes[2], [0.9f32.to_le_bytes(), 1.0f32.to_le_bytes()].concat());
+    assert_eq!(bytes[3], [0.05f32.to_le_bytes(), 0.0f32.to_le_bytes()].concat());
+    assert_eq!(bytes[4], [(-1i64).to_le_bytes(), 0i64.to_le_bytes()].concat());
+    assert_eq!(Sampling::column(Fill::Token, &seqs), None);
+    // All or none, one buffer each, one per sequence.
+    let mut m = sampled();
+    m.buffers.get_mut("p").unwrap().fill = None;
+    rejects(&m, "the sampling fills come together, all or none; missing `top_p`");
+    let mut m = sampled();
+    m.buffers.get_mut("seq_lens").unwrap().fill = Some(Fill::TopK);
+    rejects(&m, "fill `top_k` is on more than one buffer");
+    let mut m = sampled();
+    m.buffers.get_mut("seed").unwrap().shape = vec![Dim::Var("tokens".into())];
+    rejects(&m, "`seed` (fill `seed`) is shaped");
 }
 
 /// The axes are the vars', not the roles': a manifest may read no slot and

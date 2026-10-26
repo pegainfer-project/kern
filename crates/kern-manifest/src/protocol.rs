@@ -56,6 +56,7 @@
 
 use crate::types::*;
 use crate::Verified;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The axis a caller-facing buffer's first dimension spans.
@@ -92,11 +93,8 @@ pub struct Filled {
 
 impl Filled {
     /// `v` as the buffer's element type, little-endian.
-    pub fn encode(&self, v: &[i64]) -> Vec<u8> {
-        match self.dtype {
-            DType::I32 => v.iter().flat_map(|x| (*x as i32).to_le_bytes()).collect(),
-            _ => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
-        }
+    pub fn encode(&self, v: &Values) -> Vec<u8> {
+        v.encode(self.dtype)
     }
 
     /// The buffer's bytes as values.
@@ -105,6 +103,82 @@ impl Filled {
             DType::I32 => b.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c) as i64).collect(),
             _ => b.as_chunks::<8>().0.iter().map(|c| i64::from_le_bytes(*c)).collect(),
         }
+    }
+}
+
+/// What a caller stages into an input: the values in the role's own
+/// domain, integers for most, floats for sampling's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Values {
+    Ints(Vec<i64>),
+    Floats(Vec<f32>),
+}
+
+impl Values {
+    pub fn len(&self) -> usize {
+        match self {
+            Values::Ints(v) => v.len(),
+            Values::Floats(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The integer column, `None` for a float one.
+    pub fn ints(&self) -> Option<&[i64]> {
+        match self {
+            Values::Ints(v) => Some(v),
+            Values::Floats(_) => None,
+        }
+    }
+
+    /// The values as elements of `dtype`, little-endian: i32, f32 or
+    /// else i64, each value converted as `as` does.
+    pub fn encode(&self, dtype: DType) -> Vec<u8> {
+        match (self, dtype) {
+            (Values::Ints(v), DType::I32) => v.iter().flat_map(|&x| (x as i32).to_le_bytes()).collect(),
+            (Values::Ints(v), DType::F32) => v.iter().flat_map(|&x| (x as f32).to_le_bytes()).collect(),
+            (Values::Ints(v), _) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+            (Values::Floats(v), DType::I32) => v.iter().flat_map(|&x| (x as i32).to_le_bytes()).collect(),
+            (Values::Floats(v), DType::F32) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+            (Values::Floats(v), _) => v.iter().flat_map(|&x| (x as i64).to_le_bytes()).collect(),
+        }
+    }
+}
+
+/// One sequence's sampling parameters, what the sampling fills carry per
+/// sequence: `temperature` 0 takes the most likely token, `top_k` under 1,
+/// `top_p` 1 and `min_p` 0 keep every token, and the same `seed` over the
+/// same batch draws the same tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Sampling {
+    pub temperature: f32,
+    pub top_k: i32,
+    pub top_p: f32,
+    pub min_p: f32,
+    pub seed: i64,
+}
+
+impl Sampling {
+    /// The most likely token, every step.
+    pub const GREEDY: Sampling = Sampling { temperature: 0.0, top_k: 0, top_p: 1.0, min_p: 0.0, seed: 0 };
+
+    /// The roles that carry a [`Sampling`], one buffer each, all or none.
+    pub const FILLS: [Fill; 5] = [Fill::Temperature, Fill::TopK, Fill::TopP, Fill::MinP, Fill::Seed];
+
+    /// What the sampling fill `fill` reads over `seqs`, `None` for a role
+    /// that is not sampling's.
+    pub fn column(fill: Fill, seqs: &[Sampling]) -> Option<Values> {
+        Some(match fill {
+            Fill::Temperature => Values::Floats(seqs.iter().map(|s| s.temperature).collect()),
+            Fill::TopK => Values::Ints(seqs.iter().map(|s| s.top_k as i64).collect()),
+            Fill::TopP => Values::Floats(seqs.iter().map(|s| s.top_p).collect()),
+            Fill::MinP => Values::Floats(seqs.iter().map(|s| s.min_p).collect()),
+            Fill::Seed => Values::Ints(seqs.iter().map(|s| s.seed).collect()),
+            _ => return None,
+        })
     }
 }
 
@@ -345,6 +419,9 @@ impl Protocol {
                 Fill::Token => width == 1 && matches!(axis, Axis::Rows | Axis::Ranks | Axis::Groups),
                 Fill::Position | Fill::Valid | Fill::Slot => width == 1 && axis == Axis::Rows,
                 Fill::SeqLen | Fill::Count => width == 1 && axis == Axis::Groups,
+                Fill::Temperature | Fill::TopK | Fill::TopP | Fill::MinP | Fill::Seed => {
+                    width == 1 && axis == Axis::Groups
+                }
                 Fill::CuSeqlens => matches!(axis, Axis::Fixed(n) if n > groups.max),
                 Fill::Tokens => axis == Axis::Groups || (axis == Axis::Ranks && width == 1),
                 Fill::Error => axis == Axis::Fixed(1) && b.dtype == DType::I32,
@@ -357,7 +434,13 @@ impl Protocol {
                     match fill {
                         Fill::Token => "expected [rows], [ranks] (one per row) or [groups] (each sequence's first)",
                         Fill::Position | Fill::Valid | Fill::Slot => "expected [rows]",
-                        Fill::SeqLen | Fill::Count => "expected [groups]",
+                        Fill::SeqLen
+                        | Fill::Count
+                        | Fill::Temperature
+                        | Fill::TopK
+                        | Fill::TopP
+                        | Fill::MinP
+                        | Fill::Seed => "expected [groups]",
                         Fill::CuSeqlens => "expected [n] with n >= groups + 1",
                         Fill::Tokens => "expected [groups], [groups, w] or [ranks]",
                         Fill::Error => "expected i32 [1]",
@@ -377,10 +460,17 @@ impl Protocol {
         if fills.iter().filter(|f| f.fill == Fill::Token && f.axis == Axis::Groups).count() > 1 {
             errs.push("fill `token` over the sequences is on more than one buffer".into());
         }
-        for fill in [Fill::Position, Fill::Valid, Fill::CuSeqlens, Fill::Blocks, Fill::Count, Fill::Error] {
+        let single = [Fill::Position, Fill::Valid, Fill::CuSeqlens, Fill::Blocks, Fill::Count, Fill::Error];
+        for fill in single.into_iter().chain(Sampling::FILLS) {
             if one(fill).is_none() && m.buffers.values().any(|b| b.fill == Some(fill)) {
                 errs.push(format!("fill `{fill}` is on more than one buffer"));
             }
+        }
+        let sampling: Vec<Fill> = Sampling::FILLS.into_iter().filter(|&f| one(f).is_some()).collect();
+        if !sampling.is_empty() && sampling.len() < Sampling::FILLS.len() {
+            let missing: Vec<String> =
+                Sampling::FILLS.iter().filter(|f| !sampling.contains(f)).map(|f| format!("`{f}`")).collect();
+            errs.push(format!("the sampling fills come together, all or none; missing {}", missing.join(", ")));
         }
         if fills.iter().any(|f| f.fill == Fill::Token && f.axis == Axis::Ranks) && ranks.is_none() {
             errs.push("a `token` fill spans the ranks but no var names the rows of every rank".into());
@@ -640,5 +730,11 @@ impl Protocol {
     /// when the manifest takes any: a pipeline stage past the first does not.
     pub fn token_rows(&self) -> Option<&Filled> {
         self.filled(Fill::Token, Axis::Rows).or_else(|| self.filled(Fill::Token, Axis::Ranks))
+    }
+
+    /// Whether the manifest samples: it reads a [`Sampling`] per sequence.
+    /// Without, every step takes the most likely token.
+    pub fn samples(&self) -> bool {
+        self.any(Fill::Temperature).is_some()
     }
 }

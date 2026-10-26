@@ -76,8 +76,10 @@ impl Run for Fake {
             .iter()
             .map(|o| {
                 let remaps = o.acts.iter().filter(|a| matches!(a, Act::Remap(_))).count() as u64;
-                let tokens =
-                    o.item.as_ref().map_or(Vec::new(), |i| i.rows["token_ids"].iter().map(|&t| next(t)).collect());
+                let tokens = o
+                    .item
+                    .as_ref()
+                    .map_or(Vec::new(), |i| i.rows["token_ids"].ints().unwrap().iter().map(|&t| next(t)).collect());
                 Answer { tokens, remaps, ..Answer::default() }
             })
             .collect())

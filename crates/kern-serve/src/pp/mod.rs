@@ -62,7 +62,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::Filled;
+use kern_manifest::protocol::{Filled, Values};
 use kern_manifest::Protocol;
 use kern_runtime::{Fetch, Gate, Mapped, Mark, PeerHandle, Runtime};
 use serde::{Deserialize, Serialize};
@@ -145,7 +145,7 @@ pub struct Item {
     pub vars: BTreeMap<String, u64>,
     /// Each input's values by name: the fills, the page tables and the
     /// line tables when the item's sequences change them.
-    pub rows: BTreeMap<String, Vec<i64>>,
+    pub rows: BTreeMap<String, Values>,
     /// What the head's pool decided since the item before, in the order
     /// it ran on the head's stream, for a stage to run before anything
     /// else of the item: a fresh sequence's slot zeroed, the copies of a

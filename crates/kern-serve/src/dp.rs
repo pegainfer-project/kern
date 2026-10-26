@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{bail, ensure, Result};
-use kern_manifest::protocol::{Axis, Forward, Rows};
+use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::{Checkpoint, Denied, Evicted, Found, Lease, Parked, Pool, Prefix, Remap};
@@ -401,11 +401,12 @@ impl Dp {
         let positions: Vec<usize> = parts.iter().map(|&(_, pos, _)| pos).collect();
         let lens: Vec<usize> = parts.iter().map(|(.., ids)| ids.len()).collect();
         let ids: Vec<i64> = parts.iter().flat_map(|(.., ids)| ids.iter().copied()).collect();
-        let (vars, values) = kern_run::fills(p, &leases, &positions, &lens, &ids);
-        let mut rows: BTreeMap<String, Vec<i64>> = values
+        let greedy = vec![Sampling::GREEDY; leases.len()];
+        let (vars, values) = kern_run::fills(p, &leases, &positions, &lens, &ids, &greedy);
+        let mut rows: BTreeMap<String, Values> = values
             .into_iter()
             .map(|(f, v)| match (plan.is_empty(), f.fill) {
-                (true, Fill::Valid) => (f.name.clone(), vec![0; v.len()]),
+                (true, Fill::Valid) => (f.name.clone(), Values::Ints(vec![0; v.len()])),
                 _ => (f.name.clone(), v),
             })
             .collect();
@@ -414,7 +415,7 @@ impl Dp {
             for l in &leases {
                 l.extend_row(&t.name, &mut v)?;
             }
-            rows.insert(t.name.clone(), v.into_iter().map(i64::from).collect());
+            rows.insert(t.name.clone(), Values::Ints(v.into_iter().map(i64::from).collect()));
         }
         for t in &p.line_tables {
             let cols = match t.axis {
@@ -424,7 +425,7 @@ impl Dp {
             let v: Vec<i64> = kern_run::line_rows(t, &leases, cols as usize)?.into_iter().map(i64::from).collect();
             if r.lines.get(&t.name) != Some(&v) {
                 r.lines.insert(t.name.clone(), v.clone());
-                rows.insert(t.name.clone(), v);
+                rows.insert(t.name.clone(), Values::Ints(v));
             }
         }
         Ok(Item { program: self.forward.name.clone(), vars, rows, acts: Vec::new() })

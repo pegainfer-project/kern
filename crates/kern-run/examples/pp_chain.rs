@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::{Forward, Rows};
+use kern_manifest::protocol::{Forward, Rows, Sampling, Values};
 use kern_manifest::types::Arg;
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
@@ -97,18 +97,18 @@ fn logits(m: &Verified, program: &str, tokens: &str) -> Result<String> {
 
 /// Stage one call of `ids` at `pos` into `rt` from the values `p` and
 /// `lease` give.
-fn item(p: &Protocol, lease: &Lease, pos: usize, ids: &[i64]) -> Result<(Vars, BTreeMap<String, Vec<i64>>)> {
-    let (vars, values) = fills(p, std::slice::from_ref(lease), &[pos], &[ids.len()], ids);
-    let mut rows: BTreeMap<String, Vec<i64>> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
+fn item(p: &Protocol, lease: &Lease, pos: usize, ids: &[i64]) -> Result<(Vars, BTreeMap<String, Values>)> {
+    let (vars, values) = fills(p, std::slice::from_ref(lease), &[pos], &[ids.len()], ids, &[Sampling::GREEDY]);
+    let mut rows: BTreeMap<String, Values> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
     for t in &p.page_tables {
         let mut v = Vec::new();
         lease.extend_row(&t.name, &mut v)?;
-        rows.insert(t.name.clone(), v.into_iter().map(i64::from).collect());
+        rows.insert(t.name.clone(), Values::Ints(v.into_iter().map(i64::from).collect()));
     }
     Ok((vars, rows))
 }
 
-fn issue(rt: &mut Runtime, p: &Protocol, program: &str, vars: &Vars, rows: &BTreeMap<String, Vec<i64>>) -> Result<()> {
+fn issue(rt: &mut Runtime, p: &Protocol, program: &str, vars: &Vars, rows: &BTreeMap<String, Values>) -> Result<()> {
     let vars: Vars =
         vars.iter().filter(|(k, _)| rt.manifest.vars.contains_key(*k)).map(|(k, v)| (k.clone(), *v)).collect();
     for (name, v) in rows {
@@ -126,7 +126,7 @@ fn chain(
     boxes: &[Vec<(String, Mapped)>],
     program: &str,
     vars: &Vars,
-    rows: &BTreeMap<String, Vec<i64>>,
+    rows: &BTreeMap<String, Values>,
 ) -> Result<()> {
     for s in 0..stages.len() {
         let (rt, p) = &mut stages[s];

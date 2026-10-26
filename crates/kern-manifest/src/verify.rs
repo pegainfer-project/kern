@@ -326,8 +326,9 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
                 )),
                 (kind, _) => errs.push(format!("{ctx}: a fill sits on an input or output, not a {kind} buffer")),
             }
-            if !matches!(b.dtype, DType::I32 | DType::I64) {
-                errs.push(format!("{ctx}: fill `{fill}` needs an i32 or i64 buffer, not {}", b.dtype));
+            if !fill.dtypes().contains(&b.dtype) {
+                let wants: Vec<String> = fill.dtypes().iter().map(ToString::to_string).collect();
+                errs.push(format!("{ctx}: fill `{fill}` needs an {} buffer, not {}", wants.join(" or "), b.dtype));
             }
         }
         if b.placement == Placement::Host {

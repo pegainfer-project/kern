@@ -63,7 +63,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::{Axis, Forward, Rows};
+use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::{Denied, Lease};
 use kern_run::Weights;
@@ -735,14 +735,15 @@ impl PpHead {
         let positions: Vec<usize> = parts.iter().map(|&(_, pos, _)| pos).collect();
         let lens: Vec<usize> = parts.iter().map(|(.., ids)| ids.len()).collect();
         let ids: Vec<i64> = parts.iter().flat_map(|(.., ids)| ids.iter().copied()).collect();
-        let (vars, values) = kern_run::fills(&self.p, &leases, &positions, &lens, &ids);
-        let mut rows: BTreeMap<String, Vec<i64>> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
+        let greedy = vec![Sampling::GREEDY; leases.len()];
+        let (vars, values) = kern_run::fills(&self.p, &leases, &positions, &lens, &ids, &greedy);
+        let mut rows: BTreeMap<String, Values> = values.into_iter().map(|(f, v)| (f.name.clone(), v)).collect();
         for t in &self.p.page_tables {
             let mut v = Vec::with_capacity(t.width * leases.len());
             for l in &leases {
                 l.extend_row(&t.name, &mut v)?;
             }
-            rows.insert(t.name.clone(), v.into_iter().map(i64::from).collect());
+            rows.insert(t.name.clone(), Values::Ints(v.into_iter().map(i64::from).collect()));
         }
         for t in &self.p.line_tables {
             let cols = match t.axis {
@@ -752,7 +753,7 @@ impl PpHead {
             let v: Vec<i64> = kern_run::line_rows(t, &leases, cols as usize)?.into_iter().map(i64::from).collect();
             if self.lines.get(&t.name) != Some(&v) {
                 self.lines.insert(t.name.clone(), v.clone());
-                rows.insert(t.name.clone(), v);
+                rows.insert(t.name.clone(), Values::Ints(v));
             }
         }
         let job = Job::Item(Item { program: f.name.clone(), vars, rows, acts: self.cache.take_acts() });

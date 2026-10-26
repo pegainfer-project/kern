@@ -90,7 +90,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use anyhow::{bail, ensure, Result};
-use kern_manifest::protocol::{Axis, Filled, Forward, Rows};
+use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::{Checkpoint, Copies, Denied, Host, Interleave, Kept, Lease, Parked, Pool, Remap};
@@ -768,7 +768,7 @@ impl Ranks {
 
     /// Rank `q`'s inputs for a step, by name: every fill, the page tables
     /// and the line tables (see the module doc for which span the group).
-    fn stage_rank(&self, q: usize, cells: &[Cell<'_>], l: &Layout) -> Result<BTreeMap<String, Vec<i64>>> {
+    fn stage_rank(&self, q: usize, cells: &[Cell<'_>], l: &Layout) -> Result<BTreeMap<String, Values>> {
         let (p, pad, me) = (&self.protocol, &self.accounts[q].pad, self.groups.member(q));
         let ((groups, stride), per, b) = (self.laid(), l.per, l.b);
         // This rank's place in the layout: a replicated member is its group's.
@@ -785,8 +785,13 @@ impl Ranks {
         let held = |n: usize| self.dealt.map_or(n, |il| il.len(n as u64, me as u64) as usize);
         let ids_of = |c: Option<usize>| -> Vec<i64> { c.map_or(vec![0; per], |i| cells[i].ids.clone()) };
         let pos_of = |c: Option<usize>| -> usize { c.map_or(0, |i| cells[i].pos) };
-        let mut out: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+        let greedy = vec![Sampling::GREEDY; b];
+        let mut out: BTreeMap<String, Values> = BTreeMap::new();
         for f in &p.fills {
+            if let Some(v) = Sampling::column(f.fill, &greedy) {
+                out.insert(f.name.clone(), v);
+                continue;
+            }
             let v: Vec<i64> = match (f.fill, f.axis) {
                 (Fill::Token, Axis::Rows) => l.rows(q).flat_map(ids_of).collect(),
                 (Fill::Token, Axis::Ranks) => l.batch_rows(&groups, q).flat_map(ids_of).collect(),
@@ -810,15 +815,18 @@ impl Ranks {
                 (Fill::Blocks, _) => l.offsets(&groups, q).into_iter().map(|o| (o * per) as i64).collect(),
                 (Fill::Tokens | Fill::Count | Fill::Error, _) => continue,
                 (Fill::Token, Axis::Fixed(_)) => unreachable!("the protocol checks fill shapes"),
+                (Fill::Temperature | Fill::TopK | Fill::TopP | Fill::MinP | Fill::Seed, _) => {
+                    unreachable!("staged above")
+                }
             };
-            out.insert(f.name.clone(), v);
+            out.insert(f.name.clone(), Values::Ints(v));
         }
         for t in &p.page_tables {
             let mut table = Vec::new();
             for c in l.rows(q) {
                 c.map_or(pad, |i| lease_on(i)).extend_row(&t.name, &mut table)?;
             }
-            out.insert(t.name.clone(), table.into_iter().map(i64::from).collect());
+            out.insert(t.name.clone(), Values::Ints(table.into_iter().map(i64::from).collect()));
         }
         // Line tables are written whole: cell `[r, c]` carries the line of
         // the row in column `c` in entry 0 (a program that moves along a
@@ -842,7 +850,7 @@ impl Ranks {
                     table[(r * cols_max + c) * w] = i64::from(col[r]);
                 }
             }
-            out.insert(name.to_string(), table);
+            out.insert(name.to_string(), Values::Ints(table));
         }
         Ok(out)
     }
@@ -886,7 +894,7 @@ pub struct Staged {
     /// Ranks per layout rank: the group's size when replicated, else 1.
     stride: usize,
     vars: BTreeMap<String, u64>,
-    rows: Vec<BTreeMap<String, Vec<i64>>>,
+    rows: Vec<BTreeMap<String, Values>>,
 }
 
 impl Staged {

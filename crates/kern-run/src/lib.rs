@@ -30,8 +30,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
-use kern_manifest::protocol::{Axis, Filled, Forward, LineTable, PageTable, Rows};
-use kern_manifest::types::{BufferKind, Fill};
+use kern_manifest::protocol::{Axis, Filled, Forward, LineTable, PageTable, Rows, Sampling, Values};
+use kern_manifest::types::{BufferKind, DType, Fill};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::{connect_local, Capacity, GroupRank, HostWeights, Resident, Runtime, Topology};
@@ -144,13 +144,15 @@ fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
 ///
 /// Every fill a caller of one rank produces is there; `blocks` is the
 /// group's batch, and only a caller that spans a rank group can fill it.
+/// `sampling` is each lease's, read by a manifest that samples.
 pub fn fills<'p, L: Borrow<Lease>>(
     p: &'p Protocol,
     leases: &[L],
     positions: &[usize],
     lens: &[usize],
     ids: &[i64],
-) -> (Vars, Vec<(&'p Filled, Vec<i64>)>) {
+    sampling: &[Sampling],
+) -> (Vars, Vec<(&'p Filled, Values)>) {
     let b = leases.len();
     let rows: usize = lens.iter().sum();
     let context: usize = positions.iter().zip(lens).map(|(pos, n)| pos + n).sum();
@@ -161,6 +163,9 @@ pub fn fills<'p, L: Borrow<Lease>>(
         .fills
         .iter()
         .filter_map(|f| {
+            if let Some(v) = Sampling::column(f.fill, sampling) {
+                return Some((f, v));
+            }
             let v: Vec<i64> = match (f.fill, f.axis) {
                 // Each sequence's first token: the anchor a drafting program
                 // splices its own rows from.
@@ -172,8 +177,11 @@ pub fn fills<'p, L: Borrow<Lease>>(
                 (Fill::SeqLen, _) => spans().map(|r| r.end as i64).collect(),
                 (Fill::CuSeqlens, _) => starts.iter().chain([&rows]).map(|&s| s as i64).collect(),
                 (Fill::Blocks | Fill::Tokens | Fill::Count | Fill::Error, _) => return None,
+                (Fill::Temperature | Fill::TopK | Fill::TopP | Fill::MinP | Fill::Seed, _) => {
+                    unreachable!("staged above")
+                }
             };
-            Some((f, v))
+            Some((f, Values::Ints(v)))
         })
         .collect();
     (vars, values)
@@ -183,15 +191,14 @@ pub fn fills<'p, L: Borrow<Lease>>(
 /// in its dtype, a page table as i32, a line table as i32 and whole (its
 /// rows sit at the bound of their var, see [`line_rows`]). `false` when the
 /// manifest has no such input (a pipeline stage that never reads it).
-pub fn write_named(rt: &mut Runtime, p: &Protocol, name: &str, values: &[i64], vars: &Vars) -> Result<bool> {
-    let i32s = |v: &[i64]| -> Vec<u8> { v.iter().flat_map(|&x| (x as i32).to_le_bytes()).collect() };
+pub fn write_named(rt: &mut Runtime, p: &Protocol, name: &str, values: &Values, vars: &Vars) -> Result<bool> {
     if p.line_tables.iter().any(|t| t.name == name) {
-        rt.write_input(name, &i32s(values))?;
+        rt.write_input(name, &values.encode(DType::I32))?;
         return Ok(true);
     }
     let bytes = match (p.fills.iter().find(|f| f.name == name), p.page_tables.iter().any(|t| t.name == name)) {
         (Some(f), _) => f.encode(values),
-        (None, true) => i32s(values),
+        (None, true) => values.encode(DType::I32),
         (None, false) => return Ok(false),
     };
     rt.write_input_at(name, &bytes, vars)?;
@@ -223,7 +230,8 @@ fn stage<L: Borrow<Lease>>(
     rows: usize,
     ids: &[i64],
 ) -> Result<Vars> {
-    let (vars, values) = fills(p, leases, positions, &vec![rows; leases.len()], ids);
+    let greedy = vec![Sampling::GREEDY; leases.len()];
+    let (vars, values) = fills(p, leases, positions, &vec![rows; leases.len()], ids, &greedy);
     for (f, v) in values {
         rt.write_input_at(&f.name, &f.encode(&v), &vars)?;
     }
