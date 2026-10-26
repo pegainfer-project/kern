@@ -1039,6 +1039,31 @@
           "type": "string"
         },
         {
+          "const": "temperature",
+          "description": "Input: each sequence's sampling temperature, f32; 0 takes the most likely token.",
+          "type": "string"
+        },
+        {
+          "const": "top_k",
+          "description": "Input: each sequence's top-k, i32; under 1 keeps every token.",
+          "type": "string"
+        },
+        {
+          "const": "top_p",
+          "description": "Input: each sequence's top-p, f32; 1 keeps every token.",
+          "type": "string"
+        },
+        {
+          "const": "min_p",
+          "description": "Input: each sequence's min-p, f32; 0 keeps every token.",
+          "type": "string"
+        },
+        {
+          "const": "seed",
+          "description": "Input: each sequence's seed for its draw, i64; the same seed over the same batch draws the same tokens.",
+          "type": "string"
+        },
+        {
           "const": "tokens",
           "description": "Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).",
           "type": "string"

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use anyhow::{bail, Result};
-use kern_manifest::protocol::Axis;
+use kern_manifest::protocol::{Axis, Values};
 use kern_manifest::types::{Arg, DType, Dim, Fill, Provision};
 use kern_manifest::values;
 use kern_manifest::{verify, Manifest, Protocol, Verified};
@@ -446,7 +446,7 @@ impl Side for Fake {
         let vars = self.protocol.vars(1, c as u64, c as u64, pos as u64 + c as u64);
         let p = self.protocol.clone();
         let mut put = |f: &kern_manifest::protocol::Filled, v: &[i64]| {
-            let b = f.encode(v);
+            let b = f.encode(&Values::Ints(v.to_vec()));
             for r in &mut self.ranks {
                 r.bufs.get_mut(&f.name).unwrap()[..b.len()].copy_from_slice(&b);
             }

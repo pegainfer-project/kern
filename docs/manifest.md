@@ -1,4 +1,4 @@
-# Manifest 格式（schema_version 7）与 Verifier
+# Manifest 格式（schema_version 8）与 Verifier
 
 Model provider 交付 `manifest.json + kernels/ + weights`，runtime 负责：
 加载时像 rustc 一样苛刻地校验 manifest，运行时按声明闭眼执行。runtime
@@ -33,7 +33,7 @@ cut                          cut      流水线的一段：id、第几段、共�
   "vars": …, "states": …, "buffers": …, "modules": …, "ops": …, "programs": … }
 ```
 
-- `schema_version`：wire format 版本，只认 7。`model`：标签，runtime
+- `schema_version`：wire format 版本，只认 8。`model`：标签，runtime
   不赋予含义（kern-serve 用它做对外的模型名）。
 - `vars`：caller 每次调用时提供的标量（如 `tokens`），声明 `max`，下界
   恒为 1；所有静态校验在界上进行，运行时拒绝越界值。**会改变内存尺寸或
@@ -364,12 +364,20 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   （每行一个；形如 `[seqs]` 时每组一个，即投机轮的 anchor）、`position`、
   `slot`、`seq_len`、`cu_seqlens`、`blocks`（组 batch 各成员的块：
   按成员序的行数前缀和，`[t + 1]` 个 i32，末项是组 batch 的行数；块不必等长，
-  collective 核按它把本卡行号换算成组 batch 的行号）；output：`tokens`（`[seqs]`
+  collective 核按它把本卡行号换算成组 batch 的行号）、采样五件套
+  `temperature`（f32，0 即取最大概率）、`top_k`（i32，<1 即不截）、`top_p`
+  （f32，1 即不截）、`min_p`（f32，0 即不截）、`seed`（i64：同一 seed 在同一
+  batch 布局下重放出同样的 token，换了布局不保证），全是 `[seqs]` 每组一个、
+  五个一起出现或一个都没有（`Protocol::samples()`），谁读它们、怎么从
+  `seq_len` 派生 Philox offset 是 manifest 自己（生成器）的事；output：`tokens`（`[seqs]`
   每组一个，`[seqs, r]` 每行一个）、`count`（每组取几个，缺省恒 1）、`error`
   （非零即该步失败，组内 allreduce 用）。fill 只许落在 input / output
-  的 i32 / i64 buffer 上，与 `domain` 平级可共存；caller 按 buffer 的
-  dtype 编码，不写死 i64 / i32。页表和 line 表不加 fill：`index_into`
-  一个 state 本来就是它。没有 buffer 要 `position`，caller 就不写。
+  buffer 上，dtype 由角色定（`Fill::dtypes`：多数 i32 / i64，采样的三个
+  f32），与 `domain` 平级可共存；caller 按 buffer 的 dtype 编码
+  （`Values` 分整数列 / 浮点列，`Filled::encode`），不写死 i64 / i32。
+  页表和 line 表不加 fill：`index_into` 一个 state 本来就是它。没有
+  buffer 要 `position`，caller 就不写；没有采样 fill 的 manifest 每步取
+  最大概率，caller 用 `Sampling::GREEDY` 填有采样 fill 的 manifest 也一样。
 - **program 上的 `batch`**：`{"groups": 上界, "rows": 精确行数 | 一个 var
   名}`——这个 program 接受"几组、每组几行"的调用。`rows` 是精确值（round
   的 7 行是 mask 布局，喂 3 行就是错的）；是 var 名（`"tokens"`）时只能
@@ -535,6 +543,17 @@ runtime crate 的 phase-2 校验。唯一一条 runtime 替 verifier 查的 kern
 地址会把发起的 GPU 卡死到整机重启（GB300 实测），而 verifier 看不见
 SASS。簇内 barrier 的 `UTCBAR.2CTA.MULTICAST` 不碰全局内存，放行
 （MegaMoE 用它）。没有 cuobjdump 就拒绝装载。
+
+## v7 加采样 fill（2026-10-26）
+
+fill 加采样五件套 `temperature` / `top_k` / `top_p` / `min_p` / `seed`
+（`[seqs]`，五个同进退，dtype 由角色定——第一批 f32 的 fill），verifier
+第 9b 条按 `Fill::dtypes` 查 dtype，`Protocol` 加 `samples()`、`Sampling`
+（每序列的五个参数，`GREEDY` 是不采样的值）与 `Values`（caller 填进
+input 的整数列或浮点列，`Filled::encode` 按 buffer dtype 编码）。只加枚举值，
+已有字段一个不动，旧 manifest 原样可读，所以 `schema_version` 不升：**只有
+破坏性改动（删字段、改名、改语义）才升版本**，纯增量改动原地重生成 golden，
+examples 不动。
 
 ## 从 v6 到 v7
 

@@ -192,12 +192,34 @@ pub enum Fill {
     CuSeqlens,
     /// Input: the members' blocks of the group's batch — exclusive prefix sums of each member's rows in member order, `members + 1` entries, the last the batch's rows.
     Blocks,
+    /// Input: each sequence's sampling temperature, f32; 0 takes the most likely token.
+    Temperature,
+    /// Input: each sequence's top-k, i32; under 1 keeps every token.
+    TopK,
+    /// Input: each sequence's top-p, f32; 1 keeps every token.
+    TopP,
+    /// Input: each sequence's min-p, f32; 0 keeps every token.
+    MinP,
+    /// Input: each sequence's seed for its draw, i64; the same seed over the same batch draws the same tokens.
+    Seed,
     /// Output: the tokens a call produced — one per sequence (`[groups]`) or one per row (`[groups, rows]`, the program's `rows`).
     Tokens,
     /// Output: how many of a sequence's `tokens` the caller takes, per sequence; without one it takes one.
     Count,
     /// Output: a one-word error flag of the collectives, read after every call; nonzero is a failed step.
     Error,
+}
+
+impl Fill {
+    /// The element types a buffer carrying this role may have.
+    pub fn dtypes(self) -> &'static [DType] {
+        match self {
+            Fill::Temperature | Fill::TopP | Fill::MinP => &[DType::F32],
+            Fill::TopK => &[DType::I32],
+            Fill::Seed => &[DType::I64],
+            _ => &[DType::I32, DType::I64],
+        }
+    }
 }
 
 impl fmt::Display for Fill {
@@ -210,6 +232,11 @@ impl fmt::Display for Fill {
             Fill::SeqLen => "seq_len",
             Fill::CuSeqlens => "cu_seqlens",
             Fill::Blocks => "blocks",
+            Fill::Temperature => "temperature",
+            Fill::TopK => "top_k",
+            Fill::TopP => "top_p",
+            Fill::MinP => "min_p",
+            Fill::Seed => "seed",
             Fill::Tokens => "tokens",
             Fill::Count => "count",
             Fill::Error => "error",

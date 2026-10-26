@@ -3,6 +3,9 @@
 //! `tp` group, 16-token pages of 16 bytes, a 24-byte recurrent slot) and a
 //! fake set of ranks that lands whatever it is told the moment it hears it.
 
+use std::collections::BTreeMap;
+
+use kern_manifest::protocol::Values;
 use kern_manifest::types::Manifest;
 use kern_manifest::{verify, Protocol};
 use kern_pool::{Denied, Pool};
@@ -117,11 +120,11 @@ fn a_step_gives_every_rank_the_same_program_and_vars_over_its_own_rows() {
         1
     );
     // The batch is every member's block, this rank's own first.
-    let tokens: Vec<Vec<i64>> = items.iter().map(|i| i.rows["token_ids"].clone()).collect();
+    let tokens: Vec<Vec<i64>> = items.iter().map(|i| i.rows["token_ids"].ints().unwrap().to_vec()).collect();
     assert_eq!(tokens, [vec![7, 8, 0, 0], vec![8, 0, 0, 7], vec![0, 0, 7, 8], vec![0, 7, 8, 0]]);
-    let lens: Vec<Vec<i64>> = items.iter().map(|i| i.rows["seq_lens"].clone()).collect();
+    let lens: Vec<Vec<i64>> = items.iter().map(|i| i.rows["seq_lens"].ints().unwrap().to_vec()).collect();
     assert_eq!(lens, [vec![4], vec![6], vec![1], vec![1]]);
-    assert_eq!(items[2].rows["tp_blocks"], [0, 1, 2, 3, 4]);
+    assert_eq!(items[2].rows["tp_blocks"].ints().unwrap(), [0, 1, 2, 3, 4]);
     // Each cell's token is read from its owner's answer.
     let answers: Vec<Answer> = (0..4).map(|q| Answer { tokens: vec![100 + q, 0, 0, 0], ..Answer::default() }).collect();
     assert_eq!(st.emitted(r.protocol(), &f, &answers).unwrap(), [vec![100], vec![101]]);
@@ -196,7 +199,8 @@ fn a_replicated_step_deals_every_position_to_exactly_one_member() {
             let tokens: Vec<i64> = mine.iter().map(|&i| 100 + i as i64).chain(std::iter::repeat(0)).take(b).collect();
             let mut sums = vec![0i64; mine.len()];
             for m in 0..w {
-                let it = &items[g * w + m].rows;
+                let it: BTreeMap<&str, &[i64]> =
+                    items[g * w + m].rows.iter().map(|(n, v)| (n.as_str(), v.ints().unwrap())).collect();
                 assert_eq!(it["token_ids"], tokens, "w {w}, member {m}");
                 let held: Vec<i32> = mine.iter().flat_map(|&i| rows[i].leases()[m].page_ids().to_vec()).collect();
                 let mut pads = Vec::new();
@@ -256,7 +260,7 @@ fn a_rank_sent_only_the_tables_that_changed_holds_every_steps_tables() {
             p.page_tables.iter().map(|t| t.name.clone()).chain(p.line_tables.iter().map(|t| t.name.clone())).collect()
         };
         // Each rank's buffers as its writes leave them.
-        let mut bufs = vec![std::collections::BTreeMap::<String, Vec<i64>>::new(); w * groups];
+        let mut bufs = vec![std::collections::BTreeMap::<String, Values>::new(); w * groups];
         let mut rows: Vec<(Row, usize)> = Vec::new();
         for _ in 0..40 {
             match rand.next(5) {
@@ -279,7 +283,7 @@ fn a_rank_sent_only_the_tables_that_changed_holds_every_steps_tables() {
             let mut st = r.stage(&cells, 1, |k| k.next_power_of_two()).unwrap();
             let f = st.forward(r.protocol(), 1).unwrap();
             let items = st.items(&f);
-            let want: Vec<Vec<(String, Vec<i64>)>> = items
+            let want: Vec<Vec<(String, Values)>> = items
                 .iter()
                 .map(|i| tables.iter().filter_map(|n| Some((n.clone(), i.rows.get(n)?.clone()))).collect())
                 .collect();

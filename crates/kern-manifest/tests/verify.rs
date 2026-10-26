@@ -1240,6 +1240,19 @@ fn every_paged_state_is_dealt_over_one_group() {
 }
 
 #[test]
+fn a_fill_takes_its_roles_element_type() {
+    let mut v = base();
+    v["buffers"]["x"]["fill"] = "temperature".into();
+    assert_err(v, "buffer `x`: fill `temperature` needs an f32 buffer, not i32");
+    let mut v = base();
+    v["buffers"]["x"]["fill"] = "seed".into();
+    assert_err(v, "buffer `x`: fill `seed` needs an i64 buffer, not i32");
+    let mut v = base();
+    v["buffers"]["y"]["fill"] = "tokens".into();
+    assert_err(v, "buffer `y`: fill `tokens` needs an i32 or i64 buffer, not bf16");
+}
+
+#[test]
 fn a_group_dealing_positions_runs_one_replicated_batch() {
     let mut v = dealt();
     v["vars"]["rows"] = serde_json::json!({ "max": 32, "axis": "ranks" });
