@@ -560,6 +560,7 @@ impl Scheduler for Dp {
             num_running_reqs: self.ranks.iter().map(|r| r.seqs.len() as u64).sum(),
             num_waiting_reqs: self.waiting.len() as u64,
             spec_decode: None,
+            prefix_cache: None,
         }
     }
 }

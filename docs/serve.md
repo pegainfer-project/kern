@@ -841,5 +841,6 @@ checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats �
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
-真采样（temperature/top-p 作为 manifest 内的 `sample` op；投机下是 rejection sampling）、logprobs / echo、
+真采样（temperature/top-p 作为 manifest 内的 `sample` op；投机下是 rejection sampling）、logprobs / echo（要 logprobs 的请求在
+HTTP 层就按 400 拒掉并点名参数，`refuse.rs`，2026-10-26；经 scheduler 的 reject 到 vLLM wire 只会变成 500）、
 bs 2–16 的 split-KV decode、步间 host 空转（token 反馈进图）。

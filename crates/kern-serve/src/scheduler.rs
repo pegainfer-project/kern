@@ -959,6 +959,7 @@ impl Scheduler for KernScheduler {
             num_running_reqs: self.running.len() as u64,
             num_waiting_reqs: self.waiting.len() as u64,
             spec_decode: self.counters,
+            prefix_cache: None,
         }
     }
 }

@@ -32,12 +32,15 @@ kern-run = { path = "crates/kern-run" }
 # the chat renderers, picked by the checkpoint's model_type. `vllm-chat` and
 # `vllm-tokenizer` (its test tokenizer) are the same vLLM rev pegainfer pins,
 # so the renderer tests read the crate the server runs.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "18d0c29df4e9ffcda46c2900c498dc43c0bc6e2e" }
-vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
-vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
-vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "f4dde3132c94cccce485a1a59acac1d06739a59d" }
+pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "f6910714a9662c119c21811aa5f6fe2815d820dd" }
+vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
+vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
+vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
 
 anyhow = "1"
+# The frontend's own HTTP stack; kern-serve puts its refusals in front of it.
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
 # Recordings are ragged tables (a row per conversation, list columns for its
 # tokens and per-position top-k), which parquet holds and pandas / duckdb read
 # as is.
