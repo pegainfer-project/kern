@@ -33,7 +33,7 @@ import subprocess
 SCHEMA_VERSION = 7
 SCALARS = ("i32", "i64", "f32", "u8")
 
-_TOP = ["schema_version", "model", "constants", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
+_TOP = ["schema_version", "model", "chat", "constants", "vars", "topology", "states", "buffers", "modules", "ops", "programs"]
 _BUFFER = ["dtype", "shape", "kind", "fill", "domain", "bind"]
 _PROGRAM = ["batch", "once", "graph", "calls"]
 _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster", "pdl", "args"]

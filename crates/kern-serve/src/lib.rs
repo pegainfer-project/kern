@@ -58,6 +58,12 @@ pub struct ServeOpts {
     #[arg(long)]
     pub served_model_name: Option<String>,
 
+    /// Tool-call output parser, by the frontend's registry name
+    /// (`qwen3_coder`, `hermes`, …) or `none`; `auto` takes the manifest's
+    /// `chat.tool_parser`, and without one matches the model directory's name
+    #[arg(long, default_value_t = ParserSelection::Auto)]
+    pub tool_call_parser: ParserSelection,
+
     #[arg(long, default_value_t = 8000)]
     pub port: u16,
 
@@ -154,6 +160,12 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let model_path = weights.dirs().remove(0);
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
     let samples = Protocol::check_unsampled(&manifest)?.samples();
+    let parser = tool_parser(o.tool_call_parser.clone(), manifest.chat.as_ref().and_then(|c| c.tool_parser.as_deref()));
+    info!(
+        tool_call_parser = %parser,
+        resolved = parser.resolve_tool_name(&model_path.to_string_lossy()).unwrap_or("none"),
+        "chat"
+    );
 
     if manifest.cut.is_some() {
         anyhow::ensure!(o.rank.is_none(), "a pipeline stage's place is its cut manifest's; `--rank` is a topology's");
@@ -187,7 +199,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             host_turn: o.host_turn,
         };
         let load = move || pp::head::spawn(manifest, weights, head);
-        return launch(load, served_name, model_path, o.port, samples);
+        return launch(load, served_name, model_path, o.port, samples, parser);
     }
 
     // Every sequence of a group batch holds a token slot on each of its
@@ -225,7 +237,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             let facts = sched.facts();
             Ok((sched, facts))
         };
-        return launch(load, served_name, model_path, o.port, samples);
+        return launch(load, served_name, model_path, o.port, samples, parser);
     }
     let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes: host.0 };
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
@@ -236,7 +248,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         let facts = sched.facts();
         Ok((sched, facts))
     };
-    launch(load, served_name, model_path, o.port, samples)
+    launch(load, served_name, model_path, o.port, samples, parser)
 }
 
 /// Logs the verified manifest before any GPU work: buffer kinds, module count, and each program's calls.
@@ -283,11 +295,29 @@ fn program_shape(p: &kern_manifest::types::Program) -> String {
     parts.join(" ")
 }
 
+/// The tool-call parser the frontend runs: the operator's flag when it
+/// says more than `auto`, else the manifest's `chat.tool_parser`, else
+/// `auto`, which the frontend matches to the model directory's name.
+fn tool_parser(flag: ParserSelection, declared: Option<&str>) -> ParserSelection {
+    match (flag, declared) {
+        (ParserSelection::Auto, Some(name)) => ParserSelection::Explicit(name.into()),
+        (flag, _) => flag,
+    }
+}
+
 /// Run the scheduler `load` builds on a thread of its own, which owns it
 /// (and its GPUs) for its whole life, and serve HTTP once it is ready.
 /// Serve `load`'s scheduler on `port`; `samples` is whether its manifest
-/// draws, so the endpoint can refuse a request for a draw it cannot make.
-fn launch<S, L>(load: L, served_name: String, model_path: PathBuf, port: u16, samples: bool) -> Result<()>
+/// draws, so the endpoint can refuse a request for a draw it cannot make;
+/// `parser` is what the frontend reads tool calls with.
+fn launch<S, L>(
+    load: L,
+    served_name: String,
+    model_path: PathBuf,
+    port: u16,
+    samples: bool,
+    parser: ParserSelection,
+) -> Result<()>
 where
     S: Scheduler + 'static,
     L: FnOnce() -> Result<(S, scheduler::Facts)> + Send + 'static,
@@ -337,7 +367,7 @@ where
             engine,
             &model_path,
             vec![served_name],
-            ParserSelection::default(),
+            parser,
             port,
             None,
             1,
@@ -346,4 +376,18 @@ where
         )
         .await
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_flag_wins_over_the_manifest_and_the_manifest_over_auto() {
+        let explicit = |s: &str| ParserSelection::Explicit(s.into());
+        assert_eq!(tool_parser(ParserSelection::Auto, Some("qwen3_coder")), explicit("qwen3_coder"));
+        assert_eq!(tool_parser(explicit("hermes"), Some("qwen3_coder")), explicit("hermes"));
+        assert_eq!(tool_parser(ParserSelection::None, Some("qwen3_coder")), ParserSelection::None);
+        assert_eq!(tool_parser(ParserSelection::Auto, None), ParserSelection::Auto);
+    }
 }

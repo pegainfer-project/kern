@@ -422,6 +422,20 @@
       ],
       "type": "object"
     },
+    "Chat": {
+      "additionalProperties": false,
+      "description": "What a chat frontend needs to know of the model's output syntax: the names are the frontend's registry's (vLLM's `--tool-call-parser` names), chosen by whoever wrote the manifest; the runtime never reads them.",
+      "properties": {
+        "tool_parser": {
+          "description": "The parser that turns the model's tool-call syntax into structured `tool_calls`, e.g. `\"qwen3_coder\"`, `\"hermes\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Cut": {
       "additionalProperties": false,
       "description": "One stage of a manifest cut into a pipeline (`kern cut`): every stage of one cut carries the same `id`; stage `stage` of `stages` receives its predecessor's activations and sends its own to the next.",
@@ -2390,6 +2404,17 @@
       },
       "description": "Typed tensors: inputs, outputs, weights, workspace and carries.",
       "type": "object"
+    },
+    "chat": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Chat"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "How a chat frontend reads what the model writes, e.g. `{\"tool_parser\": \"qwen3_coder\"}`; the runtime does not read it."
     },
     "constants": {
       "additionalProperties": {

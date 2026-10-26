@@ -15,6 +15,12 @@ manifest / kernels / weights 走 `--manifest` `--kernels` `--weights`（与 `ker
 同一套 flag）。kern-serve **不读 kern.toml**：那是改 kernel 的开发循环的文件
 （reference、dumps、test seed），服务进程的输入全在命令行上，和 vLLM 一样。
 API 里的模型名缺省是 manifest 的 `model`，`--served-model-name` 覆盖。
+tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「顶层结构」），
+`--tool-call-parser <name|none|auto>` 显式给值压过它，两边都没有才按模型目录名猜；
+启动日志的 `chat` 行打印选的和解析到的名字。选错的症状：`tool_calls: null`、
+`finish_reason: "stop"`、content 里是裸的 XML / JSON 且少了开头的 `<tool_call>` 标签
+（解析器吃掉了它再放弃）。reasoning parser 现在还是前端按目录名猜，pegainfer 的 serve
+接口接它之后同样走 manifest（#67）。
 **前端**要的 HF 目录（config.json、tokenizer、chat template、`generation_config.json`
 的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
 Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。

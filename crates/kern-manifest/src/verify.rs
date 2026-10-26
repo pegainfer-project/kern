@@ -220,6 +220,14 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             ));
         }
     }
+    // 10b. chat: a parser name is a registry key, lowercase letters, digits and underscores
+    if let Some(name) = m.chat.as_ref().and_then(|c| c.tool_parser.as_deref()) {
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+            errs.push(format!(
+                "chat.tool_parser `{name}`: a parser name is lowercase letters, digits and underscores (e.g. `qwen3_coder`)"
+            ));
+        }
+    }
     let group_ctx = |g: &str, errs: &mut Vec<String>, used_groups: &mut BTreeSet<String>, ctx: &str| -> Option<u64> {
         match m.group_size(g) {
             Some(sz) => {

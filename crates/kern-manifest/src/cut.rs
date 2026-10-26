@@ -266,6 +266,7 @@ fn stage(
         model: m.model.clone(),
         topology: None,
         cut: Some(Cut { id: id.to_string(), stage: s as u64, stages: stages as u64 }),
+        chat: m.chat.clone(),
         vars,
         states,
         buffers,

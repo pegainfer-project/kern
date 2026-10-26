@@ -26,6 +26,7 @@ Kern.
 | `modules` | Digest-pinned sources of compiled device code |
 | `ops` | Typed launch interfaces and implementations |
 | `programs` | Ordered calls and their serving shape |
+| `chat` | What a chat frontend needs of the model's output syntax: the tool-call parser's registry name (optional; the runtime never reads it) |
 
 The schema is exhaustive. Unknown variants or fields are errors, and a schema
 version is interpreted only by a runtime that implements that version.
