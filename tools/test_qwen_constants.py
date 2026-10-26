@@ -12,12 +12,13 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # reads the kv state, `inout` -> `in`, 2026-09-16; qwen3-4b: one kv state per
 # layer and registry builds of argmax / embedding / weight_prep, 2026-10-07; all: vars
 # declare their `axis`, 2026-10-08; schema 6, 2026-10-09; schema 7, 2026-10-09; qwen3.8-27b: decode_batch
-# GEMMs on cuBLASLt, 2026-10-19). Changes to kernel wiring,
+# GEMMs on cuBLASLt, 2026-10-19; qwen3-4b: the `sample` op
+# over the sampling fills, 2026-10-26). Changes to kernel wiring,
 # capacities, float literals or even artifact pins require review.
 BASELINES = {
     "qwen3-4b-dspark.json": "0c53d2d2c114c12584b38912491aaa2bb1e571b2c852c3c39b39ee0dd75bb229",
-    "qwen3-4b-silu-mined.json": "512e71644455bc27f6e14af9f3a8cfc9be6d5d01a9e00dd2f6cc6de4a4a9fc3a",
-    "qwen3-4b.json": "266ddf976a1e06dabca00aa4f41735240d745d02ce6ac084d5bf627928099c15",
+    "qwen3-4b-silu-mined.json": "9c80477b1fffebb95a4b5067726e3cb0f228ebf88675f015f872cb4a10a12f09",
+    "qwen3-4b.json": "b8a6f26c4fa37cf016208cda1f263764ae317bbd24ad07c68f6ea96bc3f75332",
     "qwen3.8-27b-dflash2.json": "487976495a64acb69f13aa4e4be2b7f66aef810e53dae99ab1b05a3dce045e2a",
     "qwen3.8-27b.json": "9c9ecad4ac461b6f439e9f2962e81ca4f7788305fd608630d328c20ef389b07b"
 }

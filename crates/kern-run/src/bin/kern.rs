@@ -38,7 +38,7 @@ enum Cmd {
         #[command(flatten)]
         opts: kern_run::bench::BenchOpts,
     },
-    /// Greedy bs=1 generation over a target's manifest
+    /// bs=1 generation over a target's manifest, greedy unless a temperature is given
     Run {
         /// Target in kern.toml (needed when it declares several)
         target: Option<String>,

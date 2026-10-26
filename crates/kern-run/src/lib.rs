@@ -229,9 +229,9 @@ fn stage<L: Borrow<Lease>>(
     positions: &[usize],
     rows: usize,
     ids: &[i64],
+    sampling: &[Sampling],
 ) -> Result<Vars> {
-    let greedy = vec![Sampling::GREEDY; leases.len()];
-    let (vars, values) = fills(p, leases, positions, &vec![rows; leases.len()], ids, &greedy);
+    let (vars, values) = fills(p, leases, positions, &vec![rows; leases.len()], ids, sampling);
     for (f, v) in values {
         rt.write_input_at(&f.name, &f.encode(&v), &vars)?;
     }
@@ -249,7 +249,7 @@ fn stage_batch<L: Borrow<Lease>>(
     rows: usize,
     ids: &[i64],
 ) -> Result<Vars> {
-    let vars = stage(rt, p, leases, positions, rows, ids)?;
+    let vars = stage(rt, p, leases, positions, rows, ids, &vec![Sampling::GREEDY; leases.len()])?;
     for t in &p.page_tables {
         rt.write_input_at(&t.name, &le_bytes_i32(&page_rows(t, leases, leases.len())?), &vars)?;
     }
@@ -463,6 +463,8 @@ struct Caller {
     lease: Lease,
     /// Tokens already in the state (next slot to fill).
     pos: i64,
+    /// What every staged call samples by; greedy until a caller says otherwise.
+    sampling: Sampling,
 }
 
 impl Caller {
@@ -486,7 +488,7 @@ impl Caller {
             rt.write_input(&t.name, &le_bytes_i32(&line_rows(t, one, line_cols(&protocol, t))?))?;
         }
         run_once(&rt, &protocol)?;
-        Ok(Caller { rt, protocol, lease, pos: 0 })
+        Ok(Caller { rt, protocol, lease, pos: 0, sampling: Sampling::GREEDY })
     }
 
     /// Token slots the sequence can hold.
@@ -499,7 +501,7 @@ impl Caller {
     fn stage(&mut self, ids: &[i64]) -> Result<Vars> {
         let pos = self.pos as usize;
         let one = std::slice::from_ref(&self.lease);
-        crate::stage(&mut self.rt, &self.protocol, one, &[pos], ids.len(), ids)
+        crate::stage(&mut self.rt, &self.protocol, one, &[pos], ids.len(), ids, std::slice::from_ref(&self.sampling))
     }
 
     /// Stage a fixed-rows call at the cursor: `tok` is the sequence's next
