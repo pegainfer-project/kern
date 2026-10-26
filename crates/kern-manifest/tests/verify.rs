@@ -275,6 +275,19 @@ fn graph_needs_a_batch() {
 }
 
 #[test]
+fn a_chat_section_names_the_frontends_tool_parser() {
+    let mut v = base();
+    v["chat"] = serde_json::json!({"tool_parser": "qwen3_coder"});
+    assert_eq!(check(v).unwrap().chat.as_ref().and_then(|c| c.tool_parser.as_deref()), Some("qwen3_coder"));
+    let mut v = base();
+    v["chat"] = serde_json::json!({"tool_parser": "Qwen3-Coder"});
+    assert_err(v, "chat.tool_parser `Qwen3-Coder`: a parser name is lowercase");
+    let mut v = base();
+    v["chat"] = serde_json::json!({"reasoning_parser": "qwen3"});
+    assert_err(v, "unknown field `reasoning_parser`");
+}
+
+#[test]
 fn wrong_version() {
     let mut v = base();
     v["schema_version"] = 3.into();

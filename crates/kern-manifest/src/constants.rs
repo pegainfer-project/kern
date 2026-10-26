@@ -20,6 +20,8 @@ struct LiteralManifest {
     #[serde(default)]
     cut: Option<Cut>,
     #[serde(default)]
+    chat: Option<Chat>,
+    #[serde(default)]
     vars: BTreeMap<String, Var>,
     #[serde(default)]
     states: BTreeMap<String, State>,

@@ -29,12 +29,20 @@ cut                          cut      流水线的一段：id、第几段、共�
 
 ```json
 { "schema_version": 7, "model": "qwen3.8-27b",
+  "chat": {"tool_parser": "qwen3_coder"},
   "topology": {"groups": {"ep": 4}},
   "vars": …, "states": …, "buffers": …, "modules": …, "ops": …, "programs": … }
 ```
 
-- `schema_version`：wire format 版本，只认 8。`model`：标签，runtime
+- `schema_version`：wire format 版本，只认 7。`model`：标签，runtime
   不赋予含义（kern-serve 用它做对外的模型名）。
+- `chat`（可选）：chat 前端读模型输出所需的事实，runtime 不读。
+  `tool_parser` 是前端注册表里的 tool-call 解析器名（vLLM 的
+  `--tool-call-parser` 名：`qwen3_coder`、`hermes`、`deepseek_v41`……），
+  由写 manifest 的人定——模型用什么语法写 tool call 是模型知识，不能是
+  `crates/` 里按名字的分支。verifier 第 10b 条只查形状（小写字母、数字、
+  下划线），名字对不对前端启动时说。kern-serve 的 `--tool-call-parser`
+  显式给值时压过它；两边都没给才按模型目录名猜（#67）。
 - `vars`：caller 每次调用时提供的标量（如 `tokens`），声明 `max`，下界
   恒为 1；所有静态校验在界上进行，运行时拒绝越界值。**会改变内存尺寸或
   launch 几何的标量才是 var**；别的标量（temperature 之类）是数据，走
@@ -554,6 +562,11 @@ input 的整数列或浮点列，`Filled::encode` 按 buffer dtype 编码）。�
 已有字段一个不动，旧 manifest 原样可读，所以 `schema_version` 不升：**只有
 破坏性改动（删字段、改名、改语义）才升版本**，纯增量改动原地重生成 golden，
 examples 不动。
+
+同日加顶层可选段 `chat: {"tool_parser"}`（见「顶层结构」），同样只增不改，
+golden 原地重生成；examples 各加一行（qwen3-4b 三份 `hermes`，qwen3.8-27b
+两份 `qwen3_coder`，minimal 示范用 `hermes`）。reasoning parser 等 pegainfer
+的 serve 接口能接它再加（roadmap 协议线）。
 
 ## 从 v6 到 v7
 

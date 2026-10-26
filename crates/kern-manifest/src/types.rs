@@ -77,6 +77,9 @@ pub struct Manifest {
     /// The pipeline stage this manifest is, when it is one piece of a cut manifest, e.g. `{"id": "9f2c…", "stage": 1, "stages": 2}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cut: Option<Cut>,
+    /// How a chat frontend reads what the model writes, e.g. `{"tool_parser": "qwen3_coder"}`; the runtime does not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<Chat>,
     /// Per-call scalars the caller supplies, e.g. `{"tokens": {"max": 2048}}`.
     #[serde(default, deserialize_with = "unique_map", skip_serializing_if = "BTreeMap::is_empty")]
     pub vars: BTreeMap<String, Var>,
@@ -251,6 +254,15 @@ pub struct Topology {
     /// Group name to member count, e.g. `{"ep": 4}`.
     #[serde(deserialize_with = "unique_map")]
     pub groups: BTreeMap<String, u64>,
+}
+
+/// What a chat frontend needs to know of the model's output syntax: the names are the frontend's registry's (vLLM's `--tool-call-parser` names), chosen by whoever wrote the manifest; the runtime never reads them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Chat {
+    /// The parser that turns the model's tool-call syntax into structured `tool_calls`, e.g. `"qwen3_coder"`, `"hermes"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_parser: Option<String>,
 }
 
 /// One stage of a manifest cut into a pipeline (`kern cut`): every stage of one cut carries the same `id`; stage `stage` of `stages` receives its predecessor's activations and sends its own to the next.
