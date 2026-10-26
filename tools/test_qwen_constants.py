@@ -13,14 +13,15 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # layer and registry builds of argmax / embedding / weight_prep, 2026-10-07; all: vars
 # declare their `axis`, 2026-10-08; schema 6, 2026-10-09; schema 7, 2026-10-09; qwen3.8-27b: decode_batch
 # GEMMs on cuBLASLt, 2026-10-19; qwen3-4b: the `sample` op
-# over the sampling fills, 2026-10-26). Changes to kernel wiring,
+# over the sampling fills, 2026-10-26; all: the `chat` section names the
+# tool parser, 2026-10-26). Changes to kernel wiring,
 # capacities, float literals or even artifact pins require review.
 BASELINES = {
-    "qwen3-4b-dspark.json": "0c53d2d2c114c12584b38912491aaa2bb1e571b2c852c3c39b39ee0dd75bb229",
-    "qwen3-4b-silu-mined.json": "9c80477b1fffebb95a4b5067726e3cb0f228ebf88675f015f872cb4a10a12f09",
-    "qwen3-4b.json": "b8a6f26c4fa37cf016208cda1f263764ae317bbd24ad07c68f6ea96bc3f75332",
-    "qwen3.8-27b-dflash2.json": "487976495a64acb69f13aa4e4be2b7f66aef810e53dae99ab1b05a3dce045e2a",
-    "qwen3.8-27b.json": "9c9ecad4ac461b6f439e9f2962e81ca4f7788305fd608630d328c20ef389b07b"
+    "qwen3-4b-dspark.json": "7f97fb71a69367709ae0774244aad9e32a1fad07bfa53e848b7ec6a302069a04",
+    "qwen3-4b-silu-mined.json": "40f76bb88dca53495f63164059e5e7943b060aaf6e3c1332dad3781b0e4eca96",
+    "qwen3-4b.json": "ef5b7a1ed14e6446fe837a385bb46c8e99f8473a823b0a453994c910c8d1b460",
+    "qwen3.8-27b-dflash2.json": "9dd8b22e982da794cef190170a81e8c5be5713bedf8d83669e9701064ce95b25",
+    "qwen3.8-27b.json": "0e0f09754b5e97db53b680f33bae671ff03938faaf8b2ec410458a25dc5bb45a"
 }
 
 
