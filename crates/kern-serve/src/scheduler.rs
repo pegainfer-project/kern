@@ -105,8 +105,8 @@ use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::Protocol;
 use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
 use pegainfer_frontend::engine::{
-    FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
-    SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
+    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
+    SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
 use tracing::{debug, info, warn};
 
@@ -319,6 +319,9 @@ pub struct KernScheduler {
     every_page: bool,
     warned_sampling: bool,
     stats: Stats,
+    /// What the frontend's `/metrics` says of the snapshots: cumulative,
+    /// where `stats` is the log line's window.
+    prefix_cache: PrefixCacheCounters,
 }
 
 /// Rolling counters for the periodic log line, reset when it prints.
@@ -429,6 +432,7 @@ impl KernScheduler {
             every_page,
             warned_sampling: false,
             stats,
+            prefix_cache: PrefixCacheCounters::default(),
         };
         s.log_ready();
         Ok(s)
@@ -647,6 +651,13 @@ impl KernScheduler {
             self.stats.resident_hits += 1;
             self.stats.resident_hit_tokens += start as u64;
         }
+        // Every prompt token is looked up, in the host tier too when there
+        // is one; the hit is what the lookup found, from whichever tier.
+        let c = &mut self.prefix_cache;
+        c.queries += prompt as u64;
+        c.hits += start as u64;
+        c.host_queries += (self.ranks.host_tier().is_some() as u64) * prompt as u64;
+        c.host_hits += (woken as u64) * start as u64;
         debug!(
             request = %id,
             prompt,
@@ -974,7 +985,7 @@ impl Scheduler for KernScheduler {
             num_running_reqs: self.running.len() as u64,
             num_waiting_reqs: self.waiting.len() as u64,
             spec_decode: self.counters,
-            prefix_cache: None,
+            prefix_cache: Some(self.prefix_cache),
         }
     }
 }

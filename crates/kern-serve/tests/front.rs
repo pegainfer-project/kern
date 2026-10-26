@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use kern_manifest::protocol::Sampling;
-use kern_serve::front::{Call, Front, Note};
+use kern_serve::front::{Call, Clients, Front, Note};
 use kern_serve::pd::{Ask, Relay, Req};
 use pegainfer_frontend::engine::{
-    spawn_scheduler, EosPolicy, FinishReason, LiveScheduler, Request, RequestId, StepReceiver, StopPolicy, Terminal,
+    spawn_scheduler, EosPolicy, FinishReason, LiveScheduler, PrefixCacheCounters, Request, RequestId, StepReceiver,
+    StopPolicy, Terminal,
 };
 use pegainfer_frontend::sampler::SamplingParams;
 
@@ -289,4 +290,16 @@ fn the_front_ends_what_decodes_and_tells_the_head_the_rest() {
     drop(l);
     drop(live.handle);
     live.join.join().unwrap();
+}
+
+#[test]
+fn the_front_reports_the_pool_the_head_last_told_it() {
+    let mut c = Clients::new(100);
+    let before = c.metrics();
+    assert_eq!((before.kv_used_blocks, before.kv_total_blocks), (0, 100));
+    assert_eq!(before.prefix_cache, Some(PrefixCacheCounters::default()));
+    let counters = PrefixCacheCounters { queries: 48, hits: 16, host_queries: 48, host_hits: 8 };
+    assert!(c.note(Note::Pool { pages: 7, prefix_cache: counters }).unwrap().is_empty());
+    let after = c.metrics();
+    assert_eq!((after.kv_used_blocks, after.prefix_cache), (7, Some(counters)));
 }

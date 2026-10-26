@@ -178,6 +178,10 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
 同源）。DSv4.1 一次两轮（tray05，prompt 6159 token、生成 96）：第二轮 prompt
 6263 token，报 6254 = 6159 + 96 − 1，快照不复用最后一个 token。未命中时上游的
 序列化器不发 `prompt_tokens_details`，字段是 `null`。
+累计数走 `/metrics`：scheduler 和 PP head 各自把 `PrefixCacheCounters` 报进 `SchedulerMetrics`
+（`queries` 是查过的 prompt token 总数，`hits` 是其中命中的，有 host tier 时 `host_queries`
+与 `queries` 相同、`host_hits` 是从 host 唤醒的那部分），前端按区间差分成
+`vllm:prefix_cache_*` / `vllm:external_prefix_cache_*`；DP tier 没有前缀缓存，报 `None`。
 
 门禁（本机 GB300，warm 服务与 cold 服务各一，greedy，`max_tokens 64`，prompt 为 46 KB
 工程日志）：
