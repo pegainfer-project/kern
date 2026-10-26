@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
-use kern_manifest::protocol::Rows;
+use kern_manifest::protocol::{Rows, Sampling};
 use kern_pool::{Denied, Placement};
 
 use super::{Ask, Load, Pools, Refusal, Req, Seat, Shape, Tell};
@@ -37,6 +37,7 @@ struct Seq {
     next: u32,
     left: usize,
     row: Row,
+    sampling: Sampling,
 }
 
 pub struct Decoder<E> {
@@ -130,14 +131,14 @@ impl<E: Run> Decoder<E> {
     pub fn ask(&mut self, a: Ask) -> Result<Vec<Tell>> {
         match a {
             Ask::Reserve { req, tokens } => self.reserve(req, tokens),
-            Ask::Start { req, first, len, max_tokens } => {
+            Ask::Start { req, first, len, max_tokens, sampling } => {
                 let &(_, tokens) =
                     self.reserved.get(&req).with_context(|| format!("request {req} starts with no seat"))?;
                 if max_tokens == 0 || len + max_tokens > tokens {
                     bail!("request {req} starts at {len} for {max_tokens} tokens in a seat of {tokens}");
                 }
                 let (row, _) = self.reserved.remove(&req).expect("looked up");
-                self.running.push(Seq { req, pos: len, next: first, left: max_tokens, row });
+                self.running.push(Seq { req, pos: len, next: first, left: max_tokens, row, sampling });
                 Ok(Vec::new())
             }
             Ask::Abort { req } => {
@@ -211,8 +212,11 @@ impl<E: Run> Decoder<E> {
             return Ok(self.room(landed));
         }
         let t0 = std::time::Instant::now();
-        let cells: Vec<Cell> =
-            self.running.iter().map(|s| Cell { row: &s.row, ids: vec![s.next as i64], pos: s.pos }).collect();
+        let cells: Vec<Cell> = self
+            .running
+            .iter()
+            .map(|s| Cell { row: &s.row, ids: vec![s.next as i64], pos: s.pos, sampling: s.sampling })
+            .collect();
         let cap = self.cap;
         let mut st = self.ranks.stage(&cells, 1, |k| bucket(k).min(cap))?;
         drop(cells);

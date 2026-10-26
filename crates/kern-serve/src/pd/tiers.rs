@@ -9,6 +9,7 @@
 //! the head to carry out without deciding anything.
 
 use anyhow::{bail, Result};
+use kern_manifest::protocol::Sampling;
 use kern_pool::Lease;
 use pegainfer_frontend::engine::StopPolicy;
 
@@ -105,9 +106,9 @@ impl Tiers {
 
     /// `req`'s last rows are on their way through `lease`: its push, if it
     /// is handed off.
-    pub fn prefilled(&mut self, req: Req, lease: &Lease, len: usize) -> Vec<(usize, Out)> {
+    pub fn prefilled(&mut self, req: Req, lease: &Lease, len: usize, sampling: Sampling) -> Vec<(usize, Out)> {
         match self.of(req) {
-            Some((t, _)) => on(t, self.tiers[t].0.prefilled(req, lease, len)),
+            Some((t, _)) => on(t, self.tiers[t].0.prefilled(req, lease, len, sampling)),
             None => Vec::new(),
         }
     }

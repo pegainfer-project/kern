@@ -61,6 +61,7 @@ mod tiers;
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
+use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
 use kern_pool::{deal, Deal, Interleave, Pages};
 use kern_runtime::Split;
@@ -176,13 +177,13 @@ pub fn cover(stages: &[BTreeMap<String, Shape>], d: &Pools) -> Result<()> {
 }
 
 /// The P head's words to the D head.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Ask {
     /// Seats for a sequence of up to `tokens` (prompt and completion).
     Reserve { req: Req, tokens: usize },
     /// The seats hold the prompt's `len` positions: decode from `first`,
-    /// at most `max_tokens` tokens more.
-    Start { req: Req, first: u32, len: usize, max_tokens: usize },
+    /// at most `max_tokens` tokens more, drawn as `sampling` says.
+    Start { req: Req, first: u32, len: usize, max_tokens: usize, sampling: Sampling },
     /// Free the seats; nothing is pushing into them.
     Abort { req: Req },
 }

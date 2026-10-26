@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use anyhow::Result;
+use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
 use kern_pool::{Lease, Pool};
 use kern_serve::pd::{
@@ -217,7 +218,7 @@ fn a_seat_is_adopted_on_every_member_and_decodes_to_max_tokens() {
     );
     // Nothing runs before the start; the pads' zeroing lands.
     assert_eq!(d.step().unwrap(), vec![]);
-    d.ask(Ask::Start { req: 1, first: 5, len: 30, max_tokens: 3 }).unwrap();
+    d.ask(Ask::Start { req: 1, first: 5, len: 30, max_tokens: 3, sampling: Sampling::GREEDY }).unwrap();
     let (a, b) = (next(5) as u32, next(next(5)) as u32);
     let c = next(b as i64) as u32;
     let steps: Vec<_> = (0..3)
@@ -247,8 +248,14 @@ fn a_full_tier_is_busy_until_a_seat_frees_or_a_remap_lands() {
     let refused = Tell::Refuse { req: 3, why: Refusal::ContextLength { limit: 96 } };
     assert_eq!(d.ask(Ask::Reserve { req: 3, tokens: 97 }).unwrap(), vec![refused]);
     assert!(matches!(d.ask(Ask::Reserve { req: 4, tokens: 20 }).unwrap()[..], [Tell::Grant { req: 4, .. }]));
-    assert!(d.ask(Ask::Start { req: 4, first: 1, len: 15, max_tokens: 6 }).is_err(), "past the seat");
-    assert!(d.ask(Ask::Start { req: 9, first: 1, len: 1, max_tokens: 1 }).is_err(), "no seat");
+    assert!(
+        d.ask(Ask::Start { req: 4, first: 1, len: 15, max_tokens: 6, sampling: Sampling::GREEDY }).is_err(),
+        "past the seat"
+    );
+    assert!(
+        d.ask(Ask::Start { req: 9, first: 1, len: 1, max_tokens: 1, sampling: Sampling::GREEDY }).is_err(),
+        "no seat"
+    );
     assert!(d.ask(Ask::Reserve { req: 4, tokens: 20 }).is_err(), "reserved twice");
 
     // Three slots a member (the null one, the pad's, one more), each three
@@ -295,7 +302,7 @@ fn a_tier_takes_one_reserve_at_a_time_none_while_busy_and_names_itself_in_its_pu
     let plain = Manifest::from_json(include_str!("../../kern-manifest/tests/fixtures/plain.json")).unwrap();
     let pool = Arc::new(Pool::new(&plain, 64, 1024, 16, None).unwrap().0);
     h.admitted(1);
-    let outs = h.prefilled(1, &pool.lease(10).unwrap(), 10);
+    let outs = h.prefilled(1, &pool.lease(10).unwrap(), 10, Sampling::GREEDY);
     assert!(matches!(&outs[..], [Out::Push(p)] if (p.req, p.tier, p.len) == (1, 1, 10)), "{outs:?}");
 }
 
@@ -422,7 +429,7 @@ impl World {
                 Out::Ask(a) => {
                     match &a {
                         Ask::Abort { req } => assert!(!self.in_flight.contains_key(req), "abort of {req} mid-push"),
-                        Ask::Start { req, first, len, max_tokens } => {
+                        Ask::Start { req, first, len, max_tokens, .. } => {
                             let c = &self.clients[req];
                             assert!(
                                 !self.in_flight.contains_key(req) && self.first_in.contains(req),
@@ -535,7 +542,7 @@ impl World {
             1 if !self.prefilling.is_empty() => {
                 let req = *self.prefilling.keys().nth(rand.next(self.prefilling.len())).unwrap();
                 let lease = self.prefilling.remove(&req).unwrap();
-                let outs = self.h.prefilled(req, &lease, self.clients[&req].prompt);
+                let outs = self.h.prefilled(req, &lease, self.clients[&req].prompt, Sampling::GREEDY);
                 // The head retires the lease into its cache right after.
                 drop(lease);
                 self.apply(outs);

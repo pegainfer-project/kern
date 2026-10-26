@@ -29,13 +29,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
+use kern_manifest::protocol::Sampling;
 use kern_pool::Lease;
 use pegainfer_frontend::engine::{FinishReason, StopCause};
 
 use super::{Ask, Push, Refusal, Relay, Req, Seat, Tell};
 
 /// What the P head does next, in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Out {
     Ask(Ask),
     /// To every stage, the head among them.
@@ -73,7 +74,7 @@ pub enum Out {
 enum Phase {
     Reserving,
     Granted { seats: Vec<Seat> },
-    Pushing { pushed: BTreeSet<usize>, first: Option<u32>, len: usize },
+    Pushing { pushed: BTreeSet<usize>, first: Option<u32>, len: usize, sampling: Sampling },
 }
 
 #[derive(Debug)]
@@ -183,12 +184,12 @@ impl Handoffs {
     }
 
     /// The prompt's last rows of `req` are on their way through `lease`,
-    /// `len` positions: the push to every stage, unless its client left.
-    pub fn prefilled(&mut self, req: Req, lease: &Lease, len: usize) -> Vec<Out> {
+    /// `len` positions, its tokens drawn as `sampling` says: the push to
+    /// every stage, unless its client left.
+    pub fn prefilled(&mut self, req: Req, lease: &Lease, len: usize, sampling: Sampling) -> Vec<Out> {
         let Some(h) = self.live.get_mut(&req) else { return Vec::new() };
-        let Phase::Granted { seats } =
-            std::mem::replace(&mut h.phase, Phase::Pushing { pushed: BTreeSet::new(), first: None, len })
-        else {
+        let pushing = Phase::Pushing { pushed: BTreeSet::new(), first: None, len, sampling };
+        let Phase::Granted { seats } = std::mem::replace(&mut h.phase, pushing) else {
             unreachable!("a request is prefilled once, after its grant")
         };
         let (pages, slot, tier) = (lease.page_ids().to_vec(), lease.seq_slot(), self.tier);
@@ -232,7 +233,7 @@ impl Handoffs {
     /// is already over.
     fn settle(&mut self, req: Req) -> Vec<Out> {
         let h = &self.live[&req];
-        let Phase::Pushing { pushed, first: Some(first), len } = &h.phase else { return Vec::new() };
+        let Phase::Pushing { pushed, first: Some(first), len, sampling } = &h.phase else { return Vec::new() };
         if pushed.len() < self.stages {
             return Vec::new();
         }
@@ -240,7 +241,8 @@ impl Handoffs {
             self.live.remove(&req);
             return vec![Out::Ask(Ask::Abort { req })];
         }
-        let start = Ask::Start { req, first: *first, len: *len, max_tokens: h.relay.max_tokens - h.relay.generated };
+        let max_tokens = h.relay.max_tokens - h.relay.generated;
+        let start = Ask::Start { req, first: *first, len: *len, max_tokens, sampling: *sampling };
         let relay = self.live.remove(&req).expect("looked up").relay;
         vec![Out::Decode { req, relay }, Out::Ask(start)]
     }
