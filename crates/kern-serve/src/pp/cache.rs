@@ -43,6 +43,7 @@
 
 use kern_pool::{Checkpoint, Copies, Denied, Evicted, Found, Hit, Lease, Parked, Prefix, Tier};
 use kern_runtime::{Error, Runtime};
+use pegainfer_frontend::engine::PrefixCacheCounters;
 
 use crate::ranks::Act;
 
@@ -128,12 +129,25 @@ pub(super) struct Cache {
     /// The acts run on the head and not yet on the stages, in order.
     acts: Vec<Act>,
     counts: Counts,
+    /// What the frontend's `/metrics` says of the entries: cumulative,
+    /// where `counts` is the log line's window.
+    prefix_cache: PrefixCacheCounters,
 }
 
 impl Cache {
     /// An empty cache over pages of `unit` tokens.
     pub fn new(unit: usize) -> Cache {
-        Cache { prefix: Prefix::new(unit), acts: Vec::new(), counts: Counts::default() }
+        Cache {
+            prefix: Prefix::new(unit),
+            acts: Vec::new(),
+            counts: Counts::default(),
+            prefix_cache: PrefixCacheCounters::default(),
+        }
+    }
+
+    /// Prompt tokens looked up and found since the cache was made.
+    pub fn prefix_cache(&self) -> PrefixCacheCounters {
+        self.prefix_cache
     }
 
     /// Entries kept, in both tiers.
@@ -194,6 +208,11 @@ impl Cache {
                     };
                     *hits += u64::from(start > 0);
                     *tokens += start as u64;
+                    let p = &mut self.prefix_cache;
+                    p.queries += ids.len() as u64;
+                    p.hits += start as u64;
+                    p.host_queries += (rt.hosts() as u64) * ids.len() as u64;
+                    p.host_hits += ((tier == Tier::Parked) as u64) * start as u64;
                     return Ok((lease, start));
                 }
                 Err(Error::Denied(Denied::Busy)) if self.evict(rt)? => {}
@@ -254,7 +273,7 @@ impl Cache {
     /// Make room: the entry worth least parks, or is dropped; `false`
     /// when nothing is resident.
     fn evict(&mut self, rt: &mut impl Lessor) -> Result<bool, Error> {
-        let Cache { prefix, acts, counts } = self;
+        let Cache { prefix, acts, counts, .. } = self;
         let park = rt.hosts().then_some(|cp| {
             let parked = rt.park(cp)?;
             Ok::<_, Error>(parked.map(|(p, plan)| {
@@ -539,6 +558,18 @@ mod tests {
         let (start, _) = turn(&mut c, &mut rt, &a, 4);
         let n = c.take_counts();
         assert_eq!((start, n.host_hits, n.host_hit_tokens, n.hits), (a.len(), 1, a.len() as u64, 0));
+        // The frontend's counters add up over every turn: four prompts looked
+        // up, in the host tier too, and the last one's history found there.
+        let looked_up = 3 * (a.len() + 2) as u64 + (2 * a.len() + 2) as u64;
+        assert_eq!(
+            c.prefix_cache(),
+            PrefixCacheCounters {
+                queries: looked_up,
+                hits: a.len() as u64,
+                host_queries: looked_up,
+                host_hits: a.len() as u64
+            }
+        );
         let woke: Vec<Act> = c.take_acts().into_iter().filter(|a| matches!(a, Act::Wake(_))).collect();
         assert!(matches!(&woke[..], [Act::Wake(m)] if m.pages.len() == 2 && m.slot.is_some()));
     }

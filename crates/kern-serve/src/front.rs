@@ -31,7 +31,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use pegainfer_frontend::engine::{
-    FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics, StopCause,
+    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
+    SchedulerMetrics, StopCause,
 };
 
 use crate::pd::{Ask, Out, Relay, Relays, Req};
@@ -68,8 +69,11 @@ pub enum Note {
         relay: Relay,
         tier: usize,
     },
-    /// The head's pages in use.
-    Pages(u64),
+    /// The head's pool: pages in use, and its prefix cache's counters.
+    Pool {
+        pages: u64,
+        prefix_cache: PrefixCacheCounters,
+    },
     Tokens(Vec<(Req, u32, bool)>),
 }
 
@@ -137,6 +141,7 @@ pub struct Clients {
     open: BTreeMap<RequestId, Open>,
     pages: u64,
     pages_total: u64,
+    prefix_cache: PrefixCacheCounters,
 }
 
 impl Clients {
@@ -184,8 +189,9 @@ impl Clients {
                 self.tiers.insert(id.raw(), tier);
                 Vec::new()
             }
-            Note::Pages(n) => {
-                self.pages = n;
+            Note::Pool { pages, prefix_cache } => {
+                self.pages = pages;
+                self.prefix_cache = prefix_cache;
                 Vec::new()
             }
             Note::Tokens(step) => {
@@ -249,7 +255,7 @@ impl Clients {
             num_running_reqs: running as u64,
             num_waiting_reqs: (self.open.len() - running) as u64,
             spec_decode: None,
-            prefix_cache: None,
+            prefix_cache: Some(self.prefix_cache),
         }
     }
 }

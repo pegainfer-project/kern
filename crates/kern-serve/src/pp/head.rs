@@ -68,7 +68,9 @@ use kern_manifest::{Protocol, Verified};
 use kern_pool::{Denied, Lease};
 use kern_run::Weights;
 use kern_runtime::{Capacity, Error, Runtime};
-use pegainfer_frontend::engine::{FinishReason, QueuedRequest, RejectReason, RequestId, StopPolicy};
+use pegainfer_frontend::engine::{
+    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, StopPolicy,
+};
 use tracing::{debug, error, info};
 
 use super::cache::Cache;
@@ -203,8 +205,8 @@ struct PpHead {
     notes: mpsc::Sender<Note>,
     /// Requests the head holds whose clients left, retired at the next touch.
     gone: BTreeSet<RequestId>,
-    /// The pages in use the front was last told.
-    pages_told: u64,
+    /// The pool the front was last told of: pages in use and the cache's counters.
+    pool_told: (u64, PrefixCacheCounters),
     /// Events heard while waiting on stage 1 that wait for the next turn.
     later: VecDeque<Event>,
     /// Where each handed-off request stands on its decode tier.
@@ -353,7 +355,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         calls: tx_calls,
         notes,
         gone: BTreeSet::new(),
-        pages_told: 0,
+        pool_told: (0, PrefixCacheCounters::default()),
         later: VecDeque::new(),
         tiers: Tiers::new(decode.len(), cut.stages as usize),
         decode,
@@ -804,10 +806,10 @@ impl PpHead {
         self.admit()?;
         self.issue()?;
         ensure!(self.rt.remaps() == 0, "the head's pool remapped its chunks, which the stages cannot follow");
-        let used = self.rt.pages_used() as u64;
-        if used != self.pages_told {
-            self.pages_told = used;
-            self.note(Note::Pages(used))?;
+        let pool = (self.rt.pages_used() as u64, self.cache.prefix_cache());
+        if pool != self.pool_told {
+            self.pool_told = pool;
+            self.note(Note::Pool { pages: pool.0, prefix_cache: pool.1 })?;
         }
         self.log_stats();
         Ok(())
