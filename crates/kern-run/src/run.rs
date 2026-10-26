@@ -18,7 +18,7 @@ use clap::Args;
 
 use crate::config::{Config, Target};
 use crate::{Caller, Given, Inputs};
-use kern_manifest::protocol::Rows;
+use kern_manifest::protocol::{Rows, Sampling};
 use kern_manifest::types::BufferKind;
 use kern_manifest::Verified;
 use kern_runtime::{Capacity, Runtime};
@@ -89,6 +89,22 @@ pub struct RunOpts {
     #[arg(long, value_delimiter = ',')]
     stop_tokens: Vec<i64>,
 
+    /// Sampling temperature; 0 takes the most likely token every step
+    #[arg(long, default_value_t = 0.0)]
+    temperature: f32,
+    /// Top-k of a sampled step; under 1 keeps every token
+    #[arg(long, default_value_t = 0)]
+    top_k: i32,
+    /// Top-p of a sampled step; 1 keeps every token
+    #[arg(long, default_value_t = 1.0)]
+    top_p: f32,
+    /// Min-p of a sampled step; 0 keeps every token
+    #[arg(long, default_value_t = 0.0)]
+    min_p: f32,
+    /// The draws' seed: the same seed and prompt replay the same tokens
+    #[arg(long, default_value_t = 0)]
+    seed: i64,
+
     /// Debug: dump activations of the first prefill chunk and `--probe-steps`
     /// decode steps into this directory, then exit: after every call whose
     /// label matches `--probe-labels`, the buffer it writes (live rows),
@@ -118,6 +134,7 @@ struct Opts {
     chunk: Option<u64>,
     eager: bool,
     rows: Option<u64>,
+    sampling: Sampling,
     probe_dir: Option<PathBuf>,
     probe_labels: String,
     probe_steps: usize,
@@ -151,6 +168,13 @@ impl RunOpts {
             chunk: self.chunk.or_else(|| cfg.and_then(|c| c.run.chunk)),
             eager: self.eager,
             rows: self.rows,
+            sampling: Sampling {
+                temperature: self.temperature,
+                top_k: self.top_k,
+                top_p: self.top_p,
+                min_p: self.min_p,
+                seed: self.seed,
+            },
             probe_dir: self.probe_dir,
             probe_labels: self.probe_labels,
             probe_steps: self.probe_steps,
@@ -295,6 +319,12 @@ fn execute(o: Opts) -> Result<()> {
     info!("prompt: {} tokens {prompt_ids:?}", prompt_ids.len());
 
     let mut caller = Caller::new(rt)?;
+    ensure!(
+        o.sampling.temperature <= 0.0 || caller.protocol.samples(),
+        "a temperature of {} asks for a draw, but the manifest takes no sampling fills",
+        o.sampling.temperature
+    );
+    caller.sampling = o.sampling;
     let rows = o.rows.or_else(|| caller.protocol.row_shapes().last().copied()).unwrap_or(1);
     let step = caller.forward(Rows::Const(rows))?;
     let chunk_f = caller.chunk_forward()?;
