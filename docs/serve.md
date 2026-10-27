@@ -9,6 +9,7 @@ target/release/kern-serve --manifest examples/qwen3-4b.json --kernels kernels --
 # state 池默认按显存自动定：权重/激活/scratch 分完后，剩余显存减 1 GiB 全给 state，
 # KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 显式给则照旧。
 # /v1/completions、/v1/chat/completions（流式 + chat template）、/v1/models、/metrics
+# --pool-master host:port --pool-device mlx5_bond_0 加入 Mooncake 池化 KV 层（下文「池化 KV 层」）
 ```
 
 manifest / kernels / weights 走 `--manifest` `--kernels` `--weights`（与 `kern run`
@@ -30,7 +31,9 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 `ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
 不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history_boundary`
 打开，chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条）；停止原因并进
-`FinishReason::Stop(StopCause)`。更早在 pegainfer 上的 `f53b282f` bump 带来的：
+`FinishReason::Stop(StopCause)`。`Request::history_marks`：chat 层对每条后面跟着 assistant 消息的消息
+渲染一次 `messages[..=i]`，最新 8 个边界随请求给引擎，池化层探每一个（下文「池化 KV 层」）。
+更早在 pegainfer 上的 `f53b282f` bump 带来的：
 停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
 降成一份策略，scheduler 只 `classify`，结束时带 `stop_cause`），kern-serve 不再自己读
 `generation_config.json` 的 eos，`--stop-tokens` 删除；DSV4.1 renderer 的 reasoning effort
@@ -862,6 +865,37 @@ prompt 单独跑和打包跑首 token 12/12 一致；前缀命中 `cached_tokens
 保留把 KV 换成了 slot：c512 × 1k 时每 rank 只剩 ~3200 页。短于 ~800k token 的前缀保留是亏的；策略（每 rank 限
 checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats 行打 `pages=used/live slots=used/live`。
 没做：`history_tokens` 处的快照、host tier、P→D handoff（executor rank 不收 `Push`）。
+
+## 池化 KV 层（Mooncake Store，2026-10-27）
+
+`--pool-master host:port --pool-device <rdma dev>` 让每个 rank（PP 下每个 stage 和 head）各开一个
+Mooncake client，把 `pooled_spans()` 注册给 RDMA；prefix tree 留下的每个快照都被 put，admit 时
+device 没命中的部分先探池、再取回，取回的前缀在 device 池里也建 checkpoint。不给 `--pool-master`
+行为同之前。设计、对象与 key、读写路径、失败模式在 `pool.md` 第 9 节。
+
+| flag | 缺省 | 含义 |
+|---|---|---|
+| `--pool-master` | 无 | Mooncake master，`host:port` |
+| `--pool-metadata` | `P2PHANDSHAKE` | transfer engine 的 metadata server |
+| `--pool-device` | 必填 | 传输用的 RDMA 网卡 |
+| `--pool-hostname` | `<hostname>:17100+gpu` | 本进程在池里的名字，每进程唯一 |
+| `--pool-segment` | 无 | 本 tray 持段进程的段名，put 优先放这里（Mooncake 缺省随机放置，每次 put 都过网卡） |
+| `--pool-library` | loader 路径 | `libmooncake_store.so` |
+| `--pool-cooldown` | 30 s | client 报错后多久内每个 act 直接失败 |
+
+部署：每 tray 一个独立的持段进程（Mooncake 自己的 client，`global_segment_size` 给 DRAM 大小），
+kern 的进程贡献 0 字节。原因是 client 退出时它的段整体消失，kern 重启不能带走池的一份。
+
+client 三个 worker 线程：探测一队，get 一队，put 与 mark 一队。探测不排在别人半秒的 get 后面；
+get 串行让一次 get 独占网卡，10 秒租约从元数据请求起算。worker 只轮询 `Runtime::mark` 的 pinned
+字，从不调 CUDA。
+
+stats 行多了 `pool_probes` / `pool_hits` / `pool_fetched` / `pool_fetched_tokens` / `pool_fetch_fails` /
+`pool_puts` / `pool_put_fails`（PP head 另有 `pool_pending`）；metrics 的 waiting 计入探池中的请求。
+
+**未测**：落地时延分布、put 对 token 间隔的影响、命中省掉的 prefill token 数与 GPU 时间、命中请求的
+TTFT 对重算。门禁是两台 tray 共一个 master 的 session 跨 tray 命中（`pool.md` 第 9 节「门禁」），
+目标形状是 DSV4.1 Flash DP+EP4 与 K3 PP8，max_tokens=1，AgentX 与 aiprfx 回放。
 
 ## 没做（按需要加）
 
