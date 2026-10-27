@@ -340,6 +340,28 @@ AgentX 回放（`agentx_replay`，qwen3.8-27b 形状：页 784、64 KiB/token、
 行也加了 `resident_hits` / `resident_hit_tokens` / `host_hits` / `host_hit_tokens`，
 host 层有没有被打到一眼可见。
 
+**fleet 回放**（`agentx_fleet_replay`，2026-10-27，`~/bench_results/2026-10-27-mooncake-gdr/`）：
+N 个实例各自一份 `Pool` + `Prefix`、没有 host 层，请求按 `--route random`（不看任何 cache）
+或 `session`（会话粘到一个实例）分发，`--pool-gib` 开一个全局内容寻址的 LRU 池：页 seal 时
+write-through（`--put-ms` 后可见），admission 时本地命中之后逐 block 探池，命中的 block 取回并
+在本地建索引；带 state 的模型只在会话上一轮结束处找 state 对象。问的是：路由完全不做
+cache-aware、全靠池化命中，行不行。页与 slot 固定（e9a2d87 之后），4 实例、并发 128、
+每实例 250 GiB、池 3 TB：
+
+| 形状 | 路由 | 无池 | 3 TB 池（本地 / 池） | 池 get 总量 | get 忙秒 p99 / 峰值 GB/s |
+|---|---|---|---|---|---|
+| qwen3.8-27b（单实例 89.5%） | random | 58.9% | 88.3%（21.0 / 67.4） | 964 TB | 59.2 / 149 |
+| qwen3.8-27b | session | 87.2% | 91.1%（85.6 / 5.5） | 78 TB | 31.9 / 335 |
+| K3（页 64、27 KiB/token、447 MiB slot、131 slot；单实例 91.6%） | random | 70.1% | 90.1%（23.3 / 66.9） | 427 TB | 25.6 / 64.5 |
+| K3 | session | 91.8% | 94.7%（89.5 / 5.3） | 33 TB | 13.1 / 31.7 |
+
+读法：池能把 random 路由拉回粘连路由 3 个点以内，put 在途竞态可以不管（put 0 ms 与 2 ms
+逐字节同，在途 miss 0.00%）；代价是 random 路由的 get 流量是粘连的 12 倍，qwen3.8 形状下
+合 4 实例忙秒 p99 59 GB/s、每 tray 约 15 GB/s，超过实测的跨 tray RDMA（`mlx5_bond_0` 约
+11 GB/s）；K3 形状每 tray 约 6 GB/s，够。路由至少做 session 粘连，池只补跨实例的那 5–6%。
+K3 单实例的上限：slot 不被挤掉（4000 GiB、4096 slot）96.4%，131 slot 的 91.6% 差的 4.8 个点
+全是 slot 数；session + 池的 94.7% 高过单实例，池里的 state 对象把 slot 扩到了 DRAM。
+
 ## 8. 未决
 
 - 带 state 的模型要不要在页边界也留 state 快照（SGLang 的 `mamba_checkpoint_grid`），
