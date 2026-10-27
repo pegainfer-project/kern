@@ -3,6 +3,18 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-10-27，`bytes_per_seq` 的每一字节都要是跨 step 活的
+
+#100：DSV4.1 Flash 的 window state 是个 `128 + max_tokens` 行的环（prefill tier 上 32896 行 × 528 B
+× 43 层 = 712 MiB/序列），目的只是让一步里写的行落不到这一步还在读的槽上；跨 step 真正活着的
+是最后 128 行（2.8 MiB）。运行时按声明办事：checkpoint 拷整条、池 put/fetch 整条、57 个 slot 把
+设备前缀缓存挤光，四 tier 路由消融里设备命中为 0，池子 2.5 分钟就到水位线。manifest 里给运行时
+加"活窗口"声明是错的层：一步之内的工作区本来就不是 state。修在 kern-dsv41-flash：state 只留 256
+个位置，一步的 K/V 进 `window.work` buffer（`340cf28`），同路径 48/48 轮一致。
+
+规则：`bytes_per_seq` 声明的每一字节都要是跨 step 活的；一步之内的工作区声明成 buffer。生成器
+给 state 定大小时，问的是"下一步要读什么"，不是"这一步会写什么"。
+
 ## 2026-10-26，noise 重放只回写 span 自己的 write-set，只读的 state 读到的是 run 起点的镜像
 
 #63：qwen3.8 换 attention 核，noise 段 0/48 clean，每个 attention span 100% 元素不同、max 16k ulp，
