@@ -893,9 +893,28 @@ get 串行让一次 get 独占网卡，10 秒租约从元数据请求起算。wo
 stats 行多了 `pool_probes` / `pool_hits` / `pool_fetched` / `pool_fetched_tokens` / `pool_fetch_fails` /
 `pool_puts` / `pool_put_fails`（PP head 另有 `pool_pending`）；metrics 的 waiting 计入探池中的请求。
 
-**未测**：落地时延分布、put 对 token 间隔的影响、命中省掉的 prefill token 数与 GPU 时间、命中请求的
-TTFT 对重算。门禁是两台 tray 共一个 master 的 session 跨 tray 命中（`pool.md` 第 9 节「门禁」），
-目标形状是 DSV4.1 Flash DP+EP4 与 K3 PP8，max_tokens=1，AgentX 与 aiprfx 回放。
+**2026-10-27 通过（`~/bench_results/2026-10-27-pooled-kv-e2e/`）**：master 与 64 GB DRAM holder 在 tray03，
+一个会话四轮交替打两个实例（第四轮 max_tokens=1），每轮同时发给池外的冷实例，回复逐字相同，第一轮之后
+每轮都命中池：
+
+| 路径 | 实例 | 第二轮命中 / prompt | B 的取回 |
+|---|---|---|---|
+| paged-only 单卡 | qwen3-4b，tray03 GPU 0 / 1 | 3152 / 3226 | 197 页（页 16），探到落地 33 ms |
+| 带 state（GDN）跨 tray | qwen3.8-27b，tray07 GPU 0 / 1 ↔ tray03 DRAM | 2953 / 3020 | mark 2953 的 state + 46 页（页 64），30 ms |
+| PP 2 段 | qwen3-4b 切在 218，tray03 GPU 0+1 / 2+3 | 3120 / 3154 | 两段各 195 页，30 ms |
+
+`history_marks` 生效：第二轮探 `marks=[3114, 3053]`，取其下每页都在的最新一个；A 写的第一轮 mark 和 B 写的
+第二轮 mark 第三轮在 A 上接上（device 3053，取回 3114）。带 state 跨 tray 的单请求 TTFT：第二轮 32 token
+0.45–1.4 s（冷 0.67 s），第四轮一个 token 0.07–0.27 s；一次取回是一个 147 MiB 的 slot 加页，约 11 GB/s，
+没有调、没有负载。
+
+运维两条：HTTP metadata server 会留着被杀进程的 `rpc_meta/<hostname>`，同名新进程进不去（"Duplicate rpc_meta
+key"），`--pool-metadata` 用缺省 `P2PHANDSHAKE`；被杀的 holder 的段名仍挂在 master 上，同名重挂是 no-op、池 0
+字节、每次 put 被拒（master 日志 "insufficient space"），holder 要换端口重挂。被拒的 batch kern-serve 以 debug
+记一行 `pool refused`，原因看 master 日志。
+
+**未测**：生产形状（DSV4.1 Flash DP+EP4、K3 PP8，AgentX 经 aiperf 与 vllm-bench，max_tokens=1）下命中省掉
+的 prefill token 数与 GPU 时间、落地时延分布、put 对 token 间隔的影响；当时集群只剩一台空 tray。
 
 ## 没做（按需要加）
 

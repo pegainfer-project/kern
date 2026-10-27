@@ -475,6 +475,6 @@ turn 之间）。head 的 `SNAPSHOT_SHORT` 快照不在 `history_marks` 里，�
 - `crates/kern-serve/tests/pool.rs`：fake executor 上的两个实例共一个 fake 池，答案延后 0–2 步、
   随机丢 act：一个实例留下的轮次被另一个实例取回、第二次 prefill 从 mark 起；40 种子下丢 act
   的池对客户端看到的输出没有影响。全绿。
-- e2e（两台 tray 共一个 master，session 第一轮打 A、第二轮打 B）：B 命中的 token 数等于第一轮的
-  `history_tokens`，conc1 下 B 的 logits 对全在 A 上的 KL 在跨 tray 本底之内；杀掉 master，B 照常
-  出结果且 TPOT 不变。**未跑**，结果写 serve.md。
+- e2e **2026-10-27 过**（serve.md「池化 KV 层」，`~/bench_results/2026-10-27-pooled-kv-e2e/`）：一个会话四轮
+  交替打两个实例，paged-only 单卡、带 state 跨 tray、PP 2 段三条路径，每轮回复与池外冷实例逐字相同，第二轮起
+  每轮命中池；B 命中的 token 数等于上一轮的 `history_tokens`。杀 master 的退化路径与生产形状未跑。
