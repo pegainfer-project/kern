@@ -182,7 +182,10 @@ impl Shared {
             false => unsafe { self.store.batch_put_from_multi_buffers(&keys, &bufs, self.prefer.as_ref()) },
         };
         match got {
-            Ok(rcs) => spread(objects, rcs.iter().map(|&rc| rc == 0)),
+            Ok(rcs) => {
+                refused("put", &rcs);
+                spread(objects, rcs.iter().map(|&rc| rc == 0))
+            }
             Err(e) => {
                 self.fail("put", &e);
                 vec![false; objects.len()]
@@ -200,6 +203,7 @@ impl Shared {
         };
         match got {
             Ok(sizes) => {
+                refused("get", &sizes.iter().map(|&n| i32::from(n < 0)).collect::<Vec<_>>());
                 let want = objects
                     .iter()
                     .filter(|(_, b)| !b.is_empty())
@@ -211,6 +215,21 @@ impl Shared {
                 vec![false; objects.len()]
             }
         }
+    }
+}
+
+/// A batch the pool answered object by object: the refusals, with the
+/// first code (the master's log says why, say insufficient space).
+fn refused(what: &str, rcs: &[i32]) {
+    let failed = rcs.iter().filter(|&&rc| rc != 0).count();
+    if failed > 0 {
+        debug!(
+            what,
+            failed,
+            of = rcs.len(),
+            rc = rcs.iter().find(|&&rc| rc != 0).copied().unwrap_or(0),
+            "pool refused"
+        );
     }
 }
 
