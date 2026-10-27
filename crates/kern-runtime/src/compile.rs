@@ -806,11 +806,8 @@ fn pointer_arg(arg: &Arg, buffers: &BTreeMap<String, DeviceBuf>, states: &BTreeM
 }
 
 fn offset_into(b: &DeviceBuf, offset: u64, what: impl Fn() -> String) -> Result<RVal> {
-    // A pooled state's pointer spans its reservation, not the pages and
-    // slots made at load: a tensormap that fills the state is encoded once,
-    // and must reach the slots a remap makes later.
-    let Some(bytes) = b.span().checked_sub(offset) else {
-        bail!(Manifest, "offset {offset} outside {} ({} bytes)", what(), b.span());
+    let Some(bytes) = b.bytes.checked_sub(offset) else {
+        bail!(Manifest, "offset {offset} outside {} ({} bytes)", what(), b.bytes);
     };
     Ok(RVal { val: b.ptr + offset, bytes })
 }

@@ -2,10 +2,6 @@
 //! program's call list replayed in part, and event-bracketed timing.
 //! Nothing here is on the serving path and every call synchronizes; the
 //! harness driving it is `kern test` (`docs/test.md`).
-//!
-//! Whole-state access is for the layout the runtime loaded with: once a
-//! remap has moved chunks, a pooled state has holes and the bytes at an
-//! offset belong to no page.
 
 use std::collections::BTreeMap;
 
@@ -29,16 +25,6 @@ impl Scratch {
 }
 
 impl Runtime {
-    /// Whole-state access is for the layout the runtime loaded with; once
-    /// a remap has moved chunks, a pooled state has holes.
-    pub(crate) fn whole_state(&self, name: &str) -> Result<()> {
-        let pooled = self.pool.pooled().iter().any(|a| a.state == name);
-        if pooled && self.pool.remapped() {
-            bail!(Api, "state `{name}` has been remapped since load; whole-state access is for the initial layout");
-        }
-        Ok(())
-    }
-
     pub fn call_count(&self, program: &str) -> Result<usize> {
         match self.programs.get(program) {
             Some(p) => Ok(p.call_ranges.len()),
@@ -89,7 +75,6 @@ impl Runtime {
     /// harness puts a state back to a snapshot before replaying a cut.
     pub fn write_state_at(&mut self, name: &str, offset: usize, data: &[u8]) -> Result<()> {
         self.ctx.bind_to_thread()?;
-        self.whole_state(name)?;
         let Some(s) = self.states.get_mut(name) else {
             bail!(Api, "no state `{name}`");
         };
@@ -107,9 +92,6 @@ impl Runtime {
     /// the way the runtime was loaded.
     pub fn zero_states(&mut self) -> Result<()> {
         self.ctx.bind_to_thread()?;
-        for name in self.manifest.states.keys() {
-            self.whole_state(name)?;
-        }
         for s in self.states.values_mut() {
             let mut v = s.view(0..s.bytes as usize)?;
             self.stream.memset_zeros(&mut v)?;
@@ -121,7 +103,6 @@ impl Runtime {
     /// `len` bytes of a state from `offset` (synchronous).
     pub fn read_state_at(&self, name: &str, offset: usize, len: usize) -> Result<Vec<u8>> {
         self.ctx.bind_to_thread()?;
-        self.whole_state(name)?;
         let Some(s) = self.states.get(name) else {
             bail!(Api, "no state `{name}`");
         };
@@ -131,7 +112,7 @@ impl Runtime {
         Ok(self.stream.clone_dtoh(&s.view(offset..offset + len)?)?)
     }
 
-    /// Bytes allocated for a state (its initial layout).
+    /// Bytes allocated for a state.
     pub fn state_bytes(&self, name: &str) -> Result<usize> {
         match self.states.get(name) {
             Some(s) => Ok(s.bytes as usize),
@@ -173,7 +154,6 @@ impl Runtime {
 
     /// A state's whole allocation into new scratch, device to device (synchronous).
     pub fn save_state(&self, name: &str) -> Result<Scratch> {
-        self.whole_state(name)?;
         let Some(s) = self.states.get(name) else {
             bail!(Api, "no state `{name}`");
         };
@@ -185,7 +165,6 @@ impl Runtime {
 
     /// Scratch over a state's whole allocation, device to device (synchronous).
     pub fn load_state(&mut self, name: &str, from: &Scratch) -> Result<()> {
-        self.whole_state(name)?;
         let Some(s) = self.states.get(name) else {
             bail!(Api, "no state `{name}`");
         };
@@ -212,7 +191,6 @@ impl Runtime {
     /// Whole allocation of a state.
     pub fn read_state(&self, name: &str) -> Result<Vec<u8>> {
         self.ctx.bind_to_thread()?;
-        self.whole_state(name)?;
         let Some(s) = self.states.get(name) else {
             bail!(Api, "no state `{name}`");
         };

@@ -38,7 +38,7 @@ use anyhow::{bail, ensure, Result};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_pool::{Checkpoint, Denied, Evicted, Found, Lease, Parked, Pool, Prefix, Remap};
+use kern_pool::{Checkpoint, Denied, Evicted, Found, Lease, Parked, Pool, Prefix};
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
 };
@@ -48,7 +48,7 @@ use crate::executor::{Executors, Joined};
 use crate::logline;
 use crate::pack::{self, Bounds, Waiting};
 use crate::pp::Item;
-use crate::ranks::{Act, Answer, Mapping, Order};
+use crate::ranks::{Act, Order};
 use crate::scheduler::Facts;
 
 /// Items a sequence with rows left is passed over before it goes ahead
@@ -90,31 +90,15 @@ struct Rank {
     prefix: Prefix<Checkpoint, Parked>,
     seqs: Vec<Seq>,
     acts: Vec<Act>,
-    /// The remap sent and not yet landed.
-    remap: Option<Remap>,
     /// The line tables the rank's buffers hold; an item carries one only
     /// when its sequences change it.
     lines: BTreeMap<String, Vec<i64>>,
 }
 
 impl Rank {
-    /// The rank's order: its queued acts, a remap its pool has pending, `item`.
+    /// The rank's order: its queued acts and `item`.
     fn order(&mut self, item: Option<Item>) -> Order {
-        if let Some(plan) = self.pool.take_pending() {
-            self.acts.push(Act::Remap(Mapping::of(&plan)));
-            self.remap = Some(plan);
-        }
-        Order { acts: std::mem::take(&mut self.acts), item, wait: self.remap.is_some() }
-    }
-
-    /// What the rank answered: a remap it landed is complete.
-    fn heard(&mut self, q: usize, a: &Answer) -> Result<()> {
-        match (a.remaps, self.remap.take()) {
-            (0, r) => self.remap = r,
-            (1, Some(plan)) => self.pool.complete(plan),
-            (k, r) => bail!("rank {q} landed {k} remaps, {} in flight", r.is_some() as u8),
-        }
-        Ok(())
+        Order { acts: std::mem::take(&mut self.acts), item, wait: false }
     }
 
     fn backlog(&self) -> usize {
@@ -122,7 +106,7 @@ impl Rank {
     }
 
     fn max_seq_tokens(&self) -> usize {
-        self.pool.max_seq_tokens().min((self.pool.pages_max() - self.pad.pages()) * self.pool.unit() as usize)
+        self.pool.max_seq_tokens().min((self.pool.pages() - self.pad.pages()) * self.pool.unit() as usize)
     }
 
     /// Drop the coldest kept prefix; `false` when none is kept.
@@ -227,17 +211,9 @@ impl Dp {
             .map(|(q, pool)| {
                 let pool = Arc::new(pool);
                 let pad = pool.lease(1).map_err(|d| anyhow::anyhow!("rank {q}: no page for the padding row: {d}"))?;
-                ensure!(pool.used() < pool.total(), "rank {q}: the pool holds one page; nothing left to serve from");
+                ensure!(pool.used() < pool.pages(), "rank {q}: the pool holds one page; nothing left to serve from");
                 let acts = pad.seq_slot().map(Act::Zero).into_iter().collect();
-                Ok(Rank {
-                    pool,
-                    pad,
-                    prefix: Prefix::new(unit),
-                    seqs: Vec::new(),
-                    acts,
-                    remap: None,
-                    lines: BTreeMap::new(),
-                })
+                Ok(Rank { pool, pad, prefix: Prefix::new(unit), seqs: Vec::new(), acts, lines: BTreeMap::new() })
             })
             .collect::<Result<Vec<_>>>()?;
         let bounds = Bounds { rows, seqs, context: usize::MAX };
@@ -266,7 +242,7 @@ impl Dp {
 
     pub fn facts(&self) -> Facts {
         Facts {
-            total_blocks: self.ranks.iter().map(|r| r.pool.total() - r.pad.pages()).sum(),
+            total_blocks: self.ranks.iter().map(|r| r.pool.pages() - r.pad.pages()).sum(),
             block_size: self.ranks[0].pool.unit() as usize,
             max_request_tokens: self.ranks.iter().map(Rank::max_seq_tokens).min().unwrap_or(0),
         }
@@ -329,7 +305,7 @@ impl Dp {
             };
             let (lease, start, copies) = match got {
                 Ok(x) => x,
-                Err(Denied::Busy | Denied::Remapping) => break,
+                Err(Denied::Busy) => break,
                 Err(Denied::ExceedsRow { limit }) => {
                     ledger.reject(
                         id,
@@ -440,15 +416,7 @@ impl Dp {
     /// prompts whose last rows went in get their token.
     fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         if self.ranks.iter().all(|r| r.seqs.is_empty()) {
-            // Nothing to feed: only what the pools decided, and a remap
-            // on its way waited for, so the lease it serves can be retried.
-            if self.ranks.iter().any(|r| !r.acts.is_empty() || r.remap.is_some() || r.pool.remapping()) {
-                let orders = self.ranks.iter_mut().map(|r| r.order(None)).collect();
-                let answers = self.exec.run(orders)?;
-                for (q, (r, a)) in self.ranks.iter_mut().zip(&answers).enumerate() {
-                    r.heard(q, a)?;
-                }
-            }
+            // Nothing to feed; the acts queued ride with the next item.
             return Ok(());
         }
         let t0 = Instant::now();
@@ -472,9 +440,6 @@ impl Dp {
         }
         let answers = self.exec.run(orders)?;
         ensure!(answers.len() == self.ranks.len(), "{} answers from {} ranks", answers.len(), self.ranks.len());
-        for (q, (r, a)) in self.ranks.iter_mut().zip(&answers).enumerate() {
-            r.heard(q, a)?;
-        }
         let emits = &self.p.fills[self.forward.emits.expect("checked at construction")];
         let width = emits.width as usize;
         self.stats.steps += 1;
@@ -516,11 +481,9 @@ impl Dp {
         }
         if st.steps > 0 {
             let round = |x: f64, d: f64| (x * d).round() / d;
-            // Pages and slots trade chunks: a kept prefix holds a slot, and a
-            // slot made from free pages shrinks what the KV can hold.
             let (pages, slots) = self.ranks.iter().fold(((0, 0), (0, 0)), |((pu, pt), (su, st)), r| {
                 (
-                    (pu + r.pool.used() - r.pad.pages(), pt + r.pool.total() - r.pad.pages()),
+                    (pu + r.pool.used() - r.pad.pages(), pt + r.pool.pages() - r.pad.pages()),
                     (su + r.pool.slots_used(), st + r.pool.slots()),
                 )
             });
@@ -562,7 +525,7 @@ impl Scheduler for Dp {
     fn metrics(&self) -> SchedulerMetrics {
         SchedulerMetrics {
             kv_used_blocks: self.ranks.iter().map(|r| (r.pool.used() - r.pad.pages()) as u64).sum(),
-            kv_total_blocks: self.ranks.iter().map(|r| (r.pool.total() - r.pad.pages()) as u64).sum(),
+            kv_total_blocks: self.ranks.iter().map(|r| (r.pool.pages() - r.pad.pages()) as u64).sum(),
             num_running_reqs: self.ranks.iter().map(|r| r.seqs.len() as u64).sum(),
             num_waiting_reqs: self.waiting.len() as u64,
             spec_decode: None,

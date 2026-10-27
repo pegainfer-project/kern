@@ -4,8 +4,8 @@
 //! [`Topology`](crate::Topology), its index in each group. `export`
 //! buffers and every fixed state are virtual-memory allocations every
 //! rank can map (a fabric handle where the device offers one, the
-//! allocation handle itself otherwise: [`PeerHandle`]); a pooled state is
-//! reached through its chunks instead (`push`'s [`Runtime::export_pool`]).
+//! allocation handle itself otherwise: [`PeerHandle`]); the pooled states
+//! go out together as a pool (`push`'s [`Runtime::export_pool`]).
 //! [`Runtime::export_handles`] hands this rank's out, and
 //! [`Runtime::import_peers`] maps the other ranks' allocations into this
 //! address space and writes the group's addresses into each `peer` buffer,

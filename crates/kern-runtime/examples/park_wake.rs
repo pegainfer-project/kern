@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &m,
         Some(&kernels),
         gpu,
-        Some(kern_runtime::Capacity { tokens: Some(capacity), seqs: 4, landings: 0 }),
+        Some(kern_runtime::Capacity { tokens: Some(capacity), slots: 4, landings: 0 }),
         None,
     )?;
     let t = Instant::now();

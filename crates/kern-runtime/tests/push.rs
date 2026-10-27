@@ -77,21 +77,18 @@ fn a_split_its_members_cannot_divide_is_refused() {
 
 #[test]
 fn a_pool_handle_crosses_the_wire_unchanged() {
-    let chunk = 1u64 << 26;
-    let mut b = chunk.to_le_bytes().to_vec();
-    b.extend(64u64.to_le_bytes());
+    let mut b = 64u64.to_le_bytes().to_vec();
     b.extend(2u32.to_le_bytes());
-    for (name, kind, object, positions) in [("kv", 0u8, 1u64 << 16, 3u64), ("mem", 1, 1 << 20, 5)] {
+    for (i, (name, kind, object, objects)) in
+        [("kv", 0u8, 1u64 << 16, 3u64), ("mem", 1, 1 << 20, 5)].into_iter().enumerate()
+    {
         b.extend((name.len() as u32).to_le_bytes());
         b.extend(name.as_bytes());
         b.push(kind);
         b.extend(object.to_le_bytes());
-        b.extend(positions.to_le_bytes());
-    }
-    b.extend(2u32.to_le_bytes());
-    for i in 0..2u8 {
-        let mut h = [i; PeerHandle::BYTES];
-        h[64..].copy_from_slice(&chunk.to_le_bytes());
+        b.extend(objects.to_le_bytes());
+        let mut h = [i as u8; PeerHandle::BYTES];
+        h[64..].copy_from_slice(&(object * objects).to_le_bytes());
         b.extend(PeerHandle::from_bytes(&h).unwrap().to_bytes().unwrap());
     }
     let h = PoolHandle::from_bytes(&b).expect("a handle");

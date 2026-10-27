@@ -10,9 +10,8 @@ pub enum Error {
     #[error("manifest: {0}")]
     Manifest(String),
 
-    /// The caller named a table the manifest lacks, a line past the
-    /// table's rows, or a slot count the chunks cannot hold. Caller-side
-    /// bug.
+    /// The caller named a table the manifest lacks or a line past the
+    /// table's rows. Caller-side bug.
     #[error("caller contract: {0}")]
     Api(String),
 }

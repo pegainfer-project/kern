@@ -14,11 +14,10 @@
 //! P's own pool and runtime: a prompt longer than [`P_LIMIT`] is rejected,
 //! any other leased.
 //!
-//! What it checks, at every step: no process dies on what a peer sent; a
-//! stage writes into a D object only through a mirror that maps that
-//! object's chunk positions where D's pool has them; no seat is freed and
-//! no abort sent while a push into it is in flight. At quiescence: every
-//! client ended exactly once, with the greedy chain when it finished, and
+//! What it checks, at every step: no process dies on what a peer sent; no
+//! seat is freed and no abort sent while a push into it is in flight. At
+//! quiescence: every client ended exactly once, with the greedy chain when
+//! it finished, and
 //! nothing is held anywhere. A violation is shrunk to the shortest
 //! schedule that still shows it.
 
@@ -27,14 +26,14 @@ use std::sync::Arc;
 
 use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
-use kern_pool::{Kind, Placement, Pool, Pooled, Remap};
+use kern_pool::Pool;
 use kern_serve::front::{Clients, Note, Write};
-use kern_serve::pd::{Ask, Decoder, Gate, Out, Push, Refusal, Req, Run, Seat, Tell, Tiers};
-use kern_serve::ranks::{Act, Answer, Order};
+use kern_serve::pd::{Ask, Decoder, Gate, Out, Push, Refusal, Req, Run, Tell, Tiers};
+use kern_serve::ranks::{Answer, Order};
 use pegainfer_frontend::engine::{EosPolicy, FinishReason, RejectReason, RequestId, StopPolicy};
 
 mod common;
-use common::{dealt_with, replicated_of, Rand};
+use common::{dealt, replicated_of, Rand};
 
 const STAGES: usize = 3;
 /// D's group: two members, each holding every row's every other position.
@@ -56,32 +55,19 @@ fn stop() -> StopPolicy {
     StopPolicy::new(EosPolicy::Ignore, vec![STOP])
 }
 
-/// Ranks that land every remap the moment they hear it and answer every
-/// row with [`next`]. What they landed is where D's chunks really are, so
-/// what D tells P is checked against it, never taken for it.
-#[derive(Default)]
-struct Fake {
-    landed: Vec<Vec<Remap>>,
-}
+/// Ranks that answer every row with [`next`].
+struct Fake;
 
 impl Run for Fake {
     fn run(&mut self, orders: Vec<Order>) -> anyhow::Result<Vec<Answer>> {
-        self.landed.resize_with(orders.len(), Vec::new);
-        for (q, o) in orders.iter().enumerate() {
-            self.landed[q].extend(o.acts.iter().filter_map(|a| match a {
-                Act::Remap(m) => Some(m.clone().remap()),
-                _ => None,
-            }));
-        }
         Ok(orders
             .iter()
             .map(|o| {
-                let remaps = o.acts.iter().filter(|a| matches!(a, Act::Remap(_))).count() as u64;
                 let tokens = o
                     .item
                     .as_ref()
                     .map_or(Vec::new(), |i| i.rows["token_ids"].ints().unwrap().iter().map(|&t| next(t)).collect());
-                Answer { tokens, remaps, ..Answer::default() }
+                Answer { tokens, ..Answer::default() }
             })
             .collect())
     }
@@ -91,13 +77,9 @@ impl Run for Fake {
 #[derive(Debug, Clone, Copy)]
 struct Config {
     requests: u64,
-    /// Slots per D member at the start, the null one and the pad's among
-    /// them: three leave one, so a second seat makes another slot (a remap).
+    /// Slots per D member, the null one and the pad's among them: three
+    /// leave one, so a second seat waits for the first to end (`Busy`).
     slots: usize,
-    /// Bytes of a member's slot. A chunk is 256: a slot of 24 shares a
-    /// chunk mapped already, one of 768 takes three from free pages, and
-    /// the placement moves.
-    slot: u64,
     seats: usize,
     /// How many clients may leave before their end.
     leave: usize,
@@ -112,15 +94,6 @@ enum Violation {
     DecodeDied(String),
     /// The P head's process exits on what D or a stage told it.
     PrefillDied(String),
-    /// A stage writes request `req`'s state into D rank `rank` through a
-    /// mirror that maps one of the seat's chunk positions elsewhere.
-    StaleMirror {
-        stage: usize,
-        req: Req,
-        rank: usize,
-        arena: usize,
-        position: usize,
-    },
     FreedMidPush(Req),
     AbortMidPush(Req),
     /// At quiescence, a client's end is wrong or missing, or something is held.
@@ -132,7 +105,6 @@ impl Violation {
         match self {
             Violation::DecodeDied(_) => "decode died",
             Violation::PrefillDied(_) => "prefill died",
-            Violation::StaleMirror { .. } => "stale mirror",
             Violation::FreedMidPush(_) => "freed mid-push",
             Violation::AbortMidPush(_) => "abort mid-push",
             Violation::End(_) => "end",
@@ -201,54 +173,6 @@ enum Step {
     Last(Req),
 }
 
-/// Where chunk positions are on each D rank, and which a stage writes.
-struct Geometry {
-    pooled: Vec<Pooled>,
-    chunk: u64,
-    /// Per stage, the arenas of the states it holds.
-    arenas: Vec<Vec<usize>>,
-}
-
-impl Geometry {
-    fn new(m: &Manifest, slots: usize) -> Geometry {
-        let twin = Pool::new(m, 256, 128, slots, None).unwrap().0;
-        let pooled = twin.pooled().to_vec();
-        let mut names: Vec<&str> = pooled.iter().map(|p| p.state.as_str()).collect();
-        names.sort_unstable();
-        // One state a stage, in name order.
-        let arenas = (0..STAGES)
-            .map(|s| {
-                pooled
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| names.get(s) == Some(&p.state.as_str()))
-                    .map(|(a, _)| a)
-                    .collect()
-            })
-            .collect();
-        Geometry { pooled, chunk: twin.chunk(), arenas }
-    }
-
-    /// The chunk positions `seat`'s objects cover in arena `a`.
-    fn positions(&self, a: usize, seat: &Seat) -> Vec<usize> {
-        let p = &self.pooled[a];
-        let ids: Vec<usize> = match p.kind {
-            Kind::Page => seat.pages.iter().map(|&i| i as usize).collect(),
-            Kind::Slot => seat.slot.iter().map(|&i| i as usize).collect(),
-        };
-        ids.iter()
-            .flat_map(|&i| {
-                let lo = p.object * i as u64;
-                (lo / self.chunk) as usize..(lo + p.object).div_ceil(self.chunk) as usize
-            })
-            .collect()
-    }
-}
-
-fn placement(hex: &str) -> Placement {
-    Placement::from_bytes(&hex::decode(hex).unwrap()).unwrap()
-}
-
 struct Head {
     tiers: Tiers,
     outbox: VecDeque<(usize, Out)>,
@@ -267,21 +191,12 @@ struct Front {
     notes: VecDeque<Note>,
 }
 
-/// What the head sends a stage, in order.
-#[derive(Debug)]
-enum Job {
-    Push(Push),
-    Place { rank: usize, epoch: u64, placement: String },
-}
-
+/// A stage: the pushes the head sent it, in order.
 struct Stage {
-    inbox: VecDeque<Job>,
-    /// Every D rank's pool as this stage last placed it, and the epoch.
-    mirror: Vec<(Placement, u64)>,
+    inbox: VecDeque<Push>,
 }
 
 struct Sim {
-    geo: Geometry,
     clients: BTreeMap<Req, Client>,
     head: Head,
     front: Front,
@@ -295,8 +210,6 @@ struct Sim {
     p_pool: Arc<Pool>,
     /// Stages yet to push, by request.
     in_flight: BTreeMap<Req, usize>,
-    /// Each D rank's placement before anything landed.
-    start: Vec<Placement>,
     left: usize,
     log: Vec<String>,
 }
@@ -305,7 +218,7 @@ type Checked<T> = Result<T, Violation>;
 
 impl Sim {
     fn new(cfg: Config, rand: &mut Rand) -> Sim {
-        let m = dealt_with(W, cfg.slot);
+        let m = dealt(W);
         let plain =
             include_str!("../../kern-manifest/tests/fixtures/plain.json").replace("[\"seqs\", 3]", "[\"seqs\", 8]");
         let plain = Manifest::from_json(&plain).unwrap();
@@ -319,11 +232,8 @@ impl Sim {
             let max_tokens = [1, 2, 3, 5, 9][rand.next(5)];
             clients.insert(req, Client { prompt, max_tokens, tokens: Vec::new(), end: None, gone: false });
         }
-        let d = Decoder::new(replicated_of(m.clone(), W, 1, cfg.slots), Fake::default(), cfg.seats).unwrap();
-        let pools = d.pools(vec![String::new(); W], kern_serve::pd::shapes(&m));
-        let mirror: Vec<(Placement, u64)> = pools.placements.iter().map(|h| (placement(h), 0)).collect();
+        let d = Decoder::new(replicated_of(m, W, 1, cfg.slots), Fake, cfg.seats).unwrap();
         Sim {
-            geo: Geometry::new(&m, cfg.slots),
             head: Head {
                 tiers: Tiers::new(1, STAGES),
                 outbox: VecDeque::new(),
@@ -344,11 +254,10 @@ impl Sim {
             d,
             to_d: VecDeque::new(),
             to_p: VecDeque::new(),
-            stages: (0..STAGES).map(|_| Stage { inbox: VecDeque::new(), mirror: mirror.clone() }).collect(),
+            stages: (0..STAGES).map(|_| Stage { inbox: VecDeque::new() }).collect(),
             firsts: BTreeMap::new(),
-            p_pool: Arc::new(Pool::new(&plain, 64, 1024, 16, None).unwrap().0),
+            p_pool: Arc::new(Pool::new(&plain, 1024, 16).unwrap()),
             in_flight: BTreeMap::new(),
-            start: pools.placements.iter().map(|h| placement(h)).collect(),
             left: cfg.leave,
             log: Vec::new(),
         }
@@ -473,10 +382,10 @@ impl Sim {
                 }
                 Ok(())
             }
-            Step::Stage(s) => match self.stages[s].inbox.pop_front().expect("enabled") {
-                Job::Push(p) => self.push(s, &p),
-                Job::Place { rank, epoch, placement } => self.place(s, rank, epoch, &placement),
-            },
+            Step::Stage(s) => {
+                let p = self.stages[s].inbox.pop_front().expect("enabled");
+                self.push(s, &p)
+            }
             Step::Last(req) => {
                 let handoff = self.firsts.remove(&req).expect("enabled");
                 self.head.events.push_back(Event::First { req, handoff });
@@ -492,16 +401,10 @@ impl Sim {
             Out::Push(p) => {
                 self.in_flight.insert(p.req, STAGES);
                 for s in 1..STAGES {
-                    self.stages[s].inbox.push_back(Job::Push(p.clone()));
+                    self.stages[s].inbox.push_back(p.clone());
                 }
                 // The head is stage 0: it pushes from its own mirrors at once.
                 return self.push(0, &p);
-            }
-            Out::Place { rank, epoch, placement, .. } => {
-                for s in 1..STAGES {
-                    self.stages[s].inbox.push_back(Job::Place { rank, epoch, placement: placement.clone() });
-                }
-                return self.place(0, rank, epoch, &placement);
             }
             Out::Emit { req, tok } => Note::Emit { id: RequestId::new(req), tok },
             Out::Finish { req, why, cause } => {
@@ -553,12 +456,9 @@ impl Sim {
         }
         for t in &tells {
             let said = match t {
-                Tell::Grant { req, seats, .. } => format!(
-                    "D→ Grant {req} slots {:?} at epochs {:?}",
-                    seats.iter().map(|s| s.slot).collect::<Vec<_>>(),
-                    seats.iter().map(|s| s.epoch).collect::<Vec<_>>()
-                ),
-                Tell::Placed { rank, epoch, .. } => format!("D→ Placed rank {rank} at {epoch}"),
+                Tell::Grant { req, seats, .. } => {
+                    format!("D→ Grant {req} slots {:?}", seats.iter().map(|s| s.slot).collect::<Vec<_>>())
+                }
                 Tell::Tokens { step, .. } => format!("D→ Tokens {step:?}"),
                 t => format!("D→ {t:?}"),
             };
@@ -568,47 +468,13 @@ impl Sim {
         Ok(())
     }
 
-    /// Stage `s` places D rank `rank`'s mirror at `epoch`, as `Mirrors::place`.
-    fn place(&mut self, s: usize, rank: usize, epoch: u64, hex: &str) -> Checked<()> {
-        let at = self.stages[s].mirror[rank].1;
-        self.say(format!("stage {s} places rank {rank} at {epoch}"));
-        if epoch != at + 1 {
-            return Err(Violation::PrefillDied(format!("stage {s}: rank {rank}'s placement {epoch} after {at}")));
-        }
-        self.stages[s].mirror[rank] = (placement(hex), epoch);
-        Ok(())
-    }
-
-    /// Stage `s` writes every seat through its mirrors once they reach the
-    /// seats' epochs, as `Mirrors::push`: each position it writes must be
-    /// where D has it.
+    /// Stage `s` writes every seat through its mirrors, as `Mirrors::push`.
     fn push(&mut self, s: usize, p: &Push) -> Checked<()> {
         self.say(format!(
-            "stage {s} pushes {} into slots {:?} at epochs {:?}",
+            "stage {s} pushes {} into slots {:?}",
             p.req,
-            p.seats.iter().map(|s| s.slot).collect::<Vec<_>>(),
-            p.seats.iter().map(|s| s.epoch).collect::<Vec<_>>()
+            p.seats.iter().map(|s| s.slot).collect::<Vec<_>>()
         ));
-        if let Some(seat) = p.seats.iter().find(|seat| self.stages[s].mirror[seat.rank].1 < seat.epoch) {
-            let at = self.stages[s].mirror[seat.rank].1;
-            return Err(Violation::PrefillDied(format!(
-                "stage {s}: request {} at placement {} of rank {}, the mirror at {at}",
-                p.req, seat.epoch, seat.rank
-            )));
-        }
-        for seat in &p.seats {
-            let now = self.landed(seat.rank)?;
-            for &a in &self.geo.arenas[s] {
-                let bad = self
-                    .geo
-                    .positions(a, seat)
-                    .into_iter()
-                    .find(|&x| self.stages[s].mirror[seat.rank].0.at(a, x) != now.at(a, x));
-                if let Some(position) = bad {
-                    return Err(Violation::StaleMirror { stage: s, req: p.req, rank: seat.rank, arena: a, position });
-                }
-            }
-        }
         let left = self.in_flight.get_mut(&p.req).expect("a push in flight");
         *left -= 1;
         if *left == 0 {
@@ -616,15 +482,6 @@ impl Sim {
         }
         self.head.events.push_back(Event::Pushed { stage: s, req: p.req });
         Ok(())
-    }
-
-    /// D rank `q`'s placement as the rank has it: the start, then every
-    /// remap it landed.
-    fn landed(&self, q: usize) -> Checked<Placement> {
-        let remaps = self.d.exec().landed.get(q).map_or(&[][..], Vec::as_slice);
-        remaps.iter().try_fold(self.start[q].clone(), |p, r| {
-            p.apply(r, 128).map_err(|e| Violation::DecodeDied(format!("rank {q} lands a remap: {e:#}")))
-        })
     }
 
     fn died<T>(r: anyhow::Result<T>) -> Checked<T> {
@@ -857,39 +714,33 @@ fn report(name: &str, found: &(u64, Vec<usize>, Vec<String>, Violation)) {
     }
 }
 
-/// The control: no remap (slots to spare), no client leaving, no prompt P
-/// rejects. Every schedule ends cleanly, so what the other configurations
-/// find is theirs.
+/// The control: slots to spare, no client leaving, no prompt P rejects.
+/// Every schedule ends cleanly, so what the other configurations find is
+/// theirs.
 #[test]
-fn with_nothing_leaving_and_nothing_remapping_every_schedule_ends_cleanly() {
-    let cfg = Config { requests: 6, slots: 10, slot: 24, seats: 3, leave: 0, long: false };
+fn with_nothing_leaving_and_slots_to_spare_every_schedule_ends_cleanly() {
+    let cfg = Config { requests: 6, slots: 10, seats: 3, leave: 0, long: false };
     if let Some(f) = explore(cfg, 300) {
         report("control", &f);
         panic!("the control violates {:?}", f.3);
     }
 }
 
-/// Review finding 1, closed: a D rank's placement is the connection's,
-/// told in order ahead of the grant that needs it, so a grant released
-/// (P rejects its prompt) or abandoned (its client leaves) takes nothing
-/// with it, and every push writes through a mirror at its seats' epochs.
+/// A tier with one slot to grant: every second reserve is told `Busy`
+/// and asked again on `Room`, so a grant released (P rejects its prompt)
+/// or abandoned (its client leaves) frees the slot for the next, and no
+/// request is lost waiting.
 #[test]
-fn a_placement_moved_on_d_reaches_every_mirror_before_a_push_needs_it() {
+fn a_full_tier_says_busy_and_room_until_every_request_has_its_seat() {
     for leave in [0, 3] {
-        let cfg = Config { requests: 6, slots: 3, slot: 768, seats: 3, leave, long: true };
+        let cfg = Config { requests: 6, slots: 3, seats: 3, leave, long: true };
         if let Some(f) = explore(cfg, 1000) {
-            report("placement", &f);
+            report("busy", &f);
             panic!("leave {leave}: {:?}", f.3);
         }
-        let reached = (reach(cfg, 200, "D→ Placed"), reach(cfg, 200, "pushes"), reach(cfg, 200, "at epochs [1"));
-        eprintln!(
-            "leave {leave}: of 200 schedules, {} place, {} push, {} push at epoch 1",
-            reached.0, reached.1, reached.2
-        );
-        assert!(
-            reached.0 > 20 && reached.2 > 20,
-            "leave {leave}: (placed, pushed, pushed at epoch 1) in {reached:?} of 200"
-        );
+        let reached = (reach(cfg, 200, "D→ Busy"), reach(cfg, 200, "D→ Room"), reach(cfg, 200, "pushes"));
+        eprintln!("leave {leave}: of 200 schedules, {} busy, {} room, {} push", reached.0, reached.1, reached.2);
+        assert!(reached.0 > 20 && reached.1 > 20, "leave {leave}: (busy, room, pushed) in {reached:?} of 200");
     }
 }
 
@@ -898,7 +749,7 @@ fn a_placement_moved_on_d_reaches_every_mirror_before_a_push_needs_it() {
 /// to the front lands behind the head's `Start`, never ahead of it.
 #[test]
 fn an_abort_from_the_front_comes_behind_the_heads_start() {
-    let cfg = Config { requests: 4, slots: 10, slot: 24, seats: 3, leave: 4, long: false };
+    let cfg = Config { requests: 4, slots: 10, seats: 3, leave: 4, long: false };
     if let Some(f) = explore(cfg, 3000) {
         report("abort and start", &f);
         panic!("{:?}", f.3);

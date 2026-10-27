@@ -1,7 +1,7 @@
 //! The push gate: one runtime pushes pages and slots of its pooled states into
-//! other runtimes' states through mirrors of their chunks, and every byte
-//! lands where the destination's lease says. Three runtimes in one
-//! process on one GPU (a chunk's handle maps within a process as across
+//! other runtimes' states through mirrors of them, and every byte lands
+//! where the destination's lease says. Three runtimes in one process on
+//! one GPU (an allocation's handle maps within a process as across
 //! processes): A, the source; B, a whole destination; C, a destination
 //! that holds one tensor-parallel member's shard of every slot.
 //!
@@ -9,15 +9,14 @@
 //!       --manifest target/toy/toy-stateful.json --kernels target/toy/kernels [--gpu 0] [--of 4]
 //!
 //! Pages and the slot go A to B, slot parts A to C (each member's part
-//! into its own slot of C), then B remaps a page chunk into a slot, A
-//! re-places its mirror of B and pushes into the new slot, and B pushes
-//! that slot back into A, which reads it: a push into a remapped object
-//! lands. No weights are loaded: the states are all this touches.
+//! into its own slot of C), then B pushes its slot back into a fresh slot
+//! of A, which reads it. No weights are loaded: the states are all this
+//! touches.
 //! `KERN_NO_FABRIC=1` runs it over local handles instead of fabric ones.
 //!
 //! `--cross` runs the destination in a second process instead: it leases,
-//! writes its pool handle, placement and ids to a directory in their wire
-//! forms, and checks the bytes once the source says it has pushed.
+//! writes its pool handle and ids to a directory in their wire forms, and
+//! checks the bytes once the source says it has pushed.
 //!
 //! `--rows` is the gate for rows dealt over a group: see `rows.rs`.
 
@@ -27,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kern_manifest::types::Manifest;
-use kern_pool::{runs, Denied, Lease, Placement};
+use kern_pool::{runs, Lease};
 use kern_runtime::{Capacity, Error, MappedPool, PoolHandle, Runtime, Split};
 
 /// The byte at `i` of a region whose pattern base is `base`.
@@ -51,21 +50,10 @@ fn shard(m: &Manifest, of: u64) -> Manifest {
     m
 }
 
-fn lease_slot(rt: &mut Runtime) -> Result<Lease, Error> {
-    loop {
-        match rt.lease_slot() {
-            Err(Error::Denied(Denied::Remapping)) => rt.settle()?,
-            r => return r,
-        }
-    }
-}
-
 fn mirror(from: &Runtime, of: &Runtime, what: &str) -> Result<MappedPool, Error> {
     let h = of.export_pool()?;
     println!("{what}: {} handles", if h.to_bytes().is_some() { "fabric" } else { "local" });
-    let mut m = from.map_pool(&h, what)?;
-    from.place(&mut m, &of.placement())?;
-    Ok(m)
+    from.map_pool(&h, what)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -108,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|(_, s)| s.is_per_seq())
         .map(|(n, s)| (n.clone(), s.bytes_per_seq))
         .ok_or("the manifest has no per-sequence state")?;
-    let cap = Capacity { tokens: Some(1 << 14), seqs: 4, landings: 0 };
+    let cap = Capacity { tokens: Some(1 << 14), slots: 4, landings: 0 };
     if let Some(dir) = destination {
         let mut b = Runtime::load(&m, Some(&kernels), gpu, Some(cap), None)?;
         return be_destination(&mut b, &paged, &slotted, slot_bytes, unit, &dir);
@@ -141,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lb = b.lease(8 * unit as usize)?;
     let (bp, b_slot) = (lb.page_ids().to_vec(), lb.seq_slot().unwrap());
     b.synchronize()?;
-    let mut mb = mirror(&a, &b, "B")?;
+    let mb = mirror(&a, &b, "B")?;
     let pairs: Vec<(i32, i32)> =
         [(3, 1), (5, 2), (8, 3), (9, 4), (10, 5), (11, 6)].map(|(s, d)| (ap[s], bp[d])).to_vec();
     let folded = runs(&pairs.iter().map(|&(s, d)| (s, d as u64)).collect::<Vec<_>>());
@@ -162,7 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     a.push_slot(&slotted, a_slot, b_slot, &mb)?;
 
     // C: one slot per member, each taking that member's part of A's slot.
-    let lc: Vec<Lease> = (0..of).map(|_| lease_slot(&mut c)).collect::<Result<_, _>>()?;
+    let lc: Vec<Lease> = (0..of).map(|_| c.lease_slot()).collect::<Result<_, _>>()?;
     c.synchronize()?;
     let mc = mirror(&a, &c, "C")?;
     let segments = [(1, slot_bytes / 4), (4, slot_bytes / 16)];
@@ -215,31 +203,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         split.copies(lines, 0).len()
     );
 
-    // B trades a page chunk for slots; A follows by placement and pushes into the new slot.
-    drop(lb);
-    let before = b.placement();
-    let mut held = Vec::new();
-    while b.placement() == before {
-        held.push(lease_slot(&mut b)?);
-        if held.len() > 4096 {
-            return Err("B never remapped a chunk".into());
-        }
-    }
-    let fresh = held.last().unwrap().seq_slot().unwrap();
-    b.synchronize()?;
-    println!("B: {} slots leased, {} remaps; slot {fresh} sits on a chunk that held pages", held.len(), b.remaps());
-    a.place(&mut mb, &b.placement())?;
-    a.push_slot(&slotted, a_slot, fresh, &mb)?;
-    a.mark()?.wait()?;
-    let la2 = lease_slot(&mut a)?;
+    // B pushes its slot back into a fresh slot of A, which reads it.
+    let la2 = a.lease_slot()?;
     let back = la2.seq_slot().unwrap();
     a.synchronize()?;
     let ma = mirror(&b, &a, "A")?;
-    b.push_slot(&slotted, fresh, back, &ma)?;
+    b.push_slot(&slotted, b_slot, back, &ma)?;
     b.mark()?.wait()?;
     b.fault()?;
     assert!(a.read_state_at(&slotted, back as usize * slot_bytes as usize, slot_bytes as usize)? == slot);
-    println!("remapped slot: {slot_bytes} bytes there and back identical");
+    println!("slot back: {slot_bytes} bytes there and back identical");
     println!("PASS");
     Ok(())
 }
@@ -277,7 +250,6 @@ fn be_destination(
     b.synchronize()?;
     let h = b.export_pool()?.to_bytes().ok_or("local handles do not cross a process")?;
     publish(&dir.join("pool"), &h)?;
-    publish(&dir.join("placement"), &b.placement().to_bytes())?;
     let ids: Vec<i32> = l.page_ids().iter().copied().chain(l.seq_slot()).collect();
     publish(&dir.join("ids"), &ids.iter().flat_map(|i| i.to_le_bytes()).collect::<Vec<_>>())?;
     appear(&dir.join("pushed"))?;
@@ -327,10 +299,8 @@ fn push_across(
     a.write_state_at(slotted, a_slot as usize * slot_bytes as usize, &pattern(7 << 48, slot_bytes))?;
     let ids: Vec<i32> = appear(&dir.join("ids"))?.as_chunks::<4>().0.iter().map(|&w| i32::from_le_bytes(w)).collect();
     let h = PoolHandle::from_bytes(&appear(&dir.join("pool"))?).ok_or("not a pool handle")?;
-    let p = Placement::from_bytes(&appear(&dir.join("placement"))?).ok_or("not a placement")?;
     let t = Instant::now();
-    let mut mp = a.map_pool(&h, "destination process")?;
-    a.place(&mut mp, &p)?;
+    let mp = a.map_pool(&h, "destination process")?;
     let mapped = t.elapsed();
     let pairs: Vec<(i32, i32)> = ap.iter().copied().zip(ids[..4].iter().copied()).collect();
     for (name, _) in paged {
@@ -339,10 +309,7 @@ fn push_across(
     a.push_slot(slotted, a_slot, ids[4], &mp)?;
     a.mark()?.wait()?;
     a.fault()?;
-    println!(
-        "source process: pool mapped and placed in {mapped:?}, pages {pairs:?} and slot {a_slot} -> {} pushed",
-        ids[4]
-    );
+    println!("source process: pool mapped in {mapped:?}, pages {pairs:?} and slot {a_slot} -> {} pushed", ids[4]);
     publish(&dir.join("pushed"), b"")?;
     let status = child.wait()?;
     std::fs::remove_dir_all(&dir)?;

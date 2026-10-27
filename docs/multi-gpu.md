@@ -524,25 +524,17 @@ reduce-scatter 52 + all-gather 36（11%）、bf16-out GEMM 41、FMHA 30（3.8%�
 ### prefill → decode：把页与 slot 推进另一个进程的 state（2026-10-09）
 
 prefill 一个 prompt 之后，流水线的每一级把自己那些层的 KV 页和 per-seq slot 拷进 decode
-rank 的 state（`crates/kern-runtime/src/push.rs`）。难点在 pooled state 不是一块分配：
-它是一段保留一次的地址，背后是所有 pooled state 共用、remap 线程在页与 slot 之间搬的物理块
-（K1b）。所以导出的是**块**而不是 state：
+rank 的 state（`crates/kern-runtime/src/push.rs`）。每个 pooled state 是一块装载时定死大小的
+`alloc_vmm`（2026-10-27 起；之前是所有 pooled state 共用、remap 线程在页与 slot 之间搬的物理块，
+导出的是块而不是 state，镜像要跟着 `Placement` 的 epoch 重新 place），所以导出的就是 state：
 
-- `Runtime::export_pool() -> PoolHandle`：每个物理块的 handle（设备支持就是 fabric，否则
-  `Local`，与 `alloc_vmm` 同一套回退；物理块从此按 fabric 类型 `cuMemCreate`）+ 每个 pooled
-  state 的名字、类别、每页 / 每 slot 字节、保留的块位置数；`to_bytes` / `from_bytes` 是线格式。
-- `Runtime::placement() -> Placement`（`kern-pool`）：每个块位置上是哪个块。pusher 的
-  `map_pool(&handle)` 导入全部块、每个 state 保留同样大小的地址、什么都不 map；`place(&mut mirror,
-  &placement)` 跑"旧 placement → 新 placement"的 `Remap`（变了的位置先 unmap 再 map 再 access），
-  于是镜像里第 p 页 / 第 j 个 slot 的偏移与目标完全相同。
-- 契约：push 只写目标**持有**的对象（它租下的页和 slot），且镜像用的是这次 lease **之后**取的
-  placement。remap 只从没人持有的对象上拆块，所以持有着的对象一直在那份 placement 说的地方
-  （`kern-pool/tests/placement.rs` 的 property test：镜像按 remap 跟随池子，持有对象的块在任何
-  remap 之后不动）。别的写法（没租的、placement 之后才租的）是未定义：未映射的位置 fault，过期的
-  位置写进别的对象。目标的 lease 在自己的 stream 上清零 slot，所以目标在 stream 过了 lease 之后
-  才把 ids 和 placement 发出去。只有 placement 真的变了才需要发新的：`remaps()` 动了不等于
-  位置动了，比如一次只授权访问、不挪块的 remap。kern-serve 把每个 rank 的 placement 当成
-  连接上的有序快照（epoch），每个 seat 写明自己所在的 epoch（`docs/protocol.md`）。
+- `Runtime::export_pool() -> PoolHandle`：每个 pooled state 的名字、类别、每页 / 每 slot 字节、
+  对象数和它那块分配的 `PeerHandle`（设备支持就是 fabric，否则 `Local`，与 `alloc_vmm` 同一套回退）；
+  `to_bytes` / `from_bytes` 是线格式。
+- `Runtime::map_pool(&handle) -> MappedPool`：逐 state 导入（`device::import`），于是镜像里第 p 页 /
+  第 j 个 slot 的偏移与目标完全相同，连接期间不会变。
+- 契约：push 只写目标**持有**的对象（它租下的页和 slot）。目标的 lease 在自己的 stream 上清零 slot，
+  所以目标在 stream 过了 lease 之后才把 ids 发出去。别的写法（没租的）是未定义：写进别的对象。
 - `push_pages(state, &[(src, dst)], &mirror)`：连续的对用 `kern_pool::runs`（与 host 层同一个
   函数）折成一次 memcpy；`push_slot(state, src, dst, &mirror)` 整 slot 一次 memcpy；
   `push_slot_part(state, src, dst, &split, k, &mirror)`：目标按头把 state 切给 tp 组 `of` 个成员

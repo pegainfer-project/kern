@@ -19,15 +19,15 @@ use kern_serve::ranks::{Act, Answer, Order};
 use pegainfer_frontend::engine::{EosPolicy, FinishReason, StopPolicy};
 
 mod common;
-use common::{dealt, dealt_with, replicated, replicated_of, replicated_with, Rand};
+use common::{dealt, replicated, replicated_with, Rand};
 
 /// The fake model: a row fed `t` hands back `next(t)`, whatever its position.
 fn next(t: i64) -> i64 {
     t * 7 % 97 + 1
 }
 
-/// Ranks that land every remap the moment they hear it, answer every
-/// row with [`next`], and remember every slot they were told to zero.
+/// Ranks that answer every row with [`next`] and remember every slot
+/// they were told to zero.
 #[derive(Default)]
 struct Fake {
     zeroed: Vec<(usize, i32)>,
@@ -41,12 +41,11 @@ impl Run for Fake {
             .map(|(q, o)| {
                 self.zeroed
                     .extend(o.acts.iter().filter_map(|a| if let Act::Zero(s) = a { Some((q, *s)) } else { None }));
-                let remaps = o.acts.iter().filter(|a| matches!(a, Act::Remap(_))).count() as u64;
                 let tokens = o
                     .item
                     .as_ref()
                     .map_or(Vec::new(), |i| i.rows["token_ids"].ints().unwrap().iter().map(|&t| next(t)).collect());
-                Answer { tokens, remaps, ..Answer::default() }
+                Answer { tokens, ..Answer::default() }
             })
             .collect())
     }
@@ -70,7 +69,7 @@ fn pools4() -> Pools {
 fn the_decode_tier_says_what_a_stage_mirrors_and_pushes() {
     let p = pools4();
     let states = BTreeMap::from([("kv.0".into(), paged(16)), ("kv.1".into(), paged(16)), ("kda".into(), seq(24))]);
-    assert_eq!((p.group, p.dealt, p.page, p.max_seq_tokens, p.placements.len()), (4, true, 16, 192, 4));
+    assert_eq!((p.group, p.dealt, p.page, p.max_seq_tokens, p.handles.len()), (4, true, 16, 192, 4));
     assert_eq!((p.states, p.heads), (states, BTreeMap::from([("kda".into(), vec![(1, 64), (2, 16)])])));
 }
 
@@ -143,13 +142,11 @@ fn a_push_lands_every_position_once_on_the_member_that_holds_it() {
                 rank: 10 + m,
                 pages: scattered(&mut rand, local(m).div_ceil(page as usize)),
                 slot: Some(3 + m as i32),
-                epoch: 0,
             })
             .collect();
         let segs = vec![(1, 8 * w as u64), (3, 4 * w as u64)];
         let d = Pools {
             handles: vec![],
-            placements: vec![],
             states: BTreeMap::new(),
             group: w,
             dealt,
@@ -210,11 +207,10 @@ fn a_seat_is_adopted_on_every_member_and_decodes_to_max_tokens() {
     // ⌈40 / 4⌉ = 10 local positions: a page and a slot on each member.
     let t = d.ask(Ask::Reserve { req: 1, tokens: 40 }).unwrap();
     let [Tell::Grant { req: 1, seats, load }] = t.as_slice() else { panic!("{t:?}") };
-    let shape: Vec<(usize, usize, bool, u64)> =
-        seats.iter().map(|s| (s.rank, s.pages.len(), s.slot.is_some(), s.epoch)).collect();
+    let shape: Vec<(usize, usize, bool)> = seats.iter().map(|s| (s.rank, s.pages.len(), s.slot.is_some())).collect();
     assert_eq!(
         (shape, d.seated(), (load.seats, load.pages)),
-        (vec![(0, 1, true, 0), (1, 1, true, 0), (2, 1, true, 0), (3, 1, true, 0)], vec![1], (1, 4))
+        (vec![(0, 1, true), (1, 1, true), (2, 1, true), (3, 1, true)], vec![1], (1, 4))
     );
     // Nothing runs before the start; the pads' zeroing lands.
     assert_eq!(d.step().unwrap(), vec![]);
@@ -236,7 +232,7 @@ fn a_seat_is_adopted_on_every_member_and_decodes_to_max_tokens() {
 }
 
 #[test]
-fn a_full_tier_is_busy_until_a_seat_frees_or_a_remap_lands() {
+fn a_full_tier_is_busy_until_a_seat_frees() {
     let mut d = Decoder::new(replicated(2, 1), Fake::default(), 1).unwrap();
     assert!(matches!(d.ask(Ask::Reserve { req: 1, tokens: 20 }).unwrap()[..], [Tell::Grant { req: 1, .. }]));
     assert_eq!(d.ask(Ask::Reserve { req: 2, tokens: 20 }).unwrap(), vec![Tell::Busy { req: 2 }]);
@@ -258,31 +254,16 @@ fn a_full_tier_is_busy_until_a_seat_frees_or_a_remap_lands() {
     );
     assert!(d.ask(Ask::Reserve { req: 4, tokens: 20 }).is_err(), "reserved twice");
 
-    // Three slots a member (the null one, the pad's, one more), each three
-    // chunks: the second seat waits for a slot carved out of free pages, a
-    // member at a time (an adopt stops at the first member that has to
-    // wait), each remap's landing makes room, and the grant follows both
-    // ranks' next placements, its seats in them.
-    let mut d = Decoder::new(replicated_of(dealt_with(2, 768), 2, 1, 3), Fake::default(), 8).unwrap();
+    // Three slots a member (the null one, the pad's, one more): the second
+    // seat waits for the first to free its slot, nothing else makes one.
+    let mut d = Decoder::new(replicated_with(2, 1, 3), Fake::default(), 8).unwrap();
     assert!(matches!(d.ask(Ask::Reserve { req: 1, tokens: 20 }).unwrap()[..], [Tell::Grant { .. }]));
-    for _ in 0..2 {
-        assert_eq!(
-            (d.ask(Ask::Reserve { req: 2, tokens: 20 }).unwrap(), d.busy()),
-            (vec![Tell::Busy { req: 2 }], true)
-        );
-        assert_eq!(d.step().unwrap(), vec![Tell::Room]);
-    }
+    assert_eq!((d.ask(Ask::Reserve { req: 2, tokens: 20 }).unwrap(), d.busy()), (vec![Tell::Busy { req: 2 }], true));
+    assert_eq!((d.step().unwrap(), d.step().unwrap()), (vec![], vec![]));
+    assert_eq!(d.ask(Ask::Abort { req: 1 }).unwrap(), vec![Tell::Room]);
     let t = d.ask(Ask::Reserve { req: 2, tokens: 20 }).unwrap();
-    let [Tell::Placed { rank: 0, epoch: 1, .. }, Tell::Placed { rank: 1, epoch: 1, .. }, Tell::Grant { seats, .. }] =
-        t.as_slice()
-    else {
-        panic!("{t:?}")
-    };
-    assert_eq!(seats.iter().map(|s| (s.rank, s.epoch)).collect::<Vec<_>>(), [(0, 1), (1, 1)]);
-    // A placement that did not move is not told again.
-    let t =
-        d.ask(Ask::Abort { req: 2 }).unwrap().into_iter().chain(d.ask(Ask::Reserve { req: 3, tokens: 20 }).unwrap());
-    assert!(matches!(t.collect::<Vec<_>>()[..], [Tell::Grant { .. }]));
+    let [Tell::Grant { seats, .. }] = t.as_slice() else { panic!("{t:?}") };
+    assert_eq!(seats.iter().map(|s| (s.rank, s.slot)).collect::<Vec<_>>(), [(0, Some(2)), (1, Some(2))]);
 }
 
 #[test]
@@ -300,7 +281,7 @@ fn a_tier_takes_one_reserve_at_a_time_none_while_busy_and_names_itself_in_its_pu
     assert_eq!(h.hear(Tell::Room).unwrap(), vec![]);
     assert!(h.ready());
     let plain = Manifest::from_json(include_str!("../../kern-manifest/tests/fixtures/plain.json")).unwrap();
-    let pool = Arc::new(Pool::new(&plain, 64, 1024, 16, None).unwrap().0);
+    let pool = Arc::new(Pool::new(&plain, 1024, 16).unwrap());
     h.admitted(1);
     let outs = h.prefilled(1, &pool.lease(10).unwrap(), 10, Sampling::GREEDY);
     assert!(matches!(&outs[..], [Out::Push(p)] if (p.req, p.tier, p.len) == (1, 1, 10)), "{outs:?}");
@@ -409,7 +390,7 @@ impl World {
             h: Handoffs::new(STAGES, 0),
             r: Relays::new(),
             d: Decoder::new(replicated_with(2, 1, 6), Fake::default(), 3).unwrap(),
-            pool: Arc::new(Pool::new(&plain, 64, 1024, 16, None).unwrap().0),
+            pool: Arc::new(Pool::new(&plain, 1024, 16).unwrap()),
             waiting: clients.keys().copied().collect(),
             clients,
             prefilling: BTreeMap::new(),
@@ -465,8 +446,6 @@ impl World {
                     assert!(self.h.standing(req) == Standing::Unasked && !self.r.holds(req), "{req} handed over twice");
                     self.r.start(req, relay);
                 }
-                // Its decoder's 24-byte slots never move a chunk.
-                Out::Place { .. } => panic!("a placement moved"),
                 Out::Reject { req, why } => {
                     assert_eq!(self.waiting.pop_front(), Some(req), "a reject of {req}, not the front");
                     let c = self.clients.get_mut(&req).unwrap();

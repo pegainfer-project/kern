@@ -48,7 +48,7 @@ fn e4m3_operands_land_the_product_scaled_by_both_device_scales() {
     });
     let verified = Verified::from_json(&manifest.to_string()).unwrap();
     let mut rt =
-        Runtime::load(&verified, None, 0, Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }), None).unwrap();
+        Runtime::load(&verified, None, 0, Some(Capacity { tokens: Some(1), slots: 1, landings: 0 }), None).unwrap();
     // a is a permutation (one 1.0 per row at column 7i mod K), w cycles through -2..=2
     let a: Vec<u8> = (0..M * K).map(|i| e4m3(if i % K == (i / K * 7) % K { 1.0 } else { 0.0 })).collect();
     let wv = |n: usize, k: usize| ((n + k) % 5) as f32 - 2.0;

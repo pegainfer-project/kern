@@ -93,7 +93,7 @@ fn main() {
                     &verified,
                     Some(&kernels),
                     gpu,
-                    Some(kern_runtime::Capacity { tokens: Some(1), seqs: 1, landings: 0 }),
+                    Some(kern_runtime::Capacity { tokens: Some(1), slots: 1, landings: 0 }),
                     Some(&topo),
                 )?;
                 let mine = rt.export_handles()?;

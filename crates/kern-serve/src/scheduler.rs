@@ -74,11 +74,8 @@
 //!   accepted past `max_tokens` or the stop leaves a state no next turn
 //!   continues, which is not kept. The prompt's snapshot is an
 //!   optimization, never a reason to fail its request: `Busy` makes room
-//!   as a lease does, `Remapping` waits for the slot being carved (this
-//!   is the one place that waits: the state cannot be snapshotted later,
-//!   and the wait is the remap's own milliseconds), and when nothing is
-//!   left to make room with it is skipped. A `Busy` lease makes room and
-//!   retries until it fits or
+//!   as a lease does, and when nothing is left to make room with it is
+//!   skipped. A `Busy` lease makes room and retries until it fits or
 //!   nothing is left: the least recently hit snapshot is parked into the
 //!   host tier (`--host-gib`: pinned DRAM per rank, `Ranks::park`, all of
 //!   its members' pieces or none; the coldest parked ones are dropped when
@@ -573,8 +570,7 @@ impl KernScheduler {
                     self.waking.push_back((q, r));
                     continue;
                 }
-                Err(Denied::Busy) => break,      // wait for pages / a slot
-                Err(Denied::Remapping) => break, // pages or a slot are on their way
+                Err(Denied::Busy) => break, // wait for pages / a slot
                 Err(Denied::ExceedsRow { limit }) => {
                     ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
                     self.waiting.pop_front();
@@ -700,11 +696,8 @@ impl KernScheduler {
 
     /// The `key.len()` tokens `row` holds, which `key` names, as a snapshot
     /// of its recurrent state. `Busy` waits for a park's pages or makes
-    /// room and retries, `Remapping` waits for the slot on its way (the
-    /// prefill just read its output back, so the stream the remap waits on
-    /// is drained; what is left is the remap's own milliseconds); with
-    /// nothing left to make room with or any other denial, the request runs
-    /// on without it.
+    /// room and retries; with nothing left to make room with or any other
+    /// denial, the request runs on without it.
     fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId) -> Result<()> {
         loop {
             match self.ranks.checkpoint(row, key.len()) {
@@ -716,7 +709,6 @@ impl KernScheduler {
                 Ok(None) => return Ok(()),
                 Err(Denied::Busy) if self.ranks.parking() => self.settle()?,
                 Err(Denied::Busy) if self.make_room()? => {}
-                Err(Denied::Remapping) => self.settle()?,
                 Err(d) => {
                     debug!(request = %id, tokens = key.len(), denied = %d, "history not kept");
                     self.stats.prompt_skips += 1;
@@ -734,7 +726,7 @@ impl KernScheduler {
         self.ranks.heard(&answers)
     }
 
-    /// Every remap and host transfer landed, on every rank.
+    /// Every host transfer landed, on every rank.
     fn settle(&mut self) -> Result<()> {
         while self.ranks.busy() {
             self.poll(true)?;
@@ -952,7 +944,6 @@ impl KernScheduler {
                 wake_tokens = host.map(|_| st.wake_tokens),
                 slots_used = self.ranks.has_seq_state().then_some(slots_used),
                 slots = self.ranks.has_seq_state().then_some(slots),
-                remaps = self.ranks.remaps(),
                 accepted = self.counters.as_ref().map(|_| round((accepted + drafts) as f64 / drafts.max(1) as f64, 100.0)),
                 accept_pct =
                     self.counters.as_ref().map(|_| round(accepted as f64 * 100.0 / draft_tokens.max(1) as f64, 1.0)),

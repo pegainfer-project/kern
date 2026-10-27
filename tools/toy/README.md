@@ -56,12 +56,12 @@ PP2 当 P、`toy-dcp` 当 D。`test_model.py` 在 CPU 上锁住这两件事。
 每种再出一份 `-ref`：同样的 manifest，cubin 换成 128 线程块的构建，做 `kern test` 的
 A——五种形状的每个 kernel 都过 A/B（`toy-dcp` 的是 twin 的 `-ref`；多 rank 的两份不做 A/B，
 e2e 拿 twin 对它们）。尺寸在 `gen.py` 里改；kernel 写满、读满每个槽
-和每条 line，runtime 的分页、park 拷贝、slot remap 按真尺寸做。
+和每条 line，runtime 的分页、park 拷贝按真尺寸做。
 
 ## 它测什么、不测什么
 
 测 state 的路径：分页、每页 checkpoint、请求末快照、前缀命中、park 到 DRAM 再醒、slot
-增长的 remap、投机轮的 count 与回滚、`--rows 1`、chunked prefill、graph 捕获。每个门
+用满时的淘汰、投机轮的 count 与回滚、`--rows 1`、chunked prefill、graph 捕获。每个门
 都是逐 token 精确的，包括真模型上只能"报不门"的 warm 对 cold 与醒来的对 cold。
 `toy-dcp*` 测复制组（kern-serve 的 `Ranks` 复制模式）：每个位置只由一个成员写、本地
 seq_len 可以是 0（L < w）、本地页表跨页、pad 页没人读、NCCL 在图里、什么都不留。

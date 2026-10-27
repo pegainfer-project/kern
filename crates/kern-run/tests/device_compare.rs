@@ -47,7 +47,7 @@ fn runtime() -> Runtime {
         &verified,
         Some(&dir),
         gpu,
-        Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }),
+        Some(Capacity { tokens: Some(1), slots: 1, landings: 0 }),
         None,
         &scope,
     )

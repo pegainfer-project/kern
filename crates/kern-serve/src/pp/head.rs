@@ -280,8 +280,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         (c, Some(f)) => Some(c.map_or(f * unit, |c| c.min(f * unit))),
         (c, None) => c,
     };
-    let seqs = (h.max_seqs + 1) as u64;
-    let mut rt = Runtime::load(&m, h.kernels.as_deref(), h.gpu, Some(Capacity { tokens, seqs, landings: 0 }), None)?;
+    let slots = crate::slots_for(h.max_seqs);
+    let mut rt = Runtime::load(&m, h.kernels.as_deref(), h.gpu, Some(Capacity { tokens, slots, landings: 0 }), None)?;
     rt.set_eager(h.eager);
     weights.bind(&mut rt)?;
     let p = Protocol::check_unsampled(&rt.manifest)?;
@@ -545,7 +545,7 @@ impl PpHead {
                     }
                     continue;
                 }
-                Err(Error::Denied(Denied::Busy | Denied::Remapping)) => break,
+                Err(Error::Denied(Denied::Busy)) => break,
                 Err(Error::Denied(Denied::ExceedsRow { limit })) => {
                     Some(RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit })
                 }
@@ -572,14 +572,6 @@ impl PpHead {
             match o {
                 Out::Ask(a) => send(&mut self.decode[tier].d, &a)?,
                 Out::Push(p) => self.push(&p)?,
-                Out::Place { tier, rank, epoch, placement } => {
-                    let job = Job::Place { tier, rank, epoch, placement };
-                    for w in &mut self.stages {
-                        send(w, &job)?;
-                    }
-                    let Job::Place { placement, .. } = &job else { unreachable!("built above") };
-                    self.decode[tier].mirrors.place(&self.rt, rank, epoch, placement)?;
-                }
                 Out::Emit { req, tok } => self.note(Note::Emit { id: RequestId::new(req), tok })?,
                 Out::Finish { req, why, cause } => {
                     let id = RequestId::new(req);
@@ -805,7 +797,6 @@ impl PpHead {
         self.retire_gone()?;
         self.admit()?;
         self.issue()?;
-        ensure!(self.rt.remaps() == 0, "the head's pool remapped its chunks, which the stages cannot follow");
         let pool = (self.rt.pages_used() as u64, self.cache.prefix_cache());
         if pool != self.pool_told {
             self.pool_told = pool;

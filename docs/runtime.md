@@ -21,7 +21,7 @@ cubin 算 sha256，**只装载 manifest `modules` 表点名的哈希**（其余�
 （文件名不参与），**同一模块里同名的 Triton 多 constexpr 实例靠
 `cuFuncGetParamInfo` 参数布局与 manifest params 比对来消歧**（phase-2
 ABI 校验兼做实例选择，绕开了 capture 缺 launch→module 映射的坑）→ 按
-var max 分配全部 buffer / 分配 state（分页与 per-seq 的走下面的块池）→
+var max 分配全部 buffer / 分配 state（分页与 per-seq 的各一块定长的 VMM 分配，见下）→
 按每个 weight buffer 的 `bind` 从 checkpoint 里拷张量段拼出 buffer
 （张量来自一个 `Tensors`，见下「权重来源」；scratch 按 impl 声明另行私有分配）
 → 同一次 `load_weights` 里逐 call 跑 `derive` program，`source` 张量随用随传、
@@ -30,39 +30,24 @@ call 表：接口实参解析一次，逐 launch 按 `args` 连线转发/接 scr
 填字面量后 raw `cuLaunchKernel`（实参 staging 成小端 u64 slot；>48KB
 动态 shmem 自动 `cuFuncSetAttribute`）。
 
-**state 内存（K1b）**：定长 state 按声明分配；分页 state（`bytes_per_token`）与
-per-seq state（`bytes_per_seq`）**共用一份物理块预算**（`kern-pool`：`chunks.rs` 记块，
-`pages.rs` 的 `Pool` 在其上记页与 slot）。每个这样的 state 保留一段虚拟地址
-（`cuMemAddressReserve`，一次保留永不搬，`DeviceBuf::Reserved`），页与 slot 各是
-地址上的一段块区间；物理块 `cuMemCreate` 一次建齐（设备支持就带 fabric handle，另一个进程可以镜像整个池、往持有的页和 slot 里推，见 multi-gpu.md「prefill → decode」），块大小是 2 MiB 粒度的整数倍、
-不超过最小对象的一半、封顶 64 MiB（qwen3.8 24 MiB）；最小对象连两个粒度都不到时
-「对象跨两块」本就不成立，直接取封顶 64 MiB（qwen3-4b / K3 / DSV4.1）——driver 对池子
-的每个操作按块数计费且全 tray 串行，DSV4.1 的 102 GiB 从 52245 块 13–16 s 降到 1632
-块 0.5 s（tray18，2026-09-14）。谁用谁 map。块留在上次用它的地方：还回的页还是页、还回的 slot 还是 slot；只有一类用光时
-才从**另一类的空闲对象**上拆块（`Remap`：先 unmap 再 map 再 `cuMemSetAccess`；
-拆最高编号的、补最低编号的空位；跨对象边界的块按使用计数共享，最后一个用户走了
-才 unmap）。计划由 runtime 的后台线程执行：先等 stream 上记的事件（此前入队的
-kernel 都过了才 unmap），完成后主线程在下一次 `lease` / `checkpoint` /
-`lease_from` 里收下、把新 map 的块在 stream 上清零，新页 / 新 slot 才可租。同一
-时刻最多一个计划在飞；`Runtime::settle` 阻塞到在飞的和随后计划的都落地，给过不了
-这一刻的调用方（history 末尾的 checkpoint）用。租不到时三种拒绝分工明确：`Remapping`（计划已定，落地后再
-问，别淘汰）、`Busy`（有被持有的对象挡路，淘汰点什么）、`ExceedsPool`（怎么摆都
-放不下）。`seqs.max` 只限一步 batch 的行数；slot 从 `seqs.max + 2` 个起按需长
-（session 睡着时它的 checkpoint 拿着 slot，活跃请求再要就从空闲页拆），
-`index_into` per-seq state 的域上界是运行时的 slot 上限（`Provision`）。预算：
-调用方以 `Capacity { tokens, seqs }` 报自己的数——`seqs` 是它要同时活着的序列数
-（kern-serve：每 rank `(max_seqs + 1) × t`，pad 也算一条），**不是 manifest 的
-`seqs.max`**（那是一步能寻址的行数；93 层 K3 的 slot 449 MB，按 `rows.max` 256 预留
-就是 115 GB，EP4 直接 OOM）；`tokens` 给则 = tokens × Σbytes_per_token +
-(seqs+2) × Σbytes_per_seq，tokens 向下对齐到 manifest 里 `index_into` 该 state 的
-最大页单位（block table 的 `stride`），不会出现半页；`tokens: None`（kern-serve
-不给 `--capacity` 时的默认）则在 buffer、scratch 和定长 state 都分完之后
-`cuMemGetInfo`，剩余显存减
-`HEADROOM`（1 GiB）全给；每个 pooled state 自成一个整块的 arena，预算按 state
-逐个向上取整（按 Σ 取整一次会让每个 state 的最后一页 / 最后一个 slot 差一块）。
-整块读写 state（`read_state` / `write_state_at` / `zero_states`，kern test 用）
-只在第一次 remap 之前有效；program 里 state 指针和铺满维（`dims` 末维 0）的
-tensormap 按整段预留编码，remap 新做出的页和 slot 在装载时编好的图里就可寻址。
+**state 内存（K1b，2026-10-27 起静态）**：定长 state 按声明分配；分页 state（`bytes_per_token`）与
+per-seq state（`bytes_per_seq`）各是一块 `alloc_vmm`（设备支持就带 fabric handle，另一个进程可以镜像
+整个池、往持有的页和 slot 里推，见 multi-gpu.md「prefill → decode」），大小在装载时定死：
+`kern-pool` 的 `Pool::new(m, pages, slots)` 只记页与 slot 的空闲表，不知道字节。租不到时两种拒绝：
+`Busy`（空池放得下、现在被持有的对象挡路，淘汰点什么再问）、`ExceedsPool`（怎么摆都放不下）。
+`seqs.max` 只限一步 batch 的行数；`index_into` per-seq state 的域上界是运行时的 slot 数（`Provision`）。
+预算：调用方以 `Capacity { tokens, slots }` 报自己的数——`slots` 是它要同时持有 state 的序列数，
+runtime 再加 slot 0（kern-serve：每 rank `(max_seqs + 1) × t`，pad 也算一条；slot 是在跑的请求的资源，
+请求结束后留给下一轮命中的 checkpoint 只在没有请求要 slot 时占着；`lib.rs` 的 `slots_for`），**不是 manifest 的 `seqs.max`**
+（那是一步能寻址的行数；93 层 K3 的 slot 449 MB，按 `rows.max` 256 预留就是 115 GB，EP4 直接 OOM）；
+`tokens` 给则页数 = tokens / 页单位（manifest 里 `index_into` 该 state 的最大页单位，block table 的
+`stride`），不会出现半页；`tokens: None`（kern-serve 不给 `--capacity` 时的默认）则在 buffer、scratch、
+定长 state 和 slot 都分完之后 `cuMemGetInfo`，剩余显存减 `HEADROOM`（1 GiB）全给页。
+之前的做法（2026-09-02 至 2026-10-27）是页与 slot 共用一份物理块预算、一类用光时从另一类的空闲对象上
+拆块 remap（后台线程、`Remapping` 拒绝、`Placement` epoch 随 P/D 协议传播）；删掉它是因为 prefill
+将池化、GPU 上的 per-seq state 只是在跑的请求的运行时资源，而 remap 让每个 state 的地址随时间变、
+镜像要跟 epoch、`kern test` 的整块读写只在第一次 remap 之前有效——一套机制换回的只是 slot 数不用
+事先给。整块读写 state（`read_state` / `write_state_at` / `zero_states`，kern test 用）现在总是有效。
 `Runtime::lease(tokens)` 一次租下 KV 页和每个 per-seq state 的一个 slot
 （租时在 stream 上清零），`Lease::seq_line(table, r)` 给出 line 表的项（宽表
 `[lines, seqs, w]` 的格宽由 `seq_width` 给出，caller 决定 line 落在哪一项）；

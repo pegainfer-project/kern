@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use kern_pool::{runs, Checkpoint, Copies, Denied, Host, Lease, Parked, Pool};
 
-use common::{hybrid4, hybrid_pool4, land, paged4, pool4, pool_of, Rand};
+use common::{hybrid4, hybrid_pool4, paged4, pool4, pool_of, Rand};
 
 /// A block of `pages` host pages and two host slots.
 fn host(pages: u64) -> Arc<Host> {
@@ -59,7 +59,7 @@ fn a_page_parked_already_is_shared_not_copied() {
 
 #[test]
 fn full_keeps_nothing_and_the_lowest_free_unit_goes_first() {
-    let p = pool_of(&hybrid4(), 4, 16, 4); // 4 slots, 8 pages
+    let p = pool_of(&hybrid4(), 8, 4); // 4 slots, 8 pages
     let h = Arc::new(Host::new(3, 1));
     let mut l = p.lease(12).unwrap();
     let (a, _) = p.checkpoint(&mut l, 8).unwrap();
@@ -205,8 +205,8 @@ fn parked_bytes_come_back_and_name_the_units_held(p: Arc<Pool>, h: Arc<Host>) ->
     let mut stamp = 0;
     for _ in 0..4000 {
         match rand.next(9) {
-            0 => match p.lease(1 + rand.next(32)) {
-                Ok(l) => {
+            0 => {
+                if let Ok(l) = p.lease(1 + rand.next(32)) {
                     let content: Vec<u32> = (0..l.tokens())
                         .map(|pos| {
                             stamp += 1;
@@ -216,20 +216,14 @@ fn parked_bytes_come_back_and_name_the_units_held(p: Arc<Pool>, h: Arc<Host>) ->
                         .collect();
                     seqs.push((l, content));
                 }
-                Err(Denied::Remapping) => land(&p),
-                Err(_) => {}
-            },
+            }
             1 | 2 if !seqs.is_empty() => {
                 let i = rand.next(seqs.len());
                 let (l, content) = &mut seqs[i];
                 let len = 1 + rand.next(content.len());
-                match p.checkpoint(l, len) {
-                    Ok((cp, copies)) => {
-                        mem.restore(&copies);
-                        cps.push((cp, content[..len].to_vec()));
-                    }
-                    Err(Denied::Remapping) => land(&p),
-                    Err(_) => {}
+                if let Ok((cp, copies)) = p.checkpoint(l, len) {
+                    mem.restore(&copies);
+                    cps.push((cp, content[..len].to_vec()));
                 }
             }
             3 | 4 if !cps.is_empty() => {
@@ -250,19 +244,15 @@ fn parked_bytes_come_back_and_name_the_units_held(p: Arc<Pool>, h: Arc<Host>) ->
                     (1 + rand.next(whole)) * 4
                 };
                 if len < 32 {
-                    match h.restore(q, &p, len, len + 1 + rand.next(32 - len)) {
-                        Ok((l, plan)) => {
-                            mem.wake(&plan);
-                            let mut content = content[..len].to_vec();
-                            for pos in len..l.tokens() {
-                                stamp += 1;
-                                mem.device.insert(l.slot(pos), stamp);
-                                content.push(stamp);
-                            }
-                            seqs.push((l, content));
+                    if let Ok((l, plan)) = h.restore(q, &p, len, len + 1 + rand.next(32 - len)) {
+                        mem.wake(&plan);
+                        let mut content = content[..len].to_vec();
+                        for pos in len..l.tokens() {
+                            stamp += 1;
+                            mem.device.insert(l.slot(pos), stamp);
+                            content.push(stamp);
                         }
-                        Err(Denied::Remapping) => land(&p),
-                        Err(_) => {}
+                        seqs.push((l, content));
                     }
                 }
             }
@@ -270,19 +260,15 @@ fn parked_bytes_come_back_and_name_the_units_held(p: Arc<Pool>, h: Arc<Host>) ->
                 let (cp, content) = &cps[rand.next(cps.len())];
                 let len = cp.tokens();
                 if len < 32 {
-                    match p.restore(cp, len, len + 1 + rand.next(32 - len)) {
-                        Ok((l, copies)) => {
-                            mem.restore(&copies);
-                            let mut content = content.clone();
-                            for pos in len..l.tokens() {
-                                stamp += 1;
-                                mem.device.insert(l.slot(pos), stamp);
-                                content.push(stamp);
-                            }
-                            seqs.push((l, content));
+                    if let Ok((l, copies)) = p.restore(cp, len, len + 1 + rand.next(32 - len)) {
+                        mem.restore(&copies);
+                        let mut content = content.clone();
+                        for pos in len..l.tokens() {
+                            stamp += 1;
+                            mem.device.insert(l.slot(pos), stamp);
+                            content.push(stamp);
                         }
-                        Err(Denied::Remapping) => land(&p),
-                        Err(_) => {}
+                        seqs.push((l, content));
                     }
                 }
             }
@@ -331,12 +317,12 @@ fn parked_bytes_come_back_and_name_the_units_held(p: Arc<Pool>, h: Arc<Host>) ->
 
 #[test]
 fn parked_kv_comes_back_and_names_the_pages_held() {
-    assert_eq!(parked_bytes_come_back_and_name_the_units_held(pool_of(&paged4(), 4, 24, 0), host(12)), 0);
+    assert_eq!(parked_bytes_come_back_and_name_the_units_held(pool_of(&paged4(), 24, 0), host(12)), 0);
 }
 
 #[test]
 fn parked_states_come_back_and_name_the_units_held() {
-    let p = pool_of(&hybrid4(), 4, 48, 4);
+    let p = pool_of(&hybrid4(), 40, 4);
     assert_eq!(parked_bytes_come_back_and_name_the_units_held(p, Arc::new(Host::new(12, 4))), 4);
 }
 

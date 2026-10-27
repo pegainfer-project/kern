@@ -87,12 +87,7 @@ impl Snapshot {
     fn new(rt: &Runtime, buffers: BTreeSet<String>, states: BTreeSet<String>) -> Result<Self> {
         let mut saved = Vec::new();
         for (name, state) in buffers.into_iter().map(|n| (n, false)).chain(states.into_iter().map(|n| (n, true))) {
-            let src = if state {
-                rt.whole_state(&name)?;
-                &rt.states[&name]
-            } else {
-                &rt.buffers[&name]
-            };
+            let src = if state { &rt.states[&name] } else { &rt.buffers[&name] };
             let dst = alloc(&rt.stream, src.bytes)?;
             copy(rt, dst.ptr, src.ptr, src.bytes)?;
             saved.push((src.ptr, dst));

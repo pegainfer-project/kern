@@ -38,9 +38,10 @@ pub trait Storage: sealed::Sealed + Send + Sync + 'static {
 }
 ```
 
-trait 只管归还：分配留在各自的类型里，因为 `Pool::take` 的三态拒绝（`Busy` /
-`Remapping` / `ExceedsPool`）和 `Host` 的"取最小空闲号"没有共同的签名可抽。`Pool`
-（chunk、remap、manifest 的表）和 `Host`（host 页、host slot 两段定长预算）实现它，
+trait 只管归还：分配留在各自的类型里，因为 `Pool::take` 的两态拒绝（`Busy` /
+`ExceedsPool`，2026-10-27 起没有 `Remapping`：页数与 slot 数装载时定死）和 `Host` 的
+"取最小空闲号"没有共同的签名可抽。`Pool`（页、slot、manifest 的表）和 `Host`（host 页、
+host slot 两段定长预算）实现它，
 trait 是 sealed 的，别处不能。页号是裸 `i32` / `u64`，但只出现在两处：交给
 runtime 执行的 `Copies`，和只读的观测（`Lease::page_ids()`、`Checkpoint::page_ids()`、
 `Parked::page_ids()`，harness 与测试读字节用）——没有任何接口按它们找东西。
@@ -148,10 +149,9 @@ index），host 单元从不进表。行由 `extend_row` 铺，位置由 `slot(p
 封页的租约自己也不例外（`slot` 断言，`tests/pool.rs` 的
 `a_lease_refuses_the_pages_it_sealed`）；`page_ids()` 留给 harness 读字节，不是句柄。
 
-`Pool::new(manifest, chunk, chunks, first_slots, tokens)` 的 `tokens` 是容量的上限：
-页数不超过 `tokens / unit`，块的尾巴空着。块的上限是 64 MiB（`chunk_for`），小页的
-manifest 一个块就装几百页，`--capacity` 若按块取整就没有小池子可测——toy 门禁
-第一天撞上的就是这条。
+`Pool::new(manifest, pages, slots)`（2026-10-27 起）就是页数和 slot 数本身：runtime 把
+`--capacity` 的 token 数除以页单位得到页数，`--max-seqs` 经 `slots_for` 得到 slot 数，
+再各自一块 `alloc_vmm`；没有块、没有按块取整，小池子想多小就多小。
 
 ### Copies：借用来源的拷贝计划
 
@@ -313,7 +313,7 @@ dynamo router 按 block hash。kern 的 `restore` 会拷半页，所以在带 st
 消失；`Host` 层 `page_bytes` / `slot_bytes` 改在 `Host::new` 给一次，不再每次 park 传（2026-10-09 起 `Host` 不再知道字节，见第 2 节）；
 分叉在条目中间时同长的 resident 条目优先于 parked 的（之前按 id 取第一个）。
 
-不动的部分：`Pool` 内部的 chunk / remap / `Denied` 三态、`Lease` 的表接口、runtime 的
+不动的部分：`Pool` 内部的 `Denied`（当时三态，2026-10-27 起 remap 删除后两态）、`Lease` 的表接口、runtime 的
 两条流与 `Waking` / `Room` 模式、tray 级"全成或全不成"、scheduler 的快照策略。
 review 的 P2（`rebalance` 对共享 chunk 重复计费导致误报 `ExceedsPool`）在 `Pool` 内部，
 与本设计正交，单独修。

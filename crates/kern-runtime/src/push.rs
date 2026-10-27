@@ -1,35 +1,22 @@
-//! Pushes: this runtime's pages and slots copied into another runtime's
-//! pooled states, in this process or in another one on the same NVLink
-//! domain. A prefill stage hands the decode rank that continues a prompt
-//! the prompt's KV pages and recurrent state this way.
+//! Pushes: this runtime's pages and slots of its pooled states copied into
+//! another runtime's, in this process or in another one on the same
+//! NVLink domain. A prefill stage hands the decode rank that continues a
+//! prompt the prompt's KV pages and recurrent state this way.
 //!
-//! A pooled state is not one allocation. It is an address range reserved
-//! once over physical chunks that every pooled state shares and the remap
-//! thread moves between pages and slots (`kern_pool`'s chunks), so the
-//! destination exports its chunks, not its states:
-//! [`Runtime::export_pool`] hands out a [`PoolHandle`] (every chunk's
-//! handle, and each pooled state's name, bytes per page or slot and
-//! positions reserved), and the pusher's [`Runtime::map_pool`] imports
-//! the chunks and reserves a range of the same size per state with
-//! nothing mapped yet: a [`MappedPool`]. Which chunk backs which position
-//! is a [`Placement`], the destination's [`Runtime::placement`]; the
-//! pusher's [`Runtime::place`] brings its mirror to one by running the
-//! remap between the placement it holds and the new one. After that page
-//! `p` of state `s` sits at the same offset in the mirror as at the
+//! A pooled state is one allocation, so the destination exports its
+//! states: [`Runtime::export_pool`] hands out a [`PoolHandle`] (each
+//! pooled state's name, bytes per page or slot, how many it holds, and
+//! its allocation's handle), and the pusher's [`Runtime::map_pool`] maps
+//! every one into its own address space: a [`MappedPool`]. Page `p` of
+//! state `s` then sits at the same offset in the mirror as at the
 //! destination, `p` times the page's bytes, and slot `j` at `j` times the
 //! slot's.
 //!
 //! What a push relies on: it writes only objects the destination holds
-//! (pages and the slot of a lease it took), and the mirror was placed
-//! with a placement taken after that lease. A remap takes chunks only
-//! from objects nobody holds, so a held object stays where that placement
-//! says for as long as it is held. A push into anything else writes
-//! wherever the mirror maps that position: an unmapped one faults, a
-//! stale one is some other object's bytes. That is undefined and the
-//! caller rules it out: the destination sends a placement along with the
-//! objects it leased (a fresh one only when its [`Runtime::remaps`]
-//! moved), and only once its own stream has passed the lease, which
-//! zeroes the slot there.
+//! (pages and the slot of a lease it took), and only once the
+//! destination's own stream has passed the lease, which zeroes the slot
+//! there. A push into anything else writes some other object's bytes:
+//! that is undefined and the caller rules it out.
 //!
 //! Every push runs on the pusher's compute stream, after every launch
 //! issued before it, and a [`Mark`](crate::Mark) taken next says when it
@@ -58,9 +45,9 @@ use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
 
 use cudarc::driver::{sys, CudaContext};
-use kern_pool::{runs, Deal, Kind, Placement};
+use kern_pool::{runs, Deal, Kind};
 
-use crate::device::{copy_1d, copy_2d, Arena, Mapper, PeerHandle, Physical, Pinned, Space};
+use crate::device::{copy_1d, copy_2d, import, DeviceBuf, PeerHandle, Pinned, Space};
 use crate::error::{bail, cuda_check};
 use crate::exec::Mark;
 use crate::{Result, Runtime};
@@ -72,43 +59,35 @@ struct Layout {
     kind: Kind,
     /// Bytes per page or per slot.
     object: u64,
-    /// Chunk positions reserved.
-    positions: usize,
+    /// Pages or slots held.
+    objects: u64,
 }
 
-/// What a peer maps to reach a runtime's pooled states: every physical
-/// chunk behind them, in chunk order, and every pooled state's layout in
-/// the pool's arena order. From [`Runtime::export_pool`], for
-/// [`Runtime::map_pool`].
+/// What a peer maps to reach a runtime's pooled states: every pooled
+/// state's layout and its allocation's handle, in the pool's order. From
+/// [`Runtime::export_pool`], for [`Runtime::map_pool`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolHandle {
-    chunk: u64,
     /// Rows per page of every paged state.
     unit: u64,
-    chunks: Vec<PeerHandle>,
-    states: Vec<Layout>,
+    states: Vec<(Layout, PeerHandle)>,
 }
 
 impl PoolHandle {
-    /// Wire form, what a caller carries to another process: the chunk
-    /// size, the page's rows, the states (name, kind, object bytes,
-    /// positions), then each chunk's [`PeerHandle::to_bytes`];
-    /// little-endian. `None` when the chunks have local handles, which no
-    /// other process can map.
+    /// Wire form, what a caller carries to another process: the page's
+    /// rows, then per state its name, kind, object bytes, objects and
+    /// [`PeerHandle::to_bytes`]; little-endian. `None` when the handles
+    /// are local ones, which no other process can map.
     pub fn to_bytes(&self) -> Option<Vec<u8>> {
-        let mut out = self.chunk.to_le_bytes().to_vec();
-        out.extend(self.unit.to_le_bytes());
+        let mut out = self.unit.to_le_bytes().to_vec();
         out.extend((self.states.len() as u32).to_le_bytes());
-        for s in &self.states {
+        for (s, h) in &self.states {
             out.extend((s.state.len() as u32).to_le_bytes());
             out.extend(s.state.as_bytes());
             out.push(matches!(s.kind, Kind::Slot) as u8);
             out.extend(s.object.to_le_bytes());
-            out.extend((s.positions as u64).to_le_bytes());
-        }
-        out.extend((self.chunks.len() as u32).to_le_bytes());
-        for c in &self.chunks {
-            out.extend(c.to_bytes()?);
+            out.extend(s.objects.to_le_bytes());
+            out.extend(h.to_bytes()?);
         }
         Some(out)
     }
@@ -122,7 +101,6 @@ impl PoolHandle {
             r = tail;
             Some(head)
         };
-        let chunk = u64::from_le_bytes(take(8)?.try_into().ok()?);
         let unit = u64::from_le_bytes(take(8)?.try_into().ok()?);
         let n = u32::from_le_bytes(take(4)?.try_into().ok()?);
         let mut states = Vec::new();
@@ -135,34 +113,26 @@ impl PoolHandle {
                 _ => return None,
             };
             let object = u64::from_le_bytes(take(8)?.try_into().ok()?);
-            let positions = u64::from_le_bytes(take(8)?.try_into().ok()?) as usize;
-            states.push(Layout { state, kind, object, positions });
+            let objects = u64::from_le_bytes(take(8)?.try_into().ok()?);
+            let h = PeerHandle::from_bytes(take(PeerHandle::BYTES)?)?;
+            states.push((Layout { state, kind, object, objects }, h));
         }
-        let n = u32::from_le_bytes(take(4)?.try_into().ok()?);
-        let chunks = (0..n).map(|_| PeerHandle::from_bytes(take(PeerHandle::BYTES)?)).collect::<Option<Vec<_>>>()?;
-        r.is_empty().then_some(PoolHandle { chunk, unit, chunks, states })
+        r.is_empty().then_some(PoolHandle { unit, states })
     }
 }
 
-/// Another runtime's pooled states mirrored into this context: its chunks
-/// imported, a range per state reserved, mapped as the last
-/// [`Runtime::place`] said. Unmapped and released on drop; the owner's
-/// chunks outlive it.
+/// Another runtime's pooled states mapped into this context, each where
+/// its handle says. Unmapped and released on drop; the owner's
+/// allocations outlive it.
 pub struct MappedPool {
-    mapper: Mapper,
-    states: Vec<Layout>,
-    chunk: u64,
+    states: Vec<(Layout, DeviceBuf)>,
     unit: u64,
-    chunks: usize,
-    placed: Placement,
 }
 
 impl MappedPool {
-    /// State `name`'s arena: its index, layout, and how many objects its
-    /// range holds.
-    fn arena(&self, name: &str) -> Option<(usize, &Layout, u64)> {
-        let (a, l) = self.states.iter().enumerate().find(|(_, l)| l.state == name)?;
-        Some((a, l, l.positions as u64 * self.chunk / l.object))
+    /// State `name`: its layout and where it is mapped.
+    fn state(&self, name: &str) -> Option<(&Layout, &DeviceBuf)> {
+        self.states.iter().find(|(l, _)| l.state == name).map(|(l, b)| (l, b))
     }
 }
 
@@ -209,7 +179,7 @@ impl Rows {
     }
 
     /// A deal's runs as strided copies of `row`-byte rows, offsets from
-    /// the start of either side's arena, in run order: each run cut into
+    /// the start of either side's state, in run order: each run cut into
     /// pieces of at most [`Rows::PIECE`] bytes, or one row when a row is
     /// more.
     pub fn dealt(deal: &Deal, row: u64) -> Vec<Rows> {
@@ -284,64 +254,44 @@ impl Split {
 }
 
 impl Runtime {
-    /// Every pooled state's chunks and layout, for another runtime to
-    /// mirror ([`Runtime::map_pool`]): fabric handles where the device
-    /// gave the chunks one, local ones (this process only) otherwise.
+    /// What a peer maps to reach this runtime's pooled states.
     pub fn export_pool(&self) -> Result<PoolHandle> {
         self.ctx.bind_to_thread()?;
-        let states = self
-            .pool
-            .pooled()
-            .iter()
-            .map(|a| Layout { state: a.state.clone(), kind: a.kind, object: a.object, positions: a.positions })
-            .collect();
-        Ok(PoolHandle { chunk: self.pool.chunk(), unit: self.pool.unit(), chunks: self.chunks.export()?, states })
+        let mut states = Vec::with_capacity(self.pool.pooled().len());
+        for a in self.pool.pooled() {
+            let Some(h) = self.states[&a.state].export()? else {
+                bail!(Api, "state `{}` is not an exportable allocation", a.state);
+            };
+            let layout = Layout { state: a.state.clone(), kind: a.kind, object: a.object, objects: a.objects as u64 };
+            states.push((layout, h));
+        }
+        Ok(PoolHandle { unit: self.pool.unit(), states })
     }
 
-    /// Which chunk backs every position of every pooled state now: what a
-    /// mirror is placed with ([`Runtime::place`]). An object held when it
-    /// is taken stays where it says while it is held.
-    pub fn placement(&self) -> Placement {
-        self.pool.placement()
-    }
-
-    /// Import another runtime's chunks and reserve a range per pooled
-    /// state, nothing mapped until [`Runtime::place`]. Synchronous.
+    /// Map another runtime's pooled states into this context. Synchronous.
+    /// A handle whose allocation is smaller than the objects it claims is
+    /// refused: a push through it would write past the mapping.
     pub fn map_pool(&self, h: &PoolHandle, what: &str) -> Result<MappedPool> {
         self.ctx.bind_to_thread()?;
-        let physical = Arc::new(Physical::import(h.chunk as usize, &h.chunks, what)?);
-        let arenas = h
+        let states = h
             .states
             .iter()
-            .map(|s| Arena::reserve(self.gpu as i32, h.chunk as usize, s.positions))
+            .map(|(l, ph)| {
+                let buf = import(&self.stream, self.gpu as i32, ph, &format!("{what}: `{}`", l.state))?;
+                if buf.bytes < l.objects * l.object {
+                    bail!(
+                        Api,
+                        "{what}: `{}` claims {} objects of {} bytes over an allocation of {} bytes",
+                        l.state,
+                        l.objects,
+                        l.object,
+                        buf.bytes
+                    );
+                }
+                Ok((l.clone(), buf))
+            })
             .collect::<Result<Vec<_>>>()?;
-        let positions: Vec<usize> = h.states.iter().map(|s| s.positions).collect();
-        Ok(MappedPool {
-            mapper: Mapper::new(arenas, physical),
-            states: h.states.clone(),
-            chunk: h.chunk,
-            unit: h.unit,
-            chunks: h.chunks.len(),
-            placed: Placement::unmapped(&positions),
-        })
-    }
-
-    /// Map `to` as `p` says: every position whose chunk changed since the
-    /// last placement comes off and gets its new one. Synchronous, and
-    /// nothing may be pushing into `to` meanwhile (this runtime's pushes
-    /// are on its stream, which this waits for).
-    pub fn place(&self, to: &mut MappedPool, p: &Placement) -> Result<()> {
-        self.ctx.bind_to_thread()?;
-        if p.shape() != to.placed.shape() {
-            bail!(Api, "placement of {:?} positions for a pool of {:?}", p.shape(), to.placed.shape());
-        }
-        if p.chunks() as usize > to.chunks {
-            bail!(Api, "placement names chunk {} of a pool of {}", p.chunks() - 1, to.chunks);
-        }
-        self.stream.synchronize()?;
-        to.mapper.run(&to.placed.toward(p))?;
-        to.placed = p.clone();
-        Ok(())
+        Ok(MappedPool { states, unit: h.unit })
     }
 
     /// Copy pages of paged state `state` into `to`'s state of that name:
@@ -354,7 +304,7 @@ impl Runtime {
         if e.object != e.theirs {
             bail!(Api, "state `{state}`: {} bytes per page here, {} there", e.object, e.theirs);
         }
-        let (have, room) = (self.pool.pages_max() as i64, e.room as i64);
+        let (have, room) = (self.pool.pages() as i64, e.room as i64);
         if let Some(&(s, d)) = pairs.iter().find(|&&(s, d)| s < 0 || s as i64 >= have || d < 0 || d as i64 >= room) {
             bail!(Api, "state `{state}`: page pair ({s}, {d}) outside 0..{have} here, 0..{room} there");
         }
@@ -424,7 +374,7 @@ impl Runtime {
         if !row.is_multiple_of(16) {
             bail!(Api, "state `{state}`: rows of {row} bytes; a row push moves 16-byte words");
         }
-        let (have, room) = (self.pool.pages_max() as u64 * self.pool.unit(), e.room * to.unit);
+        let (have, room) = (self.pool.pages() as u64 * self.pool.unit(), e.room * to.unit);
         let outside =
             |r: &&kern_pool::RowRun| r.src_row + (r.rows - 1) * r.src_stride >= have || r.dst_row + r.rows > room;
         if let Some(r) = deal.runs().iter().find(outside) {
@@ -457,18 +407,18 @@ impl Runtime {
         let Some(here) = self.pool.pooled().iter().find(|a| a.state == state) else {
             bail!(Api, "no pooled state `{state}` here");
         };
-        let Some((a, l, room)) = to.arena(state) else {
+        let Some((l, b)) = to.state(state) else {
             bail!(Api, "no pooled state `{state}` in the mapped pool");
         };
         if here.kind != kind || l.kind != kind {
             bail!(Api, "state `{state}`: a {kind:?} push, the state is {:?} here and {:?} there", here.kind, l.kind);
         }
-        Ok(Ends { src: self.states[state].ptr, object: here.object, dst: to.mapper.ptr(a), theirs: l.object, room })
+        Ok(Ends { src: self.states[state].ptr, object: here.object, dst: b.ptr, theirs: l.object, room: l.objects })
     }
 
     /// Slot 0 is the null line on either side, never a push's.
     fn slots_in_range(&self, state: &str, from: i32, into: i32, e: &Ends) -> Result<()> {
-        let (have, room) = (self.pool.slots_max() as i64, e.room as i64);
+        let (have, room) = (self.pool.slots() as i64, e.room as i64);
         if from < 1 || from as i64 >= have || into < 1 || into as i64 >= room {
             bail!(Api, "state `{state}`: slots ({from}, {into}) outside 1..{have} here, 1..{room} there");
         }
@@ -476,8 +426,8 @@ impl Runtime {
     }
 }
 
-/// A push's two arenas: where each starts, bytes per object on either
-/// side, and how many objects the mirror's range holds.
+/// A push's two ends: where each state starts, bytes per object on either
+/// side, and how many objects the mirror holds.
 struct Ends {
     src: u64,
     object: u64,

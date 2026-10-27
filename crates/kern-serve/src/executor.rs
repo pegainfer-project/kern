@@ -66,10 +66,8 @@ pub struct Load {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Hello {
     pub rank: usize,
-    pub chunk: u64,
-    pub chunks: u32,
-    pub first_slots: usize,
-    pub tokens: Option<u64>,
+    pub pages: usize,
+    pub slots: usize,
     /// The rank's [`Offer`], hex.
     pub offer: String,
     /// The pool's `PoolHandle`, hex; none without fabric handles.
@@ -123,7 +121,7 @@ fn load(m: &Verified, weights: &Weights, groups: Groups, q: usize, o: &Load) -> 
     Ok(rt)
 }
 
-/// This runtime's pool as another process maps it; `None` when its chunks
+/// This runtime's pool as another process maps it; `None` when its states
 /// have no fabric handle.
 fn export_pool(rt: &Runtime) -> Result<Option<String>> {
     Ok(rt.export_pool()?.to_bytes().map(hex::encode))
@@ -250,7 +248,7 @@ pub fn head(
     let mut remote = Vec::with_capacity(n - 1);
     for (q, (h, mut s)) in hellos.into_iter().enumerate().skip(1).map(|(q, x)| (q, x.expect("every rank said hello"))) {
         send(&mut s, &Table { peers: members(m, groups, q, &wire), host })?;
-        budgets.push(Budget { chunk: h.chunk, chunks: h.chunks, first_slots: h.first_slots, tokens: h.tokens });
+        budgets.push(Budget { pages: h.pages, slots: h.slots });
         exported.push(h.pool);
         crate::watch::exit_with(&s, format!("rank {q}"))?;
         remote.push(s);
@@ -274,15 +272,8 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
     let mut rt = load(m, weights, groups, q, o)?;
     let mut s = connect(head, CONNECT)?;
     let b = rt.budget();
-    let hello = Hello {
-        rank: q,
-        chunk: b.chunk,
-        chunks: b.chunks,
-        first_slots: b.first_slots,
-        tokens: b.tokens,
-        offer: offer_hex(&rt.offer()?)?,
-        pool: export_pool(&rt)?,
-    };
+    let hello =
+        Hello { rank: q, pages: b.pages, slots: b.slots, offer: offer_hex(&rt.offer()?)?, pool: export_pool(&rt)? };
     send(&mut s, &hello)?;
     let t: Table = recv(&mut s)?.context("the head closed before its table")?;
     crate::watch::exit_with(&s, "the head".into())?;
@@ -310,12 +301,11 @@ pub struct Executor {
     /// Host transfers in flight, in issue order (one stream: they land in it).
     moving: VecDeque<Landing>,
     landed: u64,
-    remapping: bool,
 }
 
 impl Executor {
     fn new(rank: usize, rt: Runtime, p: Protocol) -> Executor {
-        Executor { rank, rt, p, moving: VecDeque::new(), landed: 0, remapping: false }
+        Executor { rank, rt, p, moving: VecDeque::new(), landed: 0 }
     }
 
     fn run(&mut self, o: &Order) -> Result<Answer> {
@@ -332,10 +322,6 @@ impl Executor {
     fn issue(&mut self, o: &Order) -> Result<u64> {
         for a in &o.acts {
             match a {
-                Act::Remap(m) => {
-                    self.rt.remap(m.clone().remap())?;
-                    self.remapping = true;
-                }
                 Act::Zero(s) => self.rt.zero_slot(*s)?,
                 Act::Copy(c) => self.rt.copy(&c.pages, c.slot.as_slice())?,
                 Act::Park(c) => self.moving.push_back(self.rt.host_out(&c.clone().into())?),
@@ -373,10 +359,6 @@ impl Executor {
             }
             None => (Vec::new(), Vec::new()),
         };
-        let remaps = self.rt.remapped(o.wait && self.remapping)?;
-        if remaps > 0 {
-            self.remapping = false;
-        }
         if o.wait {
             // A landing dropped is a landing waited for.
             self.landed += self.moving.len() as u64;
@@ -386,7 +368,7 @@ impl Executor {
             self.moving.pop_front();
             self.landed += 1;
         }
-        Ok(Answer { tokens, counts, remaps, landed: self.landed })
+        Ok(Answer { tokens, counts, landed: self.landed })
     }
 }
 
@@ -410,7 +392,7 @@ impl crate::pd::Run for Executors {
 
 impl Executors {
     /// Every rank's pool handle (hex), for a prefill tier to map; refused
-    /// when a rank's chunks have no fabric handle.
+    /// when a rank's states have no fabric handle.
     pub fn pools(&self) -> Result<Vec<String>> {
         self.pools
             .iter()

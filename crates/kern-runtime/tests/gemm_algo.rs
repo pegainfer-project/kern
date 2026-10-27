@@ -120,7 +120,7 @@ fn manifest(small: Value, large: Value) -> Verified {
 }
 
 fn load(v: &Verified) -> kern_runtime::Result<Runtime> {
-    Runtime::load(v, None, 0, Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }), None)
+    Runtime::load(v, None, 0, Some(Capacity { tokens: Some(1), slots: 1, landings: 0 }), None)
 }
 
 #[test]

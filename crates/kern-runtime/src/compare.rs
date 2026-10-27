@@ -157,7 +157,6 @@ impl Runtime {
                 b.view(r)
             }
             At::State(name, r) => {
-                self.whole_state(name)?;
                 let Some(s) = self.states.get(name) else {
                     bail!(Api, "no state `{name}`");
                 };

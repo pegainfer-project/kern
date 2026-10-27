@@ -171,13 +171,11 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
   只付回复和其后的部分；同一 prompt 重发也命中它，只付尾巴。量不出 history 末尾的请求（completion、
   前端读不懂的 chat body）才在结束时 `Runtime::retire`——结束序列的 state slot 原样成为
   checkpoint 的，不拷。会话走过去的旧轮留到要腾地方时先走（pool.md「带 state 的条目分档」）。history
-  末尾的快照拿不到 slot 时按租约的规则腾地方，remap 在途就等它落地（`settle`，唯一一处
-  阻塞等 remap：这个 state 过了这一刻就留不下了，而 prefill 刚读回输出、stream 已空，等的只是
-  remap 本身的几毫秒），腾不出就不留，请求照跑（stats 行的 `prompt_checkpoints` / `prompt_skips`）。
-  slot 从 manifest 的 `seqs.max + 2` 个起，与 KV 页共用一份显存预算按需互换（K1b）：
-  睡着的 session 的 checkpoint 拿着 slot，活跃请求再要 slot 就从空闲页拆，页不够
-  再从空闲 slot 拆回来；租约 `Busy` 时按最久未命中淘汰，`Remapping` 时等它落地
-  （stats 行的 `slots_used`/`slots`/`remaps`）。
+  末尾的快照拿不到 slot 时按租约的规则腾地方，腾不出就不留，请求照跑（stats 行的
+  `prompt_checkpoints` / `prompt_skips`）。slot 数装载时定死（2026-10-27 起，K1b 的 remap 删除）：
+  每 rank `(max_seqs + 1) × t` 个，pad 也算一条；slot 是在跑的请求的资源，请求结束后留给下一轮命中的
+  checkpoint 只在没有请求要 slot 时占着：睡着的 session 的 checkpoint 拿着 slot，活跃请求再要 slot 时租约
+  `Busy`，按最久未命中淘汰（park 或丢）再租（stats 行的 `slots_used`/`slots`）。
 
 命中数逐请求报给调用方：`usage.prompt_tokens_details.cached_tokens` 就是这条请求
 没有付钱的 prompt token 数（`Row::prefix()`，与 stats 行的 `prefix_hit_tokens`
@@ -382,18 +380,19 @@ K3 在 tray 上的 span 实测（93 层 EP4 / EP4×TP4 的 E3 场景、每个 tp
 **每个 rank 一个 `kern_pool::Pool`**），其余 rank 是 `--gpu g --head host:port --rank q`。`--gpus` 与
 `tray.rs` 删了；rank 数是 manifest topology 里非 tp 组的大小（没有就是 tp 的大小，都没有就是 1）。
 
-- **head 记全部的账**。rank 连上 head 发 `Hello { rank, manifest, chunk, chunks, first_slots, tokens, handles }`：
-  manifest JSON 的摘要（对不上就拒）、这张卡 arena 的形状（`Runtime::budget`）、导出 buffer 的 fabric handle。
+- **head 记全部的账**。rank 连上 head 发 `Hello { rank, pages, slots, offer, pool }`：
+  这张卡池子的页数与 slot 数（`Runtime::budget`）、它的 `Offer`（manifest、导出的分配、它牵头的 communicator）、
+  池子的 `PoolHandle`。
   `Pool::new` 是纯函数，head 拿同一个 `Budget` 建出同样的池，所以 head 的决定就是 rank 的决定，rank 自己
   不记账。head 回 `Table { peers, nccl, host }`：别的 rank 的 handle、每个 NCCL 组一个 id（每个 tp 组一个，
   其余组一个，按组名排序 join）、host 层每卡的单位数（host 页数、host slot 数，head 用 `--host-gib` 在 rank 0 的
   runtime 上按 `host_units` 切一次，head 的 `Host::new` 和每个 rank 的 `reserve_host` 用同一对数）。之后 rank 只收 `Order`、回 `Answer`。
 - **决定变成 `Act`**。`Ranks`（`ranks.rs`，纯 host 代码，测试用假 rank）在组里每个成员的池上做
   lease / lease_from / checkpoint / retire / park / wake，每个池给出的 plan 按决定的顺序排进那个 rank 的队列：
-  `Remap`、`Zero`（新 slot 清零）、`Copy`（半页 + slot 快照）、`Park`（页与 slot 拷到 host）、`Wake`（拷回）。
+  `Zero`（新 slot 清零）、`Copy`（半页 + slot 快照）、`Park`（页与 slot 拷到 host）、`Wake`（拷回）。
   每步给每个 rank 一个 `Order { acts, item, wait }`，rank 在 compute stream 上按序跑 acts 再跑 item，回
-  `Answer { tokens, counts, remaps, landed }`：这一步的输出、上次以来落地的 remap、累计落地的 host 拷贝数。
-  `Ranks::heard` 用后两个数结清 remap、放出 host 拷贝已落地的 parked checkpoint（页拷完之前不还池）。
+  `Answer { tokens, counts, landed }`：这一步的输出、累计落地的 host 拷贝数。
+  `Ranks::heard` 用后者放出 host 拷贝已落地的 parked checkpoint（页拷完之前不还池）。
 - **锁步**。远端的 Order 先发，head 再跑自己那份，最后收全部 Answer——EP dispatch 与 tp collective 在核里等
   peer，规则与原来"先全部 launch 再逐个 sync"相同，只是换成了进程。每个 rank 的 item 是同一个 program、
   同一组 var，fill 是它自己的行（`Staged::items`）。线上是 TCP 帧（u32 长度 + JSON），与流水线的 item 同。
@@ -719,8 +718,9 @@ lease 直接 `retire` 进索引（零拷贝，不等末段回 token：之后读�
 recurrent state 的 manifest 改在 `history_tokens` 处停下做一次 checkpoint、结尾不留。另在它（无 `history_tokens` 时是结尾）前 4096 处停一下做 snapshot，与它一样腾地方（它随即被这一轮 supersede，腾地方时排在前面）：重试或改写的请求在上一个请求末尾前不远处分叉（AgentX 256k trace 同一条流内：p50 448、p75 4.7k token），没有它就只能从更早的轮次续，warmup 只回放过上一轮的流则什么都命中不了（2026-10-09 kern P/D c32 计时窗口里 9 条首请求 0 命中，占输入 1.6%）。实测（2026-10-09，GB300，P = PP8 两节点、host 层每段 128 GiB，D = TP8/EP8/DCP8 两节点，AgentX 256k，c24 后接 c32 各 900 s）：命中率 c24 91.8% → 94.1%、c32 91.8% → 94.1%（同数据集 SGLang 93.9%），c32 TTFT p90 3.91 → 3.06 s、p99 48.4 → 21.8 s；只用空闲 slot 的版本 c32 只到 92.5%（slot 常满，snapshot 245 次跳过、18 次拿到）。池满（`Busy`）按
 `Prefix` 的分档丢一个条目再试（有 host 层时 park，见下）。拷贝由 head 的池决定、在 head 上当场执行，同时排进下一个
 `Item` 的 `acts`（2026-10-09 之前是 `copy_pages` / `copy_slots` / `zero_slots`），各段在写 fill 与 launch 之前按序执行
-（`Runtime::copy`），于是每段 stream 上的次序与 head 相同。段不记账，跟不了 remap：head 只在有空 slot 时取 slot（否则先丢条目），
-池真 remap 了 head 直接退出——所以带 state 的流水能缓存的条目只有初始的 `--max-seqs` + 2 个 slot 减去在跑的。
+（`Runtime::copy`），于是每段 stream 上的次序与 head 相同。段不记账：head 与每段按同一条规则（`slots_for`）
+开同样多的 slot，head 只在有空 slot 时取 slot（否则先丢条目）——所以带 state 的流水能缓存的条目只有
+`max_seqs + 1` 个 slot 减去在跑的。
 stats 行报 `resident_hits` / `resident_hit_tokens` / `checkpoints` / `evictions`，命中也作为请求的 cached
 tokens 回给客户端。门禁（qwen3-4b 切在 218，chunk 512，与单卡 kern-serve 冷跑比首 token）：`--capacity
 65536` 15/15 同——7 条 gate prompt 冷跑；1500 / 2049 两条再发命中 1488 / 2048；四个第二轮（1500+200、
@@ -827,8 +827,8 @@ vars 走 `kern_run::fills`，四个 item 一次 `Executors::run`；没活的 ran
 
 放置：所有 rank 里最长的已保留前缀所在的 rank，否则 (待 prefill 行数, 已用页, rank) 最小者。prompt 的最后几行
 进去就出 token、`retire` 成 checkpoint 进 `Prefix`（按整个 prompt 做键，`history_tokens` 处的快照还没有）；
-池 `Busy` 就丢最冷的 checkpoint 再试。请求上限是 `max_seq_tokens`（页表一行能寻址的）限于 `pages_max()`，
-**不是 `pool.total()`**：那是现在存在的页数，页和 slot 互换 chunk，它会跟着 KV 的高水位走（第一次 3k–752k
+池 `Busy` 就丢最冷的 checkpoint 再试。请求上限是 `max_seq_tokens`（页表一行能寻址的）限于 `pages()`
+（2026-10-27 起页数定死；之前页和 slot 互换 chunk、`pool.total()` 跟着 KV 的高水位走，第一次 3k–752k
 的跑里 256 条有 66 条被按 406k–544k 的"上限"拒掉，vllm-bench 还把 stream 里的 `finish_reason=error` 算成功）。
 
 DeepSeek V4.1 Flash prefill manifest（`--prefill-only --capacity 32768 --max-seqs 56 --context 1048576

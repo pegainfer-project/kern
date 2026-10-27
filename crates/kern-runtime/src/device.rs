@@ -1,6 +1,6 @@
 //! Device allocations: pool allocations, virtual-memory mappings that
-//! other ranks can import, the chunk arenas behind the pooled states, and
-//! the pinned host blocks and timing events the streams work with.
+//! other ranks can import, and the pinned host blocks and timing events
+//! the streams work with.
 
 use std::os::raw::c_void;
 use std::sync::Arc;
@@ -77,10 +77,7 @@ impl std::fmt::Debug for PeerHandle {
 /// bake in; the backing decides whether a peer can map it.
 pub(crate) struct DeviceBuf {
     pub(crate) ptr: u64,
-    /// Bytes declared (a pooled state: the initial layout's).
     pub(crate) bytes: u64,
-    /// Bytes addressable: `bytes`, or a pooled state's whole reservation.
-    span: u64,
     stream: Arc<CudaStream>,
     backing: Backing,
 }
@@ -93,8 +90,6 @@ enum Backing {
     /// `cuMemCreate` + reserve + map: every rank can map it, or a peer's
     /// allocation mapped into this address space.
     Vmm(Vmm),
-    /// A pooled state's arena, owned by the remap thread's [`Mapper`].
-    Reserved,
     /// A host state: the host allocated it and frees it, after this runtime.
     Borrowed,
 }
@@ -130,7 +125,7 @@ pub(crate) fn alloc(stream: &Arc<CudaStream>, bytes: u64) -> Result<DeviceBuf> {
         let (p, _sync) = slice.device_ptr(stream);
         p
     };
-    Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
+    Ok(DeviceBuf { ptr, bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
 }
 
 /// A pool allocation nobody has written: for scratch that is filled
@@ -141,7 +136,7 @@ pub(crate) fn alloc_uninit(stream: &Arc<CudaStream>, bytes: u64) -> Result<Devic
         let (p, _sync) = slice.device_ptr(stream);
         p
     };
-    Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
+    Ok(DeviceBuf { ptr, bytes, stream: stream.clone(), backing: Backing::Pool(slice) })
 }
 
 /// Stable alias of an immutable host weight in this stream's CUDA context.
@@ -149,7 +144,7 @@ pub(crate) fn alloc_host(stream: &Arc<CudaStream>, weight: Arc<HostWeight>) -> R
     stream.context().bind_to_thread()?;
     let ptr = weight.device_pointer()?;
     let bytes = weight.bytes;
-    Ok(DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Host(weight) })
+    Ok(DeviceBuf { ptr, bytes, stream: stream.clone(), backing: Backing::Host(weight) })
 }
 
 fn fabric_handle_type() -> sys::CUmemAllocationHandleType {
@@ -268,7 +263,7 @@ pub(crate) fn alloc_vmm(stream: &Arc<CudaStream>, dev: i32, bytes: u64, what: &s
     };
     let vmm = Vmm { handle, va, size, fabric, owns_handle: true };
     cuda_check(unsafe { sys::cuMemsetD8Async(va, 0, size, stream.cu_stream()) }, "cuMemsetD8Async")?;
-    Ok(DeviceBuf { ptr: va, bytes, span: bytes, stream: stream.clone(), backing: Backing::Vmm(vmm) })
+    Ok(DeviceBuf { ptr: va, bytes, stream: stream.clone(), backing: Backing::Vmm(vmm) })
 }
 
 /// Map a peer's allocation into this device's address space. The mapping
@@ -315,7 +310,7 @@ pub(crate) fn import(stream: &Arc<CudaStream>, dev: i32, h: &PeerHandle, what: &
     };
     tracing::debug!("{what}: {} GiB imported in {imported:?}, mapped in {:?}", size >> 30, t0.elapsed() - imported);
     let vmm = Vmm { handle, va, size, fabric: false, owns_handle };
-    Ok(DeviceBuf { ptr: va, bytes: h.bytes(), span: h.bytes(), stream: stream.clone(), backing: Backing::Vmm(vmm) })
+    Ok(DeviceBuf { ptr: va, bytes: h.bytes(), stream: stream.clone(), backing: Backing::Vmm(vmm) })
 }
 
 impl DeviceBuf {
@@ -332,20 +327,14 @@ impl DeviceBuf {
         self
     }
 
-    /// A pooled state: `bytes` of its initial layout at `ptr`, `span`
-    /// bytes reserved there; the arena behind it is the [`Mapper`]'s.
-    pub(crate) fn reserved(stream: &Arc<CudaStream>, ptr: u64, bytes: u64, span: u64) -> DeviceBuf {
-        DeviceBuf { ptr, bytes, span, stream: stream.clone(), backing: Backing::Reserved }
-    }
-
     /// A host state's memory at `ptr`, `bytes` long.
     pub(crate) fn borrowed(stream: &Arc<CudaStream>, ptr: u64, bytes: u64) -> DeviceBuf {
-        DeviceBuf { ptr, bytes, span: bytes, stream: stream.clone(), backing: Backing::Borrowed }
+        DeviceBuf { ptr, bytes, stream: stream.clone(), backing: Backing::Borrowed }
     }
 
     /// What a peer maps to reach this allocation: a fabric handle when it
     /// was created with one, the allocation handle otherwise; nothing for
-    /// pool memory, host memory and a pooled state's arena.
+    /// pool memory and host memory.
     pub(crate) fn export(&self) -> Result<Option<PeerHandle>> {
         let Backing::Vmm(v) = &self.backing else { return Ok(None) };
         let bytes = v.size as u64;
@@ -362,18 +351,11 @@ impl DeviceBuf {
         Ok(Some(PeerHandle::Fabric { fabric: fh.data, bytes }))
     }
 
-    /// Bytes addressable from `ptr`: a pooled state's whole reservation,
-    /// so a pointer or tensormap taken at load stays valid for every page
-    /// and slot a remap makes later.
-    pub(crate) fn span(&self) -> u64 {
-        self.span
-    }
-
     /// A byte range of the allocation, for the cudarc copy/memset entry
     /// points.
     pub(crate) fn view(&self, range: std::ops::Range<usize>) -> Result<BufView> {
-        if range.start > range.end || range.end as u64 > self.span {
-            bail!(Api, "byte range [{}, {}) outside the {}-byte allocation", range.start, range.end, self.span);
+        if range.start > range.end || range.end as u64 > self.bytes {
+            bail!(Api, "byte range [{}, {}) outside the {}-byte allocation", range.start, range.end, self.bytes);
         }
         Ok(BufView { ptr: self.ptr + range.start as u64, len: range.end - range.start, stream: self.stream.clone() })
     }
@@ -566,220 +548,6 @@ pub fn device_uuid(gpu: usize) -> Result<String> {
     let hex: Vec<String> = uuid.bytes.iter().map(|b| format!("{b:02x}")).collect();
     let (a, b, c, d, e) = (&hex[..4], &hex[4..6], &hex[6..8], &hex[8..10], &hex[10..]);
     Ok(format!("GPU-{}-{}-{}-{}-{}", a.concat(), b.concat(), c.concat(), d.concat(), e.concat()))
-}
-
-pub(crate) fn chunk_granularity(dev: i32) -> Result<usize> {
-    granularity(&alloc_prop(dev, none_handle_type()))
-}
-
-/// A pooled state's reserved range: `positions` chunk positions of `chunk`
-/// bytes, each mapped or not. Reserved once; the pointer the programs bake
-/// in never moves.
-pub(crate) struct Arena {
-    va: sys::CUdeviceptr,
-    chunk: usize,
-    mapped: Vec<bool>,
-    dev: i32,
-}
-
-impl Arena {
-    pub(crate) fn reserve(dev: i32, chunk: usize, positions: usize) -> Result<Arena> {
-        let mut va: sys::CUdeviceptr = 0;
-        let size = chunk * positions.max(1);
-        // Default alignment: the granularity, which `chunk` is a multiple
-        // of (an alignment must be a power of two; a chunk need not be).
-        cuda_check(unsafe { sys::cuMemAddressReserve(&mut va, size, 0, 0, 0) }, "cuMemAddressReserve")?;
-        Ok(Arena { va, chunk, mapped: vec![false; positions], dev })
-    }
-
-    pub(crate) fn ptr(&self) -> u64 {
-        self.va
-    }
-
-    fn at(&self, pos: usize) -> sys::CUdeviceptr {
-        self.va + (pos * self.chunk) as u64
-    }
-
-    fn map(&mut self, pos: usize, handle: sys::CUmemGenericAllocationHandle) -> Result<()> {
-        cuda_check(unsafe { sys::cuMemMap(self.at(pos), self.chunk, 0, handle, 0) }, "cuMemMap")?;
-        self.mapped[pos] = true;
-        Ok(())
-    }
-
-    fn unmap(&mut self, pos: usize) -> Result<()> {
-        cuda_check(unsafe { sys::cuMemUnmap(self.at(pos), self.chunk) }, "cuMemUnmap")?;
-        self.mapped[pos] = false;
-        Ok(())
-    }
-
-    /// Grant this device read/write access over `positions`, all mapped.
-    fn access(&self, positions: std::ops::Range<usize>) -> Result<()> {
-        let mut access: sys::CUmemAccessDesc = unsafe { std::mem::zeroed() };
-        access.location.type_ = sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE;
-        access.location.id = self.dev;
-        access.flags = sys::CUmemAccess_flags::CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-        cuda_check(
-            unsafe { sys::cuMemSetAccess(self.at(positions.start), positions.len() * self.chunk, &access, 1) },
-            "cuMemSetAccess",
-        )
-    }
-}
-
-impl Drop for Arena {
-    fn drop(&mut self) {
-        for pos in 0..self.mapped.len() {
-            if self.mapped[pos] {
-                unsafe { sys::cuMemUnmap(self.at(pos), self.chunk) };
-            }
-        }
-        unsafe { sys::cuMemAddressFree(self.va, self.chunk * self.mapped.len().max(1)) };
-    }
-}
-
-/// The physical chunks behind the pooled states: created once, released
-/// once every arena has let go of them. Created with fabric handles where
-/// the device offers them, like [`alloc_vmm`], so another runtime can
-/// mirror the states ([`Physical::export`]); a peer's chunks imported
-/// here are a `Physical` too, owning its handles when the import made
-/// them (a fabric handle) and not when they are the peer's own (a local
-/// one).
-pub(crate) struct Physical {
-    handles: Vec<sys::CUmemGenericAllocationHandle>,
-    chunk: usize,
-    fabric: bool,
-    owns: bool,
-}
-
-impl Physical {
-    pub(crate) fn create(dev: i32, chunk: usize, count: usize) -> Result<Physical> {
-        let fabric = fabric_supported(dev)?;
-        match Physical::create_as(dev, chunk, count, fabric) {
-            // The attribute says fabric, the driver says no (no IMEX
-            // channel, say): only this process's runtimes can mirror them.
-            Err(e) if fabric => {
-                tracing::warn!("state chunks: cuMemCreate with a fabric handle failed ({e}); creating without one");
-                Physical::create_as(dev, chunk, count, false)
-            }
-            r => r,
-        }
-    }
-
-    fn create_as(dev: i32, chunk: usize, count: usize, fabric: bool) -> Result<Physical> {
-        let prop = alloc_prop(dev, if fabric { fabric_handle_type() } else { none_handle_type() });
-        let mut out = Physical { handles: Vec::with_capacity(count), chunk, fabric, owns: true };
-        for i in 0..count {
-            let mut h: sys::CUmemGenericAllocationHandle = 0;
-            if let Err(e) = cuda_check(unsafe { sys::cuMemCreate(&mut h, chunk, &prop, 0) }, "cuMemCreate") {
-                return Err(Error::Cuda(format!("chunk {i} of {count} ({chunk} bytes): {e}")));
-            }
-            out.handles.push(h);
-        }
-        Ok(out)
-    }
-
-    /// What a peer maps to reach each chunk, in chunk order.
-    pub(crate) fn export(&self) -> Result<Vec<PeerHandle>> {
-        let bytes = self.chunk as u64;
-        self.handles
-            .iter()
-            .map(|&handle| {
-                if !self.fabric {
-                    return Ok(PeerHandle::Local { handle, bytes });
-                }
-                let mut fh = sys::CUmemFabricHandle { data: [0; 64] };
-                cuda_check(
-                    unsafe {
-                        sys::cuMemExportToShareableHandle(
-                            &mut fh as *mut _ as *mut c_void,
-                            handle,
-                            fabric_handle_type(),
-                            0,
-                        )
-                    },
-                    "cuMemExportToShareableHandle",
-                )?;
-                Ok(PeerHandle::Fabric { fabric: fh.data, bytes })
-            })
-            .collect()
-    }
-
-    /// A peer's chunks, each `chunk` bytes, all of one kind of handle.
-    pub(crate) fn import(chunk: usize, handles: &[PeerHandle], what: &str) -> Result<Physical> {
-        let owns = matches!(handles.first(), Some(PeerHandle::Fabric { .. }));
-        let mut out = Physical { handles: Vec::with_capacity(handles.len()), chunk, fabric: false, owns };
-        for (i, h) in handles.iter().enumerate() {
-            if h.bytes() != chunk as u64 {
-                bail!(Api, "{what}: chunk {i} is {} bytes, the pool's chunks are {chunk}", h.bytes());
-            }
-            let handle = match (h, owns) {
-                (PeerHandle::Fabric { fabric, .. }, true) => {
-                    let mut fh = sys::CUmemFabricHandle { data: *fabric };
-                    let mut handle: sys::CUmemGenericAllocationHandle = 0;
-                    cuda_check(
-                        unsafe {
-                            sys::cuMemImportFromShareableHandle(
-                                &mut handle,
-                                &mut fh as *mut _ as *mut c_void,
-                                fabric_handle_type(),
-                            )
-                        },
-                        &format!("{what}: chunk {i}: cuMemImportFromShareableHandle"),
-                    )?;
-                    handle
-                }
-                (PeerHandle::Local { handle, .. }, false) => *handle,
-                _ => bail!(Api, "{what}: chunk {i} is {h:?}, chunk 0 is a different kind of handle"),
-            };
-            out.handles.push(handle);
-        }
-        Ok(out)
-    }
-}
-
-impl Drop for Physical {
-    fn drop(&mut self) {
-        if self.owns {
-            for &h in &self.handles {
-                unsafe { sys::cuMemRelease(h) };
-            }
-        }
-    }
-}
-
-/// The shell of the pool's remaps: arenas in the pool's order over one set
-/// of physical chunks. Arenas drop first, then the chunks. A runtime's own
-/// mapper lives on its remap thread; a mirror of a peer's states is one
-/// too, run by [`crate::Runtime::place`].
-pub(crate) struct Mapper {
-    arenas: Vec<Arena>,
-    physical: Arc<Physical>,
-}
-
-impl Mapper {
-    pub(crate) fn new(arenas: Vec<Arena>, physical: Arc<Physical>) -> Mapper {
-        Mapper { arenas, physical }
-    }
-
-    /// Where arena `a` starts.
-    pub(crate) fn ptr(&self, a: usize) -> u64 {
-        self.arenas[a].ptr()
-    }
-
-    /// Unmap, map, grant access — in that order, so a chunk a plan moves
-    /// is off its old position before it is on its new one.
-    pub(crate) fn run(&mut self, plan: &kern_pool::Remap) -> Result<()> {
-        for &(a, p) in &plan.unmap {
-            self.arenas[a].unmap(p)?;
-        }
-        for &(a, p, c) in &plan.map {
-            let h = self.physical.handles[c as usize];
-            self.arenas[a].map(p, h)?;
-        }
-        for (a, r) in plan.access_spans() {
-            self.arenas[a].access(r)?;
-        }
-        Ok(())
-    }
 }
 
 /// Synchronization is trivially correct for these raw views: the whole
