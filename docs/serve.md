@@ -955,10 +955,15 @@ gsm8k 5-shot c64：0.9666 / 0.9674 ± 0.0049（10-11 kern-serve bf16 0.9682，10
 `--seq-slots` 原来只对 DP tier 生效，pipeline 的 head 和 stage 一直是 `max_seqs + 1`，K3 c64 时 129 / 130 个 slot 占满、
 40–57 个 prompt 排在准入外（TTFT p50 24 s）；已改成 head 和每个 stage 都按它配（`68e1402`）。
 
+1P2D（21:51 凑到 6 个空 tray：P tray07+17，D tray04+06 和 tray08+12 各一个 TP8，7 台各 600 GB holder 共 4.10 TB，
+冷 lane、空池、600 s 一轮，前 9–10 分钟都在消化冷启风暴，看 600 s 之后的请求）：c80 稳（队列空，TTFT p50 / p90
+1923 / 3737 ms，94% < 5 s），c96 不稳（p90 12.6 s，只有 76% < 5 s，两个 D 各 64 座坐满），**一个 PP8 带两个 D 过池约扛
+c88 ± 8**，和 10-11 host tier 的 1P2D 落在同一处（c64 稳、c96 饱和）；命中 83% 对那时的 89–93%，少的那几点是 device
+留不住的前缀（每轮淘汰 2.2–2.4k 条）改由池补（每轮 fetch 6.7–15.3M token）。
+
 P 单独的并发上限（停掉 D，head 自己答、`max_tokens=1`，每轮清池、600 s）：c48 队列空（waiting p50 / p90 0 / 0，
 第 8 分钟起 TTFT p50 1.0–1.8 s，命中 92.9%），c64 开始排队（waiting p50 4，TTFT p50 8.1 s），c80 / c96 崩（11 s / 124 s，
-c96 命中掉到 53%）；c48 起 req/s 就平在 3.15，再加 lane 只是排队。所以一个 PP8 过池大约扛 **c56 ± 8**（P-only 口径；
-按请求率换算，3.15 req/s 超过 10-11 的 1P2D c96 的 2.68，带 D 时相当于 c100–110）。顶住的不是算力（c64–c96 新算 29k tok/s，
+c96 命中掉到 53%）；c48 起 req/s 就平在 3.15，再加 lane 只是排队。所以 P-only 口径下一个 PP8 过池大约扛 **c56 ± 8**（按请求率换算 3.15 req/s 超过 10-11 的 1P2D c96 的 2.68；带 D 实测见上，c88 ± 8）。顶住的不是算力（c64–c96 新算 29k tok/s，
 10-11 饱和时 24k），是 device 的 page 预算：177640 页 × 64 = 11.4M token 要装 running 的 prompt 加每条 lane 的 kept 前缀
 （80 条 × 90k ≈ 7.2M），`kv_pct` 常年 98–99%，准入是 head-of-line——队首 prompt 等一次淘汰一条地腾地方（`pp/cache.rs`、
 `pp/head.rs::admit`），`waiting` 爬到 90–140、`running` 掉到 20 多，然后一次扫出 100 多条再放一批进来；10-11 的 host tier
