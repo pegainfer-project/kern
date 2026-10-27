@@ -943,7 +943,27 @@ prefill 对 chunk 边界敏感，不带池的实例上同一 prompt 从 0 算和
 杀 master（同配置，AgentX c32 300 s，+60 s `pkill mooncake_master`，+150 s 重启）：请求 0 失败（993 个，3.0 req/s），
 没 master 的 90 s 里探池全 miss、按 device 前缀算，put 被拒 203 次；第一次探失败（rc -900）立即进 30 s cooldown，
 cooldown 过后再探一次要 4.3 s 才超时、再进 cooldown，所以每 30 s 有一个请求多付 4 s；master 回来后 holder 自己重挂、
-cooldown 一过命中恢复（重启后 33 s 内），全程 TTFT p50 / p90 / p99 379 / 3426 / 10228 ms。未做：K3 PP8（没有 16 张空卡）。
+cooldown 一过命中恢复（重启后 33 s 内），全程 TTFT p50 / p90 / p99 379 / 3426 / 10228 ms。
+
+**K3 PP8 过池（2026-10-27 晚，`~/bench_results/2026-10-27-k3-pp8-pooled-1p1d`）**：full K3 bf16 KV，P = PP8（tray07+17，
+chunk 8192，`--max-seqs 128 --seq-slots 256`），D = TP8 一个 tier（tray01+02，生成器 `k3_mla_absorb_mma` 上限 64 行，
+所以一个 D 只坐 64 个序列，1P1D 而非 1P2D），P、D 都从 kern-k3-pp-prefill `2d41c94` 一个生成器出（10-20 的 sglang 布局 P
+的 state 叫 `conv.l*/ssm.l*`，和 D 的 `kda.*` 对不上，head 会拒绝）；master tray03，六个 tray 共 3.12 TB DRAM holder。
+AgentX c48 600 s：0 失败，命中 87%（device 73.8M token，池 0.3M——单个 P 自己的 device 就够，池在这里只写不读），
+去掉前 120 s 的 TTFT p50 / p90 1356 / 4471 ms（10-11 带 host tier 的 1P2D c64：1600 / 2970），D step 38 ms；
+gsm8k 5-shot c64：0.9666 / 0.9674 ± 0.0049（10-11 kern-serve bf16 0.9682，10-19 SGLang P + kern D 0.9712，一个标准误内）。
+`--seq-slots` 原来只对 DP tier 生效，pipeline 的 head 和 stage 一直是 `max_seqs + 1`，K3 c64 时 129 / 130 个 slot 占满、
+40–57 个 prompt 排在准入外（TTFT p50 24 s）；已改成 head 和每个 stage 都按它配（`68e1402`）。
+
+P 单独的并发上限（停掉 D，head 自己答、`max_tokens=1`，每轮清池、600 s）：c48 队列空（waiting p50 / p90 0 / 0，
+第 8 分钟起 TTFT p50 1.0–1.8 s，命中 92.9%），c64 开始排队（waiting p50 4，TTFT p50 8.1 s），c80 / c96 崩（11 s / 124 s，
+c96 命中掉到 53%）；c48 起 req/s 就平在 3.15，再加 lane 只是排队。所以一个 PP8 过池大约扛 **c56 ± 8**（P-only 口径；
+按请求率换算，3.15 req/s 超过 10-11 的 1P2D c96 的 2.68，带 D 时相当于 c100–110）。顶住的不是算力（c64–c96 新算 29k tok/s，
+10-11 饱和时 24k），是 device 的 page 预算：177640 页 × 64 = 11.4M token 要装 running 的 prompt 加每条 lane 的 kept 前缀
+（80 条 × 90k ≈ 7.2M），`kv_pct` 常年 98–99%，准入是 head-of-line——队首 prompt 等一次淘汰一条地腾地方（`pp/cache.rs`、
+`pp/head.rs::admit`），`waiting` 爬到 90–140、`running` 掉到 20 多，然后一次扫出 100 多条再放一批进来；10-11 的 host tier
+（每段 128 GiB）替 device 兜着 kept 前缀，所以那时 device 页只装 running 的。池的 get 被拒（`rc=1`，整批）c96 73 次、c48 0 次，
+都按设计退回 device 前缀算，没有请求失败。
 
 **2026-10-27 window state 修掉之后（`~/bench_results/2026-10-27-dsv41-window-work`）**：#100 的根因在 kern-dsv41-flash
 的生成器——window state 声明成 `128 + max_tokens` 行的环，只为一步内的行不踩这一步还在读的槽；改成 state 只留 256 个位置、
