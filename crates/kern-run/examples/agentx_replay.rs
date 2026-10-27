@@ -3,7 +3,7 @@
 //!
 //!     agentx_replay --traces <cc-traces-weka-062126>/traces.jsonl   # HF semianalysisai/cc-traces-weka-062126 \
 //!         [--unit 64] [--kv-bytes 65536] [--state <bytes per slot>] [--budget-gib 250 | --capacity <tokens>]
-//!         [--slots 130] [--concurrency 32] [--sessions N] [--host-gib 0] [--host-turn 8192] [--pp-head]
+//!         [--slots 130] [--concurrency 32] [--sessions N] [--pp-head]
 //!
 //! Every request of a session is a sequence: leased at its timestamp for
 //! `in + out` tokens, prefilled from the longest checkpoint holding a
@@ -20,12 +20,7 @@
 //! checkpoints until it fits, or waits for the next sequence to finish.
 //! The pool is `--slots` slots and the pages `--budget-gib` has room for
 //! beside them (or `--capacity` tokens of pages), fixed as the runtime's
-//! are: a lease short of a slot or pages is `Busy`. With `--host-gib`
-//! a `Busy` lease parks the coldest resident checkpoint into a host tier
-//! of that size, split into host pages and host slots as the runtime
-//! splits it (`kern_runtime::host_split`, one slot per `--host-turn`
-//! tokens of pages), instead of dropping it (dropping the coldest parked ones
-//! when the tier is full), and a hit on a parked one wakes it.
+//! are: a lease short of a slot or pages is `Busy`.
 //!
 //! `--pp-head` (with `--state`) replays as a pipeline head serving the
 //! prefill of a P/D split does: a request leases its prompt only, is kept
@@ -33,9 +28,8 @@
 //! decode tier made).
 //!
 //! Reported: hit rate (prefix tokens found / input tokens), the hits and
-//! their tokens by tier (resident, or woken from the host), extend
-//! percentiles, checkpoints kept, evictions, requests that had to wait,
-//! parks and wakes; the most entries and slots held at once, the entries
+//! their tokens, extend percentiles, checkpoints kept, evictions, requests
+//! that had to wait; the most entries and slots held at once, the entries
 //! a later turn of their session moved past at the end, and the requests
 //! that found nothing although an earlier one of their session had
 //! finished.
@@ -47,7 +41,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agentx::{manifest, pct, Trace};
-use kern_pool::{Denied, Evicted, Found, Host, Lease, Pool, Prefix, Tier};
+use kern_pool::{Denied, Lease, Pool, Prefix};
 
 struct Live {
     lease: Lease,
@@ -63,64 +57,18 @@ struct Tally {
     input: u64,
     hit: u64,
     extend: Vec<usize>,
-    /// Requests whose prefix was found resident, and on the host (woken).
-    resident_hits: u64,
-    resident_hit_tokens: u64,
-    host_hits: u64,
-    host_hit_tokens: u64,
+    /// Requests whose prefix was found, and the tokens found.
+    hits: u64,
+    hit_tokens: u64,
     checkpoints: u64,
     evictions: u64,
     waited: u64,
     rejected: u64,
     max_live: usize,
-    parks: u64,
-    wakes: u64,
-    wake_tokens: u64,
-    /// Host pages the parks copied out (pages parked already are not copied again).
-    park_pages: u64,
-    host_evictions: u64,
-    /// The most host pages and host slots held at once.
-    host_peak: (u64, u64),
     peak_entries: usize,
     peak_slots_used: usize,
     /// Requests that found nothing after an earlier one of their session finished.
     lost: u64,
-}
-
-/// Make room for a `Busy` lease: park the coldest resident checkpoint
-/// when there is a host tier (dropping the coldest parked ones until it
-/// fits), else drop it. `false` when nothing is resident.
-fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, tally: &mut Tally) -> bool {
-    // The plan's copies would run on the runtime; here the bytes are
-    // imaginary and the checkpoint goes straight back.
-    let mut copied = 0u64;
-    let park = host.map(|h| {
-        |cp| {
-            Ok::<_, ()>(h.park(&cp).map(|(p, plan)| {
-                copied += plan.pages.len() as u64;
-                p
-            }))
-            .map(|r| r.map_err(|_| cp))
-        }
-    });
-    let evicted = prefix.evict(park).unwrap();
-    tally.park_pages += copied;
-    let dropped = match evicted {
-        Some(Evicted::Parked { dropped, .. }) => {
-            tally.parks += 1;
-            if let Some(h) = host {
-                tally.host_peak = (tally.host_peak.0.max(h.used()), tally.host_peak.1.max(h.slots_used()));
-            }
-            dropped
-        }
-        Some(Evicted::Dropped { dropped, .. }) => {
-            tally.evictions += 1;
-            dropped
-        }
-        None => return false,
-    };
-    tally.host_evictions += dropped as u64;
-    true
 }
 
 fn main() {
@@ -133,8 +81,6 @@ fn main() {
     let mut slots = 130usize;
     let mut concurrency = 32usize;
     let mut sessions_cap = usize::MAX;
-    let mut host_gib = 0u64;
-    let mut host_turn = 8192u64;
     let mut pp_head = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -149,8 +95,6 @@ fn main() {
             "--slots" => slots = v().parse().unwrap(),
             "--concurrency" => concurrency = v().parse().unwrap(),
             "--sessions" => sessions_cap = v().parse().unwrap(),
-            "--host-gib" => host_gib = v().parse().unwrap(),
-            "--host-turn" => host_turn = v().parse().unwrap(),
             "--pp-head" => pp_head = true,
             _ => panic!("unknown arg {a}"),
         }
@@ -167,9 +111,6 @@ fn main() {
     } as usize;
     assert!(pages > 0, "no page left beside {slots} slots of {state} bytes: a bigger --budget-gib or fewer --slots");
     let pool = Arc::new(Pool::new(&m, pages, slots).expect("the budget lays out"));
-    let host_units = (host_gib > 0)
-        .then(|| kern_runtime::host_split(host_gib << 30, page_bytes, state, host_turn.div_ceil(unit as u64)));
-    let host = host_units.map(|(pages, slots)| Arc::new(Host::new(pages, slots)));
     let mut prefix = Prefix::new(unit);
     let mut tally = Tally::default();
     // Finish events keyed by (time bits, live index) so the order is total.
@@ -222,33 +163,19 @@ fn main() {
             now = now.max(trace.at(ri));
             let toks = trace.tokens(ri);
             let worst = if pp_head { r.input } else { r.input + r.out };
-            let mut woken = false;
             let lease = loop {
-                // Room made for a retry may have parked or dropped the
-                // checkpoint hit: look it up again where it is now.
+                // Room made for a retry may have dropped the checkpoint
+                // hit: look it up again.
                 let attempt = match prefix.lookup(&toks[..r.input]) {
-                    Some(h) => match h.found {
-                        Found::Resident(cp) => pool.restore(&cp, h.len, worst).map(|(l, _)| l),
-                        // Woken straight into the lease; the parked
-                        // checkpoint stays on the host.
-                        Found::Parked(p) => {
-                            host.as_ref().expect("a parked hit").restore(&p, &pool, h.len, worst).map(|(l, _)| {
-                                woken = true;
-                                tally.wakes += 1;
-                                tally.wake_tokens += h.len as u64;
-                                l
-                            })
-                        }
-                    },
+                    Some(h) => pool.restore(&h.found, h.len, worst).map(|(l, _)| l),
                     None => pool.lease(worst),
                 };
                 match attempt {
                     Ok(l) => break Some(l),
-                    Err(Denied::Busy) => {
-                        if !make_room(&mut prefix, host.as_ref(), &mut tally) {
-                            break None;
-                        }
-                    }
+                    Err(Denied::Busy) => match prefix.evict() {
+                        Some(_) => tally.evictions += 1,
+                        None => break None,
+                    },
                     Err(_) => {
                         tally.rejected += 1;
                         break None;
@@ -273,12 +200,9 @@ fn main() {
             tally.input += r.input as u64;
             tally.hit += hit_len as u64;
             tally.extend.push(r.input - hit_len);
-            if woken {
-                tally.host_hits += 1;
-                tally.host_hit_tokens += hit_len as u64;
-            } else if hit_len > 0 {
-                tally.resident_hits += 1;
-                tally.resident_hit_tokens += hit_len as u64;
+            if hit_len > 0 {
+                tally.hits += 1;
+                tally.hit_tokens += hit_len as u64;
             }
             if state == 0 {
                 for k in (hit_len / unit + 1)..=r.input / unit {
@@ -313,32 +237,12 @@ fn main() {
         pool.pages() as u64 * unit as u64,
         pool.slots(),
     );
-    if let Some((pages, slots)) = host_units {
-        let gib = |p: u64, s: u64| (p * page_bytes + s * state) as f64 / (1u64 << 30) as f64;
-        println!(
-            "host tier {host_gib} GiB: {pages} pages and {slots} slots, {} parks ({} pages copied out, {:.1} TiB), {} wakes ({} tokens), {} parked dropped for room, peak {} pages and {} slots ({:.1} GiB), {} parked at the end",
-            tally.parks,
-            tally.park_pages,
-            (tally.park_pages * page_bytes) as f64 / (1u64 << 40) as f64,
-            tally.wakes,
-            tally.wake_tokens,
-            tally.host_evictions,
-            tally.host_peak.0,
-            tally.host_peak.1,
-            gib(tally.host_peak.0, tally.host_peak.1),
-            prefix.count(Tier::Parked),
-        );
-    }
     println!(
-        "hit {:.1}% of {} input tokens: {} requests hit resident ({} tokens, {:.1}%), {} hit the host ({} tokens, {:.1}%); extend p50 {} p90 {} p99 {}; {} checkpoints made, {} kept, {} evicted; {} requests waited, {} rejected; max live {}",
+        "hit {:.1}% of {} input tokens: {} requests hit ({} tokens); extend p50 {} p90 {} p99 {}; {} checkpoints made, {} kept, {} evicted; {} requests waited, {} rejected; max live {}",
         100.0 * tally.hit as f64 / tally.input.max(1) as f64,
         tally.input,
-        tally.resident_hits,
-        tally.resident_hit_tokens,
-        100.0 * tally.resident_hit_tokens as f64 / tally.input.max(1) as f64,
-        tally.host_hits,
-        tally.host_hit_tokens,
-        100.0 * tally.host_hit_tokens as f64 / tally.input.max(1) as f64,
+        tally.hits,
+        tally.hit_tokens,
         pct(&mut tally.extend, 0.5).unwrap_or(0),
         pct(&mut tally.extend, 0.9).unwrap_or(0),
         pct(&mut tally.extend, 0.99).unwrap_or(0),

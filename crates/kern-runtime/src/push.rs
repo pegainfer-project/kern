@@ -308,9 +308,13 @@ impl Runtime {
         if let Some(&(s, d)) = pairs.iter().find(|&&(s, d)| s < 0 || s as i64 >= have || d < 0 || d as i64 >= room) {
             bail!(Api, "state `{state}`: page pair ({s}, {d}) outside 0..{have} here, 0..{room} there");
         }
-        let units: Vec<(i32, u64)> = pairs.iter().map(|&(s, d)| (s, d as u64)).collect();
-        for (p, d, n) in runs(&units) {
-            copy_1d(self.stream.cu_stream(), e.dst + d * e.object, e.src + p as u64 * e.object, n as u64 * e.object)?;
+        for (p, d, n) in runs(pairs) {
+            copy_1d(
+                self.stream.cu_stream(),
+                e.dst + d as u64 * e.object,
+                e.src + p as u64 * e.object,
+                n as u64 * e.object,
+            )?;
         }
         Ok(())
     }

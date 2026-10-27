@@ -2,11 +2,9 @@
 //! a sequence gets and which bytes move; the runtime runs those moves on
 //! the compute stream.
 //!
-//! Every lease operation begins with `poll`: a checkpoint whose park
-//! copies have landed goes back to the pool. A leased slot is zeroed on
-//! the stream (a fresh sequence's recurrent state); a checkpoint, a
-//! restore and a fork move whole pages and whole slots, as the pool's
-//! [`Copies`] say.
+//! A leased slot is zeroed on the stream (a fresh sequence's recurrent
+//! state); a checkpoint, a restore and a fork move whole pages and whole
+//! slots, as the pool's [`Copies`] say.
 //!
 //! The pool may also live in another process: a serving head holds one
 //! for every rank, built from the rank's [`Runtime::budget`], and the
@@ -14,9 +12,6 @@
 //! byte moves, [`Runtime::zero_slot`] for a fresh lease's slot. Such a
 //! runtime leases nothing of its own.
 
-use cudarc::driver::sys;
-
-use crate::device::landed;
 use crate::error::bail;
 use crate::{Result, Runtime};
 use kern_pool::{Checkpoint, Copies, Lease};
@@ -30,7 +25,6 @@ impl Runtime {
     /// recurrent state), and everything returns when the lease drops.
     pub fn lease(&mut self, tokens: usize) -> Result<Lease> {
         self.ctx.bind_to_thread()?;
-        self.poll()?;
         let lease = self.pool.lease(tokens)?;
         for (name, st) in &self.manifest.states {
             let Some(range) = lease.seq_bytes(st.bytes_per_seq).filter(|_| st.is_per_seq()) else { continue };
@@ -47,7 +41,6 @@ impl Runtime {
     /// recurrent state). Empty when the manifest has no per-sequence state.
     pub fn lease_slot(&mut self) -> Result<Lease> {
         self.ctx.bind_to_thread()?;
-        self.poll()?;
         let lease = self.pool.lease_slot()?;
         for (name, st) in &self.manifest.states {
             let Some(range) = lease.seq_bytes(st.bytes_per_seq).filter(|_| st.is_per_seq()) else { continue };
@@ -89,7 +82,6 @@ impl Runtime {
     /// ids to run after it ([`Runtime::copy`]).
     pub fn checkpoint(&mut self, lease: &mut Lease, len: usize) -> Result<(Checkpoint, Copies)> {
         self.ctx.bind_to_thread()?;
-        self.poll()?;
         let (cp, copies) = self.pool.checkpoint(lease, len)?;
         self.run_copies(&copies.pages, copies.slot.as_slice())?;
         Ok((cp, copies))
@@ -110,7 +102,6 @@ impl Runtime {
     /// back too, as from [`Runtime::checkpoint`].
     pub fn lease_from(&mut self, cp: &Checkpoint, len: usize, tokens: usize) -> Result<(Lease, Copies)> {
         self.ctx.bind_to_thread()?;
-        self.poll()?;
         let (lease, copies) = self.pool.restore(cp, len, tokens)?;
         self.run_copies(&copies.pages, copies.slot.as_slice())?;
         Ok((lease, copies))
@@ -123,7 +114,6 @@ impl Runtime {
     /// parent's as of now. The lease names positions from `len` on.
     pub fn fork(&mut self, parent: &mut Lease, len: usize, tokens: usize) -> Result<Lease> {
         self.ctx.bind_to_thread()?;
-        self.poll()?;
         let (lease, copies) = self.pool.fork(parent, len, tokens)?;
         self.run_copies(&copies.pages, copies.slot.as_slice())?;
         Ok(lease)
@@ -178,20 +168,6 @@ impl Runtime {
                 let src = s.view((a * bytes) as usize..((a + 1) * bytes) as usize)?;
                 let mut dst = s.view((b * bytes) as usize..((b + 1) * bytes) as usize)?;
                 self.stream.memcpy_dtod(&src, &mut dst)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Return the checkpoints whose park copies have landed to the pool.
-    pub(crate) fn poll(&mut self) -> Result<()> {
-        let mut parking = std::mem::take(&mut self.parking);
-        for (cp, ev) in parking.drain(..) {
-            if landed(ev)? {
-                unsafe { sys::cuEventDestroy_v2(ev) };
-                drop(cp);
-            } else {
-                self.parking.push((cp, ev));
             }
         }
         Ok(())

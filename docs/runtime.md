@@ -54,7 +54,7 @@ runtime 再加 slot 0（kern-serve：每 rank `(max_seqs + 1) × t`，pad 也算
 租约 drop 时一起归还。`Runtime::lease_slot()` 只租 slot 不租页：TP 下一行的
 KDA state 按头分在组里每张卡上、MLA 页只在 owner 卡，peer 卡上这一行就是一个
 slot-only 的 `Lease`（`paged() == false`，不能 `slot(pos)`），它的 checkpoint /
-retire / fork / restore / park / wake 只搬 slot、长度由调用方说（E5 tray 级）。
+retire / fork / restore 只搬 slot、长度由调用方说（E5 tray 级）。
 
 **checkpoint（K1）**：`Runtime::checkpoint(&mut lease, len)` 把序列前 `len` 个
 token 留成 `Checkpoint`——页进共享链（一页一个引用计数节点，一条序列每页一个
@@ -70,8 +70,8 @@ checkpoint drop 时回池，checkpoint 本身不会被 runtime 淘汰。
 纯 host 的 `Prefix` 索引（`kern-pool/prefix.rs`，设计见 `pool.md`）是 token 键的 radix
 tree：`insert(&tokens, cp)` 把 checkpoint 挂在它的 token 路径上（同样的 token 是同一个
 条目），`lookup(tokens)` 给出覆盖 prompt 真前缀（不含最后一个 token）的最长可用条目，
-`Hit` 持有条目的一个 clone；`evict(park)` 拿最久未命中的 resident 条目 park 进 host
-或丢掉（同一条路径叶子先走，drop 叶子才真正还页）；逻辑时钟计数，不读钟，同样的
+`Hit` 持有条目的一个 clone；`evict()` 丢掉最不值钱的条目（分档见 `pool.md`；同一条路径
+叶子先走，drop 叶子才真正还页）；逻辑时钟计数，不读钟，同样的
 token 序列给同样的判定。决策（共享哪些页、拷哪一页、
 拷哪个 slot）由 `Pool` 在 host 上算成 `Copies`，runtime 只在 stream 上执行拷贝。
 kern run / kern test 仍默认 4096（test 的 workload 抽样以 capacity 为界）。
@@ -84,43 +84,14 @@ state），纯 KV 模型可以分在任何位置。和 `lease_from` 是同一套
 区别只在源头是 `Lease` 还是 `Checkpoint`，父序列不用先 checkpoint。`lease_from`
 现在也接受 `len < checkpoint.len`（只对纯 KV 的 checkpoint，整页处起步）。
 
-**host 层（K3）**：`Runtime::reserve_host(pages, slots)` 一次 `cuMemHostAlloc` 一块 pinned
-DRAM（GB300 上约 100 ms/GiB，只做一次），分配前把线程的 NUMA 策略绑到这张卡所在的
-节点（sysfs 的 `numa_node` + `set_mempolicy`，分完恢复默认）：一个 GB300 tray 两颗
-Grace 各挂两张卡，本地 DRAM 拷贝 180 / 197 GiB/s（park / wake），跨到另一颗 CPU 的
-只有 115 / 117——同一个 6 GB 唤醒 31 ms 与 52 ms 的差别就在这里；park 分两步：`Runtime::room(checkpoint) -> Result<Room, Checkpoint>`
-只在 host 块上找地方（放不下时把 checkpoint 原样退回，调用方淘汰点什么再试；`Room`
-drop 即退地），`Runtime::park(room) -> Parked` 才拷页和 slot——分开是为了 tray 级的
-park 能先在四张卡上都找到地方再动一个字节（半途失败的 park 无法撤销）；runtime 攥着
-这个 checkpoint 直到拷贝落地，页和 slot 才回池，前缀一直可查；`Runtime::wake(&parked, len, tokens) -> Waking`
-按 `tokens` 一次取够页（`Host::restore`，与 `lease_from` 同形）并把前 `len` 个 token 的页（和 slot）
-拷进去，`Runtime::awake(waking) -> Result<Lease, Waking>` 不阻塞地问拷贝落地没有，落地了才交出
-这份 `Lease`（`Runtime::landed(&waking)` 只问不拿，tray 用它先看齐四张卡再一起 awake）——没有
-`Lease` 就没有程序能读到还在路上的页，这是类型保证的，不靠 compute stream 等事件（`Waking`
-提前 drop 会等拷贝完再还页）；一个请求的房间只问一次（2026-09-15，lessons.md）。host 上
-的页也是链（`kern-pool/host.rs`，一页一个节点，device 节点记着它 host 副本的 `Weak`），同一 session
-下一轮再 park 只拷新增的页，醒来的再睡一个字节不拷；一页在 host 上是所有分页 state 的该页首尾相接，slot 同理，
-块的前段是 host 页、后段是 host slot，`kern_pool::Host` 只按单元号记账（2026-10-09 起，
-`--host-gib` 的字节经 `Runtime::host_units` / `host_split` 每 `--host-turn` token 的页配一个 slot，见 `pool.md`）。拷贝走单独的 transfer stream
-（`cuMemcpy2DAsync`，连续页折成一次），transfer stream 在 compute stream 已入队的一切
-之后开始，compute stream 从不等它，decode 步不排在拷贝后面。流水线（2026-10-09，serve.md「流水线」）
-没有要护着的 decode 步，反过来让 host 拷贝走 compute stream：`Runtime::park_now(checkpoint)` /
-`Runtime::wake_now(&parked, len, tokens)` 在 compute stream 上按序拷、当场交回计划，checkpoint 的页立即
-回池、醒来的 `Lease` 立即可喂——之后写或读它们的 launch 都排在拷贝后面，次序就是保证；
-`Runtime::copy_out` / `copy_in` 是 `Runtime::copy` 跨 host 边界的样子，替持有同一套 id 的段执行头的
-计划（越界的 id 拒绝）。`Prefix` 表按
-`Tier::{Resident, Parked}` 分层：`lookup` 先挑 resident；纯 KV 的 checkpoint 链在表里
-是一个随页增长的条目（每个深度都登记），所以 parked 的条目部分命中时只醒需要的页；
-`evict(Some(|cp| ...))` 是调用方腾地方的一个动作（park 最冷的 resident，host 满了先丢
-最冷的 parked，没有 host 就丢）；表对它存的东西是泛型的（`Prefix<R, P>`，`R: Kept`、`P: Kept` 只要求 `tokens()` / `has_slot()`），
-单卡存 `Checkpoint` / `Parked`，kern-serve 的 tray 存四张卡的元组。实测
-（tray08 GB300 单卡，2026-09-03，`crates/kern-runtime/examples/park_wake.rs`，写入
-按位置的 pattern、park、清零、wake、逐字节比对）：qwen3.8-27b 形状 98k token =
-125 页 × 49 MiB + 147 MiB slot = 6.12 GiB，park 34 ms（180 GiB/s）、wake 31 ms
-（197 GiB/s），发起各 0.1 ms，pinned 块落在另一颗 CPU 上时 53 / 52 ms；qwen3-4b 形状 40k token = 2500 页 × 2.25 MiB = 5.49 GiB，
-park 31 ms、wake 28 ms，发起 0.9 / 0.5 ms（2500 页折成 ~50 次拷贝）。C2C 单向 memcpy
-实测 116–119 GiB/s（D2H）/ 85–117（H2D），多 stream 不涨、双向叠加 208 GiB/s；2-D
-拷贝比逐页 memcpy 快得多，每次 memcpy 发起约 12 µs。
+**host 层（K3，2026-10-27 删除）**：曾经的 pinned-DRAM 一层（`reserve_host` / `room` / `park` /
+`wake` / `Waking` / `awake`、`park_now` / `wake_now` / `copy_out` / `copy_in`、transfer stream、
+`park.rs`、`kern-pool/host.rs`、`Prefix` 的 `Tier::{Resident, Parked}`）让位给 Mooncake 池化层
+（roadmap）；runtime 只剩 compute stream，`Prefix<R>` 一层，`evict()` 只丢。当时的实测留作参考
+（tray08 GB300 单卡，2026-09-03）：qwen3.8-27b 形状 98k token = 6.12 GiB，D2H 34 ms（180 GiB/s）、
+H2D 31 ms（197 GiB/s），pinned 块落在另一颗 Grace 上时 53 / 52 ms（所以 pinned 分配要绑卡所在的
+NUMA 节点）；C2C 单向 memcpy 116–119 GiB/s（D2H）/ 85–117（H2D），多 stream 不涨、双向叠加
+208 GiB/s；2-D 拷贝比逐页 memcpy 快得多，每次 memcpy 发起约 12 µs。
 `extern:cublaslt_bf16_tn` 特判：行主序 `C[m,n]=A[m,k]@W[n,k]^T` 映射成列
 主序 `C'=W_cm^T×A_cm`（transa=T、lda=ldb=k、m'=n、ldc=n）；
 `extern:cublaslt_bf16_tn_acc` 是同一条路径 β=1（`C += A@W^T`，c 参

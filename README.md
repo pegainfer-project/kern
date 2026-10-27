@@ -151,8 +151,8 @@ needs and a state slot, all or nothing. When it ends, its pages freeze in
 place as a checkpoint. A later request with the same prefix shares the
 whole pages and gets a copy of only the page the prefix ends inside, so
 every page has at most one writer. A token radix tree finds the longest
-checkpoint for a prompt; under pressure, checkpoints park in host memory and
-wake straight into a new lease.
+checkpoint for a prompt; under pressure, the checkpoint worth least is
+dropped.
 
 **Its pages and slots are fixed at load.** Every pooled state is one VMM
 allocation sized once from the capacity the caller names: so many tokens
@@ -291,7 +291,7 @@ golden-checked in CI:
 | Path | What it is |
 | --- | --- |
 | `crates/kern-manifest` | Schema and verifier (pure, no CUDA) |
-| `crates/kern-pool` | KV pages, state slots, prefix cache, host tier (pure, no CUDA) |
+| `crates/kern-pool` | KV pages, state slots, prefix cache (pure, no CUDA) |
 | `crates/kern-runtime` | The executor: fetch, verify, allocate, CUDA graphs |
 | `crates/kern-test` | The `kern test` harness: diff, tap, noise floor, fuzz, perf, verdict (pure, no CUDA) |
 | `crates/kern-run` | The `kern` binary: `run`, `test`, `bench`, `server`, `verify`, `cut`, `kernels` |

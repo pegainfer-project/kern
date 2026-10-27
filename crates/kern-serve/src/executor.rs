@@ -10,9 +10,9 @@
 //! the handle of its pool (which a prefill tier pushes into when these
 //! ranks decode for one, `pd`). Once every rank has said hello the head
 //! answers each with a [`Table`]: every group's members' offers in member
-//! order, and the host tier to reserve. Each rank then connects
+//! order. Each rank then connects
 //! ([`Runtime::connect`]: maps its peers, joins its communicators), runs
-//! what the manifest runs once and reserves its host tier.
+//! what the manifest runs once.
 //!
 //! From then on the head sends every rank an [`Order`] and reads back its
 //! [`Answer`], over one TCP stream of frames (a `u32` length, then JSON) as
@@ -33,7 +33,7 @@
 //! remote answer after its own was done, so a step's time splits into
 //! the ranks' device time and the wire.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -43,7 +43,7 @@ use kern_manifest::types::Fill;
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Pool;
 use kern_run::Weights;
-use kern_runtime::{Budget, Capacity, GroupRank, Landing, Offer, Runtime, Topology};
+use kern_runtime::{Budget, Capacity, GroupRank, Offer, Runtime, Topology};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -74,13 +74,10 @@ pub struct Hello {
     pub pool: Option<String>,
 }
 
-/// The head's answer: by group, every member's offer (hex) in member
-/// order, and the host tier to reserve as (host pages, host slots), the
-/// units the head's [`Host`](kern_pool::Host) counts.
+/// The head's answer: by group, every member's offer (hex) in member order.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
     pub peers: BTreeMap<String, Vec<String>>,
-    pub host: (u64, u64),
 }
 
 /// The ranks a manifest runs as: the size its groups other than `tp`
@@ -146,26 +143,14 @@ fn members<T: Clone>(m: &Verified, groups: Groups, q: usize, offers: &[T]) -> BT
         .collect()
 }
 
-/// Connect, run what runs once, reserve the host tier.
-fn join(
-    rt: &mut Runtime,
-    p: &Protocol,
-    groups: Groups,
-    peers: &BTreeMap<String, Vec<Offer>>,
-    host: (u64, u64),
-) -> Result<()> {
+/// Connect, run what runs once.
+fn join(rt: &mut Runtime, p: &Protocol, groups: Groups, peers: &BTreeMap<String, Vec<Offer>>) -> Result<()> {
     rt.connect(peers).context("connecting to the groups")?;
     // Once after load, the peers mapped: a group manifest's setup (the
     // allreduce's Lamport stages are poisoned, not zeroed).
     let vars = p.vars(1, 1, groups.size() as u64, 1);
     for prog in &p.once {
         rt.run(prog, &vars).with_context(|| format!("`{prog}`"))?;
-    }
-    if host != (0, 0) {
-        let t0 = Instant::now();
-        let (pages, slots) = host;
-        rt.reserve_host(pages, slots).context("reserving the host tier")?;
-        info!(pages, slots, reserve_s = logline::secs(t0.elapsed()), "host tier reserved");
     }
     Ok(())
 }
@@ -176,28 +161,20 @@ pub struct Joined {
     pub protocol: Protocol,
     pub groups: Groups,
     pub pools: Vec<Pool>,
-    /// The host tier reserved on every rank, in (host pages, host slots).
-    pub host: (u64, u64),
     pub exec: Executors,
 }
 
 impl Joined {
     /// The group scheduler's accounting over every rank.
     pub fn ranks(self) -> Result<(Ranks, Executors)> {
-        Ok((Ranks::new(self.protocol, self.groups, self.pools, self.host)?, self.exec))
+        Ok((Ranks::new(self.protocol, self.groups, self.pools)?, self.exec))
     }
 }
 
 /// Load rank 0, wait at `listen` for every other rank (none for a
 /// manifest of one), connect them all, and build every rank's pool from
 /// the budget it reports.
-pub fn head(
-    m: &Verified,
-    weights: &Weights,
-    o: &Load,
-    listen: Option<&str>,
-    (host_bytes, host_turn): (u64, u64),
-) -> Result<Joined> {
+pub fn head(m: &Verified, weights: &Weights, o: &Load, listen: Option<&str>) -> Result<Joined> {
     let groups = world(m)?;
     let n = groups.ranks();
     let listener = match (n, listen) {
@@ -209,8 +186,6 @@ pub fn head(
     };
     let p = Protocol::check(m)?;
     let mut rt = load(m, weights, groups, 0, o)?;
-    // Every rank's states are the head's manifest's, so one runtime's split holds for all.
-    let host = rt.host_units(host_bytes, host_turn);
     let own = rt.offer()?;
     let mut hellos: Vec<Option<(Hello, TcpStream)>> = (0..n).map(|_| None).collect();
     let mut offers = vec![own.clone(); n];
@@ -247,17 +222,17 @@ pub fn head(
     let mut exported = vec![export_pool(&rt)?];
     let mut remote = Vec::with_capacity(n - 1);
     for (q, (h, mut s)) in hellos.into_iter().enumerate().skip(1).map(|(q, x)| (q, x.expect("every rank said hello"))) {
-        send(&mut s, &Table { peers: members(m, groups, q, &wire), host })?;
+        send(&mut s, &Table { peers: members(m, groups, q, &wire) })?;
         budgets.push(Budget { pages: h.pages, slots: h.slots });
         exported.push(h.pool);
         crate::watch::exit_with(&s, format!("rank {q}"))?;
         remote.push(s);
     }
-    join(&mut rt, &p, groups, &members(m, groups, 0, &offers), host)?;
+    join(&mut rt, &p, groups, &members(m, groups, 0, &offers))?;
     let pools = budgets.iter().map(|b| b.pool(m)).collect::<kern_pool::Result<Vec<_>>>()?;
     info!(ranks = n, group = groups.size(), "ranks connected");
     let exec = Executors { local: Executor::new(0, rt, p.clone()), remote, pools: exported };
-    Ok(Joined { protocol: p, groups, pools, host, exec })
+    Ok(Joined { protocol: p, groups, pools, exec })
 }
 
 /// Serve rank `q` for the head at `head` until the head is gone.
@@ -282,7 +257,7 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
         .iter()
         .map(|(g, v)| Ok((g.clone(), v.iter().map(|x| offer_of(x)).collect::<Result<_>>()?)))
         .collect::<Result<_>>()?;
-    join(&mut rt, &p, groups, &peers, t.host)?;
+    join(&mut rt, &p, groups, &peers)?;
     info!(rank = q, head, "rank serving");
     let mut x = Executor::new(q, rt, p);
     while let Some(order) = recv::<Order>(&mut s)? {
@@ -298,14 +273,11 @@ pub struct Executor {
     rank: usize,
     rt: Runtime,
     p: Protocol,
-    /// Host transfers in flight, in issue order (one stream: they land in it).
-    moving: VecDeque<Landing>,
-    landed: u64,
 }
 
 impl Executor {
     fn new(rank: usize, rt: Runtime, p: Protocol) -> Executor {
-        Executor { rank, rt, p, moving: VecDeque::new(), landed: 0 }
+        Executor { rank, rt, p }
     }
 
     fn run(&mut self, o: &Order) -> Result<Answer> {
@@ -324,8 +296,6 @@ impl Executor {
             match a {
                 Act::Zero(s) => self.rt.zero_slot(*s)?,
                 Act::Copy(c) => self.rt.copy(&c.pages, c.slot.as_slice())?,
-                Act::Park(c) => self.moving.push_back(self.rt.host_out(&c.clone().into())?),
-                Act::Wake(c) => self.moving.push_back(self.rt.host_in(&c.clone().into())?),
             }
         }
         if let Some(item) = &o.item {
@@ -339,7 +309,7 @@ impl Executor {
         Ok(logline::now_us())
     }
 
-    /// Once the item is done: its error word, its outputs, and what landed.
+    /// Once the item is done: its error word and its outputs.
     fn answer(&mut self, o: &Order) -> Result<Answer> {
         let (tokens, counts) = match &o.item {
             Some(item) => {
@@ -359,16 +329,7 @@ impl Executor {
             }
             None => (Vec::new(), Vec::new()),
         };
-        if o.wait {
-            // A landing dropped is a landing waited for.
-            self.landed += self.moving.len() as u64;
-            self.moving.clear();
-        }
-        while self.moving.front().map_or(Ok(false), Landing::landed)? {
-            self.moving.pop_front();
-            self.landed += 1;
-        }
-        Ok(Answer { tokens, counts, landed: self.landed })
+        Ok(Answer { tokens, counts })
     }
 }
 

@@ -76,23 +76,10 @@
 //!   optimization, never a reason to fail its request: `Busy` makes room
 //!   as a lease does, and when nothing is left to make room with it is
 //!   skipped. A `Busy` lease makes room and retries until it fits or
-//!   nothing is left: the least recently hit snapshot is parked into the
-//!   host tier (`--host-gib`: pinned DRAM per rank, `Ranks::park`, all of
-//!   its members' pieces or none; the coldest parked ones are dropped when
-//!   it is full) or, without one, dropped; a lease still short while a
-//!   park's pages are on their way back waits for them rather than parking
-//!   more. A prompt hitting a parked
-//!   snapshot wakes it (`Ranks::wake`) straight into its own row: one
-//!   lease sized for the request, the prefix's pages copied in over the
-//!   transfer streams, so room is decided once (waking the prefix and then
-//!   leasing from it would ask twice, and the second ask could park what
-//!   the first woke, without end). The request waits in `waking` until
-//!   `Ranks::awake` hands the row back and starts from it; no step queues
-//!   behind them. With nothing running, a step only polls the ranks for
-//!   what landed, and only while something is in flight. The parked snapshot stays parked; the request's own
-//!   finish indexes the longer context resident. A replicated group
-//!   (positions dealt over its members) keeps nothing: its checkpoints
-//!   and retires answer `None` and the prefix tree stays empty.
+//!   nothing is left: the snapshot worth least (`Prefix`'s order) is
+//!   dropped. A replicated group (positions dealt over its members) keeps
+//!   nothing: its checkpoints and retires answer `None` and the prefix
+//!   tree stays empty.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -100,7 +87,7 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::Protocol;
-use kern_pool::{Denied, Evicted, Found, Prefix, Tier};
+use kern_pool::{Denied, Prefix};
 use pegainfer_frontend::engine::{
     FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
     SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
@@ -109,7 +96,7 @@ use tracing::{debug, info, warn};
 
 use crate::executor::Executors;
 use crate::logline;
-use crate::ranks::{Cell, Ranks, Rising, Row, Sleeping, Snapshot, Staged};
+use crate::ranks::{Cell, Ranks, Row, Snapshot, Staged};
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
 /// fits and each bucket owns one captured graph.
@@ -129,8 +116,6 @@ pub struct Policy {
     /// Rows per sequence of a step, a shape the manifest declares; the
     /// widest by default.
     pub rows: Option<u64>,
-    /// Pinned host memory per rank for parked snapshots (0: none).
-    pub host_bytes: u64,
 }
 
 /// How this process drives the manifest: the forwards a step and a
@@ -305,12 +290,10 @@ pub struct KernScheduler {
     /// Draft acceptance, for a plan whose steps take several rows.
     counters: Option<SpecDecodeCounters>,
     waiting: VecDeque<QueuedRequest>,
-    /// Requests whose rows are still on the way in from the host tier.
-    waking: VecDeque<(QueuedRequest, Rising)>,
     running: Vec<Seq>,
     /// Snapshots of finished prefixes, for the next prompt that shares
     /// one (see the module doc).
-    prefix: Prefix<Snapshot, Sleeping>,
+    prefix: Prefix<Snapshot>,
     /// Checkpoint at every page (a paged-only manifest) rather than only
     /// where a prompt's history and a request end (one with a recurrent state).
     every_page: bool,
@@ -335,22 +318,13 @@ struct Stats {
     /// Prompt tokens found in a snapshot, and snapshots evicted for room.
     prefix_hit_tokens: u64,
     evictions: u64,
-    /// Requests whose prompt was found in a resident snapshot, and in one
-    /// woken from the host, with the tokens found.
+    /// Requests whose prompt was found in a snapshot, with the tokens found.
     resident_hits: u64,
     resident_hit_tokens: u64,
-    host_hits: u64,
-    host_hit_tokens: u64,
     /// Prompts checkpointed where their history ends (a recurrent state),
     /// and those skipped for want of room.
     prompt_checkpoints: u64,
     prompt_skips: u64,
-    /// Snapshots parked to the host, dropped from it for room, woken
-    /// from it, and the tokens woken.
-    parks: u64,
-    host_evictions: u64,
-    wakes: u64,
-    wake_tokens: u64,
     /// The acceptance counters at the window's start, so the window's
     /// acceptance is reported rather than the process's.
     spec_at: (u64, u64, u64),
@@ -371,14 +345,8 @@ impl Stats {
             evictions: 0,
             resident_hits: 0,
             resident_hit_tokens: 0,
-            host_hits: 0,
-            host_hit_tokens: 0,
             prompt_checkpoints: 0,
             prompt_skips: 0,
-            parks: 0,
-            host_evictions: 0,
-            wakes: 0,
-            wake_tokens: 0,
             spec_at,
         }
     }
@@ -390,13 +358,6 @@ pub struct Facts {
     pub block_size: usize,
     /// Longest request (prompt + completion) one sequence can hold.
     pub max_request_tokens: usize,
-}
-
-/// What a lease attempt handed out.
-enum Got {
-    Row(Row),
-    /// A row in flight from the host tier.
-    Rising(Rising),
 }
 
 impl KernScheduler {
@@ -423,7 +384,6 @@ impl KernScheduler {
             plan,
             counters,
             waiting: VecDeque::new(),
-            waking: VecDeque::new(),
             running: Vec::new(),
             prefix,
             every_page,
@@ -476,19 +436,15 @@ impl KernScheduler {
                 None => format!("`{}`, state only", plan.chunk.name),
             },
             checkpoints = if self.every_page { "every page" } else { "at history end and request end" },
-            host_gib_per_rank = (policy.host_bytes > 0).then_some(policy.host_bytes >> 30),
             "scheduler ready"
         );
     }
 
-    /// Rows each rank has (running, and woken ones on the way in).
+    /// Rows each rank has running.
     fn rows_per_rank(&self) -> Vec<usize> {
         let mut rows = vec![0usize; self.ranks.groups().ranks()];
         for s in &self.running {
             rows[s.row.owner().index()] += 1;
-        }
-        for (_, r) in &self.waking {
-            rows[r.owner().index()] += 1;
         }
         rows
     }
@@ -496,25 +452,6 @@ impl KernScheduler {
     /// Admit waiting requests in order and prefill each (single sequence,
     /// chunked); one that cannot be seated stops the scan.
     fn admit(&mut self, ledger: &mut RequestLedger) -> Result<()> {
-        // Wakes land in order: the first still in flight stops the scan;
-        // a landed one starts from its row ahead of the line.
-        while let Some((q, r)) = self.waking.pop_front() {
-            match self.ranks.awake(r) {
-                Ok(row) => {
-                    self.stats.wakes += 1;
-                    self.stats.wake_tokens += row.prefix() as u64;
-                    if ledger.is_aborted(q.id) {
-                        ledger.retire(q.id);
-                        continue;
-                    }
-                    self.admit_one(q, row, true, ledger)?;
-                }
-                Err(r) => {
-                    self.waking.push_front((q, r));
-                    break;
-                }
-            }
-        }
         while let Some(q) = self.waiting.front() {
             let id = q.id;
             if ledger.is_aborted(id) {
@@ -538,38 +475,25 @@ impl KernScheduler {
             }
             let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
             // A hit continues on the snapshot's owner, which must have a row free.
-            let owner = self.prefix.lookup(&ids).map(|h| match h.found {
-                Found::Resident(snap) => snap.owner(),
-                Found::Parked(p) => p.owner(),
-            });
+            let owner = self.prefix.lookup(&ids).map(|h| h.found.owner());
             if owner.is_some_and(|o| rows[o.index()] >= cap) {
                 break;
             }
-            // Room made for a retry may have parked or dropped the
-            // snapshot hit above: look it up again where it is now.
+            // Room made for a retry may have dropped the snapshot hit
+            // above: look it up again.
             let got = loop {
                 let ranks = &mut self.ranks;
                 let attempt = match self.prefix.lookup(&ids) {
-                    Some(h) => match h.found {
-                        Found::Resident(snap) => ranks.lease_from(&snap, h.len, worst).map(Got::Row),
-                        Found::Parked(p) => ranks.wake(&p, h.len, worst).map(Got::Rising),
-                    },
-                    None => ranks.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(Got::Row),
+                    Some(h) => ranks.lease_from(&h.found, h.len, worst),
+                    None => ranks.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)),
                 };
                 match attempt {
-                    Err(Denied::Busy) if self.ranks.parking() => self.settle()?,
-                    Err(Denied::Busy) if self.make_room()? => {}
+                    Err(Denied::Busy) if self.make_room() => {}
                     r => break r,
                 }
             };
             let row = match got {
-                Ok(Got::Row(row)) => row,
-                Ok(Got::Rising(r)) => {
-                    // Its copies are in flight; it starts once they land.
-                    let q = self.waiting.pop_front().unwrap();
-                    self.waking.push_back((q, r));
-                    continue;
-                }
+                Ok(row) => row,
                 Err(Denied::Busy) => break, // wait for pages / a slot
                 Err(Denied::ExceedsRow { limit }) => {
                     ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
@@ -581,18 +505,17 @@ impl KernScheduler {
                     self.waiting.pop_front();
                     continue;
                 }
-                Err(d @ Denied::HostFull) => bail!("a lease denied {d}"),
             };
             let q = self.waiting.pop_front().unwrap();
-            self.admit_one(q, row, false, ledger)?;
+            self.admit_one(q, row, ledger)?;
         }
         Ok(())
     }
 
-    /// Start `q` running in `row` (past the row's prefix, `woken` from
-    /// the host tier or resident): through the chunk forward when the
-    /// manifest has one, else with the prompt queued for the steps.
-    fn admit_one(&mut self, q: QueuedRequest, mut row: Row, woken: bool, ledger: &mut RequestLedger) -> Result<()> {
+    /// Start `q` running in `row` (past the row's prefix): through the
+    /// chunk forward when the manifest has one, else with the prompt
+    /// queued for the steps.
+    fn admit_one(&mut self, q: QueuedRequest, mut row: Row, ledger: &mut RequestLedger) -> Result<()> {
         let id = q.id;
         let prompt = q.request.prompt_tokens.len();
         let max_tokens = q.request.max_tokens;
@@ -640,27 +563,19 @@ impl KernScheduler {
         self.stats.prefill_ns += t0.elapsed().as_nanos();
         self.stats.prefill_tokens += (n_pre - start) as u64;
         self.stats.prefix_hit_tokens += start as u64;
-        if woken {
-            self.stats.host_hits += 1;
-            self.stats.host_hit_tokens += start as u64;
-        } else if start > 0 {
+        if start > 0 {
             self.stats.resident_hits += 1;
             self.stats.resident_hit_tokens += start as u64;
         }
-        // Every prompt token is looked up, in the host tier too when there
-        // is one; the hit is what the lookup found, from whichever tier.
         let c = &mut self.prefix_cache;
         c.queries += prompt as u64;
         c.hits += start as u64;
-        c.host_queries += (self.ranks.host_tier().is_some() as u64) * prompt as u64;
-        c.host_hits += (woken as u64) * start as u64;
         debug!(
             request = %id,
             prompt,
             max_tokens,
             row = ?row,
             prefix_hit = start,
-            woken,
             prefill_ms = logline::ms(t0.elapsed()),
             "admitted"
         );
@@ -695,9 +610,9 @@ impl KernScheduler {
     }
 
     /// The `key.len()` tokens `row` holds, which `key` names, as a snapshot
-    /// of its recurrent state. `Busy` waits for a park's pages or makes
-    /// room and retries; with nothing left to make room with or any other
-    /// denial, the request runs on without it.
+    /// of its recurrent state. `Busy` makes room and retries; with nothing
+    /// left to make room with or any other denial, the request runs on
+    /// without it.
     fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId) -> Result<()> {
         loop {
             match self.ranks.checkpoint(row, key.len()) {
@@ -707,8 +622,7 @@ impl KernScheduler {
                     return Ok(());
                 }
                 Ok(None) => return Ok(()),
-                Err(Denied::Busy) if self.ranks.parking() => self.settle()?,
-                Err(Denied::Busy) if self.make_room()? => {}
+                Err(Denied::Busy) if self.make_room() => {}
                 Err(d) => {
                     debug!(request = %id, tokens = key.len(), denied = %d, "history not kept");
                     self.stats.prompt_skips += 1;
@@ -718,51 +632,32 @@ impl KernScheduler {
         }
     }
 
-    /// Hand every rank what is queued for it, hear what landed; `wait`
-    /// blocks each rank with something in flight until it has.
-    fn poll(&mut self, wait: bool) -> Result<()> {
-        let orders = self.ranks.orders(None, wait);
+    /// Hand every rank what is queued for it.
+    fn poll(&mut self) -> Result<()> {
+        let orders = self.ranks.orders(None);
         let answers = self.exec.run(orders)?;
         self.ranks.heard(&answers)
     }
 
-    /// Every host transfer landed, on every rank.
-    fn settle(&mut self) -> Result<()> {
-        while self.ranks.busy() {
-            self.poll(true)?;
-        }
-        Ok(())
-    }
-
     /// Run `f` over a staged step on every rank: what it handed each cell.
     fn run(&mut self, st: &mut Staged, f: &Forward) -> Result<Vec<Vec<i64>>> {
-        let orders = self.ranks.orders(Some(st.items(f)), false);
+        let orders = self.ranks.orders(Some(st.items(f)));
         let answers = self.exec.run(orders)?;
         self.ranks.heard(&answers)?;
         st.emitted(self.ranks.protocol(), f, &answers)
     }
 
-    /// Room for a `Busy` lease: the coldest resident snapshot goes to
-    /// the host tier when there is one (the coldest parked ones dropped
-    /// until it fits), else is dropped. `false` when nothing is resident.
-    fn make_room(&mut self) -> Result<bool> {
-        let ranks = &mut self.ranks;
-        let park = (self.policy.host_bytes > 0).then_some(|snap| Ok::<_, std::convert::Infallible>(ranks.park(snap)));
-        let dropped = match self.prefix.evict(park).unwrap_or_else(|e| match e {}) {
-            Some(Evicted::Parked { key, dropped }) => {
-                debug!(tokens = key.len(), dropped, "parked");
-                self.stats.parks += 1;
-                dropped
-            }
-            Some(Evicted::Dropped { key, dropped }) => {
-                debug!(tokens = key.len(), dropped, "dropped");
+    /// Room for a `Busy` lease: the snapshot worth least is dropped.
+    /// `false` when nothing is kept.
+    fn make_room(&mut self) -> bool {
+        match self.prefix.evict() {
+            Some(key) => {
+                debug!(tokens = key.len(), "dropped");
                 self.stats.evictions += 1;
-                dropped
+                true
             }
-            None => return Ok(false),
-        };
-        self.stats.host_evictions += dropped as u64;
-        Ok(true)
+            None => false,
+        }
     }
 
     /// Checkpoint every whole page of `s` not yet checkpointed, when the
@@ -911,7 +806,6 @@ impl KernScheduler {
         }
         if st.tokens > 0 || st.prefill_tokens > 0 {
             let round = |x: f64, d: f64| (x * d).round() / d;
-            let host = self.ranks.host_tier();
             let (slots, slots_used) = self.ranks.seq_slots();
             let (drafts, draft_tokens, accepted) = self.counters.as_ref().map_or((0, 0, 0), |c| {
                 (c.num_drafts - st.spec_at.0, c.num_draft_tokens - st.spec_at.1, c.num_accepted_tokens - st.spec_at.2)
@@ -919,7 +813,7 @@ impl KernScheduler {
             info!(
                 running = self.running.len(),
                 rows_per_rank = ?self.rows_per_rank(),
-                waiting = self.waiting.len() + self.waking.len(),
+                waiting = self.waiting.len(),
                 kv_pct = round(self.ranks.pages_used() as f64 * 100.0 / self.ranks.pages_total().max(1) as f64, 10.0),
                 steps = st.steps,
                 step_ms = round(st.step_ns as f64 / 1e6 / st.steps.max(1) as f64, 100.0),
@@ -930,18 +824,10 @@ impl KernScheduler {
                 prefix_hit_tokens = st.prefix_hit_tokens,
                 resident_hits = st.resident_hits,
                 resident_hit_tokens = st.resident_hit_tokens,
-                host_hits = host.map(|_| st.host_hits),
-                host_hit_tokens = host.map(|_| st.host_hit_tokens),
                 checkpoints = self.prefix.entries(),
                 prompt_checkpoints = (!self.every_page).then_some(st.prompt_checkpoints),
                 prompt_skips = (!self.every_page).then_some(st.prompt_skips),
                 evictions = st.evictions,
-                parked = host.map(|_| self.prefix.count(Tier::Parked)),
-                host_pct = host.map(|(u, n)| round(u as f64 * 100.0 / n.max(1) as f64, 10.0)),
-                parks = host.map(|_| st.parks),
-                host_evictions = host.map(|_| st.host_evictions),
-                wakes = host.map(|_| st.wakes),
-                wake_tokens = host.map(|_| st.wake_tokens),
                 slots_used = self.ranks.has_seq_state().then_some(slots_used),
                 slots = self.ranks.has_seq_state().then_some(slots),
                 accepted = self.counters.as_ref().map(|_| round((accepted + drafts) as f64 / drafts.max(1) as f64, 100.0)),
@@ -962,7 +848,7 @@ impl Scheduler for KernScheduler {
     fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
         self.admit(ledger)?;
         if self.running.is_empty() && self.ranks.outstanding() {
-            self.poll(false)?;
+            self.poll()?;
         }
         self.step(ledger)?;
         self.log_stats();

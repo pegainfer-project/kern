@@ -38,7 +38,6 @@ mod host_weights;
 mod lease;
 mod load;
 mod nccl;
-mod park;
 mod peers;
 pub mod profile;
 mod push;
@@ -63,10 +62,9 @@ pub use exec::{Fetch, Gate, Mark};
 pub use harness::Scratch;
 pub use host::HostRegion;
 pub use host_weights::HostWeights;
-use kern_pool::{page_unit, row_tokens, Checkpoint, Pool};
+use kern_pool::{page_unit, row_tokens, Pool};
 pub use load::Resident;
 use nccl::NcclId;
-pub use park::{host_split, Landing, Room, Waking};
 use peers::PeerSlot;
 pub use peers::{connect_local, Offer};
 pub use push::{MappedPool, PoolHandle, Rows, Split};
@@ -98,7 +96,7 @@ pub struct Capacity {
 /// pure, so the pool another process builds from a runtime's budget is
 /// this runtime's pool and decides exactly as it would: that process holds
 /// the accounting and this runtime runs its plans ([`Runtime::copy`],
-/// [`Runtime::zero_slot`], [`Runtime::host_out`], [`Runtime::host_in`]).
+/// [`Runtime::zero_slot`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub pages: usize,
@@ -136,13 +134,6 @@ pub struct Runtime {
     pub manifest: Verified,
     ctx: Arc<CudaContext>,
     stream: Arc<CudaStream>,
-    /// The host tier's copies run here, off the compute stream.
-    xfer: Arc<CudaStream>,
-    /// The host tier: its accounting and its pinned block, once reserved.
-    host: Option<park::Block>,
-    /// Checkpoints whose park copies are still in flight: held here so
-    /// their pages and slots stay out of the pool until the copy lands.
-    parking: Vec<(Checkpoint, sys::CUevent)>,
     blt: CudaBlasLT,
     /// cuBLAS handle (with its own workspace) for the f32-result GEMM built-in.
     blas: Blas,
@@ -219,11 +210,9 @@ impl Drop for Runtime {
         for exec in self.graphs.values() {
             unsafe { sys::cuGraphExecDestroy(*exec) };
         }
-        // Nothing on either stream may still touch a state when it is
-        // unmapped.
+        // Nothing on the stream may still touch a state when it is unmapped.
         let _ = self.stream.synchronize();
-        let _ = self.xfer.synchronize();
-        for ev in self.parking.drain(..).map(|(_, ev)| ev).chain(self.joins) {
+        for ev in self.joins {
             unsafe { sys::cuEventDestroy_v2(ev) };
         }
     }
@@ -389,11 +378,10 @@ impl Runtime {
         self.pool.unit()
     }
 
-    /// Wait for everything enqueued on both streams.
+    /// Wait for everything enqueued on the stream.
     pub fn synchronize(&self) -> Result<()> {
         self.ctx.bind_to_thread()?;
         self.stream.synchronize()?;
-        self.xfer.synchronize()?;
         Ok(())
     }
 }

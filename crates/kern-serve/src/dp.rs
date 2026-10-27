@@ -22,7 +22,7 @@
 //! call's token for it is the answer, the request finishes, and its lease
 //! retires into the rank's [`Prefix`] keyed by the prompt, where a longer
 //! prompt extending it continues from. Room for a lease is made by
-//! dropping the rank's coldest entry; no host tier yet.
+//! dropping the rank's coldest entry.
 //!
 //! What this module is not: the group scheduler (`scheduler.rs`), which
 //! runs one batch across a group in lockstep rows and steps a decode; or
@@ -30,7 +30,6 @@
 //! it. Both stay for the shapes they serve.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -38,7 +37,7 @@ use anyhow::{bail, ensure, Result};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_pool::{Checkpoint, Denied, Evicted, Found, Lease, Parked, Pool, Prefix};
+use kern_pool::{Denied, Lease, Pool, Prefix};
 use pegainfer_frontend::engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
 };
@@ -87,7 +86,7 @@ struct Rank {
     pool: Arc<Pool>,
     /// A page and a slot no prompt owns: the row an idle rank feeds.
     pad: Lease,
-    prefix: Prefix<Checkpoint, Parked>,
+    prefix: Prefix,
     seqs: Vec<Seq>,
     acts: Vec<Act>,
     /// The line tables the rank's buffers hold; an item carries one only
@@ -98,7 +97,7 @@ struct Rank {
 impl Rank {
     /// The rank's order: its queued acts and `item`.
     fn order(&mut self, item: Option<Item>) -> Order {
-        Order { acts: std::mem::take(&mut self.acts), item, wait: false }
+        Order { acts: std::mem::take(&mut self.acts), item }
     }
 
     fn backlog(&self) -> usize {
@@ -111,13 +110,11 @@ impl Rank {
 
     /// Drop the coldest kept prefix; `false` when none is kept.
     fn make_room(&mut self) -> bool {
-        let park = None::<fn(Checkpoint) -> std::result::Result<std::result::Result<Parked, Checkpoint>, Infallible>>;
-        match self.prefix.evict(park).unwrap_or_else(|e| match e {}) {
-            Some(Evicted::Dropped { key, .. }) => {
+        match self.prefix.evict() {
+            Some(key) => {
                 debug!(tokens = key.len(), "dropped");
                 true
             }
-            Some(Evicted::Parked { .. }) => unreachable!("no host tier parks"),
             None => false,
         }
     }
@@ -171,7 +168,7 @@ pub fn fits(p: &Protocol) -> bool {
 
 impl Dp {
     pub fn new(j: Joined, policy: Policy) -> Result<Dp> {
-        let Joined { protocol: p, groups, pools, host, exec } = j;
+        let Joined { protocol: p, groups, pools, exec } = j;
         ensure!(
             groups.size() == 1,
             "a prefill tier's ranks each run their own batch; this manifest's `tp` group has {} members",
@@ -185,7 +182,6 @@ impl Dp {
             p.shards.positions.is_none(),
             "a prefill tier owns its rows; this manifest deals positions over a group"
         );
-        ensure!(host == (0, 0), "the prefill tier has no host tier yet");
         let Some(chunk) = p.chunk().cloned() else {
             bail!("no program takes one sequence of as many rows as fed: nothing to feed a prompt through")
         };
@@ -292,10 +288,7 @@ impl Dp {
             let r = &mut self.ranks[q_at];
             let got = loop {
                 let attempt = match r.prefix.lookup(&ids) {
-                    Some(h) => match h.found {
-                        Found::Resident(cp) => r.pool.restore(&cp, h.len, prompt).map(|(l, c)| (l, h.len, Some(c))),
-                        Found::Parked(_) => unreachable!("no host tier parks"),
-                    },
+                    Some(h) => r.pool.restore(&h.found, h.len, prompt).map(|(l, c)| (l, h.len, Some(c))),
                     None => r.pool.lease(prompt).map(|l| (l, 0, None)),
                 };
                 match attempt {
@@ -319,7 +312,6 @@ impl Dp {
                     self.waiting.pop_front();
                     continue;
                 }
-                Err(d @ Denied::HostFull) => bail!("a lease denied {d}"),
             };
             match copies {
                 Some(c) => r.acts.push(Act::Copy(c.into())),

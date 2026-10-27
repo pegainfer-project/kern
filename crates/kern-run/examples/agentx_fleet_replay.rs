@@ -7,8 +7,7 @@
 //!         [--state <bytes per slot>] [--budget-gib 250] [--slots 130] [--concurrency 32] [--sessions N]
 //!
 //! Every instance keeps its own device pool and prefix index, as
-//! `agentx_replay` does for one, and nothing else: no host tier, its DRAM
-//! being the pool's. The pool is content-addressed and write-through: a
+//! `agentx_replay` does for one, and nothing else: its DRAM is the pool's. The pool is content-addressed and write-through: a
 //! block (`--block` pages) is keyed by the hash chain of its tokens and
 //! put the moment a prefill seals it (at admission for the prompt, at the
 //! end for the output), landing `--put-ms` later; a recurrent state is put
@@ -36,7 +35,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agentx::{manifest, pct, Trace};
-use kern_pool::{Checkpoint, Denied, Evicted, Found, Lease, Parked, Pool, Prefix};
+use kern_pool::{Denied, Lease, Pool, Prefix};
 
 const SEED: u64 = 0xcbf29ce484222325;
 
@@ -243,15 +242,9 @@ struct Instance {
 
 impl Instance {
     fn make_room(&mut self) -> bool {
-        let park: Option<fn(Checkpoint) -> Result<Result<Parked, Checkpoint>, ()>> = None;
-        match self.prefix.evict(park).unwrap() {
-            Some(Evicted::Dropped { .. }) => {
-                self.evictions += 1;
-                true
-            }
-            Some(Evicted::Parked { .. }) => unreachable!("no host tier"),
-            None => false,
-        }
+        let dropped = self.prefix.evict().is_some();
+        self.evictions += dropped as u64;
+        dropped
     }
 
     /// Leaves a checkpoint of `lease` at the end of each of `pages` of
@@ -400,10 +393,7 @@ impl Sim<'_> {
         let mut from_pool = false;
         let mut lease = loop {
             let attempt = match inst.prefix.lookup(&seq.toks[..r.input]) {
-                Some(h) if h.len >= pool_len => match h.found {
-                    Found::Resident(cp) => inst.pool.restore(&cp, h.len, worst).map(|(l, _)| l),
-                    Found::Parked(_) => unreachable!("no host tier"),
-                },
+                Some(h) if h.len >= pool_len => inst.pool.restore(&h.found, h.len, worst).map(|(l, _)| l),
                 _ => inst.pool.lease(worst).inspect(|_| from_pool = pool_len > 0),
             };
             match attempt {

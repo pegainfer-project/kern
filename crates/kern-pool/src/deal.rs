@@ -140,3 +140,17 @@ pub fn deal(src: Pages, dst: Pages, il: Interleave, m: u64, len: u64) -> Result<
     }
     Ok(Deal { runs })
 }
+
+/// Consecutive (source page, destination page) pairs — page `p + 1` at
+/// `d + 1` — folded into (first source, first destination, count) runs,
+/// in order.
+pub fn runs(pairs: &[(i32, i32)]) -> Vec<(i32, i32, usize)> {
+    let mut out: Vec<(i32, i32, usize)> = Vec::new();
+    for &(p, d) in pairs {
+        match out.last_mut() {
+            Some((p0, d0, n)) if *p0 as i64 + *n as i64 == p as i64 && *d0 as i64 + *n as i64 == d as i64 => *n += 1,
+            _ => out.push((p, d, 1)),
+        }
+    }
+    out
+}

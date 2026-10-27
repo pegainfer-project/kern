@@ -175,7 +175,7 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
   `prompt_checkpoints` / `prompt_skips`）。slot 数装载时定死（2026-10-27 起，K1b 的 remap 删除）：
   每 rank `(max_seqs + 1) × t` 个，pad 也算一条；slot 是在跑的请求的资源，请求结束后留给下一轮命中的
   checkpoint 只在没有请求要 slot 时占着：睡着的 session 的 checkpoint 拿着 slot，活跃请求再要 slot 时租约
-  `Busy`，按最久未命中淘汰（park 或丢）再租（stats 行的 `slots_used`/`slots`）。
+  `Busy`，按 `Prefix` 的分档淘汰再租（stats 行的 `slots_used`/`slots`）。
 
 命中数逐请求报给调用方：`usage.prompt_tokens_details.cached_tokens` 就是这条请求
 没有付钱的 prompt token 数（`Row::prefix()`，与 stats 行的 `prefix_hit_tokens`
@@ -183,8 +183,8 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
 6263 token，报 6254 = 6159 + 96 − 1，快照不复用最后一个 token。未命中时上游的
 序列化器不发 `prompt_tokens_details`，字段是 `null`。
 累计数走 `/metrics`：scheduler 和 PP head 各自把 `PrefixCacheCounters` 报进 `SchedulerMetrics`
-（`queries` 是查过的 prompt token 总数，`hits` 是其中命中的，有 host tier 时 `host_queries`
-与 `queries` 相同、`host_hits` 是从 host 唤醒的那部分），前端按区间差分成
+（`queries` 是查过的 prompt token 总数，`hits` 是其中命中的；`host_queries` / `host_hits`
+自 2026-10-27 host 层删除后恒为 0），前端按区间差分成
 `vllm:prefix_cache_*` / `vllm:external_prefix_cache_*`；DP tier 没有前缀缓存，报 `None`。
 
 门禁（本机 GB300，warm 服务与 cold 服务各一，greedy，`max_tokens 64`，prompt 为 46 KB
@@ -218,7 +218,12 @@ state 的 checkpoint，KV 页只是顺带共享（vLLM v1 也是这样：hit 取
 attention 的命中被截到 mamba 块边界）。快照放哪由调用方定——请求结束（agent 多轮）
 和显式断点（roadmap K1b），不在每个块边界都存。
 
-## 睡到 DRAM 的 session（K3，2026-09-03）
+## 睡到 DRAM 的 session（K3，2026-09-03；2026-10-27 删除）
+
+**2026-10-27 删除。** `--host-gib` / `--host-turn`、stats 行的 `parked / host_pct / parks /
+host_evictions / wakes / wake_tokens / host_hits / host_hit_tokens`、e2e 的 `park_wake` /
+`wake_room` 场景都没有了，`Ranks` 不再有 park / wake / awake，`Order` 没有 `wait`、`Answer`
+没有 `landed`；跨机的第二层改为 Mooncake 池（roadmap）。以下是当时的记录。
 
 `--host-gib N` 在 tray DRAM 里 pin 一块 N GiB（`Runtime::reserve_host`，落在这张卡的
 NUMA 节点上）。租约 `Busy` 时最久未命中的 resident checkpoint 不再直接丢，而是 park
@@ -716,7 +721,7 @@ head 的前缀缓存（2026-10-09，tray03 GPU 0+1，`~/bench_results/2026-10-09
 命中就 `lease_from`（整页共享、半页与 state slot 拷给新 lease），从命中处开始喂；最后一批行发出去时
 lease 直接 `retire` 进索引（零拷贝，不等末段回 token：之后读这些页的 item 都排在写它们的后面）；带
 recurrent state 的 manifest 改在 `history_tokens` 处停下做一次 checkpoint、结尾不留。另在它（无 `history_tokens` 时是结尾）前 4096 处停一下做 snapshot，与它一样腾地方（它随即被这一轮 supersede，腾地方时排在前面）：重试或改写的请求在上一个请求末尾前不远处分叉（AgentX 256k trace 同一条流内：p50 448、p75 4.7k token），没有它就只能从更早的轮次续，warmup 只回放过上一轮的流则什么都命中不了（2026-10-09 kern P/D c32 计时窗口里 9 条首请求 0 命中，占输入 1.6%）。实测（2026-10-09，GB300，P = PP8 两节点、host 层每段 128 GiB，D = TP8/EP8/DCP8 两节点，AgentX 256k，c24 后接 c32 各 900 s）：命中率 c24 91.8% → 94.1%、c32 91.8% → 94.1%（同数据集 SGLang 93.9%），c32 TTFT p90 3.91 → 3.06 s、p99 48.4 → 21.8 s；只用空闲 slot 的版本 c32 只到 92.5%（slot 常满，snapshot 245 次跳过、18 次拿到）。池满（`Busy`）按
-`Prefix` 的分档丢一个条目再试（有 host 层时 park，见下）。拷贝由 head 的池决定、在 head 上当场执行，同时排进下一个
+`Prefix` 的分档丢一个条目再试（host 层 2026-10-27 删除前是 park，见下）。拷贝由 head 的池决定、在 head 上当场执行，同时排进下一个
 `Item` 的 `acts`（2026-10-09 之前是 `copy_pages` / `copy_slots` / `zero_slots`），各段在写 fill 与 launch 之前按序执行
 （`Runtime::copy`），于是每段 stream 上的次序与 head 相同。段不记账：head 与每段按同一条规则（`slots_for`）
 开同样多的 slot，head 只在有空 slot 时取 slot（否则先丢条目）——所以带 state 的流水能缓存的条目只有

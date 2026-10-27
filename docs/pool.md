@@ -15,18 +15,19 @@ MambaRadixCache 和它的 Rust 内核（`rust/sglang-radix-tree`）。
 - **共享单位仍然是 page，节点自创建起冻结。** 这是三个参考实现的共同选择，也是
   kernel 按 page table 寻址（一页一个写者）决定的。索引按 token 键，字节按页共享，
   两者不冲突：索引条目持有一个 store，store 持有一条页链。
-- **所有权，不是 id。** 每个句柄（`Lease`、`Store<T>`、`Hit`）持有它依用的东西，drop
-  即归还；裸 `i32` / `u64` 不穿过任何模块边界。同 tier 与跨 tier 的"已经有一份"都
-  由节点自己的 `Arc` / `Weak` 表达，不再有按 id 查的镜像表。
-- **两个 tier 一套类型。** device 和 host 是 `Storage` 的两个实现（`Tier` 这个名字留给
-  索引里的 `Resident` / `Parked` 枚举），`Store<Pool>` 是 `Checkpoint`，`Store<Host>` 是
-  `Parked`，链、引用计数、拷贝计划都只写一次。
+- **所有权，不是 id。** 每个句柄（`Lease`、`Checkpoint`、`Hit`）持有它依用的东西，drop
+  即归还；裸 `i32` 不穿过任何模块边界。"已经有一份"由节点自己的 `Arc` 表达，不再有
+  按 id 查的镜像表。
+- **一个 tier（2026-10-27 起）。** 只有 device 一层：`Checkpoint` 是具体类型（`store.rs`），
+  `Storage` trait、`Store<T>`、`Host` / `Parked`、节点的 host twin、`Tier` / `Found` 随
+  host 层一起删除——跨机的第二层是 Mooncake 池（roadmap），按 key 存对象，不是本 crate
+  的一个 `Storage` 实现。2026-09-14 到 10-27 之间的两层设计留在下文标了"历史"的段落里。
 - **单线程。** 索引与池由 scheduler 线程独占，`&mut` 修改，没有并发；`Arc` 和一把从不
   争用的 `Mutex` 只为 `Send`（句柄可能在别的线程 drop）。
 
 ## 2. 名词
 
-### Storage
+### Storage（历史，2026-10-27 删除）
 
 ```rust
 pub trait Storage: sealed::Sealed + Send + Sync + 'static {
@@ -46,7 +47,7 @@ trait 是 sealed 的，别处不能。页号是裸 `i32` / `u64`，但只出现�
 runtime 执行的 `Copies`，和只读的观测（`Lease::page_ids()`、`Checkpoint::page_ids()`、
 `Parked::page_ids()`，harness 与测试读字节用）——没有任何接口按它们找东西。
 
-### Host：按单元记账，不知道字节（2026-10-09）
+### Host：按单元记账，不知道字节（2026-10-09；历史，2026-10-27 删除）
 
 `Host::new(pages, slots)` 是两段定长预算：host 页 `0..pages`、host slot `0..slots`，
 各取最小的空闲号（没发出过的号是一个水位，还回来的在水位下面的一个有序集合里）。
@@ -107,27 +108,26 @@ pub struct Node<T: Storage> {              // 字段 crate 私有；pub 只因�
 这一条之前在 `Pool::checkpoint` 上被打破（半页 checkpoint 后 lease 接着写同一页），
 host 层按 node 去重就读到过期字节；这是 review 的 P1。
 
-`twin` 是 device 节点对它 host 副本的弱引用。park 时逐节点看 twin：活着就复用，否则
+（历史，twin 随 host 层删除）`twin` 是 device 节点对它 host 副本的弱引用。park 时逐节点看 twin：活着就复用，否则
 分配、拷贝、记下。用节点自己的字段而不是按 id 的表，两个原因：id 表的 key 可以在内容
 变了之后仍然相等（这次的 bug），用指针当 key 又有 ABA；节点持有自己的链接，两者都没有。
 wake（`Host::restore`）进 lease 的整页节点在创建时就带上 twin，所以同一 session 醒来再睡
 不再拷第二份（lessons.md 2026-09-03 记的那条缺口）。
 
-### Store<T>：一个前缀在一个 tier 里的字节
+### Checkpoint：一个前缀的字节
 
 ```rust
-pub struct Store<T: Storage> {
+pub struct Checkpoint {
     len: usize,                            // 持有的 token 数，≥ 1
     pages: usize,                          // ceil(len / unit)；slot-only 时 0
-    chain: Option<Arc<Node<T>>>,           // 页链；slot-only 时 None
-    slot: Option<Arc<SlotOwn<T>>>,         // 恰在 len 之后的 recurrent state；Drop 归还
+    chain: Option<Arc<Node>>,              // 页链；slot-only 时 None
+    slot: Option<Arc<SlotOwn>>,            // 恰在 len 之后的 recurrent state；Drop 归还
 }
-pub type Checkpoint = Store<Pool>;
-pub type Parked = Store<Host>;
 ```
 
-`Store<T>: Clone`：clone 是同一份字节的又一个持有者（`Arc` 链、`Arc` slot），最后一个
-持有者 drop 时归还。索引条目、`Hit`、runtime 手里在飞的 park 拿的是同一份，不需要
+（2026-10-27 前是 `Store<T: Storage>`，`Checkpoint = Store<Pool>`、`Parked = Store<Host>`。）
+`Checkpoint: Clone`：clone 是同一份字节的又一个持有者（`Arc` 链、`Arc` slot），最后一个
+持有者 drop 时归还。索引条目和 `Hit` 拿的是同一份，不需要
 id 也不需要类型擦除。带 slot 的 store 只在精确 `len` 上可用（state 是"恰好这些 token
 之后"的状态）；不带 slot 的可在它任何整页上可用。
 
@@ -163,29 +163,28 @@ pub struct Copies<S = i32, D = i32> {
 ```
 
 之前的 `Copies`（device→device）、`Park`（device→host）和 wake 里手拼的 `Vec<(i32, u64)>`
-合成一个类型。plan 由要它的 shell 当场执行、不存（runtime 的 `Room` 把 plan 和它
-引用的 `Checkpoint` 放在一个结构里，`Waking` 同理），所以没有绑生命周期。
+合成一个类型（2026-10-27 起只剩 device→device，`Copies` 不再泛型）。plan 由要它的 shell
+当场执行、不存，所以没有绑生命周期。
 
 ### Prefix：token 索引
 
 ```rust
-pub struct Prefix<R: Kept = Checkpoint, P: Kept = Parked> { unit, root: Node, lru, clock, .. }
+pub struct Prefix<R: Kept = Checkpoint> { unit, root: Node, lru, clock, .. }
 
-pub struct Hit<R, P> {
+pub struct Hit<R> {
     pub len: usize,                        // 可用的前缀长度
-    pub found: Found<R, P>,                // Resident(R) | Parked(P)：条目的一个 clone
+    pub found: R,                          // 条目的一个 clone
 }
 ```
 
-条目持有 `R` / `P`，`Hit` 持有它们的 clone（`Kept: Clone`，`Store<T>` 和 tray 的
-`Group<X>` 都是）。`make_room` 把条目 park 掉或删掉都不影响手里的 `Hit`（lessons.md
+条目持有 `R`，`Hit` 持有它的 clone（`Kept: Clone`，`Checkpoint` 和 tray 的
+`Group<X>` 都是）。`make_room` 把条目删掉不影响手里的 `Hit`（lessons.md
 2026-09-04"make_room 之后旧的命中不能再用"这类错误从类型上消失）。条目按 token 键
-操作：`insert(&key, r)`、`lookup(&tokens)`，腾地方只有一个动作 `evict(park)`：最不值钱
-的 resident 条目（次序见下文"带 state 的条目分档"）经调用方的拷贝 `park` 进 host（host 满了先丢最冷的 parked 条目再试，
-丢光了还放不下、或没有 host 层，就丢它），返回 `Evicted::{Parked(key), Dropped {key,
-parked}}` 说明动了谁——scheduler 与 `agentx_replay` 之前各写一份同样的循环，现在
-是表的。哪个条目最冷是表自己的事，外面看不到 LRU。TP 下 `R` / `P`
-是 tray 的 `Group<Checkpoint>` / `Group<Parked>`，索引仍然是 tray 一棵，不变。
+操作：`insert(&key, r)`、`lookup(&tokens)`，腾地方只有一个动作 `evict()`：丢掉最不值钱
+的条目（次序见下文"带 state 的条目分档"），返回它的 key 说明动了谁——scheduler 与
+`agentx_replay` 之前各写一份同样的循环，现在是表的。哪个条目最冷是表自己的事，外面看不到
+LRU。TP 下 `R` 是 tray 的 `Group<Checkpoint>`，索引仍然是 tray 一棵，不变。（2026-10-27 前
+是 `Prefix<R, P>`、`Found::{Resident, Parked}`、`evict(park)`，随 host 层删除。）
 
 ### Interleave / Deal：按位置分发给一个组（2026-10-09）
 
@@ -220,8 +219,6 @@ run 只在两侧的页物理相邻时跨页：64 行一页、8 个成员时，P 
 | `Pool::retire(Lease, len)` | `-> Checkpoint` | 整页入链，半页原地封存，多余的还 | 易主，不拷 |
 | `Pool::restore(&Checkpoint, len, tokens)` | `-> (Lease, Copies)` | 整页共享，半页拷给 lease | 拷进新 slot |
 | `Pool::fork(&mut Lease, len, tokens)` | `-> (Lease, Copies)` | 整页共享，半页拷给孩子 | 拷进新 slot |
-| `Host::park(&Checkpoint)` | `-> (Parked, Copies<i32, u64>)` | 沿链走，twin 活着的复用，其余分配并拷 | 拷 |
-| `Host::restore(&Parked, &Pool, len, tokens)` | `-> (Lease, Copies<u64, i32>)` | 按 `tokens` 一次取够页，前 ceil(len/unit) 页从 host 拷进去，整页封成带 twin 的节点，半页归 lease | `len` 是整长时拷进新 slot |
 
 三条规则贯穿全部操作：**整页共享、半页拷给新持有者、写者只有 lease。** `restore` 和
 `fork` 本来就这样，`checkpoint` 是唯一的例外，改成一致。半页拷贝只在页中间
@@ -230,7 +227,8 @@ checkpoint 时发生；scheduler 在页边界（纯 KV，零拷贝）和带 stat
 history 末尾的请求才在结束时留（`retire`，零拷贝）——history 末尾那次付一次半页拷贝加一份
 state 拷贝，换来回放别人回复的下一轮（AgentX）也能命中上一轮的 prompt，每轮只留这一份。K1c 的显式断点（system prompt 末尾）是同一种页中间 checkpoint。
 
-**wake 直接醒进请求的租约。** 2026-09-14 的版本让 wake 得到一个 `Checkpoint`，scheduler
+**wake 直接醒进请求的租约（历史：host 层于 2026-10-27 删除；"一个请求的房间只问一次"
+这条对池化层的取回同样成立）。** 2026-09-14 的版本让 wake 得到一个 `Checkpoint`，scheduler
 把它插回索引、请求回到队首再按 resident 命中 `restore`：两次分配、两次"够不够"的判断，
 没有谁把它们合起来看。DSv4.1 EP4（`--chunk 128 --max-seqs 16`）第二轮命中 parked 条目就
 活锁——醒来的快照加半页拷贝加续写比池子多一页，`Busy` → `make_room` 能 park 的只有
@@ -326,12 +324,9 @@ review 的 P2（`rebalance` 对共享 chunk 重复计费导致误报 `ExceedsPoo
   fork / retire / drop 序列，每个位置由它的 lease 写上唯一戳，对着"位置 → 戳"的
   参考模型比对每个句柄能看到的每个位置和 slot，池的占用等于句柄命名的页与 slot。
   纯 KV 与带 state 各跑一遍。旧的 `checkpoint` 在这个测试上直接复现 P1。
-- **park / wake property test**（`host.rs`）：加上 park / wake，host 上的字节按
-  host 页号比对，parked 句柄命名的 host 页恰好是 `Host::used()`，每个 parked state 一个
-  host slot、合起来恰好是 `Host::slots_used()`；纯 KV 与带 state 各跑一遍（2026-10-09）。
-- **索引 property test**（`prefix.rs`）：随机 token 序列的插入 / 查询 / park / 淘汰
-  对着"所有条目线性扫描取最长、同长 resident 优先"的参考模型；同一操作序列跑两遍
-  trace 相同。
+- **park / wake property test**（`host.rs`，随 host 层于 2026-10-27 删除）。
+- **索引 property test**（`prefix.rs`）：随机 token 序列的插入 / 查询 / 淘汰
+  对着"所有条目线性扫描取最长"的参考模型；同一操作序列跑两遍 trace 相同。
 
 AgentX 回放（`agentx_replay`，qwen3.8-27b 形状：页 784、64 KiB/token、147 MiB slot、
 130 slot 起、单卡 250 GiB、并发 32；`~/bench_results/2026-09-14-pool-radix-replay/`）：

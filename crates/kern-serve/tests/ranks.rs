@@ -1,7 +1,6 @@
 //! The head's accounting through its public API, over real pools of a
 //! tiny group manifest (kern-manifest's `ranks.json`: four ranks in one
-//! `tp` group, 16-token pages of 16 bytes, a 24-byte recurrent slot) and a
-//! fake set of ranks that lands whatever it is told the moment it hears it.
+//! `tp` group, 16-token pages of 16 bytes, a 24-byte recurrent slot).
 
 use std::collections::BTreeMap;
 
@@ -24,13 +23,13 @@ fn pool(slots: usize) -> Pool {
     Pool::new(&manifest(), 5, slots).unwrap()
 }
 
-fn ranks(slots: [usize; 4], host: (u64, u64)) -> Ranks {
-    ranks_of(manifest(), slots, host)
+fn ranks(slots: [usize; 4]) -> Ranks {
+    ranks_of(manifest(), slots)
 }
 
-fn ranks_of(m: Manifest, slots: [usize; 4], host: (u64, u64)) -> Ranks {
+fn ranks_of(m: Manifest, slots: [usize; 4]) -> Ranks {
     let p = Protocol::check(&verify(m).unwrap()).unwrap();
-    Ranks::new(p, Groups::new(4, 4).unwrap(), slots.map(pool).into(), host).unwrap()
+    Ranks::new(p, Groups::new(4, 4).unwrap(), slots.map(pool).into()).unwrap()
 }
 
 /// The same manifest drawing each sequence's token over the sampling fills.
@@ -46,81 +45,31 @@ fn sampled() -> Manifest {
     Manifest::from_json(&m.to_string()).unwrap()
 }
 
-/// Ranks that land every transfer as soon as they hear of it.
-fn answer(orders: &[Order], landed: &mut [u64; 4]) -> Vec<Answer> {
-    orders
-        .iter()
-        .zip(landed.iter_mut())
-        .map(|(o, l)| {
-            *l += o.acts.iter().filter(|a| matches!(a, Act::Park(_) | Act::Wake(_))).count() as u64;
-            Answer { landed: *l, ..Answer::default() }
-        })
-        .collect()
-}
-
 fn acts(orders: &[Order]) -> Vec<Vec<Act>> {
     orders.iter().map(|o| o.acts.clone()).collect()
 }
 
 #[test]
 fn a_row_is_every_members_or_none() {
-    let mut r = ranks([3, 3, 2, 3], (0, 0));
+    let mut r = ranks([3, 3, 2, 3]);
     let before = (r.pages_used(), r.seq_slots());
     // Rank 2 has no slot free: the owner's pages and rank 1's slot go back.
     assert_eq!(r.lease(20, |_| Some(0)).err(), Some(Denied::Busy));
-    assert_eq!((r.pages_used(), r.seq_slots(), r.busy()), (before.0, before.1, false));
-    assert_eq!(acts(&r.orders(None, false)), vec![vec![Act::Zero(1)]; 4]);
+    assert_eq!((r.pages_used(), r.seq_slots()), (before.0, before.1));
+    assert_eq!(acts(&r.orders(None)), vec![vec![Act::Zero(1)]; 4]);
     // With a slot on every member: the owner pages, its peers a slot alone.
-    let mut r = ranks([3; 4], (0, 0));
-    r.orders(None, false);
+    let mut r = ranks([3; 4]);
+    r.orders(None);
     let row = r.lease(20, |_| Some(0)).unwrap();
-    assert_eq!((row.owner().index(), row.prefix(), r.pages_used(), r.busy()), (0, 0, 2, false));
-    assert_eq!(acts(&r.orders(None, false)), vec![vec![Act::Zero(2)]; 4]);
+    assert_eq!((row.owner().index(), row.prefix(), r.pages_used()), (0, 0, 2));
+    assert_eq!(acts(&r.orders(None)), vec![vec![Act::Zero(2)]; 4]);
     // No rank open is no lease.
     assert_eq!(r.lease(20, |_| None).err(), Some(Denied::Busy));
 }
 
 #[test]
-fn a_park_holds_its_pages_until_its_copies_land_and_a_wake_rises_once_they_have() {
-    let mut r = ranks([3; 4], (16, 4));
-    let row = r.lease(40, |_| Some(0)).unwrap();
-    let snap = r.retire(row, 32).unwrap();
-    r.orders(None, false);
-    assert_eq!((r.pages_used(), r.seq_slots().1), (2, 4));
-    let sleeping = r.park(snap).ok().unwrap();
-    // Parked, the device copies are still held until the ranks report them landed.
-    assert_eq!((r.pages_used(), r.parking(), r.host_tier().map(|(u, _)| u > 0)), (2, true, Some(true)));
-    let o = r.orders(None, false);
-    assert_eq!(o.iter().map(|o| matches!(o.acts[..], [Act::Park(_)])).collect::<Vec<_>>(), [true; 4]);
-    let mut landed = [0; 4];
-    r.heard(&answer(&o, &mut landed)).unwrap();
-    assert_eq!((r.pages_used(), r.seq_slots().1, r.parking(), r.busy()), (0, 0, false, false));
-    // A wake takes its pages at once and hands the row out only after its copies.
-    let rising = r.wake(&sleeping, 32, 40).unwrap();
-    assert_eq!(r.pages_used(), 3);
-    let rising = r.awake(rising).err().unwrap();
-    let o = r.orders(None, false);
-    assert_eq!(o.iter().map(|o| matches!(o.acts[..], [Act::Wake(_)])).collect::<Vec<_>>(), [true; 4]);
-    r.heard(&answer(&o, &mut landed)).unwrap();
-    let row = r.awake(rising).ok().unwrap();
-    assert_eq!((row.owner().index(), row.prefix(), r.pages_used()), (0, 32, 3));
-}
-
-#[test]
-fn a_park_short_of_host_room_on_any_member_hands_the_snapshot_back() {
-    // No host tier at all is the shortest room there is.
-    let mut r = ranks([3; 4], (0, 0));
-    let row = r.lease(40, |_| Some(0)).unwrap();
-    let snap = r.retire(row, 32).unwrap();
-    let snap = r.park(snap).err().unwrap();
-    assert_eq!((r.pages_used(), r.parking(), r.orders(None, false)[0].acts.len()), (2, false, 2));
-    drop(snap);
-    assert_eq!(r.pages_used(), 0);
-}
-
-#[test]
 fn a_step_gives_every_rank_the_same_program_and_vars_over_its_own_rows() {
-    let mut r = ranks([4; 4], (0, 0));
+    let mut r = ranks([4; 4]);
     let a = r.lease(20, |q| Some(q.index())).unwrap();
     let b = r.lease(20, |q| Some(if q.index() == 0 { 9 } else { q.index() })).unwrap();
     assert_eq!((a.owner().index(), b.owner().index()), (0, 1));
@@ -144,14 +93,14 @@ fn a_step_gives_every_rank_the_same_program_and_vars_over_its_own_rows() {
     // Each cell's token is read from its owner's answer.
     let answers: Vec<Answer> = (0..4).map(|q| Answer { tokens: vec![100 + q, 0, 0, 0], ..Answer::default() }).collect();
     assert_eq!(st.emitted(r.protocol(), &f, &answers).unwrap(), [vec![100], vec![101]]);
-    let o = r.orders(Some(items), false);
+    let o = r.orders(Some(items));
     assert_eq!(o.iter().map(|o| o.item.is_some()).collect::<Vec<_>>(), [true; 4]);
 }
 
 #[test]
 fn a_replicated_row_is_paged_on_every_member_and_keeps_nothing() {
     let mut r = replicated(4, 1);
-    r.orders(None, false);
+    r.orders(None);
     // Four members of 48 local positions hold 192; past that is past a row.
     assert_eq!(r.max_seq_tokens(), 192);
     assert_eq!(r.lease(193, |_| Some(0)).err(), Some(Denied::ExceedsRow { limit: 192 }));
@@ -160,18 +109,18 @@ fn a_replicated_row_is_paged_on_every_member_and_keeps_nothing() {
     let pages: Vec<usize> = row.leases().iter().map(|l| l.pages()).collect();
     assert_eq!((row.owner().index(), pages, r.pages_used()), (0, vec![1; 4], 4));
     let zeros: Vec<Vec<Act>> = row.leases().iter().map(|l| vec![Act::Zero(l.seq_slot().unwrap())]).collect();
-    assert_eq!(acts(&r.orders(None, false)), zeros);
+    assert_eq!(acts(&r.orders(None)), zeros);
     // An adopted row's slots are the push's: nothing is zeroed.
     let pushed = r.adopt(37, |_| Some(1)).unwrap();
-    assert_eq!((acts(&r.orders(None, false)), r.pages_used()), (vec![vec![]; 4], 8));
+    assert_eq!((acts(&r.orders(None)), r.pages_used()), (vec![vec![]; 4], 8));
     // Nothing is kept: a checkpoint makes no snapshot, a retire drops the row.
     assert_eq!((r.checkpoint(&mut row, 16).unwrap().is_none(), r.retire(row, 37).is_none()), (true, true));
     drop(pushed);
-    assert_eq!((r.pages_used(), r.seq_slots().1, r.orders(None, false)[0].acts.len()), (0, 0, 0));
+    assert_eq!((r.pages_used(), r.seq_slots().1, r.orders(None)[0].acts.len()), (0, 0, 0));
     // The batch runs over the group the positions are dealt over, or not at all.
     let p = Protocol::check(&verify(dealt(4)).unwrap()).unwrap();
     let pools = (0..4).map(|_| Pool::new(&dealt(4), 128, 10).unwrap()).collect();
-    assert!(Ranks::new(p, Groups::new(4, 2).unwrap(), pools, (0, 0)).is_err());
+    assert!(Ranks::new(p, Groups::new(4, 2).unwrap(), pools).is_err());
 }
 
 /// Random replicated steps over (w, groups, rows, lengths): every member of
@@ -307,7 +256,7 @@ fn a_rank_sent_only_the_tables_that_changed_holds_every_steps_tables() {
                 .map(|i| tables.iter().filter_map(|n| Some((n.clone(), i.rows.get(n)?.clone()))).collect())
                 .collect();
             drop(cells);
-            for (q, o) in r.orders(Some(items), false).iter().enumerate() {
+            for (q, o) in r.orders(Some(items)).iter().enumerate() {
                 let item = o.item.as_ref().unwrap();
                 for (n, v) in &item.rows {
                     bufs[q].insert(n.clone(), v.clone());
@@ -340,7 +289,7 @@ fn a_request_draws_as_it_asks_or_takes_the_most_likely_token() {
 
 #[test]
 fn a_cell_is_staged_with_its_own_draw_and_a_padding_row_with_the_most_likely_token() {
-    let mut r = ranks_of(sampled(), [4; 4], (0, 0));
+    let mut r = ranks_of(sampled(), [4; 4]);
     let a = r.lease(20, |q| Some(q.index())).unwrap();
     let b = r.lease(20, |q| Some(if q.index() == 0 { 9 } else { q.index() })).unwrap();
     let hot = Sampling { temperature: 0.8, top_k: 50, top_p: 0.95, min_p: 0.05, seed: 7 };

@@ -160,7 +160,6 @@ impl<E: Run> Decoder<E> {
                 return Ok(vec![Tell::Refuse { req, why: Refusal::ContextLength { limit } }]);
             }
             Err(Denied::ExceedsPool) => return Ok(vec![Tell::Refuse { req, why: Refusal::KvBudget }]),
-            Err(d @ Denied::HostFull) => bail!("an adopt denied {d}"),
         };
         let first = self.ranks.groups().members(row.owner().index()).start;
         let seats = row
@@ -190,7 +189,7 @@ impl<E: Run> Decoder<E> {
     pub fn step(&mut self) -> Result<Vec<Tell>> {
         if self.running.is_empty() {
             if self.ranks.outstanding() {
-                let orders = self.ranks.orders(None, false);
+                let orders = self.ranks.orders(None);
                 let answers = self.exec.run(orders)?;
                 self.ranks.heard(&answers)?;
             }
@@ -207,7 +206,7 @@ impl<E: Run> Decoder<E> {
         drop(cells);
         let p = self.ranks.protocol();
         let f = st.forward(p, 1).context("no forward for this batch of one-row sequences")?;
-        let orders = self.ranks.orders(Some(st.items(&f)), false);
+        let orders = self.ranks.orders(Some(st.items(&f)));
         let staged_us = t0.elapsed().as_micros() as u64;
         let answers = self.exec.run(orders)?;
         let ran_us = t0.elapsed().as_micros() as u64;

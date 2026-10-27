@@ -14,11 +14,8 @@
 //! another goes out shares its items.
 //!
 //! A prompt starts past the longest prefix of it the head has kept
-//! ([`Cache`]), resident or woken from the host tier: the copies that
-//! costs, and the parks that made room for it, run on the head as they are
-//! decided and ride the next item to every stage. The head sizes the host
-//! tier in units every stage holds: `--host-gib` per stage, cut into host
-//! pages and host slots by the largest page and slot of any stage. Once its last rows are out it
+//! ([`Cache`]): the copies that costs run on the head as they are decided
+//! and ride the next item to every stage. Once its last rows are out it
 //! leaves all of itself in the cache, except that a recurrent state is
 //! kept only where the frontend says the next turn parts from the prompt:
 //! its rows stop there until the checkpoint is taken, and the state at its
@@ -104,10 +101,6 @@ pub struct Head {
     pub eager: bool,
     /// The decode tiers' heads to hand prompts to, each request to one.
     pub decode: Vec<String>,
-    /// Pinned host memory per stage for entries parked off the devices.
-    pub host_bytes: u64,
-    /// Tokens of pages the host tier holds per host slot.
-    pub host_turn: u64,
 }
 
 /// An admitted prompt with rows still to send.
@@ -287,8 +280,6 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let p = Protocol::check_unsampled(&rt.manifest)?;
     kern_run::run_once(&rt, &p)?;
     let pages = rt.pages_total() as u64;
-    let turn = h.host_turn.div_ceil(unit);
-    let host = host_units(h.host_bytes, turn, hellos.values().map(|(x, ..)| x.host).chain([rt.host_unit()]));
 
     let prefill =
         p.chunk().cloned().context("a pipeline prefills through a program taking one sequence's rows as fed")?;
@@ -312,7 +303,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let next_of = |s: u64| hellos.get(&(s + 1)).map(|(x, _, reach)| (reach.clone(), x.arrivals.clone()));
     let pools: Vec<Pools> = decode.iter().map(|p| p.pools.clone()).collect();
     let tables: Vec<Table> =
-        (1..cut.stages).map(|s| Table { pages, next: next_of(s), decode: pools.clone(), host }).collect();
+        (1..cut.stages).map(|s| Table { pages, next: next_of(s), decode: pools.clone() }).collect();
     let first = next_of(0).expect("stage 1 said hello");
     let mut stages = Vec::new();
     for ((s, (_, mut w, _)), table) in hellos.into_iter().zip(tables) {
@@ -323,7 +314,6 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         });
         stages.push(w);
     }
-    reserve(&mut rt, host)?;
     let next = Next::connect(&rt, &first.0, &first.1, {
         let tx = tx.clone();
         move || {
@@ -367,27 +357,6 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         window: Window { since: Instant::now(), fed: 0 },
         flow: Flow::new(0, None, Some(next), report, false),
     })
-}
-
-/// The host pages and host slots of `bytes` per stage, one slot per `turn`
-/// pages, the same unit ids on every stage: the split the largest page and
-/// the largest slot of any stage (each `(page bytes, slot bytes)`) make, so
-/// each stage's block, those units times its own sizes, is at most `bytes`.
-fn host_units(bytes: u64, turn: u64, stages: impl Iterator<Item = (u64, u64)>) -> (u64, u64) {
-    let (page, slot) = stages.fold((0, 0), |(p, s), (q, t)| (p.max(q), s.max(t)));
-    kern_runtime::host_split(bytes, page, slot, turn)
-}
-
-/// Reserve this stage's host block of `units` (host pages, host slots), none for (0, 0).
-pub(super) fn reserve(rt: &mut Runtime, units: (u64, u64)) -> Result<()> {
-    if units == (0, 0) {
-        return Ok(());
-    }
-    let t0 = Instant::now();
-    rt.reserve_host(units.0, units.1).context("reserving the host tier")?;
-    let gib = rt.host_tier().map_or(0.0, |(_, b)| b as f64 / (1u64 << 30) as f64);
-    info!(pages = units.0, slots = units.1, gib, reserve_s = t0.elapsed().as_secs_f64(), "host tier reserved");
-    Ok(())
 }
 
 /// Connect to decode tier `tier` at `addr`, check that `stages` (the
@@ -817,7 +786,6 @@ impl PpHead {
         if self.window.fed > 0 {
             let round = |x: f64, d: f64| (x * d).round() / d;
             let state = self.rt.has_seq_state();
-            let host = self.rt.host_tier();
             info!(
                 running = self.live(),
                 waiting = self.waiting.len(),
@@ -826,13 +794,7 @@ impl PpHead {
                 prefill_tok_s = round(self.window.fed as f64 / dt.as_secs_f64(), 1.0),
                 resident_hits = c.hits,
                 resident_hit_tokens = c.hit_tokens,
-                host_hits = host.and(Some(c.host_hits)),
-                host_hit_tokens = host.and(Some(c.host_hit_tokens)),
                 checkpoints = self.cache.entries(),
-                parked = host.and(Some(self.cache.parked())),
-                host_pct = host.map(|(u, r)| round(u as f64 * 100.0 / r.max(1) as f64, 10.0)),
-                parks = host.and(Some(c.parks)),
-                host_evictions = host.and(Some(c.host_evictions)),
                 prompt_checkpoints = state.then_some(c.kept),
                 prompt_skips = state.then_some(c.skipped),
                 snapshots = state.then_some(c.snapshots),

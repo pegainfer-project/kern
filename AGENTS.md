@@ -27,15 +27,15 @@ the schema golden, lints) belongs in CI, not here.
   load-time `verify`, which collects every diagnostic and never stops at the
   first, the serving `protocol` a driver reads off a manifest, and `cut`,
   which splits a manifest into pipeline stages. Pure host code.
-- `crates/kern-pool` — the states' accounting: physical chunks (`chunks`),
-  token and sequence slots handed out as leases (`pages`), frozen page chains
-  (`store`), the prefix radix index (`prefix`), the pinned host tier
-  (`host`), positions dealt over a group (`deal`). Pure host code with no
-  CUDA; every decision comes back as a plan the runtime executes.
+- `crates/kern-pool` — the states' accounting: token and sequence slots
+  handed out as leases (`pages`), frozen page chains (`store`), the prefix
+  radix index (`prefix`), positions dealt over a group (`deal`). Pure host
+  code with no CUDA; every decision comes back as a plan the runtime
+  executes.
 - `crates/kern-runtime` — the only crate that touches CUDA. Loads a verified
   manifest (`load`, `weights`, `derive`, `cubin`), lowers programs to flat
   launch lists (`compile`) and runs them (`exec`); runs kern-pool's plans
-  (`lease`, `park`, `push`); joins ranks over exported memory and NCCL
+  (`lease`, `push`); joins ranks over exported memory and NCCL
   (`peers`, `nccl`); provides the cuBLAS externs (`cublas`); runs inside
   another engine's process on its memory and stream (`host`). `harness`,
   `compare` and `profile` serve the test and bench tools, never the serving
