@@ -88,6 +88,11 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 256)]
     pub max_seqs: usize,
 
+    /// Per-sequence state slots per rank: the running sequences' plus the
+    /// kept prefixes' (default: `--max-seqs` plus one)
+    #[arg(long)]
+    pub seq_slots: Option<usize>,
+
     /// Debug: launch every program eagerly, ignoring the manifest's `graph`
     #[arg(long)]
     pub eager: bool,
@@ -259,7 +264,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let load = executor::Load {
         gpu: o.gpu,
         kernels: art.kernels.clone(),
-        capacity: Capacity { tokens: o.capacity, slots: slots_for(o.max_seqs) * t, landings: 0 },
+        capacity: Capacity { tokens: o.capacity, slots: o.seq_slots.map_or(slots_for(o.max_seqs), |n| (n as u64).max(slots_for(o.max_seqs))) * t, landings: 0 },
         eager: o.eager,
         pool: o.pool.config(o.gpu)?,
     };

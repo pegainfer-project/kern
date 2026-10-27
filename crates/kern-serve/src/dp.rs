@@ -20,22 +20,25 @@
 //! policy. A prompt leases its own length at admission, nothing more: the
 //! completion's pages are a decode tier's business. Its last rows out, the
 //! call's token for it is the answer, the request finishes, and its lease
-//! retires into the rank's [`Prefix`] keyed by the prompt, where a longer
-//! prompt extending it continues from. Room for a lease is made by
-//! dropping the rank's coldest entry.
+//! retires into the rank's [`Prefix`], where a longer prompt extending
+//! it continues from. A prompt with a state is kept at the frontend's
+//! parting point (`history_tokens`, the rows before the turn's assistant
+//! tag): the next turn renders the history differently past it, so a
+//! snapshot taken as the rows reach that point is what it hits, and the
+//! prompt's end is not kept once the snapshot is. A prompt without one
+//! is kept whole at retirement. Room for a lease is made by dropping the
+//! rank's coldest entry; the slots come from `--seq-slots`.
 //!
 //! With a pooled tier (`--pool-master`) a leased prompt is probed before
 //! it runs, on its rank: the marks its frontend named and every page past
 //! the device hit, in one batch; the longest usable is fetched into the
 //! lease and the prompt starts past it, a fetch that failed puts the
 //! lease back as leased and the prompt starts from the device hit. What
-//! goes in: with a state, a snapshot at the frontend's parting point
-//! (`history_tokens`), taken as the rows reach it and put from the rank,
-//! held only until the put lands (the device keeps the prompt's end, as
-//! it did, and a slot is scarce); without one, every whole page at
-//! retirement. The acts ride the rank's orders and its answers bring the
-//! landings, so a rank with nothing to feed still gets an order while an
-//! act of its is out.
+//! goes in is what the rank keeps: the snapshot at `history_tokens`, put
+//! as it is taken; without a state, every whole page at retirement. The
+//! acts ride the rank's orders and its answers bring the landings, so a
+//! rank with nothing to feed still gets an order while an act of its is
+//! out.
 //!
 //! What this module is not: the group scheduler (`scheduler.rs`), which
 //! runs one batch across a group in lockstep rows and steps a decode; or
@@ -81,8 +84,10 @@ struct Seq {
     ids: Vec<i64>,
     /// Rows in the state: the prefix it started from plus what was fed.
     pos: usize,
-    /// Where its rows stop until the pooled tier has its snapshot there.
+    /// Where its rows stop for the snapshot at `history_tokens`.
     mark: Option<usize>,
+    /// The snapshot is in the rank's prefix tree; the end will not be.
+    kept: bool,
     passed: usize,
     stop: infront_engine::StopPolicy,
     sampling: Sampling,
@@ -451,13 +456,14 @@ impl Dp {
         ledger.set_cached_tokens(id, start);
         debug!(request = %id, prompt, rank, prefix_hit = start, "admitted");
         let stateful = lease.seq_slot().is_some();
-        let mark = self.pool.as_ref().and(q.request.history_tokens).filter(|&m| stateful && m > start && m < prompt);
+        let mark = q.request.history_tokens.filter(|&m| stateful && m > start && m < prompt);
         self.ranks[rank].seqs.push(Seq {
             id,
             lease,
             ids,
             pos: start,
             mark,
+            kept: false,
             passed: 0,
             stop: q.request.stop_policy.clone(),
             sampling: crate::ranks::sampling(&q.request.params),
@@ -693,9 +699,8 @@ impl Dp {
                 self.stats.rows += n as u64;
                 if s.mark == Some(s.pos) {
                     s.mark = None;
-                    // The snapshot for the pool alone: a rank's slots are
-                    // few, and the device keeps the prompt's end. Room is
-                    // made for it as for a lease: a kept entry goes first.
+                    // Room is made for the snapshot as for a lease: a kept
+                    // entry goes first.
                     let got = loop {
                         match r.pool.checkpoint(&mut s.lease, s.pos) {
                             Err(Denied::Busy) if r.prefix.evict().is_some() => self.stats.evictions += 1,
@@ -705,9 +710,13 @@ impl Dp {
                     match got {
                         Ok((cp, copies)) => {
                             r.acts.push(Act::Copy(copies.into()));
-                            puts.push((q, cp, s.ids[..s.pos].to_vec()));
+                            r.prefix.insert(&s.ids[..s.pos], cp.clone());
+                            s.kept = true;
+                            if self.pool.is_some() {
+                                puts.push((q, cp, s.ids[..s.pos].to_vec()));
+                            }
                         }
-                        Err(d) => debug!(request = %s.id, tokens = s.pos, "no snapshot for the pool: {d}"),
+                        Err(d) => debug!(request = %s.id, tokens = s.pos, "no snapshot at the history: {d}"),
                     }
                 }
                 if s.pos == s.ids.len() {
@@ -727,6 +736,9 @@ impl Dp {
                 self.stats.finished += 1;
                 debug!(request = %s.id, prompt = s.ids.len(), elapsed_ms = logline::ms(s.admitted.elapsed()), "finished");
                 let cp = r.pool.retire(s.lease, s.pos);
+                if s.kept {
+                    continue;
+                }
                 r.prefix.insert(&s.ids, cp.clone());
                 if cp.seq_slot().is_none() {
                     puts.push((q, cp, s.ids));
