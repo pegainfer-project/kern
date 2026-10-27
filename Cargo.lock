@@ -2164,7 +2164,9 @@ dependencies = [
 name = "kern-pool"
 version = "0.3.1"
 dependencies = [
+ "hex",
  "kern-manifest",
+ "sha2 0.11.0",
  "thiserror",
 ]
 
