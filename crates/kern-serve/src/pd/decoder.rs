@@ -163,7 +163,7 @@ impl<E: Run> Decoder<E> {
         };
         let first = self.ranks.groups().members(row.owner().index()).start;
         let seats = row
-            .leases()
+            .parts()
             .iter()
             .enumerate()
             .map(|(m, l)| Seat { rank: first + m, pages: l.page_ids().to_vec(), slot: l.seq_slot() })

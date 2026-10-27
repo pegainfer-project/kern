@@ -29,6 +29,7 @@ fn request(max_tokens: usize, stop: StopPolicy) -> Request {
         prompt_tokens: vec![3; 16],
         params: SamplingParams::default(),
         history_tokens: None,
+        history_marks: Vec::new(),
         stop_policy: stop,
         max_tokens,
         logprobs: None,

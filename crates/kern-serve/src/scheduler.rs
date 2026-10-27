@@ -79,24 +79,42 @@
 //!   nothing is left: the snapshot worth least (`Prefix`'s order) is
 //!   dropped. A replicated group (positions dealt over its members) keeps
 //!   nothing: its checkpoints and retires answer `None` and the prefix
-//!   tree stays empty.
+//!   tree stays empty;
+//! - the pooled tier (`pool.rs`, over Mooncake Store), when the ranks
+//!   joined one: every snapshot the prefix tree keeps is also put to the
+//!   pool, whole pages and the state object of each member, and marked
+//!   once every member's put landed, so a prompt arriving on any instance
+//!   of the same manifest and weights finds it. A prompt the device holds
+//!   less of than the frontend's history marks say it could is probed
+//!   (one batch: the marks, and every page between the device hit and the
+//!   newest), fetched into its own lease from the newest mark whose pages
+//!   all exist, and prefilled from there; a paged-only manifest fetches the
+//!   longest run of pages instead. Probing and fetching requests hold
+//!   their row and count toward the rank's rows, so a slow pool delays only
+//!   its own request; a fetch that does not land puts the row back where
+//!   the device left it (the snapshot's copies again, or the slot zeroed)
+//!   and the prompt is prefilled from there. Nothing here calls the pool:
+//!   every ask is an act answered in a later reply, and the scheduler
+//!   polls the ranks for answers when nothing else runs
+//!   (`kern_pool::Probe`, `Chain`, `Keys`, `Landing` are the decisions).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use infront_engine::{
-    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
+    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, Request, RequestId, RequestLedger, Scheduler,
     SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
 use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::Protocol;
-use kern_pool::{Denied, Prefix};
+use kern_pool::{Chain, Denied, Keys, Landing, Prefix, Probe};
 use tracing::{debug, info, warn};
 
 use crate::executor::Executors;
 use crate::logline;
-use crate::ranks::{Cell, Ranks, Row, Snapshot, Staged};
+use crate::pd::Run;
+use crate::ranks::{Cell, Landed, Object, Rank, Ranks, Row, Snapshot, Staged};
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
 /// fits and each bucket owns one captured graph.
@@ -280,9 +298,115 @@ fn cut(toks: &[u32], generated: usize, max_tokens: usize, stop: &StopPolicy) -> 
         .map_or((toks.len(), None), |(n, end)| (n, Some(end)))
 }
 
-pub struct KernScheduler {
+/// A request between admission and prefill, waiting on the pooled tier,
+/// its row leased and its device snapshot held for the fallback.
+struct Pending {
+    q: QueuedRequest,
+    row: Row,
+    /// What the row was restored from, the fallback's copies.
+    hit: Option<Snapshot>,
+    ids: Vec<i64>,
+    stage: Stage,
+}
+
+#[derive(Clone)]
+enum Stage {
+    Probing(Probe),
+    /// Fetching `len` tokens, pages `first..` of them.
+    Fetching {
+        len: usize,
+        first: usize,
+        landing: Landing,
+    },
+}
+
+/// A snapshot being put, held so its pages and slot stay until every
+/// member landed; `mark` is written then, for a snapshot with a state.
+struct Putting {
+    snap: Snapshot,
+    len: usize,
+    landing: Landing,
+    mark: Option<String>,
+}
+
+/// The pooled tier as the scheduler sees it: the namespace its keys are
+/// in and every act awaiting an answer.
+struct Pooled {
+    keys: Keys,
+    pending: BTreeMap<u64, Pending>,
+    puts: BTreeMap<u64, Putting>,
+    /// Marks being written, each holding its snapshot until it is.
+    marks: BTreeMap<u64, Snapshot>,
+    /// Answers heard and not yet acted on.
+    inbox: Vec<(Rank, Landed)>,
+}
+
+impl Pooled {
+    fn busy(&self) -> bool {
+        !self.pending.is_empty() || !self.puts.is_empty() || !self.marks.is_empty()
+    }
+}
+
+/// Where the frontend says this prompt's history ends and where its
+/// earlier turns ended, newest first: the points a pooled snapshot may
+/// exist at.
+fn marks(r: &Request) -> Vec<usize> {
+    r.history_tokens.into_iter().chain(r.history_marks.iter().copied()).collect()
+}
+
+/// Member `m`'s objects for tokens `[0, len)` of a group whose owner is
+/// member `me`: whole pages `first..=len / unit` on the owner, and the
+/// state object (the slot, and on the owner the page `len` ends inside)
+/// when the group holds a slot. `page_ids` and `slot` are the member's.
+#[allow(clippy::too_many_arguments)]
+fn objects(
+    keys: &Keys,
+    chain: &Chain,
+    tokens: &[i64],
+    first: usize,
+    m: usize,
+    me: usize,
+    page_ids: &[i32],
+    slot: Option<i32>,
+) -> Vec<Object> {
+    let (unit, len) = (chain.unit(), tokens.len());
+    let whole = len / unit;
+    let pages = (m == me)
+        .then(|| {
+            (first..=whole).map(|k| Object {
+                key: keys.page(None, chain.at(k)),
+                pages: vec![page_ids[k - 1]],
+                slot: None,
+            })
+        })
+        .into_iter()
+        .flatten();
+    let state = slot.map(|s| Object {
+        key: keys.state(None, m as u8, chain.at(whole), &tokens[whole * unit..]),
+        pages: (m == me && len % unit != 0).then(|| page_ids[whole]).into_iter().collect(),
+        slot: Some(s),
+    });
+    pages.chain(state).collect()
+}
+
+/// Tokens one member's fetch landed, from its flags: with a state, all
+/// of `len` or nothing; without, the whole pages from `first` that landed.
+fn landed(ok: &[bool], stateful: bool, len: usize, first: usize, unit: usize) -> usize {
+    match stateful {
+        true => {
+            if ok.iter().all(|&b| b) {
+                len
+            } else {
+                0
+            }
+        }
+        false => (first - 1 + ok.iter().take_while(|&&b| b).count()) * unit,
+    }
+}
+
+pub struct KernScheduler<E = Executors> {
     ranks: Ranks,
-    exec: Executors,
+    exec: E,
     policy: Policy,
     /// Tokens per `prefill` call, within the manifest's bound.
     chunk: usize,
@@ -302,6 +426,7 @@ pub struct KernScheduler {
     /// What the frontend's `/metrics` says of the snapshots: cumulative,
     /// where `stats` is the log line's window.
     prefix_cache: PrefixCacheCounters,
+    pool: Option<Pooled>,
 }
 
 /// Rolling counters for the periodic log line, reset when it prints.
@@ -328,6 +453,16 @@ struct Stats {
     /// The acceptance counters at the window's start, so the window's
     /// acceptance is reported rather than the process's.
     spec_at: (u64, u64, u64),
+    /// The pooled tier: probes answered, of them hits (something to
+    /// fetch), fetches that landed with the tokens they brought, fetches
+    /// that did not, puts landed and puts that did not.
+    pool_probes: u64,
+    pool_hits: u64,
+    pool_fetched: u64,
+    pool_fetched_tokens: u64,
+    pool_fetch_fails: u64,
+    pool_puts: u64,
+    pool_put_fails: u64,
 }
 
 impl Stats {
@@ -348,6 +483,13 @@ impl Stats {
             prompt_checkpoints: 0,
             prompt_skips: 0,
             spec_at,
+            pool_probes: 0,
+            pool_hits: 0,
+            pool_fetched: 0,
+            pool_fetched_tokens: 0,
+            pool_fetch_fails: 0,
+            pool_puts: 0,
+            pool_put_fails: 0,
         }
     }
 }
@@ -360,11 +502,15 @@ pub struct Facts {
     pub max_request_tokens: usize,
 }
 
-impl KernScheduler {
+impl<E: Run> KernScheduler<E> {
     /// Wrap the loaded ranks (weights bound, peers connected, pads
-    /// leased): settle how the head drives the manifest, within its bounds.
-    pub fn new(ranks: Ranks, exec: Executors, policy: Policy) -> Result<KernScheduler> {
+    /// leased): settle how the head drives the manifest, within its
+    /// bounds. `keys` is the pooled tier's namespace when the ranks joined one.
+    pub fn new(ranks: Ranks, exec: E, policy: Policy, keys: Option<Keys>) -> Result<KernScheduler<E>> {
         let plan = Plan::check(ranks.protocol(), ranks.page(), ranks.seqs_max(), policy.rows, policy.max_seqs)?;
+        if keys.is_some() && ranks.interleave().is_some() {
+            bail!("a replicated group keeps nothing: it has nothing to share with a pooled tier");
+        }
         let max = ranks.protocol().rows.max as usize;
         let chunk = match policy.chunk {
             None => max,
@@ -390,6 +536,13 @@ impl KernScheduler {
             warned_sampling: false,
             stats,
             prefix_cache: PrefixCacheCounters::default(),
+            pool: keys.map(|keys| Pooled {
+                keys,
+                pending: BTreeMap::new(),
+                puts: BTreeMap::new(),
+                marks: BTreeMap::new(),
+                inbox: Vec::new(),
+            }),
         };
         s.log_ready();
         Ok(s)
@@ -436,15 +589,17 @@ impl KernScheduler {
                 None => format!("`{}`, state only", plan.chunk.name),
             },
             checkpoints = if self.every_page { "every page" } else { "at history end and request end" },
+            pooled = self.pool.is_some(),
             "scheduler ready"
         );
     }
 
-    /// Rows each rank has running.
+    /// Rows each rank has running or waiting on the pooled tier.
     fn rows_per_rank(&self) -> Vec<usize> {
         let mut rows = vec![0usize; self.ranks.groups().ranks()];
-        for s in &self.running {
-            rows[s.row.owner().index()] += 1;
+        let pending = self.pool.iter().flat_map(|p| p.pending.values()).map(|p| p.row.owner());
+        for owner in self.running.iter().map(|s| s.row.owner()).chain(pending) {
+            rows[owner.index()] += 1;
         }
         rows
     }
@@ -484,16 +639,16 @@ impl KernScheduler {
             let got = loop {
                 let ranks = &mut self.ranks;
                 let attempt = match self.prefix.lookup(&ids) {
-                    Some(h) => ranks.lease_from(&h.found, h.len, worst),
-                    None => ranks.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)),
+                    Some(h) => ranks.lease_from(&h.found, h.len, worst).map(|row| (row, Some(h.found))),
+                    None => ranks.lease(worst, |r| Some(rows[r.index()]).filter(|&n| n < cap)).map(|row| (row, None)),
                 };
                 match attempt {
                     Err(Denied::Busy) if self.make_room() => {}
                     r => break r,
                 }
             };
-            let row = match got {
-                Ok(row) => row,
+            let (row, hit) = match got {
+                Ok(got) => got,
                 Err(Denied::Busy) => break, // wait for pages / a slot
                 Err(Denied::ExceedsRow { limit }) => {
                     ledger.reject(id, RejectReason::ContextLength { prompt_tokens: prompt, max_tokens, limit });
@@ -507,15 +662,158 @@ impl KernScheduler {
                 }
             };
             let q = self.waiting.pop_front().unwrap();
-            self.admit_one(q, row, ledger)?;
+            let probe = self.pool.as_ref().and_then(|_| {
+                Probe::plan(!self.every_page, self.ranks.page(), row.prefix(), &marks(&q.request), prompt, None)
+            });
+            match probe {
+                Some(probe) => self.probe(q, row, hit, ids, probe),
+                None => {
+                    let device = row.prefix();
+                    self.admit_one(q, row, device, ledger)?
+                }
+            }
         }
         Ok(())
     }
 
+    /// Ask the pooled tier what it holds of `q`'s prompt past the device's
+    /// `row.prefix()`; the answer admits it (`landed`).
+    fn probe(&mut self, q: QueuedRequest, row: Row, hit: Option<Snapshot>, ids: Vec<i64>, probe: Probe) {
+        let pool = self.pool.as_mut().expect("probing with a pool");
+        let keys = probe.keys(&pool.keys, &Chain::of(self.ranks.page(), &ids), &ids);
+        debug!(request = %q.id, device_hit = row.prefix(), marks = ?probe.marks, pages = ?probe.pages, "probing");
+        let id = self.ranks.probe(keys);
+        pool.pending.insert(id, Pending { q, row, hit, ids, stage: Stage::Probing(probe) });
+    }
+
+    /// Act on every answer heard: a probe's choice becomes a fetch, a
+    /// fetch landed (or not) admits its request, a put landed is marked.
+    /// Admitting prefills, which hears more: the inbox is drained until
+    /// nothing is left.
+    fn drain(&mut self, ledger: &mut RequestLedger) -> Result<()> {
+        while let Some((rank, l)) = self.pool.as_mut().and_then(|p| p.inbox.pop()) {
+            let pool = self.pool.as_mut().expect("an inbox needs a pool");
+            let member = self.ranks.groups().member(rank.index());
+            if let Some(mut p) = pool.pending.remove(&l.id) {
+                if ledger.is_aborted(p.q.id) {
+                    ledger.retire(p.q.id);
+                    continue;
+                }
+                match p.stage.clone() {
+                    Stage::Probing(probe) => {
+                        self.stats.pool_probes += 1;
+                        match probe.chosen(&l.ok) {
+                            Some(len) => {
+                                self.stats.pool_hits += 1;
+                                self.fetch(p, len, probe.pages.start)
+                            }
+                            None => {
+                                debug!(request = %p.q.id, "pool miss");
+                                let device = p.row.prefix();
+                                self.admit_one(p.q, p.row, device, ledger)?
+                            }
+                        }
+                    }
+                    Stage::Fetching { len, first, landing } => {
+                        let got = landed(&l.ok, !self.every_page, len, first, self.ranks.page());
+                        let landing = landing.heard(member, got).context("a fetch's landing")?;
+                        match landing.done() {
+                            None => {
+                                p.stage = Stage::Fetching { len, first, landing };
+                                pool.pending.insert(l.id, p);
+                            }
+                            Some(got) if got > p.row.prefix() => {
+                                let device = p.row.prefix();
+                                self.stats.pool_fetched += 1;
+                                self.stats.pool_fetched_tokens += (got - device) as u64;
+                                debug!(request = %p.q.id, device_hit = device, fetched = got, "pool hit");
+                                p.row.filled(got);
+                                self.admit_one(p.q, p.row, device, ledger)?
+                            }
+                            Some(_) => {
+                                let device = p.row.prefix();
+                                self.stats.pool_fetch_fails += 1;
+                                debug!(request = %p.q.id, device_hit = device, asked = len, "pool fetch did not land");
+                                self.ranks.restore(&p.row, p.hit.as_ref());
+                                self.admit_one(p.q, p.row, device, ledger)?
+                            }
+                        }
+                    }
+                }
+            } else if let Some(mut put) = pool.puts.remove(&l.id) {
+                let whole = l.ok.iter().all(|&b| b);
+                put.landing = put.landing.heard(member, if whole { put.len } else { 0 }).context("a put's landing")?;
+                match put.landing.done() {
+                    None => {
+                        pool.puts.insert(l.id, put);
+                    }
+                    Some(got) if got == put.len => {
+                        self.stats.pool_puts += 1;
+                        if let Some(key) = put.mark {
+                            let id = self.ranks.mark(key);
+                            pool.marks.insert(id, put.snap);
+                        }
+                    }
+                    Some(_) => {
+                        self.stats.pool_put_fails += 1;
+                        debug!(tokens = put.len, "pool put did not land");
+                    }
+                }
+            } else if pool.marks.remove(&l.id).is_some() {
+                if !l.ok.iter().all(|&b| b) {
+                    self.stats.pool_put_fails += 1;
+                }
+            } else {
+                bail!("rank {}: an answer to pooled act {} nobody asked", rank.index(), l.id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Fetch `len` tokens of `p`'s prompt into its row, pages `first..`.
+    fn fetch(&mut self, p: Pending, len: usize, first: usize) {
+        let pool = self.pool.as_mut().expect("fetching with a pool");
+        let chain = Chain::of(self.ranks.page(), &p.ids[..len]);
+        let me = p.row.me();
+        let objects = p
+            .row
+            .parts()
+            .iter()
+            .enumerate()
+            .map(|(m, l)| objects(&pool.keys, &chain, &p.ids[..len], first, m, me, l.page_ids(), l.seq_slot()))
+            .collect();
+        let (id, landing) = self.ranks.get(&p.row, objects);
+        debug!(request = %p.q.id, device_hit = p.row.prefix(), len, "fetching");
+        pool.pending.insert(id, Pending { stage: Stage::Fetching { len, first, landing }, ..p });
+    }
+
+    /// Put `snap`, which holds `tokens`, to the pooled tier: with a state,
+    /// every whole page and each member's state object, marked once all
+    /// landed; without, the last page alone (the earlier ones were put
+    /// when they were sealed).
+    fn put(&mut self, snap: &Snapshot, tokens: &[i64]) {
+        let Some(pool) = self.pool.as_mut() else { return };
+        let unit = self.ranks.page();
+        let chain = Chain::of(unit, tokens);
+        let (len, whole, me) = (tokens.len(), tokens.len() / unit, snap.me());
+        let first = if self.every_page { whole } else { 1 };
+        let objects = snap
+            .parts()
+            .iter()
+            .enumerate()
+            .map(|(m, cp)| objects(&pool.keys, &chain, tokens, first, m, me, &cp.page_ids(), cp.seq_slot()))
+            .collect();
+        let mark = (!self.every_page).then(|| pool.keys.mark(chain.at(whole), &tokens[whole * unit..]));
+        let (id, landing) = self.ranks.put(snap, objects);
+        pool.puts.insert(id, Putting { snap: snap.clone(), len, landing, mark });
+    }
+
     /// Start `q` running in `row` (past the row's prefix): through the
     /// chunk forward when the manifest has one, else with the prompt
-    /// queued for the steps.
-    fn admit_one(&mut self, q: QueuedRequest, mut row: Row, ledger: &mut RequestLedger) -> Result<()> {
+    /// queued for the steps. `device` is what the device held of the
+    /// prefix before the pooled tier filled the rest, the prefix itself
+    /// without one: what landed from the pool is checkpointed here too.
+    fn admit_one(&mut self, q: QueuedRequest, mut row: Row, device: usize, ledger: &mut RequestLedger) -> Result<()> {
         let id = q.id;
         let prompt = q.request.prompt_tokens.len();
         let max_tokens = q.request.max_tokens;
@@ -543,16 +841,19 @@ impl KernScheduler {
         // the last, which is the first step's input. A snapshot hit skips
         // its tokens (never the last one). A recurrent state is kept where
         // the frontend says the next turn parts from this prompt, so the
-        // prefill stops there once.
+        // prefill stops there once; a state the pool landed exactly there
+        // is kept too (nothing is prefilled for it), and not put again.
         let parts = !self.every_page && q.request.history_tokens.is_some_and(|m| m < prompt);
         let f = self.plan.chunk.clone();
         let n_pre = if f.emits.is_some() { prompt } else { prompt - 1 };
-        let mark =
-            (!self.every_page).then_some(q.request.history_tokens).flatten().filter(|&m| m > start && m <= n_pre);
+        let mark = (!self.every_page)
+            .then_some(q.request.history_tokens)
+            .flatten()
+            .filter(|&m| m > device && m >= start && m <= n_pre);
         let first = match mark {
             Some(m) => {
                 let first = self.prefill(&f, &row, &ids[..m], start, sampling)?;
-                self.keep_prompt(&mut row, &ids[..m], id)?;
+                self.keep_prompt(&mut row, &ids[..m], id, m > start)?;
                 match m < n_pre {
                     true => self.prefill(&f, &row, &ids[..n_pre], m, sampling)?,
                     false => first,
@@ -563,9 +864,9 @@ impl KernScheduler {
         self.stats.prefill_ns += t0.elapsed().as_nanos();
         self.stats.prefill_tokens += (n_pre - start) as u64;
         self.stats.prefix_hit_tokens += start as u64;
-        if start > 0 {
+        if device > 0 {
             self.stats.resident_hits += 1;
-            self.stats.resident_hit_tokens += start as u64;
+            self.stats.resident_hit_tokens += device as u64;
         }
         let c = &mut self.prefix_cache;
         c.queries += prompt as u64;
@@ -592,7 +893,7 @@ impl KernScheduler {
             row,
             prompt_len: prompt,
             history: ids[..n_pre].to_vec(),
-            checkpointed: start / page * page,
+            checkpointed: device / page * page,
             parts,
             admitted: t0,
         };
@@ -610,13 +911,16 @@ impl KernScheduler {
     }
 
     /// The `key.len()` tokens `row` holds, which `key` names, as a snapshot
-    /// of its recurrent state. `Busy` makes room and retries; with nothing
-    /// left to make room with or any other denial, the request runs on
-    /// without it.
-    fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId) -> Result<()> {
+    /// of its recurrent state, put to the pooled tier when `put`. `Busy`
+    /// makes room and retries; with nothing left to make room with or any
+    /// other denial, the request runs on without it.
+    fn keep_prompt(&mut self, row: &mut Row, key: &[i64], id: RequestId, put: bool) -> Result<()> {
         loop {
             match self.ranks.checkpoint(row, key.len()) {
                 Ok(Some(snap)) => {
+                    if put {
+                        self.put(&snap, key);
+                    }
                     self.prefix.insert(key, snap);
                     self.stats.prompt_checkpoints += 1;
                     return Ok(());
@@ -636,15 +940,26 @@ impl KernScheduler {
     fn poll(&mut self) -> Result<()> {
         let orders = self.ranks.orders(None);
         let answers = self.exec.run(orders)?;
-        self.ranks.heard(&answers)
+        self.heard(&answers)
     }
 
     /// Run `f` over a staged step on every rank: what it handed each cell.
     fn run(&mut self, st: &mut Staged, f: &Forward) -> Result<Vec<Vec<i64>>> {
         let orders = self.ranks.orders(Some(st.items(f)));
         let answers = self.exec.run(orders)?;
-        self.ranks.heard(&answers)?;
+        self.heard(&answers)?;
         st.emitted(self.ranks.protocol(), f, &answers)
+    }
+
+    /// What the pooled tier answered goes to the inbox, for `drain`.
+    fn heard(&mut self, answers: &[crate::ranks::Answer]) -> Result<()> {
+        let landed = self.ranks.heard(answers)?;
+        match &mut self.pool {
+            Some(p) => p.inbox.extend(landed.into_iter().rev()),
+            None if !landed.is_empty() => bail!("a rank answered a pooled act, and no pooled tier was joined"),
+            None => {}
+        }
+        Ok(())
     }
 
     /// Room for a `Busy` lease: the snapshot worth least is dropped.
@@ -670,6 +985,7 @@ impl KernScheduler {
         while s.checkpointed + unit <= s.pos {
             let len = s.checkpointed + unit;
             let Some(snap) = self.ranks.checkpoint(&mut s.row, len)? else { return Ok(()) };
+            self.put(&snap, &s.history[..len]);
             self.prefix.insert(&s.history[..len], snap);
             s.checkpointed = len;
         }
@@ -804,16 +1120,26 @@ impl KernScheduler {
         if dt.as_secs() < 5 {
             return;
         }
-        if st.tokens > 0 || st.prefill_tokens > 0 {
+        if st.tokens > 0 || st.prefill_tokens > 0 || st.pool_probes > 0 || st.pool_puts > 0 {
             let round = |x: f64, d: f64| (x * d).round() / d;
             let (slots, slots_used) = self.ranks.seq_slots();
             let (drafts, draft_tokens, accepted) = self.counters.as_ref().map_or((0, 0, 0), |c| {
                 (c.num_drafts - st.spec_at.0, c.num_draft_tokens - st.spec_at.1, c.num_accepted_tokens - st.spec_at.2)
             });
+            let pool = self.pool.as_ref();
             info!(
                 running = self.running.len(),
                 rows_per_rank = ?self.rows_per_rank(),
                 waiting = self.waiting.len(),
+                pooling = pool.map(|p| p.pending.len()),
+                pool_probes = pool.map(|_| st.pool_probes),
+                pool_hits = pool.map(|_| st.pool_hits),
+                pool_fetched = pool.map(|_| st.pool_fetched),
+                pool_fetched_tokens = pool.map(|_| st.pool_fetched_tokens),
+                pool_fetch_fails = pool.map(|_| st.pool_fetch_fails),
+                pool_puts = pool.map(|_| st.pool_puts),
+                pool_put_fails = pool.map(|_| st.pool_put_fails),
+                pool_putting = pool.map(|p| p.puts.len() + p.marks.len()),
                 kv_pct = round(self.ranks.pages_used() as f64 * 100.0 / self.ranks.pages_total().max(1) as f64, 10.0),
                 steps = st.steps,
                 step_ms = round(st.step_ns as f64 / 1e6 / st.steps.max(1) as f64, 100.0),
@@ -840,17 +1166,29 @@ impl KernScheduler {
     }
 }
 
-impl Scheduler for KernScheduler {
+impl<E: Run + Send> Scheduler for KernScheduler<E> {
     fn submit(&mut self, request: QueuedRequest) {
         self.waiting.push_back(request);
     }
 
+    /// Admit, then step. With nothing running, the ranks are polled for
+    /// what is queued on them and, when only the pooled tier is awaited,
+    /// after a moment rather than as fast as the loop turns.
     fn step(&mut self, ledger: &mut RequestLedger) -> Result<()> {
+        self.drain(ledger)?;
         self.admit(ledger)?;
-        if self.running.is_empty() && self.ranks.outstanding() {
-            self.poll()?;
+        if self.running.is_empty() {
+            let awaiting = self.pool.as_ref().is_some_and(Pooled::busy);
+            if awaiting && !self.ranks.outstanding() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if awaiting || self.ranks.outstanding() {
+                self.poll()?;
+                self.drain(ledger)?;
+            }
         }
         self.step(ledger)?;
+        self.drain(ledger)?;
         self.log_stats();
         Ok(())
     }
@@ -860,7 +1198,7 @@ impl Scheduler for KernScheduler {
             kv_used_blocks: self.ranks.pages_used() as u64,
             kv_total_blocks: self.ranks.pages_total() as u64,
             num_running_reqs: self.running.len() as u64,
-            num_waiting_reqs: self.waiting.len() as u64,
+            num_waiting_reqs: (self.waiting.len() + self.pool.as_ref().map_or(0, |p| p.pending.len())) as u64,
             spec_decode: self.counters,
             prefix_cache: Some(self.prefix_cache),
         }

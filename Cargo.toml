@@ -63,6 +63,9 @@ serde = { version = "1", features = ["derive"] }
 safetensors = "=0.8.0"
 serde_json = "1"
 sha2 = "0.11"
+# The Mooncake Store client, loaded at run time (`dlopen`): kern-serve's pooled KV tier. Pinned to the
+# upstream commit that merged multi-buffer batch put/get (kvcache-ai/Mooncake#4984).
+mooncake-store = { git = "https://github.com/kvcache-ai/Mooncake", rev = "679ae2517249d38ca99f18ea640b3524cb6dd180", package = "mooncake_store", default-features = false, features = ["dlopen"] }
 thiserror = "2"
 tokenizers = "=0.23.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -162,6 +162,9 @@ fn act(rt: &mut Runtime, act: Act, holds: (bool, bool)) -> Result<()> {
             let pages = if holds.0 { m.pages } else { Vec::new() };
             rt.copy(&pages, m.slot.filter(|_| holds.1).as_slice())?
         }
+        Act::Probe { .. } | Act::Put { .. } | Act::Get { .. } | Act::Mark { .. } => {
+            bail!("a pipeline stage joins no pooled tier")
+        }
     }
     Ok(())
 }

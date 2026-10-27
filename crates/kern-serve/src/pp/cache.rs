@@ -449,6 +449,7 @@ mod tests {
                         m.pages.iter().for_each(|&(a, b)| self.pages[b as usize] = self.pages[a as usize].clone());
                         m.slot.iter().for_each(|&(a, b)| self.slots[b as usize] = self.slots[a as usize].clone());
                     }
+                    a => unreachable!("a pipeline head queues no pooled act: {a:?}"),
                 }
             }
         }

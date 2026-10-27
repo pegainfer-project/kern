@@ -22,8 +22,9 @@
 //! frontend says the prompt may continue from, newest first, and every
 //! page between the device hit and the newest of them, on every stage.
 //! The pool is asked whether each exists; [`Probe::chosen`] reads the
-//! answer. A [`Landing`] counts a put over a group: every member reports
-//! the pages it stored, and the put is whole when all have, at the fewest.
+//! answer. A [`Landing`] counts a transfer over a group: every member
+//! reports the tokens it landed, and it is whole when all have, at the
+//! fewest.
 //!
 //! Pure: no client, no clock; the same tokens give the same keys and the
 //! same answers give the same choice.
@@ -216,9 +217,9 @@ impl Probe {
     }
 }
 
-/// One put across a group: every member names the whole pages it
-/// stored, and the put is whole once all have answered, at the fewest
-/// pages any of them stored.
+/// One transfer across a group: every member names the tokens it landed,
+/// and the transfer is whole once all have answered, at the fewest tokens
+/// any of them landed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Landing {
     expect: BTreeSet<usize>,
@@ -230,18 +231,18 @@ impl Landing {
         Landing { expect: members.into_iter().collect(), heard: BTreeMap::new() }
     }
 
-    /// Member `member` stored `pages` whole pages (0: it failed).
-    pub fn heard(mut self, member: usize, pages: usize) -> Result<Landing> {
+    /// Member `member` landed `tokens` tokens (0: it failed).
+    pub fn heard(mut self, member: usize, tokens: usize) -> Result<Landing> {
         if !self.expect.contains(&member) {
             bail!(Api, "landing: member {member} is not among {:?}", self.expect);
         }
-        if self.heard.insert(member, pages).is_some() {
+        if self.heard.insert(member, tokens).is_some() {
             bail!(Api, "landing: member {member} answered twice");
         }
         Ok(self)
     }
 
-    /// Once every member answered: the fewest pages any stored.
+    /// Once every member answered: the fewest tokens any landed.
     pub fn done(&self) -> Option<usize> {
         (self.heard.len() == self.expect.len()).then(|| self.heard.values().copied().min().unwrap_or(0))
     }

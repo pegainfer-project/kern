@@ -106,9 +106,9 @@ fn a_replicated_row_is_paged_on_every_member_and_keeps_nothing() {
     assert_eq!(r.lease(193, |_| Some(0)).err(), Some(Denied::ExceedsRow { limit: 192 }));
     // ⌈37 / 4⌉ = 10 local positions: a page on every member, every slot zeroed.
     let mut row = r.lease(37, |_| Some(0)).unwrap();
-    let pages: Vec<usize> = row.leases().iter().map(|l| l.pages()).collect();
+    let pages: Vec<usize> = row.parts().iter().map(|l| l.pages()).collect();
     assert_eq!((row.owner().index(), pages, r.pages_used()), (0, vec![1; 4], 4));
-    let zeros: Vec<Vec<Act>> = row.leases().iter().map(|l| vec![Act::Zero(l.seq_slot().unwrap())]).collect();
+    let zeros: Vec<Vec<Act>> = row.parts().iter().map(|l| vec![Act::Zero(l.seq_slot().unwrap())]).collect();
     assert_eq!(acts(&r.orders(None)), zeros);
     // An adopted row's slots are the push's: nothing is zeroed.
     let pushed = r.adopt(37, |_| Some(1)).unwrap();
@@ -167,14 +167,14 @@ fn a_replicated_step_deals_every_position_to_exactly_one_member() {
                 let it: BTreeMap<&str, &[i64]> =
                     items[g * w + m].rows.iter().map(|(n, v)| (n.as_str(), v.ints().unwrap())).collect();
                 assert_eq!(it["token_ids"], tokens, "w {w}, member {m}");
-                let held: Vec<i32> = mine.iter().flat_map(|&i| rows[i].leases()[m].page_ids().to_vec()).collect();
+                let held: Vec<i32> = mine.iter().flat_map(|&i| rows[i].parts()[m].page_ids().to_vec()).collect();
                 let mut pads = Vec::new();
                 for (k, slot) in it["slot_mapping"].iter().enumerate() {
                     let Some(&i) = mine.get(k) else {
                         pads.push(*slot);
                         continue;
                     };
-                    let (pos, lease) = (lens[i] - 1, &rows[i].leases()[m]);
+                    let (pos, lease) = (lens[i] - 1, &rows[i].parts()[m]);
                     match pos % w == m {
                         true => assert_eq!(*slot, lease.slot(pos / w)),
                         false => pads.push(*slot),

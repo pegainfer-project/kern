@@ -113,7 +113,7 @@ fn a_probe_agrees_with_the_brute_force_model() {
         let marks: Vec<usize> = (0..r.next(4)).map(|_| r.next(prompt + 2)).collect();
         let Some(p) = Probe::plan(stateful, unit, hit, &marks, prompt, stages) else {
             let any_mark = stateful && marks.iter().any(|&m| m > hit && m < prompt);
-            let any_page = !stateful && hit / unit + 1 <= (prompt - 1) / unit;
+            let any_page = !stateful && hit / unit < (prompt - 1) / unit;
             assert!(
                 !any_mark && !any_page,
                 "nothing planned for unit {unit} hit {hit} prompt {prompt} marks {marks:?}"
@@ -140,7 +140,7 @@ fn a_probe_agrees_with_the_brute_force_model() {
 }
 
 #[test]
-fn a_landing_is_whole_once_every_member_answered_at_the_fewest_pages() {
+fn a_landing_is_whole_once_every_member_answered_at_the_fewest_tokens() {
     let l = Landing::new([0, 2, 3]);
     assert_eq!(l.done(), None);
     let l = l.heard(2, 5).unwrap().heard(0, 7).unwrap();
@@ -158,7 +158,7 @@ fn a_landing_is_whole_once_every_member_answered_at_the_fewest_pages() {
     let mut r = Rand::new(3);
     for _ in 0..200 {
         let n = 1 + r.next(5);
-        let pages: Vec<usize> = (0..n).map(|_| r.next(9)).collect();
+        let tokens: Vec<usize> = (0..n).map(|_| r.next(9)).collect();
         let mut order: Vec<usize> = (0..n).collect();
         for i in (1..n).rev() {
             order.swap(i, r.next(i + 1));
@@ -166,8 +166,8 @@ fn a_landing_is_whole_once_every_member_answered_at_the_fewest_pages() {
         let mut l = Landing::new(0..n);
         for (i, &m) in order.iter().enumerate() {
             assert_eq!(l.done().is_some(), i == n, "whole before everyone answered");
-            l = l.heard(m, pages[m]).unwrap();
+            l = l.heard(m, tokens[m]).unwrap();
         }
-        assert_eq!(l.done(), pages.iter().copied().min());
+        assert_eq!(l.done(), tokens.iter().copied().min());
     }
 }

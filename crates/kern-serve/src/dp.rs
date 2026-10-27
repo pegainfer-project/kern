@@ -168,7 +168,7 @@ pub fn fits(p: &Protocol) -> bool {
 
 impl Dp {
     pub fn new(j: Joined, policy: Policy) -> Result<Dp> {
-        let Joined { protocol: p, groups, pools, exec } = j;
+        let Joined { protocol: p, groups, pools, exec, .. } = j;
         ensure!(
             groups.size() == 1,
             "a prefill tier's ranks each run their own batch; this manifest's `tp` group has {} members",

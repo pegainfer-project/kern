@@ -41,13 +41,14 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, ensure, Context, Result};
 use kern_manifest::types::Fill;
 use kern_manifest::{Protocol, Verified};
-use kern_pool::Pool;
+use kern_pool::{Keys, Pool};
 use kern_run::Weights;
 use kern_runtime::{Budget, Capacity, GroupRank, Offer, Runtime, Topology};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::logline;
+use crate::pool;
 use crate::pp::{connect, recv, send};
 use crate::ranks::{Act, Answer, Groups, Order, Ranks};
 
@@ -60,6 +61,8 @@ pub struct Load {
     pub kernels: Option<PathBuf>,
     pub capacity: Capacity,
     pub eager: bool,
+    /// The pooled tier every rank joins, when there is one.
+    pub pool: Option<pool::Config>,
 }
 
 /// A rank introducing itself to the head.
@@ -143,8 +146,14 @@ fn members<T: Clone>(m: &Verified, groups: Groups, q: usize, offers: &[T]) -> BT
         .collect()
 }
 
-/// Connect, run what runs once.
-fn join(rt: &mut Runtime, p: &Protocol, groups: Groups, peers: &BTreeMap<String, Vec<Offer>>) -> Result<()> {
+/// Connect, run what runs once, join the pooled tier.
+fn join(
+    rt: &mut Runtime,
+    p: &Protocol,
+    groups: Groups,
+    peers: &BTreeMap<String, Vec<Offer>>,
+    pool: Option<&pool::Config>,
+) -> Result<Option<pool::Client>> {
     rt.connect(peers).context("connecting to the groups")?;
     // Once after load, the peers mapped: a group manifest's setup (the
     // allreduce's Lamport stages are poisoned, not zeroed).
@@ -152,7 +161,15 @@ fn join(rt: &mut Runtime, p: &Protocol, groups: Groups, peers: &BTreeMap<String,
     for prog in &p.once {
         rt.run(prog, &vars).with_context(|| format!("`{prog}`"))?;
     }
-    Ok(())
+    pool.map(|cfg| pool::Client::open(cfg, rt.pooled_spans())).transpose()
+}
+
+/// What names a manifest's objects in the pool: the manifest and the
+/// weights, nothing a deployment chooses.
+pub fn keys(m: &Verified, weights: &Weights) -> Result<Keys> {
+    use sha2::{Digest, Sha256};
+    let manifest: [u8; 32] = Sha256::digest(m.to_json()).into();
+    Ok(Keys::new(&[&manifest, &weights.digest()?]))
 }
 
 /// Every rank loaded and joined, before anyone accounts for them: the
@@ -162,6 +179,8 @@ pub struct Joined {
     pub groups: Groups,
     pub pools: Vec<Pool>,
     pub exec: Executors,
+    /// The pooled tier's namespace, when every rank joined one.
+    pub keys: Option<Keys>,
 }
 
 impl Joined {
@@ -228,11 +247,12 @@ pub fn head(m: &Verified, weights: &Weights, o: &Load, listen: Option<&str>) -> 
         crate::watch::exit_with(&s, format!("rank {q}"))?;
         remote.push(s);
     }
-    join(&mut rt, &p, groups, &members(m, groups, 0, &offers))?;
+    let client = join(&mut rt, &p, groups, &members(m, groups, 0, &offers), o.pool.as_ref())?;
+    let keys = o.pool.as_ref().map(|_| keys(m, weights)).transpose()?;
     let pools = budgets.iter().map(|b| b.pool(m)).collect::<kern_pool::Result<Vec<_>>>()?;
     info!(ranks = n, group = groups.size(), "ranks connected");
-    let exec = Executors { local: Executor::new(0, rt, p.clone()), remote, pools: exported };
-    Ok(Joined { protocol: p, groups, pools, exec })
+    let exec = Executors { local: Executor::new(0, rt, p.clone(), client), remote, pools: exported };
+    Ok(Joined { protocol: p, groups, pools, exec, keys })
 }
 
 /// Serve rank `q` for the head at `head` until the head is gone.
@@ -257,9 +277,9 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
         .iter()
         .map(|(g, v)| Ok((g.clone(), v.iter().map(|x| offer_of(x)).collect::<Result<_>>()?)))
         .collect::<Result<_>>()?;
-    join(&mut rt, &p, groups, &peers)?;
+    let client = join(&mut rt, &p, groups, &peers, o.pool.as_ref())?;
     info!(rank = q, head, "rank serving");
-    let mut x = Executor::new(q, rt, p);
+    let mut x = Executor::new(q, rt, p, client);
     while let Some(order) = recv::<Order>(&mut s)? {
         let answer = x.run(&order).with_context(|| format!("rank {q}"))?;
         send(&mut s, &answer)?;
@@ -273,11 +293,16 @@ pub struct Executor {
     rank: usize,
     rt: Runtime,
     p: Protocol,
+    pool: Option<pool::Client>,
 }
 
 impl Executor {
-    fn new(rank: usize, rt: Runtime, p: Protocol) -> Executor {
-        Executor { rank, rt, p }
+    fn new(rank: usize, rt: Runtime, p: Protocol, pool: Option<pool::Client>) -> Executor {
+        Executor { rank, rt, p, pool }
+    }
+
+    fn pool(&self) -> Result<&pool::Client> {
+        self.pool.as_ref().with_context(|| format!("rank {}: a pooled act, but no pooled tier was joined", self.rank))
     }
 
     fn run(&mut self, o: &Order) -> Result<Answer> {
@@ -296,6 +321,16 @@ impl Executor {
             match a {
                 Act::Zero(s) => self.rt.zero_slot(*s)?,
                 Act::Copy(c) => self.rt.copy(&c.pages, c.slot.as_slice())?,
+                Act::Probe { id, keys } => self.pool()?.probe(*id, keys.clone()),
+                Act::Mark { id, key } => self.pool()?.mark(*id, key.clone()),
+                Act::Put { id, objects } => {
+                    let after = self.rt.mark()?;
+                    self.pool()?.put(*id, after, objects);
+                }
+                Act::Get { id, objects } => {
+                    let after = self.rt.mark()?;
+                    self.pool()?.get(*id, after, objects);
+                }
             }
         }
         if let Some(item) = &o.item {
@@ -329,7 +364,8 @@ impl Executor {
             }
             None => (Vec::new(), Vec::new()),
         };
-        Ok(Answer { tokens, counts })
+        let landed = self.pool.as_ref().map_or_else(Vec::new, pool::Client::landed);
+        Ok(Answer { tokens, counts, landed })
     }
 }
 
