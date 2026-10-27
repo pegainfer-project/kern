@@ -264,7 +264,11 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let load = executor::Load {
         gpu: o.gpu,
         kernels: art.kernels.clone(),
-        capacity: Capacity { tokens: o.capacity, slots: o.seq_slots.map_or(slots_for(o.max_seqs), |n| (n as u64).max(slots_for(o.max_seqs))) * t, landings: 0 },
+        capacity: Capacity {
+            tokens: o.capacity,
+            slots: o.seq_slots.map_or(slots_for(o.max_seqs), |n| (n as u64).max(slots_for(o.max_seqs))) * t,
+            landings: 0,
+        },
         eager: o.eager,
         pool: o.pool.config(o.gpu)?,
     };
