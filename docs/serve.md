@@ -945,6 +945,35 @@ prefill 对 chunk 边界敏感，不带池的实例上同一 prompt 从 0 算和
 cooldown 过后再探一次要 4.3 s 才超时、再进 cooldown，所以每 30 s 有一个请求多付 4 s；master 回来后 holder 自己重挂、
 cooldown 一过命中恢复（重启后 33 s 内），全程 TTFT p50 / p90 / p99 379 / 3426 / 10228 ms。未做：K3 PP8（没有 16 张空卡）。
 
+**2026-10-27 window state 修掉之后（`~/bench_results/2026-10-27-dsv41-window-work`）**：#100 的根因在 kern-dsv41-flash
+的生成器——window state 声明成 `128 + max_tokens` 行的环，只为一步内的行不踩这一步还在读的槽；改成 state 只留 256 个位置、
+一步的 K/V 进 `window.work` 工作区（kern-dsv41-flash `340cf28`），每序列 712 MiB → 5.5 MiB，paged 页 181k → 553k，同路径
+48/48 轮一致。单 tier 带池 AgentX c32 300 s：TTFT p50 627 → 297 ms，每个 put 13 MB、池动作 39 → 4.4 ms。
+
+顺着查到 DP 层 device 从不命中的真正原因：下一轮的渲染在 `history_tokens`（assistant 标记前）之后就和上一轮不同，而 device
+只在 retire 时按整条 prompt 建条目、`history_tokens` 的快照只给池；`8c32e77` 起快照就是该 rank 的 kept entry（有没有池
+都取），prompt 末尾不再另存，`--seq-slots` 单独定 slot 数（默认 `--max-seqs` + 1）。单 tier `--seq-slots 512` 同负载：
+device 命中 0 → 944 / 1056（89%，正是之前池命中的那部分），池 fetch 0，TTFT 不变（p50 282 ms）——13 MB 的 fetch 本来
+就不是成本，device 命中的意义在多 tier。
+
+路由消融（4 tier：tray07 / 17 / 01 / 02，`--seq-slots 512`，池 master tray03 + holder tray03 / tray17 各 200 GB；每个策略
+前重启 4 个 tier 并清池，AgentX c1024 600 s，vllm-router 0.1.15，`power_of_two` 打了让它计 in-flight 的补丁）。第 0 分钟是
+1024 个会话首轮同时到的冷启动风暴（971 个请求 × 122k token，TTFT p50 77 s），决定整段 p99（43–46 s）且与策略无关；
+稳态取第 5–12 分钟启动的请求：
+
+| 策略 | 稳态 TTFT p50 / p90 / p99 | 整段 p50 / p90 / p99 | device 命中 | 池 fetch | 请求 |
+|---|---|---|---|---|---|
+| cache_aware | 2239 / 3191 / 4729 ms | 2590 / 7076 / 46371 | 65% | 61% | 38905 |
+| round_robin | 1760 / 2853 / 4266 ms | 1985 / 7825 / 43258 | 65% | 62% | 39619 |
+| power_of_two | 1365 / 2206 / 3088 ms | 1697 / 3683 / 42722 | 66% | 62% | 41012 |
+| consistent_hash | 1121 / 1827 / 2754 ms | 1443 / 3655 / 43670 | 83% | 1% | 41336 |
+
+consistent_hash 稳态 TTFT 是 round_robin 的 0.64×：会话黏在同一 tier，device 命中 65% → 83%，池只剩写入；收益来自
+命中率而不是省下的 fetch——round_robin 下 35% 的请求两边都没命中（上一轮在别的 tier、快照未落地或已被池淘汰：
+每策略 4 万个 put、池 10 分钟到 80% 水位），黏住后降到 17%。power_of_two 靠最短队列在稳态比 round_robin 快 22%，
+命中率不变。cache_aware 最差：按文本前缀树把同源会话堆到一个 tier（burst 期一个 tier 跑 32 个、其余 0），均衡差而
+命中率没涨。c128 时 4 tier in-flight ≤ 8、没有队列，策略之间看不出差别；c512 稳态每 tier 9–18 个仍无队列。
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
