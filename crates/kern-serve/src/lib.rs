@@ -98,19 +98,6 @@ pub struct ServeOpts {
     #[arg(long)]
     pub rows: Option<u64>,
 
-    /// Pinned host memory (GiB) per rank, or per stage on a pipeline's head,
-    /// for snapshots parked off the device: a lease short of pages or slots
-    /// parks the coldest snapshot there instead of dropping it, and a
-    /// prompt hitting one wakes it (0: off)
-    #[arg(long, default_value_t = 0.0)]
-    pub host_gib: f64,
-
-    /// Tokens a parked snapshot adds to the prefix its session's other
-    /// snapshots share: the host tier holds one slot per this many tokens
-    /// of pages. The default fits the AgentX traces on qwen3.8 and full K3
-    #[arg(long, default_value_t = 8192)]
-    pub host_turn: u64,
-
     /// Serve as the head of several processes: HTTP, scheduler and every
     /// process's accounting, waiting at this host:port for the others to
     /// join — the later stages of a cut manifest (`kern cut`), or ranks
@@ -195,8 +182,6 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             max_seqs: o.max_seqs,
             eager: o.eager,
             decode: o.decode.clone(),
-            host_bytes: (o.host_gib * (1u64 << 30) as f64) as u64,
-            host_turn: o.host_turn,
         };
         let load = move || pp::head::spawn(manifest, weights, head);
         return launch(load, served_name, model_path, o.port, samples, parser);
@@ -219,11 +204,10 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     }
     anyhow::ensure!(o.decode.is_empty(), "`--decode` hands prompts off from a pipeline head; this manifest is not cut");
     if let Some(at) = &o.decode_listen {
-        let (ranks, exec) = executor::head(&manifest, &weights, &load, o.listen.as_deref(), (0, 0))?.ranks()?;
+        let (ranks, exec) = executor::head(&manifest, &weights, &load, o.listen.as_deref())?.ranks()?;
         let pools = exec.pools()?;
         return pd::tier::serve(ranks, exec, pools, pd::shapes(&manifest), at, o.max_seqs);
     }
-    let host = ((o.host_gib * (1u64 << 30) as f64) as u64, o.host_turn);
     let listen = o.listen.clone();
     // A manifest with nothing to step with is a prefill tier: every rank
     // its own batch (`dp`); any other runs the group scheduler.
@@ -231,7 +215,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         let policy = dp::Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs };
         let load = move || -> Result<(dp::Dp, scheduler::Facts)> {
             let t0 = Instant::now();
-            let joined = executor::head(&manifest, &weights, &load, listen.as_deref(), host)?;
+            let joined = executor::head(&manifest, &weights, &load, listen.as_deref())?;
             info!(model = %manifest.model, ranks = joined.groups.ranks(), load_s = logline::secs(t0.elapsed()), "ranks loaded");
             let sched = dp::Dp::new(joined, policy)?;
             let facts = sched.facts();
@@ -239,10 +223,10 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         };
         return launch(load, served_name, model_path, o.port, samples, parser);
     }
-    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows, host_bytes: host.0 };
+    let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows };
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
         let t0 = Instant::now();
-        let (ranks, exec) = executor::head(&manifest, &weights, &load, listen.as_deref(), host)?.ranks()?;
+        let (ranks, exec) = executor::head(&manifest, &weights, &load, listen.as_deref())?.ranks()?;
         info!(model = %manifest.model, ranks = ranks.groups().ranks(), load_s = logline::secs(t0.elapsed()), "ranks loaded");
         let sched = KernScheduler::new(ranks, exec, policy)?;
         let facts = sched.facts();

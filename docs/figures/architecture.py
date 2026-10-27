@@ -49,7 +49,7 @@ arrow("M480,256 H506 V390 H526", (526, 390))
 rect(532, 56, 396, 248, 14, "#f8fafc", SOFT)
 text(552, 86, "RUN", 11.5, 700, MUTED, spacing="1.2")
 card(552, 100, 176, 96, "kern-runtime", ["allocate · lower", "replay as CUDA graphs"])
-card(744, 100, 164, 96, "kern-pool", ["pages · slots · leases", "prefix · host tier"])
+card(744, 100, 164, 96, "kern-pool", ["pages · slots · leases", "prefix radix tree"])
 el(f'<path d="M728,148 H744" stroke="{LINE}" stroke-width="2"/>')
 text(552, 224, "HOSTED IN", 10.5, 700, MUTED, spacing="1.2")
 for i, h in enumerate(["kern-serve", "vLLM", "SGLang"]):

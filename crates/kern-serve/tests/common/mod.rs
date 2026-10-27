@@ -29,7 +29,7 @@ pub fn replicated_with(w: usize, groups: usize, slots: usize) -> Ranks {
 pub fn replicated_of(m: Manifest, w: usize, groups: usize, slots: usize) -> Ranks {
     let p = Protocol::check(&verify(m.clone()).unwrap()).unwrap();
     let pools = (0..w * groups).map(|_| Pool::new(&m, 128, slots).unwrap()).collect();
-    Ranks::new(p, Groups::new(w * groups, w).unwrap(), pools, (0, 0)).unwrap()
+    Ranks::new(p, Groups::new(w * groups, w).unwrap(), pools).unwrap()
 }
 
 /// `groups` replicated groups of `w`, ten slots a member and pages to spare.

@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mb = mirror(&a, &b, "B")?;
     let pairs: Vec<(i32, i32)> =
         [(3, 1), (5, 2), (8, 3), (9, 4), (10, 5), (11, 6)].map(|(s, d)| (ap[s], bp[d])).to_vec();
-    let folded = runs(&pairs.iter().map(|&(s, d)| (s, d as u64)).collect::<Vec<_>>());
+    let folded = runs(&pairs);
     println!(
         "pages {:?}: {} copies, runs of {:?} pages",
         pairs,

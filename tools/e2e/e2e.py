@@ -14,12 +14,6 @@ toml and a scenario reads like a client:
   concurrent        every prompt at once: all finish, acceptance holds up
                     (under an exact oracle: the same tokens as one at a time)
   abort             a client that hangs up mid-stream leaves the server whole
-  park_wake         a pool of a few pages and a host tier: the coldest
-                    checkpoints park, a prompt hitting one wakes it, the answer
-                    is the cold one
-  wake_room         a pool holding one worst-case second turn: its first turn's
-                    checkpoint parks for it and wakes into the turn's own row;
-                    it finishes, with the warm answer
   slot_pressure     a stateful manifest served with two slots evicts the
                     coldest checkpoints as requests finish, slots fixed,
                     answers unchanged
@@ -343,12 +337,12 @@ class Server:
 
     def counters(self) -> dict:
         """Sums of the per-window counters over every stats line, the gauges as last seen."""
-        sums = ("parks", "wakes", "host_hits", "resident_hits", "evictions", "host_evictions", "prefill_tokens")
+        sums = ("resident_hits", "evictions", "prefill_tokens")
         out = {k: 0 for k in sums}
         for s in self.lines("stats"):
             for k in sums:
                 out[k] += s.get(k, 0) or 0
-            for k in ("slots", "slots_used", "checkpoints", "parked", "host_gib", "accept_pct", "accepted"):
+            for k in ("slots", "slots_used", "checkpoints", "accept_pct", "accepted"):
                 if k in s:
                     out[k] = s[k]
         return out
@@ -617,7 +611,6 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
     first: dict[str, list[str]] = {}
     stop: dict[str, int | None] = {}
     turn2: dict[str, dict] = {}
-    prompt_max = 0
     with Server(a, t, gpus, port, {}, out / "server-default.log") as s:
         rep.facts = s.facts
         page, rows = s.facts["page"], s.facts["rows"]
@@ -628,7 +621,6 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
         for i, p in enumerate(PROMPTS):
             r = s.complete(p, a.max_tokens)
             cold[p], prompt_ids[p], stop[p], first[p] = r["ids"], r["prompt_ids"], r["stop"], [r["request"]]
-            prompt_max = max(prompt_max, len(r["prompt_ids"]))
             wants[p] = oracle.run(r["prompt_ids"], a.max_tokens, rows)
             if wants[p] is not None:
                 same.add(f"prompt {i}", r["prompt_ids"], r["ids"], wants[p])
@@ -722,91 +714,13 @@ def session_default(a, t: Target, gpus: list[int], port: int, rep: Report, oracl
         same.add("after the abort", r["prompt_ids"], r["ids"], cold[PROMPTS[0]])
         rep.add("abort", got == 3 and same.ok, f"{got} chunks read before hanging up; next answer vs cold: {same}")
         rep.counters["default"] = c
-    return {"cold": cold, "turn2": turn2, "page": page, "rows": rows, "prompt_max": prompt_max + a.max_tokens + len(suffix) + 1}
-
-
-def session_host(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path, prev: dict) -> None:
-    """A pool of a few pages and a host tier: the cold half of turn2, then parks and wakes.
-    Answers that took another numerical path (warm after cold, a hit on a parked
-    state) are held to identity only where the oracle can excuse a near-tie."""
-    cold, turn2, page, rows = prev["cold"], prev["turn2"], prev["page"], prev["rows"]
-    # Per rank, room for its share of four of the longest requests' worst
-    # cases and a page over; a stateful manifest's first slots come on top
-    # of that (pages and slots trade chunks), so the fill goes on until the
-    # server parks.
-    per = -(-4 // t.ranks)
-    capacity = (per * -(-(prev["prompt_max"] + a.max_tokens + 16) // page) + 1) * page
-    flags = {"--capacity": str(capacity), "--host-gib": "2", "--max-seqs": "4"}
-    gate = lambda same: same.ok if oracle.available else None
-    with Server(a, t, gpus, port, flags, out / "server-host.log") as s:
-        # Cold turn2 on a fresh server: warm == cold.
-        same = Same(oracle, rows)
-        for i, p in enumerate(PROMPTS[:4]):
-            r = s.complete(turn2[p]["ids"], a.max_tokens)
-            turn2[p]["cold_ids"] = r["ids"]
-            same.add(f"turn2 {i}", turn2[p]["ids"], turn2[p]["warm_ids"], r["ids"])
-        rep.add("turn2_warm_equals_cold", gate(same), f"cached_tokens warm {[turn2[p]['cached'] for p in PROMPTS[:4]]}; {same}")
-        # Finished requests fill the pool until the checkpoints turn2 hits
-        # (their lengths are what the warm turn2 got) have parked: the
-        # twelve prompts (their answers vs cold), then numbered variants.
-        fill, n = Same(oracle, rows), 0
-        want = {turn2[p]["cached"] for p in PROMPTS[:4]} - {0}
-        parked = lambda: {l["tokens"] for l in s.lines("parked")}
-        while n < len(PROMPTS) or (n < 48 * t.ranks and not want <= parked()):
-            p = PROMPTS[n % len(PROMPTS)]
-            r = s.complete(p if n < len(PROMPTS) else f"{n}. {p}", a.max_tokens)
-            if n < len(PROMPTS):
-                fill.add(f"prompt {n}", r["prompt_ids"], r["ids"], cold[p])
-            n += 1
-        # The turn2 prompts hit the parked checkpoints of their first turns.
-        same = Same(oracle, rows)
-        for i, p in enumerate(PROMPTS[:4]):
-            r = s.complete(turn2[p]["ids"], a.max_tokens)
-            same.add(f"turn2 {i}", turn2[p]["ids"], r["ids"], turn2[p]["cold_ids"])
-        s.flush_stats()
-        c = s.counters()
-        woke = sum(1 for l in s.lines("admitted") if l.get("woken") == "true")
-        rep.counters["host"] = c
-        identity = gate(fill) is not False and gate(same) is not False
-        rep.add(
-            "park_wake",
-            c["parks"] >= 1 and c["wakes"] >= 1 and c["host_hits"] >= 1 and identity,
-            f"capacity={capacity} fills={n} parks={c['parks']} (turn2's {sorted(want & parked())} of {sorted(want)}) host_evictions={c['host_evictions']} evictions={c['evictions']} wakes={c['wakes']} host_hits={c['host_hits']} woken requests={woke}; under the small pool vs cold: {fill}; turn2 after the parks vs cold: {same}",
-        )
-
-
-def session_wake(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path, prev: dict) -> None:
-    """A pool holding exactly one worst-case second turn (and the pad's
-    page). A stateful manifest's checkpoint ends inside a page, and the
-    continuation copies that page: one more than the pool, so the
-    checkpoint parks and the second turn's room is asked for once, with
-    the checkpoint woken into it (waking it back as a snapshot first,
-    then leasing from that, asks twice and parks what it just woke,
-    without end). A paged-only checkpoint ends at a page and is continued
-    in place. Either way the request finishes, with the answer a warm
-    server gave."""
-    turn2, page, rows = prev["turn2"], prev["page"], prev["rows"]
-    p = PROMPTS[0]
-    worst = len(turn2[p]["ids"]) + a.max_tokens + rows - 1
-    capacity = (-(-worst // page) + 1) * page
-    flags = {"--capacity": str(capacity), "--host-gib": "2", "--max-seqs": "4"}
-    with Server(a, t, gpus, port, flags, out / "server-wake.log") as s:
-        s.complete(p, a.max_tokens)
-        try:
-            r = s.complete(turn2[p]["ids"], a.max_tokens, timeout=120)
-        except Exception as e:  # noqa: BLE001
-            rep.add("wake_room", False, f"capacity={capacity} ({worst} worst): the second turn did not finish ({type(e).__name__}); {len(s.lines('parked'))} parked lines")
-            return
-        same = Same(oracle, rows)
-        same.add("turn2 0", turn2[p]["ids"], r["ids"], turn2[p]["warm_ids"])
-        parks = len(s.lines("parked"))
-        rep.add("wake_room", same.ok and parks <= 4, f"capacity={capacity} ({worst} worst) cached={r['cached']} parks={parks}; vs the warm answer: {same}")
+    return {"cold": cold, "turn2": turn2, "page": page, "rows": rows}
 
 
 def session_slots(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path, prev: dict) -> None:
     """A stateful manifest's slots are fixed at load: finished requests
-    beyond them evict the coldest checkpoints (the pool is the default,
-    nothing parks), the slot count never moves, the answers are the cold
+    beyond them evict the coldest checkpoints (the pool is the default),
+    the slot count never moves, the answers are the cold
     ones and a turn2 still answers as the warm one did, hit or not."""
     if not t.stateful:
         return
@@ -981,10 +895,8 @@ def run_target(a, t: Target, gpus: list[Gpu], out: Path, twin: Target | None = N
     try:
         kern_test(a, t, use[0].index, rep, out)
         prev = session_default(a, t, use, a.port, rep, oracle, runner if a.reference else None, out)
-        session_host(a, t, use, a.port + 1, rep, oracle, out, prev)
-        session_wake(a, t, use, a.port + 2, rep, oracle, out, prev)
-        session_slots(a, t, use, a.port + 3, rep, oracle, out, prev)
-        session_rows1(a, t, use, a.port + 4, rep, oracle, out, prev)
+        session_slots(a, t, use, a.port + 1, rep, oracle, out, prev)
+        session_rows1(a, t, use, a.port + 2, rep, oracle, out, prev)
     except Exception as e:  # noqa: BLE001
         rep.add("error", False, f"{type(e).__name__}: {e}")
     return rep

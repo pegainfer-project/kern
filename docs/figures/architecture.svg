@@ -34,7 +34,7 @@
 <rect x="744" y="100" width="164" height="96" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
 <text x="826.0" y="136.0" font-size="15" font-weight="600" fill="#0f172a" text-anchor="middle">kern-pool</text>
 <text x="826.0" y="156.0" font-size="12.5" font-weight="400" fill="#475569" text-anchor="middle">pages · slots · leases</text>
-<text x="826.0" y="173.0" font-size="12.5" font-weight="400" fill="#475569" text-anchor="middle">prefix · host tier</text>
+<text x="826.0" y="173.0" font-size="12.5" font-weight="400" fill="#475569" text-anchor="middle">prefix radix tree</text>
 <path d="M728,148 H744" stroke="#94a3b8" stroke-width="2"/>
 <text x="552" y="224" font-size="10.5" font-weight="700" fill="#64748b" text-anchor="start" letter-spacing="1.2">HOSTED IN</text>
 <rect x="552" y="236" width="112" height="48" rx="8" fill="#f1f5f9" stroke="#e2e8f0" stroke-width="1.5"/>

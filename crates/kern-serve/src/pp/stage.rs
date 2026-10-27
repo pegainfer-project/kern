@@ -2,9 +2,8 @@
 //! head, joins the stage after it and the one before from the table it
 //! gets back, then replays the head's items in order as they arrive. It
 //! keeps no accounting: the page ids, positions and slots of every item
-//! are the head's, and so are the zeroing of a fresh sequence's slot, the
-//! pages and slots a kept prefix copies and the host units an entry parks
-//! in or wakes from, in the block the head's table sizes. The last stage answers every
+//! are the head's, and so are the zeroing of a fresh sequence's slot and
+//! the pages and slots a kept prefix copies. The last stage answers every
 //! item with its tokens. With a decode tier, the stage mirrors its pools
 //! at start and runs every push the head sends behind the item before it.
 
@@ -20,8 +19,7 @@ use tracing::{error, info};
 
 use super::{arrivals, connect, recv, send, Answer, Flow, Hello, Job, Next, Prev, Report, Table, LANDINGS};
 use crate::pd::{mirror::Mirrors, shapes};
-use crate::ranks::{Act, Moves};
-use kern_pool::Copies;
+use crate::ranks::Act;
 
 /// How a stage loads and where its head listens.
 pub struct Stage {
@@ -64,7 +62,6 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         port: listener.local_addr()?.port(),
         arrivals: arrivals(&rt, &p)?,
         states: shapes(&rt.manifest),
-        host: rt.host_unit(),
     };
     send(&mut head, &hello)?;
     let table: Table = recv(&mut head)?.context("the head closed before its table")?;
@@ -84,7 +81,6 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
             if n.is_some() { "a" } else { "no" }
         ),
     };
-    super::head::reserve(&mut rt, table.host)?;
     let mine = shapes(&rt.manifest);
     let mut mirrors: Vec<Mirrors> =
         table.decode.into_iter().map(|d| Mirrors::map(&rt, d, &mine)).collect::<Result<_>>()?;
@@ -159,19 +155,13 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
 /// `holds` (pages, slots) only: a stage without paged or per-sequence
 /// state has nothing the head's ids of that kind name.
 fn act(rt: &mut Runtime, act: Act, holds: (bool, bool)) -> Result<()> {
-    fn held<S, D>(m: Moves<S, D>, holds: (bool, bool)) -> Copies<S, D> {
-        let pages = if holds.0 { m.pages } else { Vec::new() };
-        Copies { pages, slot: m.slot.filter(|_| holds.1) }
-    }
     match act {
         Act::Zero(slot) if holds.1 => rt.zero_slot(slot)?,
         Act::Zero(_) => {}
         Act::Copy(m) => {
-            let c = held(m, holds);
-            rt.copy(&c.pages, c.slot.as_slice())?
+            let pages = if holds.0 { m.pages } else { Vec::new() };
+            rt.copy(&pages, m.slot.filter(|_| holds.1).as_slice())?
         }
-        Act::Park(m) => rt.copy_out(&held(m, holds))?,
-        Act::Wake(m) => rt.copy_in(&held(m, holds))?,
     }
     Ok(())
 }

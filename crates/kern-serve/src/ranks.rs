@@ -1,19 +1,16 @@
-//! The head's accounting of every rank: one [`kern_pool::Pool`] (and host
-//! tier) per GPU, decided here, run by the ranks' own processes.
+//! The head's accounting of every rank: one [`kern_pool::Pool`] per GPU,
+//! decided here, run by the ranks' own processes.
 //!
 //! Every GPU is one process. The head holds what each rank's runtime would
-//! otherwise decide for itself — its pages and slots, its parked
-//! checkpoints — in a pool built from the rank's own budget, so the
-//! pool here starts where the rank's did and makes the decisions it would
-//! make. Nothing in this module touches a device or a socket: a decision
-//! comes back as [`Act`]s queued on the rank in the order they were made,
-//! and [`Ranks::orders`] hands each rank its queue with the step's
-//! [`Item`]. The rank runs them in that order on its compute stream ahead
-//! of the item, so a page freed here and leased again is written there in
-//! the same order. What the rank does asynchronously — a host transfer on
-//! its transfer stream — it reports in its [`Answer`], and
-//! [`Ranks::heard`] lands it here: a parked checkpoint's device pages
-//! return, a woken row comes up.
+//! otherwise decide for itself — its pages and slots — in a pool built
+//! from the rank's own budget, so the pool here starts where the rank's
+//! did and makes the decisions it would make. Nothing in this module
+//! touches a device or a socket: a decision comes back as [`Act`]s queued
+//! on the rank in the order they were made, and [`Ranks::orders`] hands
+//! each rank its queue with the step's [`Item`]. The rank runs them in
+//! that order on its compute stream ahead of the item, so a page freed
+//! here and leased again is written there in the same order, and answers
+//! with the item's outputs ([`Answer`]).
 //!
 //! # Lockstep
 //!
@@ -34,18 +31,16 @@
 //! rows it owns (MLA attention is by row: the owner alone reads them). A
 //! [`Row`] is therefore one paged [`Lease`] on its owner and a slot-only
 //! lease on each of the owner's peers, and every act on it — lease,
-//! checkpoint, retire, park, wake — is the same act on every member of the
-//! group, all or nothing: a `Row` is only ever constructed once every
-//! member's pool has said yes, and an early return drops what the earlier
-//! members handed out, before any act is queued. The pools decide
-//! independently (slot numbers differ across ranks and are never
-//! compared). Parking finds host room on every member before anything is
-//! queued. An owner is chosen when a row is leased — the open rank with
-//! the fewest rows, then the fewest pages in use (pages count the
-//! snapshots kept there, so a rank holding a long prefix would otherwise
-//! sit idle while the others prefill) — and is fixed for the row's life
-//! and everything that descends from it: pages live on that GPU, a parked
-//! copy lives in that GPU's pinned block.
+//! checkpoint, retire — is the same act on every member of the group, all
+//! or nothing: a `Row` is only ever constructed once every member's pool
+//! has said yes, and an early return drops what the earlier members handed
+//! out, before any act is queued. The pools decide independently (slot
+//! numbers differ across ranks and are never compared). An owner is chosen
+//! when a row is leased — the open rank with the fewest rows, then the
+//! fewest pages in use (pages count the snapshots kept there, so a rank
+//! holding a long prefix would otherwise sit idle while the others
+//! prefill) — and is fixed for the row's life and everything that descends
+//! from it: pages live on that GPU.
 //!
 //! # Staging
 //!
@@ -82,7 +77,7 @@
 //! The vars stay one set for the group. Nothing is kept: such a group is a
 //! decode tier whose next turn starts from a prefill elsewhere, so a
 //! checkpoint or a retire answers that nothing was kept, and with no
-//! snapshot there is nothing to restore, park or wake.
+//! snapshot there is nothing to restore.
 
 use std::collections::hash_map::RandomState;
 use std::collections::BTreeMap;
@@ -94,7 +89,7 @@ use anyhow::{bail, ensure, Result};
 use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_pool::{Checkpoint, Copies, Denied, Host, Interleave, Kept, Lease, Parked, Pool};
+use kern_pool::{Checkpoint, Copies, Denied, Interleave, Kept, Lease, Pool};
 use pegainfer_frontend::sampler::SamplingParams;
 use serde::{Deserialize, Serialize};
 
@@ -155,19 +150,19 @@ impl Groups {
 
 /// [`Copies`] on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Moves<S, D> {
-    pub pages: Vec<(S, D)>,
-    pub slot: Option<(S, D)>,
+pub struct Moves {
+    pub pages: Vec<(i32, i32)>,
+    pub slot: Option<(i32, i32)>,
 }
 
-impl<S, D> From<Copies<S, D>> for Moves<S, D> {
-    fn from(c: Copies<S, D>) -> Moves<S, D> {
+impl From<Copies> for Moves {
+    fn from(c: Copies) -> Moves {
         Moves { pages: c.pages, slot: c.slot }
     }
 }
 
-impl<S, D> From<Moves<S, D>> for Copies<S, D> {
-    fn from(m: Moves<S, D>) -> Copies<S, D> {
+impl From<Moves> for Copies {
+    fn from(m: Moves) -> Copies {
         Copies { pages: m.pages, slot: m.slot }
     }
 }
@@ -178,36 +173,27 @@ pub enum Act {
     /// Zero a fresh lease's slot in every per-sequence state.
     Zero(i32),
     /// Pages and a slot within the device pool.
-    Copy(Moves<i32, i32>),
-    /// Device pages and slot out to host offsets (a park).
-    Park(Moves<i32, u64>),
-    /// Host offsets into device pages and slot (a wake).
-    Wake(Moves<u64, i32>),
+    Copy(Moves),
 }
 
 /// What a rank is sent: its acts in decision order, then the step's item
-/// when there is one, without the tables the rank already holds. `wait`:
-/// block until the host transfers in flight have landed before answering.
+/// when there is one, without the tables the rank already holds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
     pub acts: Vec<Act>,
     pub item: Option<Item>,
-    pub wait: bool,
 }
 
 /// A rank's reply to an [`Order`], once its device is done with the item:
-/// the item's `tokens` and `count` outputs (empty without) and how many
-/// host transfers have landed in all.
+/// the item's `tokens` and `count` outputs (empty without).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answer {
     pub tokens: Vec<i64>,
     pub counts: Vec<i64>,
-    pub landed: u64,
 }
 
 /// One sequence's pieces across its owner's group, one per member in
-/// member order: leases (a [`Row`]), checkpoints (a [`Snapshot`]),
-/// parked copies (a [`Sleeping`]) or wakes in flight (a [`Rising`]). The
+/// member order: leases (a [`Row`]) or checkpoints (a [`Snapshot`]). The
 /// owner's piece, at `me`, is the paged one; the peers' hold a slot
 /// alone. Dropping it returns all of them.
 pub struct Group<X> {
@@ -218,11 +204,6 @@ pub struct Group<X> {
 
 pub type Row = Group<Lease>;
 pub type Snapshot = Group<Checkpoint>;
-pub type Sleeping = Group<Parked>;
-/// A row whose host copies are in flight: each member's lease and the
-/// transfer it waits for. Only [`Ranks::awake`] consumes one; dropping it
-/// earlier would return pages a transfer is still writing.
-pub type Rising = Group<(Lease, u64)>;
 
 impl<X: Clone> Clone for Group<X> {
     fn clone(&self) -> Group<X> {
@@ -304,35 +285,16 @@ pub fn sampling(p: &SamplingParams) -> Sampling {
     Sampling { temperature: p.temperature, top_k: p.top_k, top_p: p.top_p, min_p: p.min_p, seed }
 }
 
-/// One rank's pool, host tier and what is queued or in flight on it.
+/// One rank's pool and what is queued on it.
 struct Account {
     pool: Arc<Pool>,
-    host: Option<Arc<Host>>,
-    host_pages: u64,
     /// A page and a slot no sequence owns: padding rows write here.
     pad: Lease,
     /// Decisions not yet sent, in the order they were made.
     acts: Vec<Act>,
-    /// Host transfers sent and landed; a transfer's number is `sent` after it.
-    sent: u64,
-    landed: u64,
-    /// Checkpoints being parked, held until their transfer lands.
-    parking: Vec<(u64, Checkpoint)>,
     /// The tables the rank's buffers hold: the last item sent, its rows
     /// cut to the page and line tables.
     held: Option<Item>,
-}
-
-impl Account {
-    fn busy(&self) -> bool {
-        self.sent > self.landed
-    }
-
-    fn transfer(&mut self, act: Act) -> u64 {
-        self.acts.push(act);
-        self.sent += 1;
-        self.sent
-    }
 }
 
 pub struct Ranks {
@@ -345,10 +307,9 @@ pub struct Ranks {
 
 impl Ranks {
     /// The accounting of `pools`, one per rank in rank order (each built
-    /// from that rank's budget), with a host tier of `host` (host pages,
-    /// host slots) on each (none: no tier); every rank's pad is leased and
-    /// its slot zeroing queued.
-    pub fn new(protocol: Protocol, groups: Groups, pools: Vec<Pool>, host: (u64, u64)) -> Result<Ranks> {
+    /// from that rank's budget); every rank's pad is leased and its slot
+    /// zeroing queued.
+    pub fn new(protocol: Protocol, groups: Groups, pools: Vec<Pool>) -> Result<Ranks> {
         ensure!(pools.len() == groups.n, "{} pools for {} ranks", pools.len(), groups.n);
         let dealt = match &protocol.shards.positions {
             Some(p) if p.group != "tp" || p.members != groups.t as u64 => bail!(
@@ -378,19 +339,8 @@ impl Ranks {
                 if pool.used() == pool.pages() {
                     bail!("rank {q}: the pool holds one page; nothing left to serve from");
                 }
-                let tier = (host != (0, 0)).then(|| Arc::new(Host::new(host.0, host.1)));
                 let acts = pad.seq_slot().map(Act::Zero).into_iter().collect();
-                Ok(Account {
-                    pool,
-                    host: tier,
-                    host_pages: host.0,
-                    pad,
-                    acts,
-                    sent: 0,
-                    landed: 0,
-                    parking: Vec::new(),
-                    held: None,
-                })
+                Ok(Account { pool, pad, acts, held: None })
             })
             .collect::<Result<_>>()?;
         Ok(Ranks { protocol, groups, dealt, accounts })
@@ -469,24 +419,9 @@ impl Ranks {
         (all, self.accounts.iter().map(|a| a.pool.slots_used()).sum::<usize>() - self.groups.n)
     }
 
-    /// (host pages used, host pages) of the host tiers together, when there are any.
-    pub fn host_tier(&self) -> Option<(u64, u64)> {
-        self.accounts.iter().try_fold((0, 0), |(u, r), a| a.host.as_ref().map(|h| (u + h.used(), r + a.host_pages)))
-    }
-
-    /// Whether a host transfer is still on its way on any rank.
-    pub fn busy(&self) -> bool {
-        self.accounts.iter().any(Account::busy)
-    }
-
-    /// Whether any rank has work to hear about or acts not yet sent.
+    /// Whether any rank has acts not yet sent.
     pub fn outstanding(&self) -> bool {
-        self.accounts.iter().any(|a| a.busy() || !a.acts.is_empty())
-    }
-
-    /// Whether device pages are on their way back from a park.
-    pub fn parking(&self) -> bool {
-        self.accounts.iter().any(|a| !a.parking.is_empty())
+        self.accounts.iter().any(|a| !a.acts.is_empty())
     }
 
     // ---- rows: every act is the same act on every member of a group.
@@ -599,93 +534,25 @@ impl Ranks {
         Some(row.map(|l| self.accounts[base + m.next().expect("unbounded")].pool.retire(l, len)))
     }
 
-    /// Park `snap` in its members' host tiers: room on every one first,
-    /// then the copies; `Err(snap)` hands it back untouched when any
-    /// member is short of room. Each member's checkpoint is held until its
-    /// copy lands.
-    pub fn park(&mut self, snap: Snapshot) -> std::result::Result<Sleeping, Snapshot> {
-        let base = self.groups.members(snap.owner.0).start;
-        let rooms: Option<Vec<(Parked, Copies<i32, u64>)>> =
-            snap.parts.iter().enumerate().map(|(m, cp)| self.accounts[base + m].host.as_ref()?.park(cp).ok()).collect();
-        let Some(rooms) = rooms else { return Err(snap) };
-        let Group { owner, me, parts } = snap;
-        let parked = parts
-            .into_iter()
-            .zip(rooms)
-            .enumerate()
-            .map(|(m, (cp, (p, plan)))| {
-                let a = &mut self.accounts[base + m];
-                let n = a.transfer(Act::Park(plan.into()));
-                a.parking.push((n, cp));
-                p
-            })
-            .collect();
-        Ok(Group { owner, me, parts: parked })
-    }
-
-    /// A row continuing from the first `len` tokens of `sleeping` with
-    /// room for `tokens`, on the snapshot's owner, its bytes on the way in
-    /// from every member's host tier; the peers continue their slots at
-    /// the snapshot's length. The copies are in flight until
-    /// [`Ranks::awake`] hands the row out.
-    pub fn wake(&mut self, sleeping: &Sleeping, len: usize, tokens: usize) -> Result<Rising, Denied> {
-        let me = sleeping.me;
-        let got = self.each(sleeping.by_ref(), |a, m, p| {
-            let host = a.host.as_ref().expect("a parked snapshot has a host tier");
-            host.restore(p, &a.pool, if m == me { len } else { p.tokens() }, tokens)
-        })?;
-        let base = self.groups.members(got.owner.0).start;
-        let mut m = 0..;
-        Ok(got.map(|(lease, plan)| {
-            let n = self.accounts[base + m.next().expect("unbounded")].transfer(Act::Wake(plan.into()));
-            (lease, n)
-        }))
-    }
-
-    /// The row of a wake whose copies have all landed; `Err(r)` while any
-    /// is still in flight.
-    pub fn awake(&self, r: Rising) -> std::result::Result<Row, Rising> {
-        let base = self.groups.members(r.owner.0).start;
-        match r.parts.iter().enumerate().all(|(m, (_, n))| self.accounts[base + m].landed >= *n) {
-            true => Ok(r.map(|(l, _)| l)),
-            false => Err(r),
-        }
-    }
-
     // ---- orders.
 
     /// Every rank's order: its queued acts and its part of the step
-    /// (`items[q]`, from [`Staged::items`]). `wait` asks every rank with
-    /// something in flight to wait for it.
-    pub fn orders(&mut self, items: Option<Vec<Item>>, wait: bool) -> Vec<Order> {
+    /// (`items[q]`, from [`Staged::items`]).
+    pub fn orders(&mut self, items: Option<Vec<Item>>) -> Vec<Order> {
         let mut items = items.map(Vec::into_iter);
         let p = &self.protocol;
         self.accounts
             .iter_mut()
             .map(|a| {
                 let item = items.as_mut().and_then(Iterator::next).map(|i| elide(p, &mut a.held, i));
-                Order { acts: std::mem::take(&mut a.acts), item, wait: wait && a.busy() }
+                Order { acts: std::mem::take(&mut a.acts), item }
             })
             .collect()
     }
 
-    /// What the ranks answered, in rank order: the parked checkpoints
-    /// whose copies landed let go of their device pages.
-    pub fn heard(&mut self, answers: &[Answer]) -> Result<()> {
+    /// Every rank answered, in rank order.
+    pub fn heard(&self, answers: &[Answer]) -> Result<()> {
         ensure!(answers.len() == self.groups.n, "{} answers from {} ranks", answers.len(), self.groups.n);
-        for (q, (a, ans)) in self.accounts.iter_mut().zip(answers).enumerate() {
-            if ans.landed < a.landed || ans.landed > a.sent {
-                bail!(
-                    "rank {q} reports {} host transfers landed, {} sent and {} landed before",
-                    ans.landed,
-                    a.sent,
-                    a.landed
-                );
-            }
-            a.landed = ans.landed;
-            let landed = a.landed;
-            a.parking.retain(|(n, _)| *n > landed);
-        }
         Ok(())
     }
 

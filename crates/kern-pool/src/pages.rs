@@ -73,7 +73,7 @@ use std::sync::{Arc, Mutex};
 use kern_manifest::types::{BufferKind, Dim, Manifest};
 
 use crate::error::{bail, Result};
-use crate::store::{ancestor, chain_pages, lock, sealed, Copies, HostTwin, Node, SlotOwn, Storage, Store};
+use crate::store::{ancestor, chain_pages, lock, Checkpoint, Copies, Node, SlotOwn};
 
 /// A page table input: `stride` tokens per entry, `width` entries per row.
 struct Table {
@@ -133,23 +133,12 @@ pub struct Pool {
     inner: Mutex<Inner>,
 }
 
-/// The first `len` tokens of a sequence that is gone, on the device. Made
-/// by [`Pool::checkpoint`] / [`Pool::retire`] / [`crate::Host::wake`],
-/// spent by [`Pool::restore`] and [`crate::Host::park`].
-pub type Checkpoint = Store<Pool>;
-
-impl sealed::Sealed for Pool {}
-
-impl Storage for Pool {
-    type Page = i32;
-    type Slot = i32;
-    type Twin = HostTwin;
-
-    fn give_page(&self, page: i32) {
+impl Pool {
+    pub(crate) fn give_page(&self, page: i32) {
         self.release(&[page], None);
     }
 
-    fn give_slot(&self, slot: i32) {
+    pub(crate) fn give_slot(&self, slot: i32) {
         self.release(&[], Some(slot));
     }
 }
@@ -322,7 +311,7 @@ impl Pool {
         self.seq_tables.keys().map(String::as_str)
     }
 
-    pub(crate) fn pages_for(&self, tokens: usize) -> std::result::Result<usize, Denied> {
+    fn pages_for(&self, tokens: usize) -> std::result::Result<usize, Denied> {
         // Nothing paged: a sequence of any length holds no page.
         if !self.pooled.iter().any(|p| p.kind == Kind::Page) {
             return Ok(0);
@@ -336,10 +325,7 @@ impl Pool {
 
     /// `fresh` free pages, the lowest, and, when the manifest has
     /// per-sequence states, a slot; all or nothing.
-    pub(crate) fn take(
-        self: &Arc<Pool>,
-        fresh: usize,
-    ) -> std::result::Result<(Vec<i32>, Option<Arc<SlotOwn<Pool>>>), Denied> {
+    fn take(self: &Arc<Pool>, fresh: usize) -> std::result::Result<(Vec<i32>, Option<Arc<SlotOwn>>), Denied> {
         let want_slot = self.has_slots();
         let mut g = lock(&self.inner);
         if fresh > g.free_pages.len() || (want_slot && g.free_slots.is_empty()) {
@@ -401,11 +387,11 @@ impl Pool {
         let (fresh, slot) = self.take((tail > 0) as usize)?;
         let chain = (full > 0).then(|| lease.share(full));
         let (chain, pages) = match fresh.first() {
-            Some(&p) => (Some(Node::new(p, chain, self, HostTwin::default())), vec![(lease.pages[full], p)]),
+            Some(&p) => (Some(Node::new(p, chain, self)), vec![(lease.pages[full], p)]),
             None => (chain, Vec::new()),
         };
         let copies = Copies { pages, slot: lease.seq_slot().zip(slot.as_ref().map(|s| s.id)) };
-        Ok((Store { len, pages: full + (tail > 0) as usize, chain, slot }, copies))
+        Ok((Checkpoint { len, pages: full + (tail > 0) as usize, chain, slot }, copies))
     }
 
     /// The first `len` tokens of a finished sequence as a checkpoint:
@@ -419,7 +405,7 @@ impl Pool {
         );
         let pages = if lease.paged() { len.div_ceil(self.unit as usize) } else { 0 };
         let chain = (pages > 0).then(|| lease.share(pages));
-        Store { len, pages, chain, slot: lease.slot.take() }
+        Checkpoint { len, pages, chain, slot: lease.slot.take() }
     }
 
     /// A sequence continuing from the first `len` tokens of `cp` with room
@@ -513,8 +499,6 @@ pub enum Denied {
     ExceedsPool,
     /// Fits, but not right now: pages or sequence slots all held.
     Busy,
-    /// The host tier has no room for the checkpoint; drop a parked one.
-    HostFull,
 }
 
 impl fmt::Display for Denied {
@@ -523,7 +507,6 @@ impl fmt::Display for Denied {
             Denied::ExceedsRow { limit } => write!(f, "longer than a page-table row ({limit} tokens)"),
             Denied::ExceedsPool => write!(f, "the pool has no sequence slot to lease"),
             Denied::Busy => write!(f, "pages or sequence slots busy"),
-            Denied::HostFull => write!(f, "no room in the host tier"),
         }
     }
 }
@@ -538,33 +521,22 @@ impl std::error::Error for Denied {}
 /// starts with `prefix` positions already filled; it never names a slot
 /// inside them.
 pub struct Lease {
-    chain: Option<Arc<Node<Pool>>>,
+    chain: Option<Arc<Node>>,
     shared: usize,
     /// Every page in order: the chain's, then the lease's own.
     pages: Vec<i32>,
-    slot: Option<Arc<SlotOwn<Pool>>>,
+    slot: Option<Arc<SlotOwn>>,
     prefix: usize,
     pool: Arc<Pool>,
 }
 
 impl Lease {
-    pub(crate) fn new(
-        chain: Option<Arc<Node<Pool>>>,
-        shared: usize,
-        pages: Vec<i32>,
-        slot: Option<Arc<SlotOwn<Pool>>>,
-        prefix: usize,
-        pool: &Arc<Pool>,
-    ) -> Lease {
-        Lease { chain, shared, pages, slot, prefix, pool: Arc::clone(pool) }
-    }
-
     /// The chain through the first `keep` pages (at least 1), moving own
     /// pages into nodes as needed.
-    fn share(&mut self, keep: usize) -> Arc<Node<Pool>> {
+    fn share(&mut self, keep: usize) -> Arc<Node> {
         while self.shared < keep {
             let page = self.pages[self.shared];
-            self.chain = Some(Node::new(page, self.chain.take(), &self.pool, HostTwin::default()));
+            self.chain = Some(Node::new(page, self.chain.take(), &self.pool));
             self.shared += 1;
         }
         ancestor(&self.chain, self.shared - keep).expect("keep is at least 1")

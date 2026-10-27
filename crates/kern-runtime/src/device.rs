@@ -361,7 +361,7 @@ impl DeviceBuf {
     }
 }
 
-/// Page-locked host memory: the host tier's block, allocated once.
+/// Page-locked host memory, allocated once.
 pub(crate) struct Pinned {
     ptr: *mut c_void,
     bytes: u64,
@@ -649,20 +649,4 @@ pub(crate) fn record(stream: &CudaStream) -> Result<sys::CUevent> {
     )?;
     cuda_check(unsafe { sys::cuEventRecord(ev, stream.cu_stream()) }, "cuEventRecord")?;
     Ok(ev)
-}
-
-/// `stream` waits for `ev`, which is then destroyed.
-pub(crate) fn wait_then_destroy(stream: &CudaStream, ev: sys::CUevent) -> Result<()> {
-    let r = cuda_check(unsafe { sys::cuStreamWaitEvent(stream.cu_stream(), ev, 0) }, "cuStreamWaitEvent");
-    unsafe { sys::cuEventDestroy_v2(ev) };
-    r
-}
-
-/// Whether everything before `ev` on its stream has completed.
-pub(crate) fn landed(ev: sys::CUevent) -> Result<bool> {
-    match unsafe { sys::cuEventQuery(ev) } {
-        sys::CUresult::CUDA_SUCCESS => Ok(true),
-        sys::CUresult::CUDA_ERROR_NOT_READY => Ok(false),
-        r => cuda_check(r, "cuEventQuery").map(|_| true),
-    }
 }

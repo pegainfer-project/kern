@@ -123,7 +123,6 @@ impl Runtime {
         // A created (non-legacy) stream: the NULL stream cannot be captured
         // into a CUDA graph.
         let stream = ctx.new_stream()?;
-        let xfer = ctx.new_stream()?;
         let blt = CudaBlasLT::new(stream.clone())?;
         let blas = Blas::new(&stream)?;
         ctx.bind_to_thread()?;
@@ -293,9 +292,6 @@ impl Runtime {
             kept,
             ctx,
             stream,
-            xfer,
-            host: None,
-            parking: Vec::new(),
             blt,
             blas,
             provision,

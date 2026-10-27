@@ -4,9 +4,8 @@
 //! prefixes is the pipeline's too: a [`Prefix`] over the head's
 //! checkpoints keyed by their tokens, as the single-process scheduler
 //! keeps one (`scheduler.rs`, `docs/pool.md`). A prompt continues from the
-//! longest entry holding a proper prefix of it — a resident one shares the
-//! entry's whole pages and copies the page it ends inside and its state
-//! slot, a parked one is woken straight into the prompt's lease — and is
+//! longest entry holding a proper prefix of it — sharing the entry's whole
+//! pages and copying the page it ends inside and its state slot — and is
 //! fed from there. A prompt whose last rows are out leaves all of itself:
 //! its lease retires into the index, its pages and slot becoming the
 //! entry's, nothing copied. A recurrent state cannot roll back, so a
@@ -21,34 +20,24 @@
 //! it as for the turn: the turn supersedes it at once, so it is among the
 //! first taken when room is wanted.
 //!
-//! A `Busy` pool makes room and asks again, taking the entry worth least
+//! A `Busy` pool makes room and asks again, dropping the entry worth least
 //! ([`Prefix`]'s order): a turn its conversation has moved past, else the
-//! newest of the conversation idle longest. With a host tier that entry
-//! parks — a conversation's newest parks the whole conversation, since its
-//! chain holds every page of it — the coldest parked ones dropped while
-//! the tier is full; without one it is dropped.
+//! newest of the conversation idle longest.
 //!
 //! Every act the pool decides runs on the head's runtime as it is decided,
-//! on its compute stream, and is queued for the stages, whose states and
-//! host blocks hold the same page, slot and host unit ids for their own
-//! layers: the next item carries the queue and each stage runs it before
-//! the item's launches, so every stage's stream sees the acts where the
-//! head's did. Stream order is all that orders them: a park's pages go
-//! back to the pool at once, since whatever writes them next is a later
-//! item; a wake's lease is fed at once, since whatever reads it is too. A
-//! stage keeps no accounting: its pages and slots are the head's, all of
-//! them there from load, and a state slot is taken only while one is
-//! free, room made for it otherwise.
+//! on its compute stream, and is queued for the stages, whose states hold
+//! the same page and slot ids for their own layers: the next item carries
+//! the queue and each stage runs it before the item's launches, so every
+//! stage's stream sees the acts where the head's did. A stage keeps no
+//! accounting: its pages and slots are the head's, all of them there from
+//! load, and a state slot is taken only while one is free, room made for
+//! it otherwise.
 
-use kern_pool::{Checkpoint, Copies, Denied, Evicted, Found, Hit, Lease, Parked, Prefix, Tier};
+use kern_pool::{Checkpoint, Copies, Denied, Lease, Prefix};
 use kern_runtime::{Error, Runtime};
 use pegainfer_frontend::engine::PrefixCacheCounters;
 
 use crate::ranks::Act;
-
-/// What a park hands back: the parked copy and its plan, or the
-/// checkpoint when the host tier cannot hold it.
-pub(super) type Parking = Result<(Parked, Copies<i32, u64>), Checkpoint>;
 
 /// The acts the cache asks of the pool's shell: the head's runtime, which
 /// runs their copies on its stream as it decides them, or a bare pool.
@@ -57,10 +46,6 @@ pub(super) trait Lessor {
     fn lease_from(&mut self, cp: &Checkpoint, len: usize, tokens: usize) -> Result<(Lease, Copies), Error>;
     fn checkpoint(&mut self, lease: &mut Lease, len: usize) -> Result<(Checkpoint, Copies), Error>;
     fn retire(&mut self, lease: Lease, len: usize) -> Checkpoint;
-    /// Whether there is a host tier to park in.
-    fn hosts(&self) -> bool;
-    fn park(&mut self, cp: Checkpoint) -> Result<Parking, Error>;
-    fn wake(&mut self, p: &Parked, len: usize, tokens: usize) -> Result<(Lease, Copies<u64, i32>), Error>;
 }
 
 impl Lessor for Runtime {
@@ -79,29 +64,14 @@ impl Lessor for Runtime {
     fn retire(&mut self, lease: Lease, len: usize) -> Checkpoint {
         Runtime::retire(self, lease, len)
     }
-
-    fn hosts(&self) -> bool {
-        self.host_tier().is_some()
-    }
-
-    fn park(&mut self, cp: Checkpoint) -> Result<Parking, Error> {
-        self.park_now(cp)
-    }
-
-    fn wake(&mut self, p: &Parked, len: usize, tokens: usize) -> Result<(Lease, Copies<u64, i32>), Error> {
-        self.wake_now(p, len, tokens)
-    }
 }
 
 /// What the cache did since the counts were last taken.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Counts {
-    /// Prompts that continued from a resident entry, and the tokens they skipped.
+    /// Prompts that continued from an entry, and the tokens they skipped.
     pub hits: u64,
     pub hit_tokens: u64,
-    /// Prompts woken from a parked entry, and the tokens they skipped.
-    pub host_hits: u64,
-    pub host_hit_tokens: u64,
     /// Prompts kept where their history ends, and those skipped for want
     /// of room.
     pub kept: u64,
@@ -109,15 +79,12 @@ pub(super) struct Counts {
     /// Snapshots kept short of that point, and those skipped.
     pub snapshots: u64,
     pub snapshot_skips: u64,
-    /// Entries dropped for room, entries parked for it, and parked ones
-    /// dropped for the host tier's room.
+    /// Entries dropped for room.
     pub evictions: u64,
-    pub parks: u64,
-    pub host_evictions: u64,
 }
 
 pub(super) struct Cache {
-    prefix: Prefix<Checkpoint, Parked>,
+    prefix: Prefix,
     /// The acts run on the head and not yet on the stages, in order.
     acts: Vec<Act>,
     counts: Counts,
@@ -142,14 +109,8 @@ impl Cache {
         self.prefix_cache
     }
 
-    /// Entries kept, in both tiers.
     pub fn entries(&self) -> usize {
         self.prefix.entries()
-    }
-
-    /// Entries on the host alone.
-    pub fn parked(&self) -> usize {
-        self.prefix.count(Tier::Parked)
     }
 
     /// Entries kept that a later turn of their conversation moved past.
@@ -169,44 +130,32 @@ impl Cache {
     }
 
     /// A lease with room for all of `ids`, continuing from the longest
-    /// entry (resident, or woken from the host) or fresh, and the tokens it
-    /// starts past. `Busy` makes room and asks again, until the lease fits
-    /// or nothing is left to make room with; every other denial is the
-    /// caller's.
+    /// entry or fresh, and the tokens it starts past. `Busy` makes room
+    /// and asks again, until the lease fits or nothing is left to make
+    /// room with; every other denial is the caller's.
     pub fn lease(&mut self, rt: &mut impl Lessor, ids: &[i64]) -> Result<(Lease, usize), Error> {
         loop {
-            // Room made last time may have parked or dropped the entry hit then.
+            // Room made last time may have dropped the entry hit then.
             let got = match self.prefix.lookup(ids) {
-                Some(Hit { len, found: Found::Resident(cp) }) => {
-                    rt.lease_from(&cp, len, ids.len()).map(|(l, c)| (l, Some(Act::Copy(c.into())), Tier::Resident))
-                }
-                Some(Hit { len, found: Found::Parked(p) }) => {
-                    rt.wake(&p, len, ids.len()).map(|(l, c)| (l, Some(Act::Wake(c.into())), Tier::Parked))
-                }
+                Some(h) => rt.lease_from(&h.found, h.len, ids.len()).map(|(l, c)| (l, Some(Act::Copy(c.into())))),
                 None => rt.lease(ids.len()).map(|l| {
                     let zero = l.seq_slot().map(Act::Zero);
-                    (l, zero, Tier::Resident)
+                    (l, zero)
                 }),
             };
             match got {
-                Ok((lease, act, tier)) => {
+                Ok((lease, act)) => {
                     self.acts.extend(act.filter(|a| !idle(a)));
                     let start = lease.prefix();
                     let c = &mut self.counts;
-                    let (hits, tokens) = match tier {
-                        Tier::Resident => (&mut c.hits, &mut c.hit_tokens),
-                        Tier::Parked => (&mut c.host_hits, &mut c.host_hit_tokens),
-                    };
-                    *hits += u64::from(start > 0);
-                    *tokens += start as u64;
+                    c.hits += u64::from(start > 0);
+                    c.hit_tokens += start as u64;
                     let p = &mut self.prefix_cache;
                     p.queries += ids.len() as u64;
                     p.hits += start as u64;
-                    p.host_queries += (rt.hosts() as u64) * ids.len() as u64;
-                    p.host_hits += ((tier == Tier::Parked) as u64) * start as u64;
                     return Ok((lease, start));
                 }
-                Err(Error::Denied(Denied::Busy)) if self.evict(rt)? => {}
+                Err(Error::Denied(Denied::Busy)) if self.evict() => {}
                 Err(e) => return Err(e),
             }
         }
@@ -243,7 +192,7 @@ impl Cache {
                     self.prefix.insert(key, cp);
                     return Ok(true);
                 }
-                Err(Error::Denied(Denied::Busy)) if self.evict(rt)? => {}
+                Err(Error::Denied(Denied::Busy)) if self.evict() => {}
                 Err(Error::Denied(_)) => return Ok(false),
                 Err(e) => return Err(e),
             }
@@ -257,26 +206,12 @@ impl Cache {
         self.prefix.insert(key, cp);
     }
 
-    /// Make room: the entry worth least parks, or is dropped; `false`
-    /// when nothing is resident.
-    fn evict(&mut self, rt: &mut impl Lessor) -> Result<bool, Error> {
-        let Cache { prefix, acts, counts, .. } = self;
-        let park = rt.hosts().then_some(|cp| {
-            let parked = rt.park(cp)?;
-            Ok::<_, Error>(parked.map(|(p, plan)| {
-                acts.push(Act::Park(plan.into()));
-                p
-            }))
-        });
-        let (parked, dropped) = match prefix.evict(park)? {
-            Some(Evicted::Parked { dropped, .. }) => (1, dropped),
-            Some(Evicted::Dropped { dropped, .. }) => (0, dropped),
-            None => return Ok(false),
-        };
-        counts.parks += parked;
-        counts.evictions += 1 - parked;
-        counts.host_evictions += dropped as u64;
-        Ok(true)
+    /// Make room: the entry worth least is dropped; `false` when nothing
+    /// is kept.
+    fn evict(&mut self) -> bool {
+        let dropped = self.prefix.evict().is_some();
+        self.counts.evictions += dropped as u64;
+        dropped
     }
 }
 
@@ -290,15 +225,13 @@ mod tests {
     use std::sync::Arc;
 
     use kern_manifest::types::Manifest;
-    use kern_pool::{Host, Pool};
+    use kern_pool::Pool;
 
     use super::*;
 
-    /// The bare pool and host tier as the head's shell: the same
-    /// decisions, no device.
+    /// The bare pool as the head's shell: the same decisions, no device.
     struct Bare {
         pool: Arc<Pool>,
-        host: Option<Arc<Host>>,
     }
 
     impl Lessor for Bare {
@@ -316,22 +249,6 @@ mod tests {
 
         fn retire(&mut self, lease: Lease, len: usize) -> Checkpoint {
             self.pool.retire(lease, len)
-        }
-
-        fn hosts(&self) -> bool {
-            self.host.is_some()
-        }
-
-        fn park(&mut self, cp: Checkpoint) -> Result<Parking, Error> {
-            match self.host.as_ref().expect("a host tier").park(&cp) {
-                Ok(x) => Ok(Ok(x)),
-                Err(Denied::HostFull) => Ok(Err(cp)),
-                Err(d) => Err(Error::Denied(d)),
-            }
-        }
-
-        fn wake(&mut self, p: &Parked, len: usize, tokens: usize) -> Result<(Lease, Copies<u64, i32>), Error> {
-            self.host.as_ref().expect("a host tier").restore(p, &self.pool, len, tokens).map_err(Error::Denied)
         }
     }
 
@@ -373,7 +290,7 @@ mod tests {
     /// `pages` pages of 4 tokens and, with a recurrent state, `slots`
     /// slots (slot 0 among them).
     fn pool(pages: usize, slots: usize) -> Bare {
-        Bare { pool: Arc::new(Pool::new(&manifest(slots > 0), pages, slots).unwrap()), host: None }
+        Bare { pool: Arc::new(Pool::new(&manifest(slots > 0), pages, slots).unwrap()) }
     }
 
     fn prompt(seed: i64, n: usize) -> Vec<i64> {
@@ -510,69 +427,18 @@ mod tests {
         assert_eq!(c.lease(&mut rt, &p1).unwrap().1, 10);
     }
 
-    #[test]
-    fn a_conversation_pushed_to_the_host_wakes_where_it_left_off() {
-        // Three slots besides slot 0, twelve pages, a host tier of eight
-        // host pages and two host slots.
-        let mut rt = pool(12, 4);
-        rt.host = Some(Arc::new(Host::new(8, 2)));
-        let mut c = Cache::new(4);
-        let turn = |c: &mut Cache, rt: &mut Bare, history: &[i64], seed: i64| {
-            let p: Vec<i64> = history.iter().copied().chain(prompt(seed, 5)).chain([-1, -2]).collect();
-            let (mut l, start) = c.lease(rt, &p).unwrap();
-            c.keep(rt, &mut l, &p[..p.len() - 2]).unwrap();
-            (start, p[..p.len() - 2].to_vec())
-        };
-        let (_, a) = turn(&mut c, &mut rt, &[], 1);
-        // Two other conversations take the slots: a's entry parks for the
-        // second, its pages and slot copied out, not dropped.
-        let (_, _) = turn(&mut c, &mut rt, &[], 2);
-        let (_, _) = turn(&mut c, &mut rt, &[], 3);
-        let n = c.take_counts();
-        assert_eq!((n.parks, n.evictions, c.parked()), (1, 0, 1));
-        let parked: Vec<Act> = c.take_acts().into_iter().filter(|a| matches!(a, Act::Park(_))).collect();
-        assert!(matches!(&parked[..], [Act::Park(m)] if m.pages.len() == 2 && m.slot.is_some()));
-        // Its next turn wakes it into the lease: those pages and the slot
-        // copied back in, and the turn starts where the history ended.
-        let (start, _) = turn(&mut c, &mut rt, &a, 4);
-        let n = c.take_counts();
-        assert_eq!((start, n.host_hits, n.host_hit_tokens, n.hits), (a.len(), 1, a.len() as u64, 0));
-        // The frontend's counters add up over every turn: four prompts looked
-        // up, in the host tier too, and the last one's history found there.
-        let looked_up = 3 * (a.len() + 2) as u64 + (2 * a.len() + 2) as u64;
-        assert_eq!(
-            c.prefix_cache(),
-            PrefixCacheCounters {
-                queries: looked_up,
-                hits: a.len() as u64,
-                host_queries: looked_up,
-                host_hits: a.len() as u64
-            }
-        );
-        let woke: Vec<Act> = c.take_acts().into_iter().filter(|a| matches!(a, Act::Wake(_))).collect();
-        assert!(matches!(&woke[..], [Act::Wake(m)] if m.pages.len() == 2 && m.slot.is_some()));
-    }
-
     /// The bytes a stage holds, as the acts and the items leave them: each
-    /// device page and host page a token per position, each slot the
-    /// tokens its recurrent state has taken in.
+    /// page a token per position, each slot the tokens its recurrent state
+    /// has taken in.
     struct Stage {
         unit: usize,
         pages: Vec<Vec<i64>>,
         slots: Vec<Vec<i64>>,
-        host_pages: Vec<Vec<i64>>,
-        host_slots: Vec<Vec<i64>>,
     }
 
     impl Stage {
-        fn new(unit: usize, pages: usize, slots: usize, host: (u64, u64)) -> Stage {
-            Stage {
-                unit,
-                pages: vec![vec![-9; unit]; pages],
-                slots: vec![vec![-9]; slots],
-                host_pages: vec![vec![-9; unit]; host.0 as usize],
-                host_slots: vec![vec![-9]; host.1 as usize],
-            }
+        fn new(unit: usize, pages: usize, slots: usize) -> Stage {
+            Stage { unit, pages: vec![vec![-9; unit]; pages], slots: vec![vec![-9]; slots] }
         }
 
         fn run(&mut self, acts: Vec<Act>) {
@@ -582,14 +448,6 @@ mod tests {
                     Act::Copy(m) => {
                         m.pages.iter().for_each(|&(a, b)| self.pages[b as usize] = self.pages[a as usize].clone());
                         m.slot.iter().for_each(|&(a, b)| self.slots[b as usize] = self.slots[a as usize].clone());
-                    }
-                    Act::Park(m) => {
-                        m.pages.iter().for_each(|&(p, o)| self.host_pages[o as usize] = self.pages[p as usize].clone());
-                        m.slot.iter().for_each(|&(s, o)| self.host_slots[o as usize] = self.slots[s as usize].clone());
-                    }
-                    Act::Wake(m) => {
-                        m.pages.iter().for_each(|&(o, p)| self.pages[p as usize] = self.host_pages[o as usize].clone());
-                        m.slot.iter().for_each(|&(o, s)| self.slots[s as usize] = self.host_slots[o as usize].clone());
                     }
                 }
             }
@@ -626,19 +484,16 @@ mod tests {
     }
 
     /// Conversations taking turns, a few prompts fed at once in random
-    /// chunks, through a pool and a host tier small enough that room is
-    /// made all the time: a stage that runs only the acts and the items,
-    /// in order, holds for every prompt that continues from an entry,
-    /// resident or woken, exactly its tokens before the start, and its
-    /// prompt's tokens before its start in its state. Every way room is
-    /// made and every way a prompt starts must have happened.
+    /// chunks, through a pool small enough that room is made all the time:
+    /// a stage that runs only the acts and the items, in order, holds for
+    /// every prompt that continues from an entry exactly its tokens before
+    /// the start, and its prompt's tokens before its start in its state.
     #[test]
     fn a_stage_running_the_acts_in_order_reads_every_prompt_it_continues() {
-        for (rec, host, seed) in [(true, (24, 3), 1), (true, (6, 2), 2), (true, (0, 0), 3), (false, (12, 0), 4)] {
+        for (rec, seed) in [(true, 1), (true, 3), (false, 4)] {
             let slots = if rec { 6 } else { 0 };
             let mut rt = pool(28, slots);
-            rt.host = (host != (0, 0)).then(|| Arc::new(Host::new(host.0, host.1)));
-            let mut st = Stage::new(4, rt.pool.pages(), slots, host);
+            let mut st = Stage::new(4, rt.pool.pages(), slots);
             let mut c = Cache::new(4);
             let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ seed);
             // Every turn so far of each conversation, the newest last.
@@ -701,19 +556,9 @@ mod tests {
                     }
                 }
                 let n = c.take_counts();
-                total = Counts {
-                    hits: total.hits + n.hits,
-                    host_hits: total.host_hits + n.host_hits,
-                    evictions: total.evictions + n.evictions,
-                    parks: total.parks + n.parks,
-                    host_evictions: total.host_evictions + n.host_evictions,
-                    ..total
-                };
+                total = Counts { hits: total.hits + n.hits, evictions: total.evictions + n.evictions, ..total };
             }
-            let hosted = host != (0, 0);
-            assert!(total.hits > 20 && (hosted || total.evictions > 0), "{seed}: {total:?}");
-            assert_eq!((total.parks > 0, total.host_hits > 0), (hosted, hosted), "{seed}: {total:?}");
-            assert!(seed != 2 || total.host_evictions > 0, "a full host tier drops: {total:?}");
+            assert!(total.hits > 20 && total.evictions > 0, "{seed}: {total:?}");
         }
     }
 }

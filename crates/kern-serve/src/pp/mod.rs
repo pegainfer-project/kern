@@ -16,10 +16,8 @@
 //! the pages, and where the next stage listens with what arrives there.
 //! From then on the head sends every stage every [`Item`] in issue order
 //! — the program, its vars, the values of each input it staged and what
-//! its pool decided since the item before (copies, parks and wakes into
-//! each stage's own host block, sized by the head in host pages and
-//! host slots) — and
-//! the last stage answers every item with its tokens (none for a program
+//! its pool decided since the item before (copies) — and the last stage
+//! answers every item with its tokens (none for a program
 //! that hands none back). TCP keeps the order, so an item's number is its
 //! place in it and every stage counts the same items alike; there is no
 //! sequence number, no stop message and no fault message. A stage that
@@ -94,22 +92,16 @@ pub struct Hello {
     pub arrivals: Landings,
     /// Its pooled states, which a decode tier's must match.
     pub states: BTreeMap<String, Shape>,
-    /// Bytes of its host page and its host slot: every paged state's page
-    /// back to back, every per-sequence state's slot likewise.
-    pub host: (u64, u64),
 }
 
 /// The head's answer: the pages every stage addresses, where the next
-/// stage listens with what arrives there (none for the last stage), the
-/// decode tiers to push into, in the head's `--decode` order, and the host
-/// pages and host slots of the host tier every stage reserves, (0, 0) for
-/// none.
+/// stage listens with what arrives there (none for the last stage), and
+/// the decode tiers to push into, in the head's `--decode` order.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
     pub pages: u64,
     pub next: Option<(String, Landings)>,
     pub decode: Vec<Pools>,
-    pub host: (u64, u64),
 }
 
 /// What the head sends a stage, in issue order.
@@ -141,8 +133,7 @@ pub struct Item {
     /// What the head's pool decided since the item before, in the order
     /// it ran on the head's stream, for a stage to run before anything
     /// else of the item: a fresh sequence's slot zeroed, the copies of a
-    /// prompt continuing from a kept prefix or of a prefix kept, an entry
-    /// parked to the host tier, a parked one woken into a lease.
+    /// prompt continuing from a kept prefix or of a prefix kept.
     pub acts: Vec<Act>,
 }
 
