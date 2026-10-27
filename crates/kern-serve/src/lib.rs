@@ -230,6 +230,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
                 capacity: o.capacity,
                 max_seqs: o.max_seqs,
                 eager: o.eager,
+                pool: o.pool.config(o.gpu)?,
             };
             return pp::stage::run(manifest, &weights, stage);
         }
@@ -244,6 +245,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             max_seqs: o.max_seqs,
             eager: o.eager,
             decode: o.decode.clone(),
+            pool: o.pool.config(o.gpu)?,
         };
         let load = move || pp::head::spawn(manifest, weights, head);
         return launch(load, served_name, model_path, o.port, samples, parser);

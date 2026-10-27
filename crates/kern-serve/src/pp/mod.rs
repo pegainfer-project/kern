@@ -66,7 +66,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::logline::now_us;
 use crate::pd::{Pools, Push, Req, Shape};
-use crate::ranks::Act;
+use crate::ranks::{Act, Landed};
 
 /// How long a stage waits for its neighbour to deliver or take an item.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -104,19 +104,22 @@ pub struct Table {
     pub decode: Vec<Pools>,
 }
 
-/// What the head sends a stage, in issue order.
+/// What the head sends a stage, in issue order: an item, a push, or acts
+/// alone (the pooled tier's, which wait for no item).
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Job {
     Item(Item),
     Push(Push),
+    Acts(Vec<Act>),
 }
 
 /// What a stage tells the head: the last stage every item's tokens, every
-/// stage each push that landed.
+/// stage each push that landed and each pooled act answered.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Report {
     Tokens(Vec<i64>),
     Pushed(Req),
+    Landed(Landed),
 }
 
 /// Where a stage's watch thread reports.

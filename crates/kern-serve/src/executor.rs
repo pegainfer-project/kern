@@ -164,12 +164,13 @@ fn join(
     pool.map(|cfg| pool::Client::open(cfg, rt.pooled_spans())).transpose()
 }
 
-/// What names a manifest's objects in the pool: the manifest and the
-/// weights, nothing a deployment chooses.
+/// What names a manifest's objects in the pool: the manifest, the
+/// weights and the cut it is a stage of, nothing a deployment chooses.
 pub fn keys(m: &Verified, weights: &Weights) -> Result<Keys> {
     use sha2::{Digest, Sha256};
     let manifest: [u8; 32] = Sha256::digest(m.to_json()).into();
-    Ok(Keys::new(&[&manifest, &weights.digest()?]))
+    let cut = m.cut.as_ref().map(|c| c.id.as_bytes()).unwrap_or_default();
+    Ok(Keys::new(&[&manifest, &weights.digest()?, cut]))
 }
 
 /// Every rank loaded and joined, before anyone accounts for them: the

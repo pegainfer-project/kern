@@ -37,7 +37,9 @@ use kern_runtime::{Mark, Span};
 use mooncake_store::{MooncakeStore, ReplicateConfig};
 use tracing::{debug, info, warn};
 
-use crate::ranks::{Landed, Object};
+use kern_pool::Object;
+
+use crate::ranks::Landed;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -170,11 +172,17 @@ impl Shared {
         self.report(id, ok);
     }
 
+    /// An object with no bytes on this rank (a stage holding none of its
+    /// states) is landed at once.
     fn put(&self, objects: &[(String, Buffers)]) -> Vec<bool> {
         let (keys, bufs) = flatten(objects);
         let bufs: Vec<&[(*mut std::ffi::c_void, usize)]> = bufs.iter().map(Vec::as_slice).collect();
-        match unsafe { self.store.batch_put_from_multi_buffers(&keys, &bufs, self.prefer.as_ref()) } {
-            Ok(rcs) => rcs.iter().map(|&rc| rc == 0).collect(),
+        let got = match keys.is_empty() {
+            true => Ok(Vec::new()),
+            false => unsafe { self.store.batch_put_from_multi_buffers(&keys, &bufs, self.prefer.as_ref()) },
+        };
+        match got {
+            Ok(rcs) => spread(objects, rcs.iter().map(|&rc| rc == 0)),
             Err(e) => {
                 self.fail("put", &e);
                 vec![false; objects.len()]
@@ -186,12 +194,18 @@ impl Shared {
     fn get(&self, objects: &[(String, Buffers)]) -> Vec<bool> {
         let (keys, bufs) = flatten(objects);
         let bufs: Vec<&[(*mut std::ffi::c_void, usize)]> = bufs.iter().map(Vec::as_slice).collect();
-        match unsafe { self.store.batch_get_into_multi_buffers(&keys, &bufs, true) } {
-            Ok(sizes) => sizes
-                .iter()
-                .zip(objects)
-                .map(|(&got, (_, b))| got >= 0 && got as u64 == b.iter().map(|&(_, n)| n as u64).sum::<u64>())
-                .collect(),
+        let got = match keys.is_empty() {
+            true => Ok(Vec::new()),
+            false => unsafe { self.store.batch_get_into_multi_buffers(&keys, &bufs, true) },
+        };
+        match got {
+            Ok(sizes) => {
+                let want = objects
+                    .iter()
+                    .filter(|(_, b)| !b.is_empty())
+                    .map(|(_, b)| b.iter().map(|&(_, n)| n as u64).sum::<u64>());
+                spread(objects, sizes.iter().zip(want).map(|(&got, want)| got >= 0 && got as u64 == want))
+            }
             Err(e) => {
                 self.fail("get", &e);
                 vec![false; objects.len()]
@@ -200,10 +214,17 @@ impl Shared {
     }
 }
 
+/// `ok`, one flag per object that has bytes here, as one flag per object.
+fn spread(objects: &[(String, Buffers)], mut ok: impl Iterator<Item = bool>) -> Vec<bool> {
+    objects.iter().map(|(_, b)| b.is_empty() || ok.next().unwrap_or(false)).collect()
+}
+
+/// The objects with bytes here, as the batch calls take them.
 #[allow(clippy::type_complexity)]
 fn flatten(objects: &[(String, Buffers)]) -> (Vec<&str>, Vec<Vec<(*mut std::ffi::c_void, usize)>>) {
-    let keys = objects.iter().map(|(k, _)| k.as_str()).collect();
-    let bufs = objects.iter().map(|(_, b)| b.iter().map(|&(p, n)| (p as *mut std::ffi::c_void, n)).collect()).collect();
+    let with = objects.iter().filter(|(_, b)| !b.is_empty());
+    let keys = with.clone().map(|(k, _)| k.as_str()).collect();
+    let bufs = with.map(|(_, b)| b.iter().map(|&(p, n)| (p as *mut std::ffi::c_void, n)).collect()).collect();
     (keys, bufs)
 }
 
@@ -314,5 +335,23 @@ impl Client {
     /// Every act answered since the last call.
     pub fn landed(&self) -> Vec<Landed> {
         self.done.try_iter().collect()
+    }
+
+    /// Hand every answer to `f` on a thread of its own instead, as it
+    /// comes, until `f` says to stop.
+    pub fn forward(&mut self, mut f: impl FnMut(Landed) -> bool + Send + 'static) -> Result<()> {
+        let (_, rx) = channel();
+        let rx = std::mem::replace(&mut self.done, rx);
+        std::thread::Builder::new()
+            .name("kern-pool-landed".into())
+            .spawn(move || {
+                for l in rx {
+                    if !f(l) {
+                        return;
+                    }
+                }
+            })
+            .context("spawning the pool answer thread")?;
+        Ok(())
     }
 }
