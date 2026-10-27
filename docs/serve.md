@@ -868,7 +868,7 @@ checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats �
 
 ## 池化 KV 层（Mooncake Store，2026-10-27）
 
-`--pool-master host:port --pool-device <rdma dev>` 让每个 rank（PP 下每个 stage 和 head）各开一个
+`--pool-master host:port --pool-device <rdma dev>` 让每个 rank（PP 下每个 stage 和 head，DP prefill tier 的每个 rank）各开一个
 Mooncake client，把 `pooled_spans()` 注册给 RDMA；prefix tree 留下的每个快照都被 put，admit 时
 device 没命中的部分先探池、再取回，取回的前缀在 device 池里也建 checkpoint。不给 `--pool-master`
 行为同之前。设计、对象与 key、读写路径、失败模式在 `pool.md` 第 9 节。
@@ -913,8 +913,32 @@ key"），`--pool-metadata` 用缺省 `P2PHANDSHAKE`；被杀的 holder 的段�
 字节、每次 put 被拒（master 日志 "insufficient space"），holder 要换端口重挂。被拒的 batch kern-serve 以 debug
 记一行 `pool refused`，原因看 master 日志。
 
-**未测**：生产形状（DSV4.1 Flash DP+EP4、K3 PP8，AgentX 经 aiperf 与 vllm-bench，max_tokens=1）下命中省掉
-的 prefill token 数与 GPU 时间、落地时延分布、put 对 token 间隔的影响；当时集群只剩一台空 tray。
+**2026-10-27 DSV4.1 Flash DP+EP4 通过（同目录）**：tray17 与 tray07 各一个 prefill tier（`dp.rs`，一卡一进程），
+round-robin router 打两边；master 在 tray03，三个 holder 共 1.27 TB DRAM（tray03 500 GB、tray07 / tray17 各 400 GB，
+`--eviction_high_watermark_ratio=0.8`，默认 allocator）。AgentX 经 aiperf，并发 32，600 s，max_tokens=1，ISL 均 106k：
+
+| | 无池 | 池化 |
+|---|---|---|
+| 请求 | 1388（2.2 req/s） | 1570（2.49 req/s） |
+| TTFT p50 / p90 / p99 | 2076 / 4011 / 5746 ms | 344 / 1104 / 2968 ms |
+| GPU 实际 prefill 行数 | 151.4M | 13.5M |
+| 探池命中 | — | 1458 / 1613（90%），每次取回平均 108k token；device 自身只命中平均 8 token |
+| 取回失败 / put 被拒 | — | 0 / 0 |
+| 一次 ~800 MB 的 put / get 落地 | — | 平均 34 ms，最大 189 ms |
+| 池末占用 | — | 934 GB（72%） |
+
+请求数只涨 13%：trace 自带轮间间隔，闭环的速率由 trace 定，收益在 TTFT。DP 层的 device 前缀缓存对多轮几乎无用
+（device 只留 prompt 末尾的条目，下一轮不从那里续），池的 `history_tokens` 快照是第二轮命中的全部来源，所以 dp.rs 给
+这份快照像租约一样腾 slot（没腾之前 600 s 里 501 次 "slots busy"，池里一个 state 都没有）。每次 put 里 712 MiB 是
+window state 的 ring（活的只有 128 行，#100），页只有 ~90 MB；第一次跑时 256 GB 的单 holder 10 分钟被小对象填满、
+state 全被拒（rc -200），holder 要够大、分在多台 tray。
+
+精度：qwen3-4b / qwen3.8-27b / PP2 三条路径逐字同冷实例（上表）。DSV4.1 的首 token 对照不能当门禁：这个 manifest 的
+prefill 对 chunk 边界敏感，不带池的实例上同一 prompt 从 0 算和从 device 续算（completions，尾 chunk 2–28 行）在近平局
+的回忆题上 37% 翻转，答案确定的题不翻（冷实例正序 / 倒序 128/128，5 行 / 25 行续算 48/48）。带池路径每个 prompt 在
+`history_tokens`（prompt − 2，assistant 标记前）切一刀，多一个 2 行的尾 chunk，与冷实例的首 token 一致率在同一区间
+（近平局题 57/128，确定题全同）；两个带池 tier 互相一致，各自重放 125/128（差的 3 处是命中路径不同）。logits 级 KL
+门禁等 DSV4.1 有 logits 通路再补。未做：杀 master 照常出结果；K3 PP8（没有 16 张空卡）。
 
 ## 没做（按需要加）
 
