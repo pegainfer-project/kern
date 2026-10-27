@@ -37,6 +37,7 @@ mod host;
 mod host_weights;
 mod lease;
 mod load;
+mod local_ipc;
 mod nccl;
 mod park;
 mod peers;

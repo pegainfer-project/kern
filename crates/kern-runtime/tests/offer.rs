@@ -6,10 +6,17 @@ use std::collections::BTreeMap;
 
 use kern_runtime::{Offer, PeerHandle};
 
+/// A fabric handle for even `i`, a same-host POSIX locator (told apart by
+/// its magic) for odd.
 fn handle(i: usize) -> PeerHandle {
-    let mut fabric = [0u8; 64];
-    fabric.iter_mut().enumerate().for_each(|(j, b)| *b = (i * 31 + j * 7) as u8);
-    PeerHandle::Fabric { fabric, bytes: (i as u64 + 1) << 21 }
+    let mut head = [0u8; 64];
+    head.iter_mut().enumerate().for_each(|(j, b)| *b = (i * 31 + j * 7) as u8);
+    let bytes = (i as u64 + 1) << 21;
+    if i.is_multiple_of(2) {
+        return PeerHandle::Fabric { fabric: head, bytes };
+    }
+    head[..16].copy_from_slice(b"KERN_LOCAL_FD_v1");
+    PeerHandle::Posix { wire: head, bytes }
 }
 
 fn offer(handles: usize, groups: usize, name: &str) -> Offer {
