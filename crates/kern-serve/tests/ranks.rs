@@ -19,10 +19,9 @@ fn manifest() -> Manifest {
     Manifest::from_json(include_str!("../../kern-manifest/tests/fixtures/ranks.json")).unwrap()
 }
 
-/// 20 chunks of 8 bytes, `slots` sequence slots made at the start (slot 0
-/// the null one, slot 1 the pad's), the rest pages: 5 pages beside 3 slots.
+/// 5 pages and `slots` sequence slots (slot 0 the null one, slot 1 the pad's).
 fn pool(slots: usize) -> Pool {
-    Pool::new(&manifest(), 8, 20, slots, None).unwrap().0
+    Pool::new(&manifest(), 5, slots).unwrap()
 }
 
 fn ranks(slots: [usize; 4], host: (u64, u64)) -> Ranks {
@@ -47,15 +46,14 @@ fn sampled() -> Manifest {
     Manifest::from_json(&m.to_string()).unwrap()
 }
 
-/// Ranks that land every remap and transfer as soon as they hear of it.
+/// Ranks that land every transfer as soon as they hear of it.
 fn answer(orders: &[Order], landed: &mut [u64; 4]) -> Vec<Answer> {
-    let count = |o: &Order, f: fn(&Act) -> bool| o.acts.iter().filter(|a| f(a)).count() as u64;
     orders
         .iter()
         .zip(landed.iter_mut())
         .map(|(o, l)| {
-            *l += count(o, |a| matches!(a, Act::Park(_) | Act::Wake(_)));
-            Answer { remaps: count(o, |a| matches!(a, Act::Remap(_))), landed: *l, ..Answer::default() }
+            *l += o.acts.iter().filter(|a| matches!(a, Act::Park(_) | Act::Wake(_))).count() as u64;
+            Answer { landed: *l, ..Answer::default() }
         })
         .collect()
 }
@@ -65,19 +63,16 @@ fn acts(orders: &[Order]) -> Vec<Vec<Act>> {
 }
 
 #[test]
-fn a_row_is_every_members_or_none_and_waits_for_the_slot_being_carved() {
+fn a_row_is_every_members_or_none() {
     let mut r = ranks([3, 3, 2, 3], (0, 0));
     let before = (r.pages_used(), r.seq_slots());
     // Rank 2 has no slot free: the owner's pages and rank 1's slot go back.
-    assert_eq!(r.lease(20, |_| Some(0)).err(), Some(Denied::Remapping));
-    assert_eq!((r.pages_used(), r.seq_slots(), r.busy()), (before.0, before.1, true));
-    let o = r.orders(None, true);
-    let pads = vec![Act::Zero(1)];
-    assert_eq!((acts(&o)[0].clone(), acts(&o)[1].clone(), acts(&o)[3].clone()), (pads.clone(), pads.clone(), pads));
-    assert_eq!((o[2].acts.len(), matches!(o[2].acts[1], Act::Remap(_))), (2, true));
-    assert_eq!(o.iter().map(|o| o.wait).collect::<Vec<_>>(), [false, false, true, false]);
-    r.heard(&answer(&o, &mut [0; 4])).unwrap();
-    // Landed: every member leases, the owner pages, its peers a slot alone.
+    assert_eq!(r.lease(20, |_| Some(0)).err(), Some(Denied::Busy));
+    assert_eq!((r.pages_used(), r.seq_slots(), r.busy()), (before.0, before.1, false));
+    assert_eq!(acts(&r.orders(None, false)), vec![vec![Act::Zero(1)]; 4]);
+    // With a slot on every member: the owner pages, its peers a slot alone.
+    let mut r = ranks([3; 4], (0, 0));
+    r.orders(None, false);
     let row = r.lease(20, |_| Some(0)).unwrap();
     assert_eq!((row.owner().index(), row.prefix(), r.pages_used(), r.busy()), (0, 0, 2, false));
     assert_eq!(acts(&r.orders(None, false)), vec![vec![Act::Zero(2)]; 4]);
@@ -175,7 +170,7 @@ fn a_replicated_row_is_paged_on_every_member_and_keeps_nothing() {
     assert_eq!((r.pages_used(), r.seq_slots().1, r.orders(None, false)[0].acts.len()), (0, 0, 0));
     // The batch runs over the group the positions are dealt over, or not at all.
     let p = Protocol::check(&verify(dealt(4)).unwrap()).unwrap();
-    let pools = (0..4).map(|_| Pool::new(&dealt(4), 256, 128, 10, None).unwrap().0).collect();
+    let pools = (0..4).map(|_| Pool::new(&dealt(4), 128, 10).unwrap()).collect();
     assert!(Ranks::new(p, Groups::new(4, 2).unwrap(), pools, (0, 0)).is_err());
 }
 

@@ -64,7 +64,6 @@ pub use harness::Scratch;
 pub use host::HostRegion;
 pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Checkpoint, Pool};
-use lease::Remaps;
 pub use load::Resident;
 use nccl::NcclId;
 pub use park::{host_split, Landing, Room, Waking};
@@ -79,40 +78,37 @@ pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
 pub const CUDA_API: u32 = sys::CUDA_VERSION;
 
 /// What the caller will hold in the pooled states at once: pages for
-/// `tokens` tokens of every paged state and `seqs` sequences' slots of every
-/// per-sequence state (plus the null slot and a spare). A number the caller
-/// knows — its batch, its serving bound — never the manifest's var bounds,
-/// which say what a step may address, not how many sequences live.
+/// `tokens` tokens of every paged state and `slots` sequence slots of every
+/// per-sequence state (slot 0, the null line, comes on top). A number the
+/// caller knows — its batch, its serving bound and the checkpoints it keeps
+/// beside it — never the manifest's var bounds, which say what a step may
+/// address, not how many sequences hold a slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capacity {
     /// Tokens of paged state; `None` takes what the device has left.
     pub tokens: Option<u64>,
-    pub seqs: u64,
+    pub slots: u64,
     /// Twins of every exported input buffer, taken before the states take
     /// what is left ([`Runtime::landing`]); 0 outside a pipeline stage.
     pub landings: usize,
 }
 
-/// The states' budget as load cut it: the chunk, how many, the slots that
-/// exist from the start and the tokens asked for. [`kern_pool::Pool::new`]
-/// is pure, so the pool another process builds from a runtime's budget
-/// starts where this runtime's pool did and decides exactly as it would:
-/// that process holds the accounting and this runtime runs its plans
-/// ([`Runtime::remap`], [`Runtime::copy`], [`Runtime::zero_slot`],
-/// [`Runtime::host_out`], [`Runtime::host_in`]).
+/// The states' budget as load cut it: the pages of every paged state and
+/// the slots of every per-sequence state. [`kern_pool::Pool::new`] is
+/// pure, so the pool another process builds from a runtime's budget is
+/// this runtime's pool and decides exactly as it would: that process holds
+/// the accounting and this runtime runs its plans ([`Runtime::copy`],
+/// [`Runtime::zero_slot`], [`Runtime::host_out`], [`Runtime::host_in`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
-    pub chunk: u64,
-    pub chunks: u32,
-    pub first_slots: usize,
-    pub tokens: Option<u64>,
+    pub pages: usize,
+    pub slots: usize,
 }
 
 impl Budget {
-    /// The pool of `m` over this budget; its initial layout is already
-    /// mapped wherever the budget came from.
+    /// The pool of `m` over this budget.
     pub fn pool(&self, m: &Manifest) -> kern_pool::Result<Pool> {
-        Pool::new(m, self.chunk, self.chunks, self.first_slots, self.tokens).map(|(p, _)| p)
+        Pool::new(m, self.pages, self.slots)
     }
 }
 
@@ -151,18 +147,10 @@ pub struct Runtime {
     /// cuBLAS handle (with its own workspace) for the f32-result GEMM built-in.
     blas: Blas,
     /// What every `index_into` domain resolves against: the token slots a
-    /// paged state's arena spans, the sequence slots a per-sequence one's.
+    /// paged state holds, the sequence slots a per-sequence one.
     provision: Provision,
     /// Owner of the states' token slots: hands them out as leases.
     pool: Arc<Pool>,
-    /// The remap thread: runs the pool's plans off the serving thread.
-    remaps: Remaps,
-    remap_count: u64,
-    /// Where the remaps [`Runtime::remap`] was handed leave the chunks: the
-    /// next one is checked against it before it runs.
-    driven: kern_pool::Placement,
-    /// The chunks the remap thread maps, kept here to export them.
-    chunks: Arc<device::Physical>,
     budget: Budget,
     /// Name-keyed because names are the caller API (`write_input`,
     /// `read_output`, weight binding); execution never looks these up —
@@ -231,14 +219,13 @@ impl Drop for Runtime {
         for exec in self.graphs.values() {
             unsafe { sys::cuGraphExecDestroy(*exec) };
         }
-        // The thread owns the arenas: nothing on either stream may still
-        // touch them when it unmaps.
+        // Nothing on either stream may still touch a state when it is
+        // unmapped.
         let _ = self.stream.synchronize();
         let _ = self.xfer.synchronize();
         for ev in self.parking.drain(..).map(|(_, ev)| ev).chain(self.joins) {
             unsafe { sys::cuEventDestroy_v2(ev) };
         }
-        self.remaps.stop();
     }
 }
 
@@ -343,8 +330,8 @@ impl Runtime {
         self.pool.has_slots()
     }
 
-    /// Sequence slots that exist now in every per-sequence state, slot 0
-    /// among them (0 without one).
+    /// Sequence slots of every per-sequence state, slot 0 among them (0
+    /// without one).
     pub fn seq_slots(&self) -> usize {
         self.pool.slots()
     }
@@ -363,7 +350,7 @@ impl Runtime {
 
     /// Pages the states hold in total.
     pub fn pages_total(&self) -> usize {
-        self.pool.total()
+        self.pool.pages()
     }
 
     /// Pages currently leased.
@@ -387,9 +374,9 @@ impl Runtime {
         self.budget
     }
 
-    /// Token slots the paged states hold now (whole pages).
+    /// Token slots the paged states hold (whole pages).
     pub fn capacity(&self) -> u64 {
-        self.pool.total() as u64 * self.pool.unit()
+        self.pool.pages() as u64 * self.pool.unit()
     }
 
     /// The bounds `index_into` domains resolve against.

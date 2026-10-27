@@ -306,7 +306,7 @@ impl Device {
             _ => bail!("`{logits}` is not [rows, vocab] with a constant vocab"),
         };
         let groups = p.max_groups(Rows::Const(1)) as usize;
-        let capacity = Capacity { tokens: None, seqs: groups as u64, landings: 0 };
+        let capacity = Capacity { tokens: None, slots: groups as u64, landings: 0 };
         let mut rts = crate::load_ranks(&m, inputs, &load.gpu, capacity, &HostWeights::new(), None)?;
         crate::each(&mut rts, "running what the manifest runs once", |rt| crate::run_once(rt, &p))?;
         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
@@ -392,15 +392,14 @@ impl Device {
     }
 
     /// `tokens` slots for `row` on every rank, or on none: `false` when the
-    /// pool is busy with the rows running. A remap in flight is waited
-    /// out, so whether a row fits does not depend on the clock; a row that
-    /// can never fit is an error, never a row left out of the score.
+    /// pool is busy with the rows running; a row that can never fit is an
+    /// error, never a row left out of the score.
     fn lease(&mut self, name: &str, row: usize, tokens: usize) -> Result<bool> {
         let idle = self.ranks[0].leases.is_empty();
         let leases: Vec<Option<Lease>> = self
             .ranks
             .iter_mut()
-            .map(|k| match lease(&mut k.rt, tokens) {
+            .map(|k| match k.rt.lease(tokens) {
                 Ok(l) => Ok(Some(l)),
                 Err(kern_runtime::Error::Denied(Denied::Busy)) if !idle => Ok(None),
                 Err(e) => Err(anyhow::Error::new(e).context(format!("row `{name}` needs {tokens} token slots"))),
@@ -438,16 +437,6 @@ impl Device {
     fn coverage(&self) -> String {
         let calls: Vec<String> = self.calls.iter().map(|(p, n)| format!("`{p}` ×{n}")).collect();
         row("programs", calls.join(" · "), None)
-    }
-}
-
-/// A lease, a remap in flight settled and asked again.
-fn lease(rt: &mut Runtime, tokens: usize) -> kern_runtime::Result<Lease> {
-    loop {
-        match rt.lease(tokens) {
-            Err(kern_runtime::Error::Denied(Denied::Remapping)) => rt.settle()?,
-            r => return r,
-        }
     }
 }
 

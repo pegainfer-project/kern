@@ -1,6 +1,6 @@
 //! Fixtures shared by the runtime's host-side tests: pools over tiny
 //! manifests whose states are one byte per token or a few bytes per
-//! sequence, so every page and slot is a handful of chunks.
+//! sequence.
 
 #![allow(dead_code)]
 
@@ -15,7 +15,7 @@ fn manifest(json: &str) -> Manifest {
 
 /// Two paged states: kv in 16-token pages (a row of 3), a draft state in
 /// 4-token pages (a row of 16). Page unit 16, a page is 16 bytes in each
-/// of two arenas.
+/// of the two.
 pub fn two_paged() -> Manifest {
     manifest(
         r#"{
@@ -76,32 +76,29 @@ pub fn hybrid4() -> Manifest {
     )
 }
 
-/// A pool over `m` with `chunks` chunks of `chunk` bytes, the initial
-/// remap taken as landed.
-pub fn pool_of(m: &Manifest, chunk: u64, chunks: u32, first_slots: usize) -> Arc<Pool> {
-    Arc::new(Pool::new(m, chunk, chunks, first_slots, None).expect("fixture lays out").0)
+/// A pool over `m` of `pages` pages and `slots` slots (slot 0 among them).
+pub fn pool_of(m: &Manifest, pages: usize, slots: usize) -> Arc<Pool> {
+    Arc::new(Pool::new(m, pages, slots).expect("fixture lays out"))
 }
 
-/// `two_paged` over 8-byte chunks: a page is 2 chunks per arena, 16 chunks
-/// hold 4 pages.
+/// `two_paged` with 4 pages.
 pub fn pool() -> Arc<Pool> {
-    pool_of(&two_paged(), 8, 16, 0)
+    pool_of(&two_paged(), 4, 0)
 }
 
-/// `hybrid` over 8-byte chunks, 20 of them: 4 slots (slot 0 among them)
-/// and 4 pages, no chunk spare.
+/// `hybrid` with 4 slots (slot 0 among them) and 4 pages.
 pub fn hybrid_pool() -> Arc<Pool> {
-    pool_of(&hybrid(), 8, 20, 4)
+    pool_of(&hybrid(), 4, 4)
 }
 
-/// `paged4` over 4-byte chunks: 8 pages of one chunk.
+/// `paged4` with 8 pages.
 pub fn pool4() -> Arc<Pool> {
-    pool_of(&paged4(), 4, 8, 0)
+    pool_of(&paged4(), 8, 0)
 }
 
-/// `hybrid4` over 4-byte chunks, 18 of them: 3 slots and 6 pages.
+/// `hybrid4` with 3 slots and 6 pages.
 pub fn hybrid_pool4() -> Arc<Pool> {
-    pool_of(&hybrid4(), 4, 18, 3)
+    pool_of(&hybrid4(), 6, 3)
 }
 
 /// A deterministic xorshift source, `next(n)` in `0..n`.
@@ -118,9 +115,4 @@ impl Rand {
         self.0 ^= self.0 << 17;
         (self.0 >> 33) as usize % n
     }
-}
-
-/// Land the remap the pool has planned.
-pub fn land(p: &Pool) {
-    p.complete(p.take_pending().expect("a remap planned"));
 }

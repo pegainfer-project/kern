@@ -8,8 +8,7 @@
 //! The states' budget is decided here too. Buffers, scratch and fixed
 //! states are allocated as declared, at var max; what the paged and
 //! per-sequence states get is the caller's [`Capacity`] or, without one,
-//! whatever the device has left less [`HEADROOM`], carved into physical
-//! chunks that the pool hands out as pages and slots.
+//! whatever the device has left less [`HEADROOM`], in whole pages.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,21 +16,17 @@ use std::sync::Arc;
 
 use cudarc::cublaslt::CudaBlasLT;
 use cudarc::driver::{sys, CudaContext, CudaStream};
-use kern_manifest::types::{Buffer, BufferKind, DType, Dim, Manifest, Placement, Provision, Segment};
+use kern_manifest::types::{Buffer, BufferKind, DType, Dim, Placement, Provision, Segment};
 use kern_manifest::Verified;
 
 use crate::cublas::Blas;
 use crate::derive::Derivation;
-use crate::device::{
-    alloc, alloc_host, alloc_uninit, alloc_vmm, chunk_granularity, copy_1d, copy_2d, record, Arena, DeviceBuf, Mapper,
-    Physical, Pinned, Space,
-};
+use crate::device::{alloc, alloc_host, alloc_uninit, alloc_vmm, copy_1d, copy_2d, record, DeviceBuf, Pinned, Space};
 use crate::error::{bail, cuda_check};
-use crate::lease::Remaps;
 use crate::peers::PeerSlot;
 use crate::weights::{Blob, Tensors};
 use crate::{compile, cubin, derive, weights, Budget, Capacity, Error, Result, Runtime, Topology, HEADROOM};
-use kern_pool::{chunks_for, page_unit, Kind, Pool};
+use kern_pool::{page_unit, Pool};
 
 impl Runtime {
     /// Load every `*.cubin` under `kernels_dir` and every registry ref the
@@ -216,43 +211,39 @@ impl Runtime {
         // Everything but the states is on the device now: what is left is
         // the states' to take (weights are bound into buffers already
         // sized, so binding later costs nothing more). A fixed state is
-        // allocated as declared; the paged and per-sequence states share
-        // one budget of physical chunks, pages and sequence slots made out
-        // of it as the pool decides.
+        // allocated as declared; a paged state holds the pages the capacity
+        // asks for or the device has left, a per-sequence state the slots
+        // asked for, each one allocation.
         let token_bytes: u64 = manifest.states.values().map(|s| s.bytes_per_token).sum();
         let paged_bytes = token_bytes * page;
         let slot_bytes: u64 = manifest.states.values().map(|s| s.bytes_per_seq).sum();
         let fixed_bytes: u64 =
             manifest.states.values().filter(|s| s.bytes_per_token == 0 && s.bytes_per_seq == 0).map(|s| s.bytes).sum();
-        let first_slots = match (slot_bytes > 0, capacity) {
+        let slots = match (slot_bytes > 0, capacity) {
             (false, _) => 0,
-            (true, Some(c)) => c.seqs + 2,
+            (true, Some(c)) => c.slots + 1,
             (true, None) => manifest.seq_slots(),
-        };
-        let chunk = chunk_size(&manifest, page, chunk_granularity(dev)? as u64);
-        let tokens = match capacity.and_then(|c| c.tokens) {
+        } as usize;
+        let pages = match capacity.and_then(|c| c.tokens).filter(|_| paged_bytes > 0) {
             Some(asked) => {
-                let aligned = asked / page * page;
-                if aligned == 0 {
+                let pages = asked / page;
+                if pages == 0 {
                     return Err(Error::Manifest(format!(
                         "state capacity {asked} tokens is smaller than one page ({page} tokens)"
                     )));
                 }
-                if aligned != asked {
-                    tracing::warn!("state capacity {asked} is not a multiple of the page unit {page}; using {aligned}");
+                if pages * page != asked {
+                    tracing::warn!(
+                        "state capacity {asked} is not a multiple of the page unit {page}; using {}",
+                        pages * page
+                    );
                 }
-                Some(aligned)
+                pages as usize
             }
-            None => None,
+            // Nothing paged: no page to fit, whatever the capacity says.
+            None if paged_bytes == 0 => 0,
+            None => fit_budget(&ctx, fixed_bytes + slots as u64 * slot_bytes, paged_bytes)? as usize,
         };
-        // Nothing pooled (fixed and host states only): no budget to fit.
-        let chunks = match tokens {
-            _ if paged_bytes == 0 && slot_bytes == 0 => 0,
-            Some(t) => chunks_for(&manifest, t, first_slots, chunk),
-            None => fit_budget(&ctx, fixed_bytes, paged_bytes, slot_bytes * first_slots)? / chunk,
-        };
-        let chunks =
-            u32::try_from(chunks).map_err(|_| Error::Manifest(format!("{chunks} chunks of state: too many")))?;
 
         let mut states = BTreeMap::new();
         for (name, s) in &manifest.states {
@@ -261,33 +252,20 @@ impl Runtime {
                 states.insert(name.clone(), buf);
             }
         }
+        let pool = Pool::new(&manifest, pages, slots)?;
         let t0 = std::time::Instant::now();
-        let (pool, initial) = Pool::new(&manifest, chunk, chunks, first_slots as usize, tokens)?;
-        let planned = t0.elapsed();
-        let physical = Arc::new(Physical::create(dev, chunk as usize, chunks as usize)?);
-        let created = t0.elapsed() - planned;
-        let mut arenas = Vec::with_capacity(pool.pooled().len());
         for a in pool.pooled() {
-            let arena = Arena::reserve(dev, chunk as usize, a.positions)?;
-            let objects = match a.kind {
-                Kind::Page => pool.total(),
-                Kind::Slot => pool.slots(),
-            } as u64;
-            let buf = DeviceBuf::reserved(&stream, arena.ptr(), objects * a.object, a.positions as u64 * chunk);
+            let buf = alloc_vmm(&stream, dev, a.objects as u64 * a.object, &format!("state `{}`", a.state))?;
             states.insert(a.state.clone(), buf);
-            arenas.push(arena);
         }
-        let mut mapper = Mapper::new(arenas, Arc::clone(&physical));
-        let t1 = std::time::Instant::now();
-        mapper.run(&initial)?;
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
         tracing::debug!(
-            "state budget {:.1} GiB in {chunks} chunks of {} MiB: {} pages of {page} tokens, {} sequence slots; planned in {planned:?}, created in {created:?}, mapped in {:?}",
-            gib(chunks as u64 * chunk),
-            chunk >> 20,
-            pool.total(),
+            "states: {} pages of {page} tokens ({:.1} GiB), {} sequence slots ({:.1} GiB); allocated in {:?}",
+            pool.pages(),
+            gib(pool.pages() as u64 * paged_bytes),
             pool.slots(),
-            t1.elapsed(),
+            gib(pool.slots() as u64 * slot_bytes),
+            t0.elapsed(),
         );
         let resolution = resolved.iter().map(|(n, rk)| (n.clone(), rk.launch_modules())).collect();
         // A host state has no address until the host binds it, and every
@@ -305,9 +283,8 @@ impl Runtime {
             stage,
         };
 
-        let provision = Provision { tokens: pool.pages_max() as u64 * page, seq_slots: pool.slots_max() as u64 };
-        let remaps = Remaps::spawn(Arc::clone(&ctx), mapper)?;
-        let mut rt = Runtime {
+        let provision = Provision { tokens: pool.pages() as u64 * page, seq_slots: pool.slots() as u64 };
+        let rt = Runtime {
             host_weights_ready: !manifest.buffers.values().any(|b| b.placement == Placement::Host),
             signals: crate::exec::Signals::load(&ctx, gpu)?,
             gather: crate::push::Gather::load(&ctx)?,
@@ -322,12 +299,8 @@ impl Runtime {
             blt,
             blas,
             provision,
-            driven: pool.placement(),
+            budget: Budget { pages: pool.pages(), slots: pool.slots() },
             pool: Arc::new(pool),
-            remaps,
-            chunks: physical,
-            remap_count: 0,
-            budget: Budget { chunk, chunks, first_slots: first_slots as usize, tokens },
             buffers,
             states,
             staging,
@@ -347,7 +320,6 @@ impl Runtime {
             joins: [join_event()?, join_event()?],
             derivation: Some(derivation),
         };
-        rt.zero_fresh(&initial)?;
         rt.stream.synchronize()?;
         Ok(rt)
     }
@@ -707,92 +679,32 @@ fn fmt_groups(t: &kern_manifest::types::Topology) -> String {
     t.groups.iter().map(|(g, n)| format!("{g}={n}")).collect::<Vec<_>>().join(", ")
 }
 
-/// The chunk the pooled states are backed in, from the smallest page or
-/// slot object and the allocation granularity `g`.
-fn chunk_size(m: &Manifest, page: u64, g: u64) -> u64 {
-    let smallest = m
-        .states
-        .values()
-        .filter_map(|s| match (s.bytes_per_token, s.bytes_per_seq) {
-            (t, 0) if t > 0 => Some(t * page),
-            (0, q) if q > 0 => Some(q),
-            _ => None,
-        })
-        .min();
-    chunk_for(smallest, g)
-}
-
-const CHUNK_MAX: u64 = 64 << 20;
-
-/// A multiple of `g`, at most half the smallest object so an object spans
-/// at least two chunks (one shared at a boundary is then one of many), at
-/// most [`CHUNK_MAX`]. An object too small for even one granule per half
-/// shares its chunk with many others whatever the chunk is, so the chunk
-/// is then the largest: every driver call on the pool costs per chunk.
-fn chunk_for(smallest: Option<u64>, g: u64) -> u64 {
-    let cap = (CHUNK_MAX / g).max(1);
-    let units = match smallest.map_or(0, |s| s / 2 / g) {
-        0 => cap,
-        n => n.min(cap),
-    };
-    units * g
-}
-
-/// State budget in bytes that fits the device: free memory (after every
-/// buffer, scratch and fixed state) less [`HEADROOM`]; it must hold the
-/// first sequence slots and a page.
-fn fit_budget(ctx: &CudaContext, fixed: u64, page_bytes: u64, first_slots_bytes: u64) -> Result<u64> {
+/// Pages that fit the device: free memory less `fixed` (every buffer,
+/// scratch, fixed state and the sequence slots) and [`HEADROOM`], in
+/// whole pages of `page_bytes`; at least one.
+fn fit_budget(ctx: &CudaContext, fixed: u64, page_bytes: u64) -> Result<u64> {
     let (free, total) = ctx.mem_get_info()?;
     let (free, total) = (free as u64, total as u64);
     let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
-    let Some(budget) = free.checked_sub(HEADROOM).and_then(|b| b.checked_sub(fixed)) else {
+    let pages = free.checked_sub(HEADROOM).and_then(|b| b.checked_sub(fixed)).map_or(0, |b| b / page_bytes);
+    if pages == 0 {
         return Err(Error::Cuda(format!(
-            "{:.2} GiB free of {:.1} on the device: nothing left for the states after {:.1} GiB headroom",
+            "{:.2} GiB free of {:.1} on the device: no page of {:.2} GiB left after {:.2} GiB of fixed states and sequence slots and {:.1} GiB headroom",
             gib(free),
             gib(total),
-            gib(HEADROOM)
-        )));
-    };
-    if budget < first_slots_bytes + page_bytes {
-        return Err(Error::Cuda(format!(
-            "{:.2} GiB free of {:.1} on the device: the first sequence slots are {:.2} GiB and a page {:.2} GiB, headroom {:.1} GiB",
-            gib(free),
-            gib(total),
-            gib(first_slots_bytes),
             gib(page_bytes),
+            gib(fixed),
             gib(HEADROOM)
         )));
     }
     tracing::info!(
-        "state budget {:.1} GiB; device {:.1} GiB free of {:.1}, {:.1} GiB headroom",
-        gib(budget),
+        "paged states: {pages} pages, {:.1} GiB; device {:.1} GiB free of {:.1}, {:.1} GiB headroom",
+        gib(pages * page_bytes),
         gib(free),
         gib(total),
         gib(HEADROOM)
     );
-    Ok(budget)
-}
-
-#[cfg(test)]
-mod chunk_tests {
-    use super::chunk_for;
-
-    const G: u64 = 2 << 20;
-
-    #[test]
-    fn half_the_smallest_object_in_granules_capped_at_64_mib() {
-        assert_eq!(chunk_for(Some(48 << 20), G), 24 << 20);
-        assert_eq!(chunk_for(Some(5 << 20), G), 2 << 20);
-        assert_eq!(chunk_for(Some(1 << 30), G), 64 << 20);
-    }
-
-    #[test]
-    fn an_object_below_two_granules_takes_the_largest_chunk() {
-        assert_eq!(chunk_for(Some(1 << 10), G), 64 << 20);
-        assert_eq!(chunk_for(Some(4 << 20), G), 2 << 20);
-        assert_eq!(chunk_for(Some((4 << 20) - 1), G), 64 << 20);
-        assert_eq!(chunk_for(None, G), 64 << 20);
-    }
+    Ok(pages)
 }
 
 #[cfg(test)]

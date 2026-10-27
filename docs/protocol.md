@@ -13,9 +13,9 @@ PR #50 的 review 找出的问题几乎都出在这里。原因是同一个：�
 
 | 边界 | 两端 | 消息 | 状态的 owner | 顺序 |
 |---|---|---|---|---|
-| 锁步组 | ranks head（rank 0，`Ranks`）↔ 每个 rank 的 `Executor` | `Hello` / `Table`，然后 `Order { acts, item, wait }` ↔ `Answer { tokens, counts, remaps, landed }` | 每个 rank 的 pool 账（页、slot、remap、host）全在 head；rank 的 runtime 只执行 | 每个 rank 一条 TCP，一问一答；组内 kernel 靠 collective 互等 |
+| 锁步组 | ranks head（rank 0，`Ranks`）↔ 每个 rank 的 `Executor` | `Hello` / `Table`，然后 `Order { acts, item, wait }` ↔ `Answer { tokens, counts, landed }` | 每个 rank 的 pool 账（页、slot、host）全在 head；rank 的 runtime 只执行 | 每个 rank 一条 TCP，一问一答；组内 kernel 靠 collective 互等 |
 | 流水线 | pp head（stage 0）↔ stage 1..n | `Job::Item { acts, rows, vars }` / `Job::Push` ↔ `Report::Tokens` / `Report::Pushed` | 整条流水线只有一个 pool，在 head；stage 执行 acts 和 push | 每个 stage 一条 TCP；stream 顺序 |
-| P/D | P head、P front ↔ D head；P 的每个 stage → D 的显存 | `Ask { Reserve, Start, Abort }` ↔ `Tell { Pools, Placed, Grant, Busy, Room, Refuse, Tokens }`；`Push` 经镜像写进 D 的 pool | D 的 seat 和 placement 在 D head；交接阶段在 P head（`Tiers`）；解码中的 relay 在 P front（`Clients`） | 一条 TCP，P 侧只有 head 一个写者，front 的 abort 经 head 转发；placement 按 epoch 在连接上先于用到它的 `Grant` 告知，镜像只接受下一个 epoch，seat 的 epoch 超过镜像的 push 被拒 |
+| P/D | P head、P front ↔ D head；P 的每个 stage → D 的显存 | `Ask { Reserve, Start, Abort }` ↔ `Tell { Pools, Grant, Busy, Room, Refuse, Tokens }`；`Push` 经镜像写进 D 的 pool | D 的 seat 在 D head；交接阶段在 P head（`Tiers`）；解码中的 relay 在 P front（`Clients`） | 一条 TCP，P 侧只有 head 一个写者，front 的 abort 经 head 转发；D 的 pool 装载时定死，镜像在连接开始时映射一次就对（2026-10-27 起，之前 placement 按 epoch 传播） |
 
 ## 不变量
 
@@ -23,10 +23,9 @@ PR #50 的 review 找出的问题几乎都出在这里。原因是同一个：�
 
 **安全**
 
-- **S1 写目标。** 一次 push 写入 D 上的对象 o（页或 slot）时，o 被该请求持有；写入方的
-  镜像在 o 覆盖的每个 chunk 位置上，与 D 的 pool 此刻的 placement 相同。
-  kern-pool 保证被持有的对象不会被 remap 挪走（`chunks.rs` 模块文档），所以这一条
-  只需要在写的那一刻检查。
+- **S1 写目标。** 一次 push 写入 D 上的对象 o（页或 slot）时，o 被该请求持有。D 的
+  pool 装载时定死（2026-10-27 起），镜像映射一次就与它逐字节同址，所以这一条只剩
+  "持有"要查：seat 在 push 在途时不能被释放（S3）。
 - **S2 不死于正常事件。** 对端发来的消息序列只要合法，任何进程都不能因此退出。合法的
   情况包括客户端离开、P 拒掉 prompt、D 回 `Busy`，以及这些事件之间的任意交错。fail-fast
   针对的是真正的故障（对端死亡、计划违反自身事实），不是协议里的正常分支。
@@ -76,6 +75,10 @@ lease）。head 只在听到事件之后才轮到一次 turn，和它的主循�
 
 对照组：不 remap、没有客户端离开、没有 prompt 被拒，300 个种子全部干净结束。所以上面
 抓到的问题是对应配置自己的。
+
+**2026-10-27**：remap 连同 placement / epoch 一起删除（K1b 的池改成装载时定死页数与 slot 数），
+上表 1 和 3 的机制不复存在；仿真里对应的配置改成 slot 紧缺（每成员一个可授的 slot）：1000 个种子
+全部干净，200 个种子里 `Busy` / `Room` 各出现 20 次以上。`StaleMirror` 这条违例随之删除。
 
 原有的 `tests/pd.rs` 随机调度测试为什么没抓到 1 和 2：
 

@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kern_manifest::Verified;
-use kern_pool::{deal, Deal, Interleave, Lease, Pages, Placement};
+use kern_pool::{deal, Deal, Interleave, Lease, Pages};
 use kern_runtime::{Capacity, MappedPool, PoolHandle, Rows, Runtime};
 
 use crate::{appear, publish};
@@ -189,7 +189,7 @@ pub fn run(args: Vec<String>) -> Res<()> {
 }
 
 fn cap(tokens: u64) -> Capacity {
-    Capacity { tokens: Some(tokens), seqs: 1, landings: 0 }
+    Capacity { tokens: Some(tokens), slots: 1, landings: 0 }
 }
 
 /// Member runtimes for the largest group any case deals over, each with
@@ -269,23 +269,17 @@ impl Group {
         }
     }
 
-    /// Every member's pages and placement for case `i`, once it has leased them.
-    fn seat(&mut self, s: Shape, i: usize, c: Case) -> Res<Vec<(Vec<i32>, Placement)>> {
+    /// Every member's pages for case `i`, once it has leased them.
+    fn seat(&mut self, s: Shape, i: usize, c: Case) -> Res<Vec<Vec<i32>>> {
         match self {
             Group::Here { members, seats } => {
                 *seats = (0..c.w).map(|m| seat(&mut members[m as usize], s, c, m)).collect::<Res<_>>()?;
-                Ok(seats
-                    .iter()
-                    .zip(members.iter())
-                    .map(|(s, rt)| (s.lease.page_ids().to_vec(), rt.placement()))
-                    .collect())
+                Ok(seats.iter().map(|s| s.lease.page_ids().to_vec()).collect())
             }
             Group::There { dir, .. } => (0..c.w)
                 .map(|m| {
                     let ids = appear(&dir.join(format!("c{i}.ids.{m}")))?;
-                    let p = Placement::from_bytes(&appear(&dir.join(format!("c{i}.placement.{m}")))?)
-                        .ok_or("not a placement")?;
-                    Ok((ids.as_chunks::<4>().0.iter().map(|&b| i32::from_le_bytes(b)).collect(), p))
+                    Ok(ids.as_chunks::<4>().0.iter().map(|&b| i32::from_le_bytes(b)).collect())
                 })
                 .collect(),
         }
@@ -345,10 +339,9 @@ fn be_group(s: Shape, cases: &[Case], gpu: usize, dir: &Path) -> Res<()> {
     }
     for (i, &c) in cases.iter().enumerate() {
         let seats = (0..c.w).map(|m| seat(&mut members[m as usize], s, c, m)).collect::<Res<Vec<_>>>()?;
-        for (m, (st, rt)) in seats.iter().zip(&members).enumerate() {
+        for (m, st) in seats.iter().enumerate() {
             let ids: Vec<u8> = st.lease.page_ids().iter().flat_map(|i| i.to_le_bytes()).collect();
             publish(&dir.join(format!("c{i}.ids.{m}")), &ids)?;
-            publish(&dir.join(format!("c{i}.placement.{m}")), &rt.placement().to_bytes())?;
         }
         appear(&dir.join(format!("c{i}.pushed")))?;
         let verdict = (0..c.w).map(|m| check(&members[m as usize], s, c, m, &seats[m as usize])).sum::<Res<u64>>();
@@ -390,15 +383,12 @@ fn push_case(
         }
     }
     let seats = group.seat(s, i, c)?;
-    for ((_, p), mp) in seats.iter().zip(mirrors.iter_mut()) {
-        a.place(mp, p)?;
-    }
     let il = Interleave::new(c.w)?;
     let t = Instant::now();
     let deals: Vec<Deal> = seats
         .iter()
         .enumerate()
-        .map(|(m, (ids, _))| deal(Pages { ids: &src, unit: UNIT }, Pages { ids, unit: UNIT }, il, m as u64, c.len))
+        .map(|(m, ids)| deal(Pages { ids: &src, unit: UNIT }, Pages { ids, unit: UNIT }, il, m as u64, c.len))
         .collect::<Result<_, _>>()?;
     let planned = t.elapsed();
     let runs: usize = deals.iter().map(|d| d.runs().len()).sum();

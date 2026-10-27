@@ -20,8 +20,9 @@ toml and a scenario reads like a client:
   wake_room         a pool holding one worst-case second turn: its first turn's
                     checkpoint parks for it and wakes into the turn's own row;
                     it finishes, with the warm answer
-  slot_growth       a stateful manifest served with two slots grows them out
-                    of free pages as requests finish, answers unchanged
+  slot_pressure     a stateful manifest served with two slots evicts the
+                    coldest checkpoints as requests finish, slots fixed,
+                    answers unchanged
   rows1             a speculative manifest served with `--rows 1` equals
                     `kern run --rows 1`
 
@@ -347,7 +348,7 @@ class Server:
         for s in self.lines("stats"):
             for k in sums:
                 out[k] += s.get(k, 0) or 0
-            for k in ("remaps", "slots", "slots_used", "checkpoints", "parked", "host_gib", "accept_pct", "accepted"):
+            for k in ("slots", "slots_used", "checkpoints", "parked", "host_gib", "accept_pct", "accepted"):
                 if k in s:
                     out[k] = s[k]
         return out
@@ -803,10 +804,10 @@ def session_wake(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: 
 
 
 def session_slots(a, t: Target, gpus: list[int], port: int, rep: Report, oracle: Oracle, out: Path, prev: dict) -> None:
-    """A stateful manifest starts with a few slots and grows them out of free
-    pages: finished requests beyond the first slots leave their checkpoints
-    resident (the pool is the default, nothing parks), the answers are the
-    cold ones and a turn2 hits after the growth as it did before it."""
+    """A stateful manifest's slots are fixed at load: finished requests
+    beyond them evict the coldest checkpoints (the pool is the default,
+    nothing parks), the slot count never moves, the answers are the cold
+    ones and a turn2 still answers as the warm one did, hit or not."""
     if not t.stateful:
         return
     cold, turn2, rows = prev["cold"], prev["turn2"], prev["rows"]
@@ -828,11 +829,11 @@ def session_slots(a, t: Target, gpus: list[int], port: int, rep: Report, oracle:
         s.flush_stats()
         c = s.counters()
         rep.counters["slots"] = c
-        grown = c.get("remaps", 0) >= 1 and c.get("slots", 0) > first
+        pressed = c.get("evictions", 0) >= 1 and c.get("slots", 0) == first
         rep.add(
-            "slot_growth",
-            grown and same.ok and warm.ok and all(g == w for g, w in hits),
-            f"remaps={c.get('remaps')} slots={c.get('slots')} ({first} to start) slots_used={c.get('slots_used')} after {max(2 * first + 4, len(PROMPTS))} requests; the {len(PROMPTS)} prompts vs cold: {same}; turn2 hits (got, before) {hits}, vs the warm answers: {warm}",
+            "slot_pressure",
+            pressed and same.ok and warm.ok,
+            f"evictions={c.get('evictions')} slots={c.get('slots')} ({first} to start) slots_used={c.get('slots_used')} after {max(2 * first + 4, len(PROMPTS))} requests; the {len(PROMPTS)} prompts vs cold: {same}; turn2 hits (got, before) {hits}, vs the warm answers: {warm}",
         )
 
 

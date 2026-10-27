@@ -2,7 +2,7 @@
 // that a served answer is right or wrong with no margin to argue. The
 // states are the thing under test — every byte they hold is written by
 // these kernels and read back into the next token, so a page served
-// stale, a slot remapped wrong, a page listed out of order, a line
+// stale, a slot zeroed or copied wrong, a page listed out of order, a line
 // restored from the wrong copy or copied short all change the output.
 //
 // A token slot holds WORDS marks, mark(t, p, w) for its token t at

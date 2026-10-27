@@ -18,10 +18,9 @@
 //! shares. Sessions start `--concurrency` at a time, in file order, each
 //! when the one that many before it ends. A `Busy` lease evicts
 //! checkpoints until it fits, or waits for the next sequence to finish.
-//! Pages and slots come out of one chunk budget (`--budget-gib`, or
-//! `--capacity` tokens of pages plus `--slots` slots) as the runtime's
-//! do: `--slots` is only what the pool starts with, a `Remapping` denial
-//! is landed on the spot and the lease asked for again. With `--host-gib`
+//! The pool is `--slots` slots and the pages `--budget-gib` has room for
+//! beside them (or `--capacity` tokens of pages), fixed as the runtime's
+//! are: a lease short of a slot or pages is `Busy`. With `--host-gib`
 //! a `Busy` lease parks the coldest resident checkpoint into a host tier
 //! of that size, split into host pages and host slots as the runtime
 //! splits it (`kern_runtime::host_split`, one slot per `--host-turn`
@@ -31,16 +30,15 @@
 //! `--pp-head` (with `--state`) replays as a pipeline head serving the
 //! prefill of a P/D split does: a request leases its prompt only, is kept
 //! where its prompt ends (the next request carries its output, which the
-//! decode tier made), and the pool never carves a slot: a lease or a
-//! checkpoint takes one only while one is free, making room otherwise.
+//! decode tier made).
 //!
 //! Reported: hit rate (prefix tokens found / input tokens), the hits and
 //! their tokens by tier (resident, or woken from the host), extend
 //! percentiles, checkpoints kept, evictions, requests that had to wait,
-//! remaps, the most slots the pool grew to, parks and wakes; the most
-//! entries and slots held at once, the entries a later turn of their
-//! session moved past at the end, and the requests that found nothing
-//! although an earlier one of their session had finished.
+//! parks and wakes; the most entries and slots held at once, the entries
+//! a later turn of their session moved past at the end, and the requests
+//! that found nothing although an earlier one of their session had
+//! finished.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader};
@@ -199,8 +197,6 @@ struct Tally {
     waited: u64,
     rejected: u64,
     max_live: usize,
-    remaps: u64,
-    max_slots: usize,
     parks: u64,
     wakes: u64,
     wake_tokens: u64,
@@ -249,14 +245,6 @@ fn make_room(prefix: &mut Prefix, host: Option<&Arc<Host>>, tally: &mut Tally) -
     };
     tally.host_evictions += dropped as u64;
     true
-}
-
-/// The runtime's chunk rule: 2 MiB granularity, half the smallest object,
-/// at most 64 MiB.
-fn chunk_size(page_bytes: u64, state: u64) -> u64 {
-    let g = 2u64 << 20;
-    let smallest = if state > 0 { page_bytes.min(state) } else { page_bytes };
-    (smallest / 2 / g).clamp(1, 32) * g
 }
 
 fn main() {
@@ -316,16 +304,13 @@ fn main() {
     let row = (1usize << 20) / unit + 64;
     let m = manifest(unit, kv_bytes, state, slots, row);
     let page_bytes = kv_bytes * unit as u64;
-    let chunk = chunk_size(page_bytes, state);
-    let chunks = match capacity {
-        Some(tokens) => (tokens / unit as u64 * page_bytes).div_ceil(chunk) + (slots as u64 * state).div_ceil(chunk),
-        None => (budget_gib << 30) / chunk,
-    };
-    let first_slots = if state > 0 { slots } else { 0 };
-    // The head's pages all exist from load and never give way to slots.
-    let cap = capacity.filter(|_| pp_head);
-    let pool =
-        Arc::new(Pool::new(&m, chunk, chunks as u32, first_slots, cap).expect("the budget holds the first slots").0);
+    let slots = if state > 0 { slots } else { 0 };
+    let pages = match capacity {
+        Some(tokens) => tokens / unit as u64,
+        None => (budget_gib << 30).saturating_sub(slots as u64 * state) / page_bytes,
+    } as usize;
+    assert!(pages > 0, "no page left beside {slots} slots of {state} bytes: a bigger --budget-gib or fewer --slots");
+    let pool = Arc::new(Pool::new(&m, pages, slots).expect("the budget lays out"));
     let host_units = (host_gib > 0)
         .then(|| kern_runtime::host_split(host_gib << 30, page_bytes, state, host_turn.div_ceil(unit as u64)));
     let host = host_units.map(|(pages, slots)| Arc::new(Host::new(pages, slots)));
@@ -392,8 +377,6 @@ fn main() {
                 // Room made for a retry may have parked or dropped the
                 // checkpoint hit: look it up again where it is now.
                 let attempt = match prefix.lookup(&toks[..r.input]) {
-                    // The head's pool never carves a slot (`pp::cache`).
-                    _ if pp_head && pool.slots() <= pool.slots_used() + 1 => Err(Denied::Busy),
                     Some(h) => match h.found {
                         Found::Resident(cp) => pool.restore(&cp, h.len, worst).map(|(l, _)| l),
                         // Woken straight into the lease; the parked
@@ -415,12 +398,6 @@ fn main() {
                         if !make_room(&mut prefix, host.as_ref(), &mut tally) {
                             break None;
                         }
-                    }
-                    Err(Denied::Remapping) => {
-                        let plan = pool.take_pending().expect("a remap was planned");
-                        pool.complete(plan);
-                        tally.remaps += 1;
-                        tally.max_slots = tally.max_slots.max(pool.slots());
                     }
                     Err(_) => {
                         tally.rejected += 1;
@@ -476,18 +453,15 @@ fn main() {
     }
     let main_reqs = reqs.iter().filter(|r| !r.subagent).count();
     println!(
-        "{} sessions, {} requests ({main_reqs} main), unit {unit} ({} MiB/page), {}, budget {:.1} GiB in {chunks} chunks of {} MiB: {} pages ({} tokens) and {} slots at the end, {} slots at most, {} remaps, concurrency {concurrency}",
+        "{} sessions, {} requests ({main_reqs} main), unit {unit} ({} MiB/page), {}, {:.1} GiB: {} pages ({} tokens) and {} slots, concurrency {concurrency}",
         sessions,
         reqs.len(),
         page_bytes >> 20,
         if state > 0 { format!("recurrent state {} MiB/slot (checkpoint at request end)", state >> 20) } else { "paged only (checkpoint every page)".into() },
-        (chunks * chunk) as f64 / (1u64 << 30) as f64,
-        chunk >> 20,
-        pool.total(),
-        pool.total() as u64 * unit as u64,
+        (pages as u64 * page_bytes + slots as u64 * state) as f64 / (1u64 << 30) as f64,
+        pool.pages(),
+        pool.pages() as u64 * unit as u64,
         pool.slots(),
-        tally.max_slots.max(pool.slots()),
-        tally.remaps,
     );
     if let Some((pages, slots)) = host_units {
         let gib = |p: u64, s: u64| (p * page_bytes + s * state) as f64 / (1u64 << 30) as f64;

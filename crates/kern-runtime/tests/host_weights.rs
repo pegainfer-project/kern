@@ -46,7 +46,7 @@ fn mapped_weight_rectangle_replay_shared_scope_and_guards() {
     let dir = std::env::temp_dir().join(format!("kern-host-weight-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let scope = HostWeights::new();
-    let capacity = Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 });
+    let capacity = Some(Capacity { tokens: Some(1), slots: 1, landings: 0 });
     let mut first = Runtime::load_with_host_weights(&verified, Some(&dir), 0, capacity, None, &scope).unwrap();
     let mut second = Runtime::load_with_host_weights(&verified, Some(&dir), 0, capacity, None, &scope).unwrap();
     assert_eq!(scope.allocated_bytes().unwrap(), 512);

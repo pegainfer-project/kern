@@ -24,10 +24,9 @@
 //! place in it and every stage counts the same items alike; there is no
 //! sequence number, no stop message and no fault message. A stage that
 //! fails exits; a closed connection ends the process on the other side.
-//! With a decode tier (`pd`) the head's table also carries its pools, the
-//! head forwards every placement a tier moves to, and it sends every stage
-//! a [`Push`] after the item that writes a prompt's last rows; each stage
-//! answers it `Pushed` once it has landed.
+//! With a decode tier (`pd`) the head's table also carries its pools, and
+//! the head sends every stage a [`Push`] after the item that writes a
+//! prompt's last rows; each stage answers it `Pushed` once it has landed.
 //!
 //! The second kind joins each stage to the next, and carries item
 //! numbers both ways. Every arriving buffer of a stage (`kern_run::arrivals`:
@@ -118,13 +117,6 @@ pub struct Table {
 pub enum Job {
     Item(Item),
     Push(Push),
-    /// Decode tier `tier`'s rank `rank` moved to placement `epoch` (hex).
-    Place {
-        tier: usize,
-        rank: usize,
-        epoch: u64,
-        placement: String,
-    },
 }
 
 /// What a stage tells the head: the last stage every item's tokens, every
@@ -150,8 +142,7 @@ pub struct Item {
     /// it ran on the head's stream, for a stage to run before anything
     /// else of the item: a fresh sequence's slot zeroed, the copies of a
     /// prompt continuing from a kept prefix or of a prefix kept, an entry
-    /// parked to the host tier, a parked one woken into a lease. Never a
-    /// remap: the head's pool makes none.
+    /// parked to the host tier, a parked one woken into a lease.
     pub acts: Vec<Act>,
 }
 

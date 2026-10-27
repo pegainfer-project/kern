@@ -50,14 +50,6 @@ pub enum Out {
         why: FinishReason,
         cause: Option<StopCause>,
     },
-    /// Decode tier `tier`'s rank `rank` is at placement `epoch` (hex): the
-    /// head's mirror and every stage's, ahead of any push behind it.
-    Place {
-        tier: usize,
-        rank: usize,
-        epoch: u64,
-        placement: String,
-    },
     /// The waiting front's reserve was refused: reject it.
     Reject {
         req: Req,
@@ -257,7 +249,6 @@ impl Handoffs {
         };
         match t {
             Tell::Pools(_) => bail!("the decode tier sent its pools twice"),
-            Tell::Placed { rank, epoch, placement } => Ok(vec![Out::Place { tier: self.tier, rank, epoch, placement }]),
             Tell::Grant { req, seats, .. } => {
                 answered(req, &mut self.asking)?;
                 let h = self.live.get_mut(&req).expect("asking is live");

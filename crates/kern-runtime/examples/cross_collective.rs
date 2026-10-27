@@ -369,7 +369,7 @@ fn main() {
             &verified,
             Some(&kernels),
             gpu,
-            Some(Capacity { tokens: Some(1), seqs: 1, landings: 0 }),
+            Some(Capacity { tokens: Some(1), slots: 1, landings: 0 }),
             Some(&topo),
         )
         .map_err(e)?;

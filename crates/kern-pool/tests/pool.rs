@@ -1,5 +1,5 @@
-//! The pool through its public API: leases, checkpoints, restores, forks,
-//! retirements and the remaps that move chunks between pages and slots.
+//! The pool through its public API: leases, checkpoints, restores, forks
+//! and retirements.
 
 mod common;
 
@@ -8,61 +8,52 @@ use std::sync::Arc;
 use kern_manifest::types::{Dim, Manifest};
 use std::collections::{BTreeMap, BTreeSet};
 
-use kern_pool::{chunks_for, Checkpoint, Copies, Denied, Kind, Lease, Pool, Remap};
+use kern_pool::{Checkpoint, Copies, Denied, Kind, Lease, Pool};
 
-use common::{hybrid, hybrid4, hybrid_pool, land, paged4, pool, pool_of, two_paged, Rand};
+use common::{hybrid, hybrid4, hybrid_pool, paged4, pool, pool_of, two_paged, Rand};
 
 #[test]
-fn a_new_pool_maps_every_chunk_in_its_first_plan() {
+fn a_new_pool_holds_its_pages_and_slots() {
     let p = pool();
-    assert_eq!((p.total(), p.unit(), p.max_seq_tokens(), p.chunk()), (4, 16, 48, 8));
+    assert_eq!((p.pages(), p.unit(), p.max_seq_tokens()), (4, 16, 48));
     assert_eq!(p.tables().collect::<Vec<_>>(), ["block_table", "draft_block_table"]);
     assert_eq!((p.has_slots(), p.slots()), (false, 0));
     assert_eq!(p.lease(1).unwrap().seq_slot(), None);
-    // Two chunks over what four pages take are spare, not a torn page.
-    let (p2, plan) = Pool::new(&two_paged(), 8, 18, 0, None).unwrap();
-    assert_eq!((p2.total(), p2.pages_max(), plan.map.len(), plan.unmap.len()), (4, 4, 16, 0));
-    // A capacity in tokens is a cap on the pages, whatever the chunks hold.
-    let (p3, plan3) = Pool::new(&two_paged(), 8, 18, 0, Some(32)).unwrap();
-    assert_eq!((p3.total(), p3.pages_max(), plan3.map.len()), (2, 2, 8));
-    assert_eq!(plan.made, [(Kind::Page, 0), (Kind::Page, 1), (Kind::Page, 2), (Kind::Page, 3)]);
-    let names: Vec<(&str, Kind, u64, usize)> =
-        p2.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.object, a.positions)).collect();
-    assert_eq!(names, [("draft_kv", Kind::Page, 16, 8), ("kv", Kind::Page, 16, 8)]);
-    // With slots: every chunk mapped, one access grant per object, nothing unmapped.
-    let (p, plan) = Pool::new(&hybrid(), 8, 20, 4, None).unwrap();
-    assert_eq!((plan.map.len(), plan.access.len(), plan.unmap.len(), plan.unmade.len()), (20, 8, 0, 0));
-    assert_eq!(plan.made.len(), 8);
-    assert_eq!((p.total(), p.slots(), p.pages_max(), p.slots_max()), (4, 4, 10, 6));
-    let arenas: Vec<(&str, Kind, usize)> = p.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.positions)).collect();
-    assert_eq!(arenas, [("kv", Kind::Page, 20), ("gdn", Kind::Slot, 18)]);
+    let states: Vec<(&str, Kind, u64, usize)> =
+        p.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.object, a.objects)).collect();
+    assert_eq!(states, [("draft_kv", Kind::Page, 16, 4), ("kv", Kind::Page, 16, 4)]);
+    // Slots asked of a manifest without per-sequence states are none.
+    assert_eq!(Pool::new(&two_paged(), 4, 3).unwrap().slots(), 0);
+    let p = hybrid_pool();
+    assert_eq!((p.pages(), p.slots(), p.slots_used()), (4, 4, 0));
+    let states: Vec<(&str, Kind, u64, usize)> =
+        p.pooled().iter().map(|a| (a.state.as_str(), a.kind, a.object, a.objects)).collect();
+    assert_eq!(states, [("kv", Kind::Page, 16, 4), ("gdn", Kind::Slot, 24, 4)]);
 }
 
 #[test]
 fn pool_rejects_a_manifest_it_cannot_lay_out() {
-    let err = |m: &Manifest, chunks: u32, first_slots: usize| match Pool::new(m, 8, chunks, first_slots, None) {
+    let err = |m: &Manifest| match Pool::new(m, 4, 4) {
         Ok(_) => panic!("laid out"),
         Err(e) => e.to_string(),
     };
     // A state is paged or per sequence, not both.
     let mut m = hybrid();
     m.states.get_mut("gdn").unwrap().bytes = 8;
-    assert!(err(&m, 20, 4).contains("one layout"));
+    assert!(err(&m).contains("one layout"));
     // The line table's shape is [lines, seqs, w] with the state's line count.
     let mut m = hybrid();
     let b = m.buffers.get_mut("line_index").unwrap();
     b.shape = vec![Dim::Const(4), Dim::Var("seqs".into())];
-    assert!(err(&m, 20, 4).contains("state holds 3"));
+    assert!(err(&m).contains("state holds 3"));
     let b = m.buffers.get_mut("line_index").unwrap();
     b.shape = vec![Dim::Var("seqs".into())];
-    assert!(err(&m, 20, 4).contains("[lines, seqs, w]"));
+    assert!(err(&m).contains("[lines, seqs, w]"));
     let b = m.buffers.get_mut("line_index").unwrap();
     b.shape = vec![Dim::Const(3), Dim::Var("seqs".into()), Dim::Const(8)];
-    let p = pool_of(&m, 8, 20, 4);
+    let p = pool_of(&m, 4, 4);
     let a = p.lease(16).unwrap();
     assert_eq!((a.seq_width("line_index").unwrap(), a.seq_lines("line_index").unwrap()), (8, 3));
-    // The budget must hold the first slots.
-    assert!(err(&hybrid(), 5, 4).contains("hold 1 sequence slots"));
 }
 
 #[test]
@@ -71,25 +62,11 @@ fn a_line_table_over_one_line_per_slot_holds_the_slot_in_every_row() {
     // of that layout (a host's per-layer states), each at the lease's slot.
     let mut m = hybrid();
     m.buffers.get_mut("line_index").unwrap().domain.as_mut().unwrap().stride = 24;
-    let p = pool_of(&m, 8, 20, 4);
+    let p = pool_of(&m, 4, 4);
     let a = p.lease(16).unwrap();
     let slot = a.seq_slot().unwrap();
     let rows: Vec<i32> = (0..3).map(|r| a.seq_line("line_index", r).unwrap()).collect();
     assert_eq!((rows, a.seq_lines("line_index").unwrap()), (vec![slot; 3], 3));
-}
-
-#[test]
-fn the_chunk_budget_rounds_every_state_on_its_own() {
-    // kv: 32 tokens of 1 byte = 4 chunks; gdn: 4 slots of 24 bytes = 12 chunks.
-    assert_eq!(chunks_for(&hybrid(), 32, 4, 8), 16);
-    // Two per-sequence states of 40 bytes each hold one slot in 2 chunks of 32
-    // apiece, not the 3 the summed 80 bytes suggest: each arena rounds alone.
-    let mut m = hybrid();
-    m.states.get_mut("gdn").unwrap().bytes_per_seq = 40;
-    m.states.insert("gdn2".into(), m.states["gdn"].clone());
-    assert_eq!(chunks_for(&m, 0, 1, 32), 4);
-    assert!(Pool::new(&m, 32, 4, 1, None).is_ok());
-    assert!(Pool::new(&m, 32, 3, 1, None).is_err());
 }
 
 #[test]
@@ -115,16 +92,16 @@ fn denials() {
     let p = pool();
     assert_eq!(p.lease(49).unwrap_err(), Denied::ExceedsRow { limit: 48 });
     let a = p.lease(48).unwrap();
-    // One page free, no other kind to take chunks from: busy.
+    // One page free: busy.
     assert_eq!(p.lease(17).unwrap_err(), Denied::Busy);
     let b = p.lease(16).unwrap();
     assert_eq!(p.lease(1).unwrap_err(), Denied::Busy);
     drop(a);
     assert!(p.lease(33).is_ok());
     drop(b);
-    // Two pages of budget cap the row at two pages.
-    let small = pool_of(&two_paged(), 8, 8, 0);
-    assert_eq!((small.pages_max(), small.lease(48).unwrap_err()), (2, Denied::ExceedsRow { limit: 32 }));
+    // Two pages cap the row at two pages.
+    let small = pool_of(&two_paged(), 2, 0);
+    assert_eq!((small.pages(), small.lease(48).unwrap_err()), (2, Denied::ExceedsRow { limit: 32 }));
     // A restore is denied the same way: by the row, or by the fresh pages it needs.
     let mut a = p.lease(16).unwrap();
     let (cp, _) = p.checkpoint(&mut a, 16).unwrap();
@@ -143,14 +120,13 @@ fn hybrid_denials() {
     let _c = p.lease(16).unwrap();
     // Every page and slot held: only an eviction helps.
     assert_eq!(p.lease(16).unwrap_err(), Denied::Busy);
-    assert!(p.take_pending().is_none());
     // A checkpoint copies the slot, so it needs one too; retiring never does.
     assert_eq!(p.checkpoint(&mut a, 16).unwrap_err(), Denied::Busy);
     let cp = p.retire(a, 16);
     assert!(cp.seq_slot().is_some());
-    // Five chunks: slot 0 and one page, room for no other slot ever.
-    let small = pool_of(&hybrid(), 8, 5, 1);
-    assert_eq!((small.slots_max(), small.total()), (1, 1));
+    // Slot 0 and one page: no slot to lease, ever.
+    let small = pool_of(&hybrid(), 1, 1);
+    assert_eq!((small.slots(), small.pages()), (1, 1));
     assert_eq!(small.lease(16).unwrap_err(), Denied::ExceedsPool);
 }
 
@@ -198,8 +174,7 @@ fn seq_slots_and_lines() {
     let mut got = vec![sa, sb, sc];
     got.sort();
     assert_eq!((got, p.slots_used()), (vec![1, 2, 3], 3));
-    // A fourth page is free but no slot is, and one free page's two
-    // chunks are short of a slot's three: busy, not exhausted.
+    // A fourth page is free but no slot is: busy, not exhausted.
     assert_eq!(p.lease(16).unwrap_err(), Denied::Busy);
     // Line r of a slot: slot × 3 + r; the null line 0 belongs to no lease.
     assert_eq!(a.seq_line("line_index", 2).unwrap(), sa * 3 + 2);
@@ -210,55 +185,6 @@ fn seq_slots_and_lines() {
     drop(b);
     let d = p.lease(16).unwrap();
     assert_eq!(d.seq_slot().unwrap(), sb);
-}
-
-#[test]
-fn pages_come_from_free_slots() {
-    let p = hybrid_pool();
-    let a = p.lease(48).unwrap(); // pages 0..3, slot 1
-    assert_eq!((p.used(), p.slots_used()), (3, 1));
-    // Two pages wanted, one free: the highest free slot's three chunks make page 4.
-    assert_eq!(p.lease(32).unwrap_err(), Denied::Remapping);
-    let plan = p.take_pending().unwrap();
-    assert_eq!(
-        (plan.unmap.len(), plan.map.len(), &plan.made[..], &plan.unmade[..]),
-        (3, 2, &[(Kind::Page, 4)][..], &[(Kind::Slot, 3)][..])
-    );
-    assert_eq!(plan.access, [(0, 8..10)]);
-    // Until it lands, a caller sees neither the page arriving nor the slot leaving.
-    assert_eq!(p.lease(32).unwrap_err(), Denied::Remapping);
-    assert!(p.take_pending().is_none());
-    assert_eq!((p.total(), p.slots()), (4, 3));
-    p.complete(plan);
-    let b = p.lease(32).unwrap();
-    assert_eq!(
-        (b.page_ids().to_vec(), b.seq_slot(), p.total(), p.slots(), p.slots_used()),
-        (vec![3, 4], Some(2), 5, 3, 2)
-    );
-    drop((a, b));
-    assert_eq!((p.used(), p.slots_used()), (0, 0));
-}
-
-#[test]
-fn a_slot_comes_from_free_pages() {
-    // 24 chunks: 4 slots and 6 pages.
-    let p = pool_of(&hybrid(), 8, 24, 4);
-    let held: Vec<Lease> = (0..3).map(|_| p.lease(16).unwrap()).collect();
-    assert_eq!((p.total(), p.used(), p.slots_used()), (6, 3, 3));
-    // A page is free but every slot is held: two free pages give slot 4.
-    assert_eq!(p.lease(16).unwrap_err(), Denied::Remapping);
-    let plan = p.take_pending().unwrap();
-    assert_eq!(
-        (plan.unmade.clone(), plan.made.clone()),
-        (vec![(Kind::Page, 5), (Kind::Page, 4)], vec![(Kind::Slot, 4)])
-    );
-    assert_eq!((plan.unmap.len(), plan.map.len()), (4, 3));
-    p.complete(plan);
-    let d = p.lease(16).unwrap();
-    assert_eq!((d.seq_slot(), p.total(), p.slots(), p.slots_used()), (Some(4), 4, 5, 4));
-    drop(held);
-    // Chunks stay where they were: pages 4 and 5 are gone, slots 1..3 free.
-    assert_eq!((p.total(), p.slots(), p.used()), (4, 5, 1));
 }
 
 #[test]
@@ -357,7 +283,7 @@ fn restore_shares_whole_pages_and_copies_the_partial_one() {
 #[test]
 #[should_panic(expected = "restoring 4 tokens of a checkpoint of 10 (with a slot)")]
 fn a_stateful_checkpoint_restores_at_its_length_only() {
-    let p = pool_of(&hybrid(), 8, 26, 4);
+    let p = pool_of(&hybrid(), 7, 4);
     let mut a = p.lease(16).unwrap();
     let (cp, _) = p.checkpoint(&mut a, 10).unwrap();
     let _ = p.restore(&cp, 4, 20);
@@ -388,7 +314,7 @@ fn restored_lease_refuses_its_prefix() {
 
 #[test]
 fn fork_shares_whole_pages_and_copies_the_partial_one_and_the_slot() {
-    let p = pool_of(&hybrid(), 8, 26, 4); // 4 slots, 7 pages
+    let p = pool_of(&hybrid(), 7, 4); // 4 slots, 7 pages
     let mut a = p.lease(40).unwrap(); // 3 pages
     let [a0, a1, _] = a.page_ids()[..] else { panic!() };
     let sa = a.seq_slot().unwrap();
@@ -416,8 +342,7 @@ fn fork_shares_whole_pages_and_copies_the_partial_one_and_the_slot() {
 
 #[test]
 fn hybrid_checkpoint_copies_the_slot_and_retire_moves_it() {
-    // 28 chunks: 4 slots and 8 pages.
-    let p = pool_of(&hybrid(), 8, 28, 4);
+    let p = pool_of(&hybrid(), 8, 4);
     let mut a = p.lease(16).unwrap();
     let (a0, sa) = (a.page_ids()[0], a.seq_slot().unwrap());
     let (cp, copies) = p.checkpoint(&mut a, 10).unwrap();
@@ -428,13 +353,9 @@ fn hybrid_checkpoint_copies_the_slot_and_retire_moves_it() {
     let (b, copies) = p.restore(&cp, cp.tokens(), 17).unwrap();
     let sb = b.seq_slot().unwrap();
     assert_eq!((copies.slot, b.prefix(), p.slots_used()), (Some((sc, sb)), 10, 3));
-    // No slot left; of the four free pages the restore needs two, the
-    // other two hold a slot's worth of chunks.
-    assert_eq!(p.restore(&cp, cp.tokens(), 17).unwrap_err(), Denied::Remapping);
-    land(&p);
-    let (c, copies) = p.restore(&cp, cp.tokens(), 17).unwrap();
-    assert_eq!((copies.slot, p.slots(), p.slots_used(), p.total()), (Some((sc, 4)), 5, 4, 6));
-    drop((b, c));
+    // No slot left: busy, however many pages are free.
+    assert_eq!(p.restore(&cp, cp.tokens(), 17).unwrap_err(), Denied::Busy);
+    drop(b);
     // Retiring a moves its slot and its page to the checkpoint: no copy.
     let a2 = p.retire(a, 10);
     assert_eq!((a2.seq_slot(), a2.page_ids(), p.slots_used(), p.used()), (Some(sa), vec![a0], 2, 2));
@@ -485,93 +406,13 @@ fn a_long_chain_drops_without_recursion() {
     }"#,
     )
     .unwrap();
-    let p: Arc<Pool> = pool_of(&m, 1, 200_000, 0);
+    let p: Arc<Pool> = pool_of(&m, 200_000, 0);
     let mut a = p.lease(200_000).unwrap();
     let cp = p.checkpoint(&mut a, 200_000).unwrap().0;
     drop(a);
     assert_eq!(p.used(), 200_000);
     drop(cp);
     assert_eq!(p.used(), 0);
-}
-
-/// Which chunk is mapped at each (arena, position), kept from the plans
-/// the pool hands out: a chunk is free or at one position, a plan maps
-/// only free chunks onto empty positions and unmaps only mapped ones,
-/// and what it makes is whole once it lands.
-#[derive(Default)]
-struct Mapping {
-    chunks: usize,
-    at: BTreeMap<(usize, usize), u32>,
-    free: BTreeSet<u32>,
-    /// Objects that exist, by (kind, object).
-    made: BTreeSet<(Kind, i32)>,
-    landed: usize,
-}
-
-impl Mapping {
-    fn new(chunks: u32) -> Mapping {
-        Mapping {
-            chunks: chunks as usize,
-            at: BTreeMap::new(),
-            free: (0..chunks).collect(),
-            made: BTreeSet::new(),
-            landed: 0,
-        }
-    }
-
-    /// Positions `object` of `kind` covers in each arena of that kind.
-    fn positions(p: &Pool, kind: Kind, object: usize) -> Vec<(usize, usize)> {
-        let chunk = p.chunk();
-        p.pooled()
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| a.kind == kind)
-            .flat_map(|(a, ar)| {
-                let lo = ar.object * object as u64;
-                ((lo / chunk) as usize..((lo + ar.object).div_ceil(chunk)) as usize).map(move |q| (a, q))
-            })
-            .collect()
-    }
-
-    fn land(&mut self, p: &Pool, plan: &Remap) {
-        for &(a, q) in &plan.unmap {
-            let c = self.at.remove(&(a, q)).expect("unmapping a mapped position");
-            assert!(self.free.insert(c), "chunk {c} freed twice");
-        }
-        for &(a, q, c) in &plan.map {
-            assert!(self.free.remove(&c), "chunk {c} mapped while in use");
-            assert!(self.at.insert((a, q), c).is_none(), "position ({a}, {q}) mapped twice");
-        }
-        for &(k, o) in &plan.unmade {
-            assert!(self.made.remove(&(k, o)), "unmaking {k:?} {o} that did not exist");
-        }
-        for &(k, o) in &plan.made {
-            assert!(self.made.insert((k, o)), "making {k:?} {o} twice");
-            for pos in Mapping::positions(p, k, o as usize) {
-                assert!(self.at.contains_key(&pos), "{k:?} {o} landed with position {pos:?} unmapped");
-            }
-        }
-        assert_eq!(self.at.len() + self.free.len(), self.chunks, "a chunk is free or at one position");
-        let count = |k: Kind| self.made.iter().filter(|(kk, _)| *kk == k).count();
-        assert_eq!((p.total(), p.slots()), (count(Kind::Page), count(Kind::Slot)));
-        self.landed += 1;
-    }
-
-    /// Every page and slot a live handle names exists and is whole.
-    fn covers(&self, p: &Pool, pages: &BTreeSet<i32>, slots: &BTreeSet<i32>) {
-        for &page in pages {
-            assert!(self.made.contains(&(Kind::Page, page)), "page {page} held but not made");
-            for pos in Mapping::positions(p, Kind::Page, page as usize) {
-                assert!(self.at.contains_key(&pos), "page {page} held with {pos:?} unmapped");
-            }
-        }
-        for &slot in slots {
-            assert!(self.made.contains(&(Kind::Slot, slot)), "slot {slot} held but not made");
-            for pos in Mapping::positions(p, Kind::Slot, slot as usize) {
-                assert!(self.at.contains_key(&pos), "slot {slot} held with {pos:?} unmapped");
-            }
-        }
-    }
 }
 
 /// The positions and slots of a device, each holding the stamp last
@@ -632,9 +473,8 @@ fn fill(dev: &mut Device, s: &mut Seq, upto: usize, stamp: &mut u32) {
 }
 
 /// Every position and slot a live handle names reads what its writer
-/// put there, is mapped whole, and the pool holds exactly what the
-/// handles name.
-fn check(dev: &Device, map: &Mapping, p: &Pool, seqs: &[Seq], cps: &[Held]) {
+/// put there, and the pool holds exactly what the handles name.
+fn check(dev: &Device, p: &Pool, seqs: &[Seq], cps: &[Held]) {
     let unit = p.unit() as usize;
     let (mut pages, mut slots) = (BTreeSet::new(), BTreeSet::new());
     for s in seqs {
@@ -660,7 +500,6 @@ fn check(dev: &Device, map: &Mapping, p: &Pool, seqs: &[Seq], cps: &[Held]) {
         pages.extend(ids);
     }
     assert_eq!((p.used(), p.slots_used()), (pages.len(), slots.len()));
-    map.covers(p, &pages, &slots);
 }
 
 /// Random leases, fills, checkpoints, restores, forks, retirements and
@@ -670,19 +509,9 @@ fn check(dev: &Device, map: &Mapping, p: &Pool, seqs: &[Seq], cps: &[Held]) {
 /// it held however far its sequence runs on. (A half-page checkpoint
 /// that shared the page its lease kept writing was the bug behind
 /// this rewrite.) With a recurrent state a checkpoint is the sequence
-/// as of now and restores at its own length only. The remaps planned
-/// along the way land into a model of the chunks: a chunk is free or
-/// at one position, and whatever a handle names is mapped whole.
-fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, first_slots: usize, seed: u64) {
-    let (p, first) = Pool::new(m, chunk, chunks, first_slots, None).unwrap();
-    let p = Arc::new(p);
-    let mut map = Mapping::new(chunks);
-    map.land(&p, &first);
-    let land = |map: &mut Mapping| {
-        let plan = p.take_pending().expect("a remap planned");
-        p.complete(plan.clone());
-        map.land(&p, &plan);
-    };
+/// as of now and restores at its own length only.
+fn handles_read_what_their_writer_wrote(m: &Manifest, pages: usize, slots: usize, seed: u64) {
+    let p = Arc::new(Pool::new(m, pages, slots).unwrap());
     let unit = p.unit() as usize;
     let max = p.max_seq_tokens();
     let stateful = p.has_slots();
@@ -695,16 +524,14 @@ fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, f
     let cut = |rand: &mut Rand, filled: usize| if stateful { filled } else { 1 + rand.next(filled) };
     for _ in 0..4000 {
         match rand.next(9) {
-            0 | 1 => match p.lease(1 + rand.next(max)) {
-                Ok(lease) => {
+            0 | 1 => {
+                if let Ok(lease) = p.lease(1 + rand.next(max)) {
                     let mut s = Seq { lease, content: Vec::new() };
                     let upto = rand.next(s.lease.tokens() + 1);
                     fill(&mut dev, &mut s, upto, &mut stamp);
                     seqs.push(s);
                 }
-                Err(Denied::Remapping) => land(&mut map),
-                Err(_) => {}
-            },
+            }
             2 if !seqs.is_empty() => {
                 let i = rand.next(seqs.len());
                 let s = &mut seqs[i];
@@ -718,13 +545,9 @@ fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, f
                     continue;
                 }
                 let len = cut(&mut rand, s.content.len());
-                match p.checkpoint(&mut s.lease, len) {
-                    Ok((cp, copies)) => {
-                        dev.copy(unit, &copies);
-                        cps.push(Held { cp, content: s.content[..len].to_vec() });
-                    }
-                    Err(Denied::Remapping) => land(&mut map),
-                    Err(_) => {}
+                if let Ok((cp, copies)) = p.checkpoint(&mut s.lease, len) {
+                    dev.copy(unit, &copies);
+                    cps.push(Held { cp, content: s.content[..len].to_vec() });
                 }
             }
             4 if !cps.is_empty() => {
@@ -738,16 +561,12 @@ fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, f
                 if len >= max {
                     continue;
                 }
-                match p.restore(&c.cp, len, len + 1 + rand.next(max - len)) {
-                    Ok((lease, copies)) => {
-                        dev.copy(unit, &copies);
-                        let mut s = Seq { lease, content: c.content[..len].to_vec() };
-                        let upto = len + rand.next(s.lease.tokens() - len + 1);
-                        fill(&mut dev, &mut s, upto, &mut stamp);
-                        seqs.push(s);
-                    }
-                    Err(Denied::Remapping) => land(&mut map),
-                    Err(_) => {}
+                if let Ok((lease, copies)) = p.restore(&c.cp, len, len + 1 + rand.next(max - len)) {
+                    dev.copy(unit, &copies);
+                    let mut s = Seq { lease, content: c.content[..len].to_vec() };
+                    let upto = len + rand.next(s.lease.tokens() - len + 1);
+                    fill(&mut dev, &mut s, upto, &mut stamp);
+                    seqs.push(s);
                 }
             }
             5 if !seqs.is_empty() => {
@@ -758,16 +577,12 @@ fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, f
                 }
                 let len = cut(&mut rand, filled);
                 let tokens = len + 1 + rand.next(max - len);
-                match p.fork(&mut seqs[i].lease, len, tokens) {
-                    Ok((lease, copies)) => {
-                        dev.copy(unit, &copies);
-                        let mut s = Seq { lease, content: seqs[i].content[..len].to_vec() };
-                        let upto = len + rand.next(s.lease.tokens() - len + 1);
-                        fill(&mut dev, &mut s, upto, &mut stamp);
-                        seqs.push(s);
-                    }
-                    Err(Denied::Remapping) => land(&mut map),
-                    Err(_) => {}
+                if let Ok((lease, copies)) = p.fork(&mut seqs[i].lease, len, tokens) {
+                    dev.copy(unit, &copies);
+                    let mut s = Seq { lease, content: seqs[i].content[..len].to_vec() };
+                    let upto = len + rand.next(s.lease.tokens() - len + 1);
+                    fill(&mut dev, &mut s, upto, &mut stamp);
+                    seqs.push(s);
                 }
             }
             6 if !seqs.is_empty() => {
@@ -787,36 +602,26 @@ fn handles_read_what_their_writer_wrote(m: &Manifest, chunk: u64, chunks: u32, f
             }
             _ => {}
         }
-        check(&dev, &map, &p, &seqs, &cps);
+        check(&dev, &p, &seqs, &cps);
     }
     drop((seqs, cps));
     assert_eq!((p.used(), p.slots_used()), (0, 0));
-    assert!(!stateful || map.landed > 1, "pages and slots never traded a chunk");
 }
 
 #[test]
 fn paged_handles_read_what_their_writer_wrote() {
     // 24 pages of 4 tokens, rows of 8.
-    handles_read_what_their_writer_wrote(&paged4(), 4, 24, 0, 0x9E37_79B9_7F4A_7C15);
+    handles_read_what_their_writer_wrote(&paged4(), 24, 0, 0x9E37_79B9_7F4A_7C15);
 }
 
 #[test]
 fn stateful_handles_read_what_their_writer_wrote() {
-    // 3 slots and 6 pages over 18 chunks: pages and slots trade chunks.
-    handles_read_what_their_writer_wrote(&hybrid4(), 4, 18, 3, 0x2545_F491_4F6C_DD1D);
+    // 3 slots and 6 pages: both run short.
+    handles_read_what_their_writer_wrote(&hybrid4(), 6, 3, 0x2545_F491_4F6C_DD1D);
 }
 
 #[test]
 fn hybrid_handles_read_what_their_writer_wrote() {
-    // 8-byte chunks, 26 of them: 3 slots of 24 bytes, 8 pages of 16, a
-    // spare chunk, so a page or a slot boundary can fall inside a chunk.
-    handles_read_what_their_writer_wrote(&hybrid(), 8, 26, 3, 0x1234_5678_9ABC_DEF1);
-}
-
-#[test]
-fn access_spans_merge_touching_grants_per_arena() {
-    let plan =
-        Remap { access: vec![(1, 4..6), (0, 0..2), (0, 1..3), (0, 3..4), (0, 6..7), (1, 2..4)], ..Remap::default() };
-    assert_eq!(plan.access_spans(), [(0, 0..4), (0, 6..7), (1, 2..6)]);
-    assert_eq!(Remap::default().access_spans(), []);
+    // 3 slots of 24 bytes, 8 pages of 16.
+    handles_read_what_their_writer_wrote(&hybrid(), 8, 3, 0x1234_5678_9ABC_DEF1);
 }

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use kern_pool::{Checkpoint, Denied, Evicted, Found, Hit, Host, Kept, Parked, Prefix, Tier};
 
-use common::{hybrid_pool4, land, pool4, Rand};
+use common::{hybrid4, hybrid_pool4, pool4, pool_of, Rand};
 
 fn table() -> Prefix<Checkpoint, Parked> {
     Prefix::new(4)
@@ -181,7 +181,8 @@ fn a_branch_is_its_own_entry() {
 
 #[test]
 fn a_stateful_entry_is_usable_at_its_length_only() {
-    let p = hybrid_pool4();
+    // Room for two retired entries beside slot 0, and their 7 pages.
+    let p = pool_of(&hybrid4(), 7, 3);
     let mut t = table();
     let l = p.lease(12).unwrap();
     t.insert(&toks(10), p.retire(l, 10));
@@ -201,7 +202,8 @@ fn a_stateful_entry_is_usable_at_its_length_only() {
 fn a_stateful_checkpoint_at_the_history_end_serves_a_turn_that_replaced_the_reply() {
     // A turn: 6 prompt tokens checkpointed mid-page before the reply
     // moves the state, then retired with 4 generated tokens after them.
-    let p = hybrid_pool4();
+    // Slot 0, the lease's, the checkpoint's and the next turn's.
+    let p = pool_of(&hybrid4(), 6, 4);
     let mut t = table();
     let mut l = p.lease(12).unwrap();
     let (cp, copies) = p.checkpoint(&mut l, 6).unwrap();
@@ -214,15 +216,7 @@ fn a_stateful_checkpoint_at_the_history_end_serves_a_turn_that_replaced_the_repl
     let h = t.lookup(&next).unwrap();
     assert_eq!((h.len, tier(&h), t.entries()), (6, Tier::Resident, 2));
     let cp = resident(&h).unwrap();
-    // The pool may plan a remap for this restore first: land it and ask again.
-    let restored = match p.restore(cp, h.len, 12) {
-        Err(Denied::Remapping) => {
-            land(&p);
-            p.restore(cp, h.len, 12)
-        }
-        r => r,
-    };
-    let (lease, copies) = restored.unwrap();
+    let (lease, copies) = p.restore(cp, h.len, 12).unwrap();
     assert_eq!((lease.prefix(), copies.pages.len(), copies.slot.is_some()), (6, 1, true));
     assert_eq!(t.lookup(&toks(11)).map(|h| h.len), Some(10));
 }

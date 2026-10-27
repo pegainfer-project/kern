@@ -154,18 +154,16 @@ every page has at most one writer. A token radix tree finds the longest
 checkpoint for a prompt; under pressure, checkpoints park in host memory and
 wake straight into a new lease.
 
-![kern-pool memory budget: a static split leaves a sixth request waiting while KV memory sits free; kern remaps free pages' physical chunks under the slot range and runs it](docs/figures/pool_budget.svg)
-
-**It keeps one budget for all state.** Every state reserves a virtual
-address range once, and one pool of physical chunks backs them all through
-CUDA VMM. Leasing and freeing touch only free lists, and a freed page stays
-a page. Only when slots run short while pages sit free, or the reverse, does
-the pool remap: the free pages' chunks are unmapped and mapped under the
-slot range. Kernels still see one contiguous array per state, so nothing is
-copied, no kernel changes, memory never fragments, and the same chunks can
-be exported to ranks on other trays. The manifest's `seqs` bound sizes one
-step's batch; how many sequences hold state is up to the budget, not a
-number fixed at startup.
+**Its pages and slots are fixed at load.** Every pooled state is one VMM
+allocation sized once from the capacity the caller names: so many tokens
+of pages and so many sequence slots. Leasing and freeing touch only free
+lists, and a lease short of a page or a slot waits (`Busy`) for the
+scheduler to make room by parking or dropping a kept prefix. Nothing is
+remapped, so a state's address never changes, the same allocation can be
+exported to ranks on other trays, and a prefill tier's mirror of a decode
+rank's pool is right for as long as the rank serves. The manifest's `seqs`
+bound sizes one step's batch; how many sequences hold state is the
+caller's capacity, not a number the manifest fixes.
 
 ### The harness
 

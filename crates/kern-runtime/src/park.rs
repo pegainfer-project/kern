@@ -247,10 +247,7 @@ impl Runtime {
         if len == 0 || len > p.tokens() || (len != p.tokens() && (p.has_slot() || !len.is_multiple_of(unit))) {
             bail!(Api, "waking {len} tokens of a parked checkpoint of {} ({p:?})", p.tokens());
         }
-        let (lease, plan) = match Arc::clone(host).restore(p, &self.pool, len, tokens) {
-            Ok(x) => x,
-            Err(d) => return self.denied(d),
-        };
+        let (lease, plan) = Arc::clone(host).restore(p, &self.pool, len, tokens)?;
         self.transfer(&self.xfer, &inward(&plan.pages), plan.slot.map(|(o, s)| (s, o)), false)?;
         Ok(Waking { lease: Some(lease), event: record(&self.xfer)? })
     }
@@ -310,18 +307,15 @@ impl Runtime {
         let Some(Block { host, .. }) = &self.host else {
             bail!(Api, "no host tier: reserve_host first");
         };
-        let (lease, plan) = match Arc::clone(host).restore(p, &self.pool, len, tokens) {
-            Ok(x) => x,
-            Err(d) => return self.denied(d),
-        };
+        let (lease, plan) = Arc::clone(host).restore(p, &self.pool, len, tokens)?;
         self.transfer(&self.stream, &inward(&plan.pages), plan.slot.map(|(o, s)| (s, o)), false)?;
         Ok((lease, plan))
     }
 
     /// Run a park another runtime's accounting decided on this one's
     /// states, on the compute stream in order, as [`Runtime::copy`] runs
-    /// its copies. That accounting knows which ids exist; this one only
-    /// refuses one past its arena or its block.
+    /// its copies. That accounting knows which ids are free; this one only
+    /// refuses one past its states or its block.
     pub fn copy_out(&mut self, plan: &Copies<i32, u64>) -> Result<()> {
         self.ctx.bind_to_thread()?;
         self.check_host(plan.pages.iter().copied(), plan.slot)?;
@@ -337,12 +331,12 @@ impl Runtime {
         self.transfer(&self.stream, &pages, slot, false)
     }
 
-    /// Refuse a (device, host) page or slot past the arena or the block.
+    /// Refuse a (device, host) page or slot past the states or the block.
     fn check_host(&self, mut pages: impl Iterator<Item = (i32, u64)>, slot: Option<(i32, u64)>) -> Result<()> {
         let Some(b) = &self.host else {
             bail!(Api, "no host tier: reserve_host first");
         };
-        let (pages_max, slots_max) = (self.pool.pages_max() as i32, self.provision.seq_slots as i32);
+        let (pages_max, slots_max) = (self.pool.pages() as i32, self.provision.seq_slots as i32);
         if let Some((p, o)) = pages.find(|&(p, o)| !(0..pages_max).contains(&p) || o >= b.pages) {
             bail!(
                 Api,

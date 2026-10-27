@@ -202,15 +202,15 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         return launch(load, served_name, model_path, o.port, samples, parser);
     }
 
-    // Every sequence of a group batch holds a token slot on each of its
+    // Every sequence of a group batch holds a state slot on each of its
     // `t` ranks, and each rank its pad. A replicated group's batch is
     // `--max-seqs` rows on every member, not `t` members' worth.
     let replicated = Protocol::check(&manifest)?.shards.positions.is_some();
-    let t = if replicated { 1 } else { manifest.group_size("tp").unwrap_or(1) as usize };
+    let t = if replicated { 1 } else { manifest.group_size("tp").unwrap_or(1) as u64 };
     let load = executor::Load {
         gpu: o.gpu,
         kernels: art.kernels.clone(),
-        capacity: Capacity { tokens: o.capacity, seqs: ((o.max_seqs + 1) * t) as u64, landings: 0 },
+        capacity: Capacity { tokens: o.capacity, slots: slots_for(o.max_seqs) * t, landings: 0 },
         eager: o.eager,
     };
     if let Some(head) = &o.head {
@@ -249,6 +249,16 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         Ok((sched, facts))
     };
     launch(load, served_name, model_path, o.port, samples, parser)
+}
+
+/// State slots a rank holds for `seats` running sequences: the pad's and
+/// one per seat. A slot is a running request's resource; a checkpoint a
+/// request's end leaves for its next turn keeps one only while no seat
+/// wants it. The slots are fixed at load; past them a lease waits for
+/// room (`Busy`), and the scheduler makes it by parking or dropping a
+/// kept prefix.
+pub(crate) fn slots_for(seats: usize) -> u64 {
+    seats as u64 + 1
 }
 
 /// Logs the verified manifest before any GPU work: buffer kinds, module count, and each program's calls.

@@ -36,10 +36,9 @@
 //! head's did. Stream order is all that orders them: a park's pages go
 //! back to the pool at once, since whatever writes them next is a later
 //! item; a wake's lease is fed at once, since whatever reads it is too. A
-//! stage keeps no accounting and cannot follow a remap, so the head's pool
-//! never makes one: its pages all exist from load (the capacity bounds
-//! them), and a state slot is taken only while one is free, room made for
-//! it otherwise.
+//! stage keeps no accounting: its pages and slots are the head's, all of
+//! them there from load, and a state slot is taken only while one is
+//! free, room made for it otherwise.
 
 use kern_pool::{Checkpoint, Copies, Denied, Evicted, Found, Hit, Lease, Parked, Prefix, Tier};
 use kern_runtime::{Error, Runtime};
@@ -58,9 +57,6 @@ pub(super) trait Lessor {
     fn lease_from(&mut self, cp: &Checkpoint, len: usize, tokens: usize) -> Result<(Lease, Copies), Error>;
     fn checkpoint(&mut self, lease: &mut Lease, len: usize) -> Result<(Checkpoint, Copies), Error>;
     fn retire(&mut self, lease: Lease, len: usize) -> Checkpoint;
-    /// Whether a lease or a checkpoint can have a state slot without a
-    /// remap: always, for a manifest without per-sequence states.
-    fn slot_free(&self) -> bool;
     /// Whether there is a host tier to park in.
     fn hosts(&self) -> bool;
     fn park(&mut self, cp: Checkpoint) -> Result<Parking, Error>;
@@ -82,10 +78,6 @@ impl Lessor for Runtime {
 
     fn retire(&mut self, lease: Lease, len: usize) -> Checkpoint {
         Runtime::retire(self, lease, len)
-    }
-
-    fn slot_free(&self) -> bool {
-        !self.has_seq_state() || self.seq_slots() > self.seq_slots_used() + 1
     }
 
     fn hosts(&self) -> bool {
@@ -185,7 +177,6 @@ impl Cache {
         loop {
             // Room made last time may have parked or dropped the entry hit then.
             let got = match self.prefix.lookup(ids) {
-                _ if !rt.slot_free() => Err(Error::Denied(Denied::Busy)),
                 Some(Hit { len, found: Found::Resident(cp) }) => {
                     rt.lease_from(&cp, len, ids.len()).map(|(l, c)| (l, Some(Act::Copy(c.into())), Tier::Resident))
                 }
@@ -246,11 +237,7 @@ impl Cache {
 
     fn checkpoint(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<bool, Error> {
         loop {
-            let got = match rt.slot_free() {
-                true => rt.checkpoint(lease, key.len()),
-                false => Err(Error::Denied(Denied::Busy)),
-            };
-            match got {
+            match rt.checkpoint(lease, key.len()) {
                 Ok((cp, copies)) => {
                     self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
                     self.prefix.insert(key, cp);
@@ -331,10 +318,6 @@ mod tests {
             self.pool.retire(lease, len)
         }
 
-        fn slot_free(&self) -> bool {
-            !self.pool.has_slots() || self.pool.slots() > self.pool.slots_used() + 1
-        }
-
         fn hosts(&self) -> bool {
             self.host.is_some()
         }
@@ -387,13 +370,10 @@ mod tests {
         .expect("fixture parses")
     }
 
-    /// `pages` pages of 4 tokens over 4-byte chunks; with a recurrent
-    /// state, `slots` slots (slot 0 among them) out of 8-byte slots and as
-    /// many chunks again spare, which a remap could carve into slots.
-    fn pool(pages: u32, slots: u32) -> Bare {
-        let m = manifest(slots > 0);
-        let chunks = pages + 2 * slots + 2 * slots;
-        Bare { pool: Arc::new(Pool::new(&m, 4, chunks, slots as usize, Some(pages as u64 * 4)).unwrap().0), host: None }
+    /// `pages` pages of 4 tokens and, with a recurrent state, `slots`
+    /// slots (slot 0 among them).
+    fn pool(pages: usize, slots: usize) -> Bare {
+        Bare { pool: Arc::new(Pool::new(&manifest(slots > 0), pages, slots).unwrap()), host: None }
     }
 
     fn prompt(seed: i64, n: usize) -> Vec<i64> {
@@ -448,8 +428,8 @@ mod tests {
     }
 
     #[test]
-    fn a_recurrent_state_is_kept_where_the_history_ends_and_never_remapped() {
-        // Slot 0 and two slots to lease or keep, and the chunks for more.
+    fn a_recurrent_state_is_kept_where_the_history_ends_and_a_full_pool_waits() {
+        // Slot 0 and two slots to lease or keep.
         let mut rt = pool(16, 3);
         let mut c = Cache::new(4);
         let p1 = prompt(1, 10);
@@ -466,14 +446,13 @@ mod tests {
         c.retire(&mut rt, l0, &p0);
         // The next turn parts from p1 where its history ends and continues
         // from that entry, which the lookup makes the warmer: its slot comes
-        // from dropping the other conversation, not from carving a new one.
+        // from dropping the other conversation.
         let p2: Vec<i64> = p1[..6].iter().copied().chain(prompt(2, 5)).collect();
         let (l2, start) = c.lease(&mut rt, &p2).unwrap();
         assert_eq!((start, l2.seq_slot(), copies(&mut c).1), (6, Some(1), vec![(2, 1)]));
         assert_eq!(c.take_counts(), Counts { hits: 1, hit_tokens: 6, kept: 1, evictions: 1, ..Counts::default() });
-        assert_eq!((rt.pool.remapping(), rt.pool.remapped()), (false, false));
-        // Where the pool alone would have carved one.
-        assert_eq!(Pool::lease(&rt.pool, 4).err(), Some(Denied::Remapping));
+        // Both slots held: the pool alone has nothing to lease with.
+        assert_eq!(Pool::lease(&rt.pool, 4).err(), Some(Denied::Busy));
     }
 
     #[test]
@@ -612,7 +591,6 @@ mod tests {
                         m.pages.iter().for_each(|&(o, p)| self.pages[p as usize] = self.host_pages[o as usize].clone());
                         m.slot.iter().for_each(|&(o, s)| self.slots[s as usize] = self.host_slots[o as usize].clone());
                     }
-                    Act::Remap(_) => panic!("the head's pool never remaps"),
                 }
             }
         }
@@ -660,7 +638,7 @@ mod tests {
             let slots = if rec { 6 } else { 0 };
             let mut rt = pool(28, slots);
             rt.host = (host != (0, 0)).then(|| Arc::new(Host::new(host.0, host.1)));
-            let mut st = Stage::new(4, rt.pool.pages_max(), slots as usize, host);
+            let mut st = Stage::new(4, rt.pool.pages(), slots, host);
             let mut c = Cache::new(4);
             let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ seed);
             // Every turn so far of each conversation, the newest last.

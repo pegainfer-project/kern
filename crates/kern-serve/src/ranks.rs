@@ -2,19 +2,18 @@
 //! tier) per GPU, decided here, run by the ranks' own processes.
 //!
 //! Every GPU is one process. The head holds what each rank's runtime would
-//! otherwise decide for itself — its pages and slots, its remaps, its
-//! parked checkpoints — in a pool built from the rank's own budget, so the
+//! otherwise decide for itself — its pages and slots, its parked
+//! checkpoints — in a pool built from the rank's own budget, so the
 //! pool here starts where the rank's did and makes the decisions it would
 //! make. Nothing in this module touches a device or a socket: a decision
 //! comes back as [`Act`]s queued on the rank in the order they were made,
 //! and [`Ranks::orders`] hands each rank its queue with the step's
 //! [`Item`]. The rank runs them in that order on its compute stream ahead
 //! of the item, so a page freed here and leased again is written there in
-//! the same order. What the rank does asynchronously — a remap on its
-//! remap thread, a host transfer on its transfer stream — it reports in its
-//! [`Answer`], and [`Ranks::heard`] lands it here: a remap's pages become
-//! leasable, a parked checkpoint's device pages return, a woken row comes
-//! up.
+//! the same order. What the rank does asynchronously — a host transfer on
+//! its transfer stream — it reports in its [`Answer`], and
+//! [`Ranks::heard`] lands it here: a parked checkpoint's device pages
+//! return, a woken row comes up.
 //!
 //! # Lockstep
 //!
@@ -95,7 +94,7 @@ use anyhow::{bail, ensure, Result};
 use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_pool::{Checkpoint, Copies, Denied, Host, Interleave, Kept, Lease, Parked, Pool, Remap};
+use kern_pool::{Checkpoint, Copies, Denied, Host, Interleave, Kept, Lease, Parked, Pool};
 use pegainfer_frontend::sampler::SamplingParams;
 use serde::{Deserialize, Serialize};
 
@@ -154,34 +153,6 @@ impl Groups {
     }
 }
 
-/// A remap as a rank's runtime runs it: chunks off, chunks on, access
-/// over whole objects. What it makes and unmakes is the head's pool's.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mapping {
-    pub unmap: Vec<(usize, usize)>,
-    pub map: Vec<(usize, usize, u32)>,
-    pub access: Vec<(usize, usize, usize)>,
-}
-
-impl Mapping {
-    pub(crate) fn of(r: &Remap) -> Mapping {
-        Mapping {
-            unmap: r.unmap.clone(),
-            map: r.map.clone(),
-            access: r.access.iter().map(|(a, s)| (*a, s.start, s.end)).collect(),
-        }
-    }
-
-    pub fn remap(self) -> Remap {
-        Remap {
-            unmap: self.unmap,
-            map: self.map,
-            access: self.access.into_iter().map(|(a, s, e)| (a, s..e)).collect(),
-            ..Remap::default()
-        }
-    }
-}
-
 /// [`Copies`] on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Moves<S, D> {
@@ -204,8 +175,6 @@ impl<S, D> From<Moves<S, D>> for Copies<S, D> {
 /// One decision of a rank's pool, as the rank runs it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Act {
-    /// Hand the remap thread this plan; report it in a later answer.
-    Remap(Mapping),
     /// Zero a fresh lease's slot in every per-sequence state.
     Zero(i32),
     /// Pages and a slot within the device pool.
@@ -218,8 +187,7 @@ pub enum Act {
 
 /// What a rank is sent: its acts in decision order, then the step's item
 /// when there is one, without the tables the rank already holds. `wait`:
-/// block until the remap and the host transfers in flight have landed
-/// before answering.
+/// block until the host transfers in flight have landed before answering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
     pub acts: Vec<Act>,
@@ -228,13 +196,12 @@ pub struct Order {
 }
 
 /// A rank's reply to an [`Order`], once its device is done with the item:
-/// the item's `tokens` and `count` outputs (empty without), how many remaps
-/// landed since its last answer and how many host transfers in all.
+/// the item's `tokens` and `count` outputs (empty without) and how many
+/// host transfers have landed in all.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answer {
     pub tokens: Vec<i64>,
     pub counts: Vec<i64>,
-    pub remaps: u64,
     pub landed: u64,
 }
 
@@ -346,9 +313,6 @@ struct Account {
     pad: Lease,
     /// Decisions not yet sent, in the order they were made.
     acts: Vec<Act>,
-    /// The remap sent and not yet landed.
-    remap: Option<Remap>,
-    remaps: u64,
     /// Host transfers sent and landed; a transfer's number is `sent` after it.
     sent: u64,
     landed: u64,
@@ -361,7 +325,7 @@ struct Account {
 
 impl Account {
     fn busy(&self) -> bool {
-        self.pool.remapping() || self.sent > self.landed
+        self.sent > self.landed
     }
 
     fn transfer(&mut self, act: Act) -> u64 {
@@ -411,7 +375,7 @@ impl Ranks {
             .map(|(q, pool)| {
                 let pool = Arc::new(pool);
                 let pad = pool.lease(1).map_err(|d| anyhow::anyhow!("rank {q}: no page for the padding rows: {d}"))?;
-                if pool.used() == pool.total() {
+                if pool.used() == pool.pages() {
                     bail!("rank {q}: the pool holds one page; nothing left to serve from");
                 }
                 let tier = (host != (0, 0)).then(|| Arc::new(Host::new(host.0, host.1)));
@@ -422,8 +386,6 @@ impl Ranks {
                     host_pages: host.0,
                     pad,
                     acts,
-                    remap: None,
-                    remaps: 0,
                     sent: 0,
                     landed: 0,
                     parking: Vec::new(),
@@ -476,7 +438,7 @@ impl Ranks {
 
     /// Pages rows can hold, every rank together (the pads excluded).
     pub fn pages_total(&self) -> usize {
-        self.accounts.iter().map(|a| a.pool.total() - a.pad.pages()).sum()
+        self.accounts.iter().map(|a| a.pool.pages() - a.pad.pages()).sum()
     }
 
     /// Longest sequence a row can hold on any rank: what its page table
@@ -487,7 +449,7 @@ impl Ranks {
         let local = self
             .accounts
             .iter()
-            .map(|a| a.pool.max_seq_tokens().min((a.pool.pages_max() - a.pad.pages()) * page))
+            .map(|a| a.pool.max_seq_tokens().min((a.pool.pages() - a.pad.pages()) * page))
             .min()
             .unwrap_or(0);
         local * self.dealt.map_or(1, |il| il.members() as usize)
@@ -497,8 +459,8 @@ impl Ranks {
         self.accounts[0].pool.has_slots()
     }
 
-    /// (slots that exist, slots held by rows) over every rank; (0, 0)
-    /// without per-sequence states.
+    /// (slots, slots held by rows) over every rank; (0, 0) without
+    /// per-sequence states.
     pub fn seq_slots(&self) -> (usize, usize) {
         if !self.has_seq_state() {
             return (0, 0);
@@ -507,28 +469,12 @@ impl Ranks {
         (all, self.accounts.iter().map(|a| a.pool.slots_used()).sum::<usize>() - self.groups.n)
     }
 
-    /// Remaps planned.
-    pub fn remaps(&self) -> u64 {
-        self.accounts.iter().map(|a| a.remaps).sum()
-    }
-
-    /// Remaps planned on rank `q`: its placement moves only when this does.
-    pub fn remaps_of(&self, q: usize) -> u64 {
-        self.accounts[q].remaps
-    }
-
-    /// Where rank `q`'s pool puts every page and slot, as decided: what a
-    /// mirror of it maps to reach the objects it holds.
-    pub fn placement(&self, q: usize) -> kern_pool::Placement {
-        self.accounts[q].pool.placement()
-    }
-
     /// (host pages used, host pages) of the host tiers together, when there are any.
     pub fn host_tier(&self) -> Option<(u64, u64)> {
         self.accounts.iter().try_fold((0, 0), |(u, r), a| a.host.as_ref().map(|h| (u + h.used(), r + a.host_pages)))
     }
 
-    /// Whether a remap or a host transfer is still on its way on any rank.
+    /// Whether a host transfer is still on its way on any rank.
     pub fn busy(&self) -> bool {
         self.accounts.iter().any(Account::busy)
     }
@@ -708,37 +654,26 @@ impl Ranks {
 
     // ---- orders.
 
-    /// Every rank's order: its queued acts, a remap its pool has pending,
-    /// and its part of the step (`items[q]`, from [`Staged::items`]).
-    /// `wait` asks every rank with something in flight to wait for it.
+    /// Every rank's order: its queued acts and its part of the step
+    /// (`items[q]`, from [`Staged::items`]). `wait` asks every rank with
+    /// something in flight to wait for it.
     pub fn orders(&mut self, items: Option<Vec<Item>>, wait: bool) -> Vec<Order> {
         let mut items = items.map(Vec::into_iter);
         let p = &self.protocol;
         self.accounts
             .iter_mut()
             .map(|a| {
-                if let Some(plan) = a.pool.take_pending() {
-                    a.acts.push(Act::Remap(Mapping::of(&plan)));
-                    a.remap = Some(plan);
-                    a.remaps += 1;
-                }
                 let item = items.as_mut().and_then(Iterator::next).map(|i| elide(p, &mut a.held, i));
                 Order { acts: std::mem::take(&mut a.acts), item, wait: wait && a.busy() }
             })
             .collect()
     }
 
-    /// What the ranks answered, in rank order: the remaps they landed are
-    /// complete, the parked checkpoints whose copies landed let go of
-    /// their device pages.
+    /// What the ranks answered, in rank order: the parked checkpoints
+    /// whose copies landed let go of their device pages.
     pub fn heard(&mut self, answers: &[Answer]) -> Result<()> {
         ensure!(answers.len() == self.groups.n, "{} answers from {} ranks", answers.len(), self.groups.n);
         for (q, (a, ans)) in self.accounts.iter_mut().zip(answers).enumerate() {
-            match (ans.remaps, a.remap.take()) {
-                (0, r) => a.remap = r,
-                (1, Some(plan)) => a.pool.complete(plan),
-                (k, r) => bail!("rank {q} landed {k} remaps, {} in flight", r.is_some() as u8),
-            }
             if ans.landed < a.landed || ans.landed > a.sent {
                 bail!(
                     "rank {q} reports {} host transfers landed, {} sent and {} landed before",

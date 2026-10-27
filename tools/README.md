@@ -33,8 +33,8 @@ Kimi-K3 的生成器、核源码、harness 与 manifest 在
 | `trtllm_fmha_abi.py` | TensorRT-LLM gen 的 ragged context FMHA（FlashInfer 的 cubin，索引族 `trtllm_fmha_ctx_h192_v128`）作为 kern op 的数据：`bytes<1344>` 的 `KernelParams` pack（四个 tensormap + 指针 + 标量，从 kernel-capture 提出，见 k3-kernel-abi.md K13） |
 | `gen_trtllm_fmha_probe.py` | 只含 `fmha` 一个 op 的 manifest，`program_io` 喂 `tools/trtllm-fmha/probe.py` 的 dump 做逐位门禁（K13） |
 | `kernels/pick.py` | 把 `kern bench` 选出的变体写进索引的 `[[pick]]`，report 进 blob store |
-| `vmm_bench.py` | CUDA VMM 块池的代价（roadmap K1b）：`cuMemMap` / `cuMemSetAccess` / `cuMemUnmap` 每块延迟，拼一页 KV / 一个 state slot / 一份 K3 state 的总耗时与首次访问，以及 map/unmap 进行时同卡带宽循环的抖动；只用 driver API（ctypes），不用编译，`python3 tools/vmm_bench.py <gpu>` |
-| `crates/kern-run/examples/agentx_replay.rs` | K1 的 host 门禁：把 AgentX（Claude Code）trace（HF `semianalysisai/cc-traces-weka-062126`）按时间回放进 `Pool` + `Prefix`（只有页号，不碰 GPU），报命中率 / extend 分位 / 淘汰数 / remap 数与 slot 峰值；`--unit` 页大小、`--kv-bytes` 每 token 字节、`--state <每 slot 字节>` 带循环状态（只在请求结束留 checkpoint）、`--budget-gib` 页与 slot 共用的预算（或 `--capacity` token 数 + `--slots` 起始 slot 数）、`--concurrency` |
+| `vmm_bench.py` | （历史，K1b 的块池 2026-10-27 已删）CUDA VMM 块池的代价：`cuMemMap` / `cuMemSetAccess` / `cuMemUnmap` 每块延迟，拼一页 KV / 一个 state slot / 一份 K3 state 的总耗时与首次访问，以及 map/unmap 进行时同卡带宽循环的抖动；只用 driver API（ctypes），不用编译，`python3 tools/vmm_bench.py <gpu>` |
+| `crates/kern-run/examples/agentx_replay.rs` | K1 的 host 门禁：把 AgentX（Claude Code）trace（HF `semianalysisai/cc-traces-weka-062126`）按时间回放进 `Pool` + `Prefix`（只有页号，不碰 GPU），报命中率 / extend 分位 / 淘汰数与 slot 峰值；`--unit` 页大小、`--kv-bytes` 每 token 字节、`--state <每 slot 字节>` 带循环状态（只在请求结束留 checkpoint）、`--slots` slot 数与 `--budget-gib` 它们之外留给页的预算（或 `--capacity` 页的 token 数）、`--concurrency` |
 
 支撑件：
 

@@ -290,7 +290,7 @@ fn execute(o: Opts) -> Result<()> {
     // paged state takes the runtime's fit).
     let capacity = o.capacity.or_else(|| kern_runtime::seq_capacity(&verified)).map(|tokens| Capacity {
         tokens: Some(tokens),
-        seqs: 1,
+        slots: 1,
         landings: 0,
     });
     let mut rt = Runtime::load(&verified, o.inputs.kernels.as_deref(), o.inputs.gpu, capacity, None)?;

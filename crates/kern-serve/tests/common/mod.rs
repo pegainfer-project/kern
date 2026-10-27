@@ -12,22 +12,14 @@ use kern_serve::ranks::{Groups, Ranks};
 /// positions a member), and a 24-byte recurrent slot a member, its heads'
 /// segments scaled to the group.
 pub fn dealt(w: usize) -> Manifest {
-    dealt_with(w, 24)
-}
-
-/// [`dealt`] with a recurrent slot of `slot` bytes a member, a multiple of
-/// 6: its heads' segments one row of two thirds of it, two of a sixth.
-pub fn dealt_with(w: usize, slot: u64) -> Manifest {
     let json = include_str!("../../../kern-manifest/tests/fixtures/dealt.json")
         .replace("\"tp\": 4", &format!("\"tp\": {w}"))
-        .replace("\"bytes_per_seq\": 24", &format!("\"bytes_per_seq\": {slot}"))
-        .replace("[[1, 64], [2, 16]]", &format!("[[1, {}], [2, {}]]", slot * 2 / 3 * w as u64, slot / 6 * w as u64));
+        .replace("[[1, 64], [2, 16]]", &format!("[[1, {}], [2, {}]]", 16 * w, 4 * w));
     Manifest::from_json(&json).unwrap()
 }
 
 /// `groups` replicated groups of `w`, every member's pool `slots` slots
-/// (the null one and the pad's among them) and the rest of 128 chunks of
-/// 256 bytes as pages.
+/// (the null one and the pad's among them) and 128 pages.
 pub fn replicated_with(w: usize, groups: usize, slots: usize) -> Ranks {
     replicated_of(dealt(w), w, groups, slots)
 }
@@ -36,7 +28,7 @@ pub fn replicated_with(w: usize, groups: usize, slots: usize) -> Ranks {
 /// [`replicated_with`]'s.
 pub fn replicated_of(m: Manifest, w: usize, groups: usize, slots: usize) -> Ranks {
     let p = Protocol::check(&verify(m.clone()).unwrap()).unwrap();
-    let pools = (0..w * groups).map(|_| Pool::new(&m, 256, 128, slots, None).unwrap().0).collect();
+    let pools = (0..w * groups).map(|_| Pool::new(&m, 128, slots).unwrap()).collect();
     Ranks::new(p, Groups::new(w * groups, w).unwrap(), pools, (0, 0)).unwrap()
 }
 

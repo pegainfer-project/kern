@@ -41,7 +41,8 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
     ensure!(cut.stage > 0, "stage 0 is the head; it takes `--listen`");
     let last = cut.stage + 1 == cut.stages;
     let t0 = Instant::now();
-    let capacity = Capacity { tokens: o.capacity, seqs: (o.max_seqs + 1) as u64, landings: LANDINGS as usize };
+    // The head's slot ids are this stage's: the same slots, by the same rule.
+    let capacity = Capacity { tokens: o.capacity, slots: crate::slots_for(o.max_seqs), landings: LANDINGS as usize };
     let mut rt = Runtime::load(&m, o.kernels.as_deref(), o.gpu, Some(capacity), None)?;
     rt.set_eager(o.eager);
     weights.bind(&mut rt)?;
@@ -128,11 +129,6 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
                 flow.pushed(&rt, push.req)?;
                 continue;
             }
-            super::Job::Place { tier, rank, epoch, placement } => {
-                let m = mirrors.get_mut(tier).with_context(|| format!("a placement of decode tier {tier}, of none"))?;
-                m.place(&rt, rank, epoch, &placement)?;
-                continue;
-            }
         };
         let vars: Vars = item.vars.into_iter().filter(|(k, _)| rt.manifest.vars.contains_key(k)).collect();
         // The acts, fills and tables are stream-ordered behind the item
@@ -161,7 +157,7 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
 
 /// Run one of the head's acts on this stage's states, the kinds it
 /// `holds` (pages, slots) only: a stage without paged or per-sequence
-/// state has no arena for the head's ids of that kind.
+/// state has nothing the head's ids of that kind name.
 fn act(rt: &mut Runtime, act: Act, holds: (bool, bool)) -> Result<()> {
     fn held<S, D>(m: Moves<S, D>, holds: (bool, bool)) -> Copies<S, D> {
         let pages = if holds.0 { m.pages } else { Vec::new() };
@@ -176,7 +172,6 @@ fn act(rt: &mut Runtime, act: Act, holds: (bool, bool)) -> Result<()> {
         }
         Act::Park(m) => rt.copy_out(&held(m, holds))?,
         Act::Wake(m) => rt.copy_in(&held(m, holds))?,
-        Act::Remap(_) => bail!("the head sent a remap, which its pool never makes"),
     }
     Ok(())
 }

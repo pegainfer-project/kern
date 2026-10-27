@@ -2,10 +2,8 @@
 //!
 //! A `Reserve` adopts a row ([`Ranks::adopt`]: a lease on every member,
 //! nothing zeroed, since the push writes the slot whole and a zero landing
-//! after it would clear it) and grants it, each seat naming its rank's
-//! placement epoch; a seat's rank whose placement moved since P was last
-//! told is told first (`Placed`). A reserve that finds no room is `Busy`
-//! and owes a `Room` once a seat is freed or a remap lands.
+//! after it would clear it) and grants it. A reserve that finds no room
+//! is `Busy` and owes a `Room` once a seat is freed.
 //! A seat is freed only by `Abort` or by finishing, and P sends the first
 //! only while nothing pushes into it (`handoff.rs`), so a seat is never
 //! leased again under a push. A `Start` moves a seat into the running batch
@@ -19,7 +17,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 use kern_manifest::protocol::{Rows, Sampling};
-use kern_pool::{Denied, Placement};
+use kern_pool::Denied;
 
 use super::{Ask, Load, Pools, Refusal, Req, Seat, Shape, Tell};
 use crate::ranks::{Answer, Cell, Order, Ranks, Row};
@@ -49,8 +47,6 @@ pub struct Decoder<E> {
     running: Vec<Seq>,
     /// A `Busy` was told and no `Room` since.
     owed: bool,
-    /// Each rank's placement as P was last told, and its epoch.
-    told: Vec<(u64, Placement)>,
 }
 
 impl<E: Run> Decoder<E> {
@@ -62,8 +58,7 @@ impl<E: Run> Decoder<E> {
             bail!("no program takes one sequence of one row: nothing to decode with");
         }
         let cap = max_seqs.clamp(1, ranks.seqs_max()).min(p.max_groups(Rows::Const(1)) as usize).max(1);
-        let told = (0..ranks.groups().ranks()).map(|q| (0, ranks.placement(q))).collect();
-        Ok(Decoder { ranks, exec, cap, reserved: BTreeMap::new(), running: Vec::new(), owed: false, told })
+        Ok(Decoder { ranks, exec, cap, reserved: BTreeMap::new(), running: Vec::new(), owed: false })
     }
 
     /// What runs the orders.
@@ -101,13 +96,11 @@ impl<E: Run> Decoder<E> {
 
     /// What a prefill head is told on connecting: the pools behind
     /// `handles` (every rank's `PoolHandle`, hex) holding `states` (the
-    /// manifest's [`shapes`](super::shapes)), their placements at epoch 0,
-    /// and the states' shards.
+    /// manifest's [`shapes`](super::shapes)), and the states' shards.
     pub fn pools(&self, handles: Vec<String>, states: BTreeMap<String, Shape>) -> Pools {
         let (r, p) = (&self.ranks, self.ranks.protocol());
         Pools {
             handles,
-            placements: self.told.iter().map(|(_, p)| hex::encode(p.to_bytes())).collect(),
             states,
             group: r.groups().size(),
             dealt: r.interleave().is_some(),
@@ -159,7 +152,7 @@ impl<E: Run> Decoder<E> {
         let got = self.ranks.adopt(tokens, |q| Some(held[q.index()]).filter(|&n| n < cap));
         let row = match got {
             Ok(row) => row,
-            Err(Denied::Busy | Denied::Remapping) => {
+            Err(Denied::Busy) => {
                 self.owed = true;
                 return Ok(vec![Tell::Busy { req }]);
             }
@@ -170,21 +163,14 @@ impl<E: Run> Decoder<E> {
             Err(d @ Denied::HostFull) => bail!("an adopt denied {d}"),
         };
         let first = self.ranks.groups().members(row.owner().index()).start;
-        let mut tells = Vec::new();
-        let mut seats = Vec::with_capacity(row.leases().len());
-        for (m, l) in row.leases().iter().enumerate() {
-            let q = first + m;
-            let now = self.ranks.placement(q);
-            if now != self.told[q].1 {
-                let epoch = self.told[q].0 + 1;
-                tells.push(Tell::Placed { rank: q, epoch, placement: hex::encode(now.to_bytes()) });
-                self.told[q] = (epoch, now);
-            }
-            seats.push(Seat { rank: q, pages: l.page_ids().to_vec(), slot: l.seq_slot(), epoch: self.told[q].0 });
-        }
+        let seats = row
+            .leases()
+            .iter()
+            .enumerate()
+            .map(|(m, l)| Seat { rank: first + m, pages: l.page_ids().to_vec(), slot: l.seq_slot() })
+            .collect();
         self.reserved.insert(req, (row, tokens));
-        tells.push(Tell::Grant { req, seats, load: self.load() });
-        Ok(tells)
+        Ok(vec![Tell::Grant { req, seats, load: self.load() }])
     }
 
     /// A `Room` owed and room made.
@@ -199,17 +185,16 @@ impl<E: Run> Decoder<E> {
     }
 
     /// One step: every running row one token, or with none running, the
-    /// ranks polled for what is still landing.
+    /// ranks' queued acts sent (a freed row leaves none; the pads' zeroing
+    /// at the start does).
     pub fn step(&mut self) -> Result<Vec<Tell>> {
-        let was = self.ranks.busy();
         if self.running.is_empty() {
             if self.ranks.outstanding() {
                 let orders = self.ranks.orders(None, false);
                 let answers = self.exec.run(orders)?;
                 self.ranks.heard(&answers)?;
             }
-            let landed = was && !self.ranks.busy();
-            return Ok(self.room(landed));
+            return Ok(Vec::new());
         }
         let t0 = std::time::Instant::now();
         let cells: Vec<Cell> = self
@@ -247,7 +232,7 @@ impl<E: Run> Decoder<E> {
         }
         let before = self.running.len();
         self.running.retain(|s| s.left > 0);
-        let made = self.running.len() < before || (was && !self.ranks.busy());
+        let made = self.running.len() < before;
         let mut tells = vec![Tell::Tokens { step, load: self.load() }];
         tells.extend(self.room(made));
         Ok(tells)

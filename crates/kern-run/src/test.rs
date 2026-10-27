@@ -384,7 +384,7 @@ fn load_side(
     // states need. Sizing them for the manifest's whole batch made every
     // whole-state read of a span copy 128 slots: on qwen3.8-27b (154 MB of
     // GDN state per slot) a run grew past 700 GB of host memory.
-    let capacity = Capacity { tokens: Some(capacity), seqs: 1, landings: 0 };
+    let capacity = Capacity { tokens: Some(capacity), slots: 1, landings: 0 };
     let rts = crate::load_ranks(m, &o.inputs, &o.gpus, capacity, host_weights, resident)?;
     Ok(Ranks { ranks: rts.into_iter().map(Caller::new).collect::<Result<_>>()? })
 }
