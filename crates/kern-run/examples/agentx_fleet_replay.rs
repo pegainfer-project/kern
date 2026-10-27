@@ -13,16 +13,20 @@
 //! put the moment a prefill seals it (at admission for the prompt, at the
 //! end for the output), landing `--put-ms` later; a recurrent state is put
 //! at the request's end as one object at its exact length (the slot and
-//! the tail past the last whole block), which the session's next turn
-//! looks for where the frontend says its history ends. The pool is one
-//! LRU of `--pool-gib`. A prompt starts from the longer of its local hit
-//! and the pool's landed prefix, fetching the pool's part into a fresh
-//! lease; a key present but not landed yet ends the pool's prefix there
-//! and is counted as missed in flight.
+//! the tail past the last whole block). A prompt with a state looks for
+//! the session's marks (where its earlier turns ended) newest first,
+//! skipping the ones it has diverged from; the device index is asked
+//! first, the pool for a longer mark it has landed, fetched into a fresh
+//! lease. A paged-only prompt takes the longer of its local hit and the
+//! pool's landed prefix of whole blocks. The pool is one LRU of
+//! `--pool-gib`.
 //!
-//! Reported: hit rate split into local and pool, the tokens missed in
-//! flight, put and get bytes with the peak and p99 of the busy seconds,
-//! pool evictions, and the per-instance device tallies.
+//! Reported: hit rate split into local and pool, and every input token
+//! not hit by its cause (the session's first turn, its last turn still
+//! running, the prompt diverged from every mark, the mark evicted from
+//! both tiers, its put in flight, a block under it evicted, or the tail
+//! past a hit), put and get bytes with the peak and p99 of the busy
+//! seconds, and the per-instance device tallies.
 
 mod agentx;
 
@@ -34,29 +38,45 @@ use std::sync::Arc;
 use agentx::{manifest, pct, Trace};
 use kern_pool::{Checkpoint, Denied, Evicted, Found, Lease, Parked, Pool, Prefix};
 
+const SEED: u64 = 0xcbf29ce484222325;
+
 /// FNV-1a over `words` from `seed`, a word at a time.
 fn fnv(seed: u64, words: impl IntoIterator<Item = u64>) -> u64 {
     words.into_iter().fold(seed, |h, w| (h ^ w).wrapping_mul(0x100000001b3))
 }
 
-/// The content keys of `toks` in blocks of `block` tokens: key `j` chains
-/// key `j - 1` with the tokens of block `j`, so equal prefixes give equal
-/// keys whatever session wrote them.
-fn block_keys(toks: &[i64], block: usize) -> Vec<u64> {
-    toks.chunks_exact(block)
-        .scan(0xcbf29ce484222325u64, |h, b| {
-            *h = fnv(*h, b.iter().map(|&t| t as u64));
-            Some(*h)
-        })
-        .collect()
+/// A sequence's tokens and their hash chain by page: `chain[p]` covers
+/// pages `0..=p`, so equal prefixes give equal values whatever session
+/// wrote them.
+struct Seq {
+    toks: Vec<i64>,
+    chain: Vec<u64>,
 }
 
-/// The key of a recurrent state after exactly `toks`: the chain through
-/// its whole blocks, then its tail, marked apart from a block key.
-fn state_key(toks: &[i64], block: usize) -> u64 {
-    let whole = toks.len() / block * block;
-    let h = block_keys(&toks[..whole], block).last().copied().unwrap_or(0xcbf29ce484222325);
-    fnv(h ^ 0x5bd1e995, toks[whole..].iter().map(|&t| t as u64).chain([u64::MAX]))
+impl Seq {
+    fn new(toks: Vec<i64>, unit: usize) -> Seq {
+        let chain = toks
+            .chunks_exact(unit)
+            .scan(SEED, |h, page| {
+                *h = fnv(*h, page.iter().map(|&t| t as u64));
+                Some(*h)
+            })
+            .collect();
+        Seq { toks, chain }
+    }
+
+    /// The key of whole block `j` of `pages` pages.
+    fn block_key(&self, j: usize, pages: usize) -> u64 {
+        self.chain[(j + 1) * pages - 1]
+    }
+
+    /// The key of a recurrent state after exactly `len` tokens: the chain
+    /// through its whole pages, then its tail, marked apart from a block.
+    fn state_key(&self, len: usize, unit: usize) -> u64 {
+        let k = len / unit;
+        let h = if k > 0 { self.chain[k - 1] } else { SEED };
+        fnv(h ^ 0x5bd1e995, self.toks[k * unit..len].iter().map(|&t| t as u64).chain([u64::MAX]))
+    }
 }
 
 struct Obj {
@@ -72,7 +92,9 @@ struct Store {
     used: u64,
     put_ms: f64,
     clock: u64,
-    objs: BTreeMap<u64, Obj>,
+    // Never iterated: the LRU below is the only order anything reads.
+    #[allow(clippy::disallowed_types)]
+    objs: std::collections::HashMap<u64, Obj>,
     lru: BTreeMap<(u64, u64), ()>,
     put_bytes: u64,
     get_bytes: u64,
@@ -88,7 +110,7 @@ impl Store {
             used: 0,
             put_ms,
             clock: 0,
-            objs: BTreeMap::new(),
+            objs: Default::default(),
             lru: BTreeMap::new(),
             put_bytes: 0,
             get_bytes: 0,
@@ -144,28 +166,72 @@ impl Store {
     }
 }
 
+/// What became of the tokens a prompt did not hit.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Cause {
+    /// Hit on the device; the tokens past the hit are the prompt's own.
+    Local,
+    /// Fetched from the pool; likewise.
+    Pool,
+    /// The session had finished nothing a prompt could continue.
+    First,
+    /// The session's last turn was still running.
+    Running,
+    /// The prompt diverged from every mark the session left.
+    Diverged,
+    /// The mark was gone from the device and the pool both.
+    Evicted,
+    /// The mark's put had not landed.
+    Inflight,
+    /// The mark was in the pool but a block under it was not.
+    Blocks,
+}
+
+const CAUSES: [Cause; 8] = [
+    Cause::Local,
+    Cause::Pool,
+    Cause::First,
+    Cause::Running,
+    Cause::Diverged,
+    Cause::Evicted,
+    Cause::Inflight,
+    Cause::Blocks,
+];
+
+impl Cause {
+    fn name(self) -> &'static str {
+        match self {
+            Cause::Local => "local",
+            Cause::Pool => "pool",
+            Cause::First => "first",
+            Cause::Running => "running",
+            Cause::Diverged => "diverged",
+            Cause::Evicted => "evicted",
+            Cause::Inflight => "inflight",
+            Cause::Blocks => "blocks",
+        }
+    }
+}
+
 struct Live {
     instance: usize,
     lease: Lease,
     req: usize,
     hit: usize,
-    tokens: Vec<i64>,
+    seq: Seq,
 }
 
 #[derive(Default)]
 struct Tally {
     input: u64,
-    local_hits: u64,
     local_hit_tokens: u64,
-    pool_hits: u64,
     pool_hit_tokens: u64,
-    /// Tokens a pool hit would have reached had the put landed.
-    inflight_tokens: u64,
+    /// Requests and input tokens not hit, by cause.
+    causes: [(u64, u64); 8],
     extend: Vec<usize>,
     checkpoints: u64,
     waited: u64,
     rejected: u64,
-    lost: u64,
 }
 
 struct Instance {
@@ -208,8 +274,14 @@ struct Shape {
     unit: usize,
     kv_bytes: u64,
     state: u64,
-    /// Tokens per pooled block.
-    block: usize,
+    /// Pages per pooled block.
+    pages: usize,
+}
+
+impl Shape {
+    fn block(&self) -> usize {
+        self.pages * self.unit
+    }
 }
 
 enum Admit {
@@ -219,56 +291,81 @@ enum Admit {
     Rejected,
 }
 
+/// What the pool has of a mark.
+enum Fetch {
+    Landed(Vec<u64>),
+    Inflight,
+    Blocks,
+    Absent,
+}
+
 struct Sim<'a> {
     trace: &'a Trace,
     shape: Shape,
     fleet: Vec<Instance>,
     store: Store,
     /// Where each session's turns left a state: (length, key), newest last.
-    states: Vec<Vec<(usize, u64)>>,
-    finished: Vec<bool>,
+    marks: Vec<Vec<(usize, u64)>>,
+    /// Requests of each session in flight.
+    running: Vec<u32>,
     tally: Tally,
 }
 
 impl Sim<'_> {
-    /// The blocks of `toks[from..to]` sealed at `now` go to the pool.
-    fn put_blocks(&mut self, toks: &[i64], from: usize, to: usize, now: f64) {
-        let Shape { block, kv_bytes, .. } = self.shape;
-        let keys = block_keys(&toks[..to], block);
-        for (j, &k) in keys.iter().enumerate().skip(from / block) {
-            if (j + 1) * block > from {
-                self.store.put(k, block as u64 * kv_bytes, now);
+    /// The blocks of `seq.toks[from..to]` sealed at `now` go to the pool.
+    fn put_blocks(&mut self, seq: &Seq, from: usize, to: usize, now: f64) {
+        let (block, pages) = (self.shape.block(), self.shape.pages);
+        for j in from / block..to / block {
+            self.store.put(seq.block_key(j, pages), block as u64 * self.shape.kv_bytes, now);
+        }
+    }
+
+    /// The newest mark of `session` within `usable` that the prompt still
+    /// follows, or why there is none.
+    fn best_mark(&self, session: usize, seq: &Seq, usable: usize) -> Result<(usize, u64), Cause> {
+        let unit = self.shape.unit;
+        let within = self.marks[session].iter().rev().filter(|&&(len, _)| len <= usable);
+        let mut any = false;
+        for &(len, key) in within {
+            any = true;
+            if seq.state_key(len, unit) == key {
+                return Ok((len, key));
+            }
+        }
+        Err(match (any, self.running[session] > 0) {
+            (true, _) => Cause::Diverged,
+            (false, true) => Cause::Running,
+            (false, false) => Cause::First,
+        })
+    }
+
+    /// The pool's holding of the state at `len`, keyed `sk`, with the
+    /// blocks under it.
+    fn fetch_state(&self, seq: &Seq, len: usize, sk: u64, now: f64) -> Fetch {
+        let (store, Shape { pages, .. }) = (&self.store, self.shape);
+        match store.probe(sk, now) {
+            None => Fetch::Absent,
+            Some(false) => Fetch::Inflight,
+            Some(true) => {
+                let keys: Vec<u64> = (0..len / self.shape.block()).map(|j| seq.block_key(j, pages)).collect();
+                match keys.iter().all(|&k| store.probe(k, now) == Some(true)) {
+                    true => Fetch::Landed(keys.into_iter().chain([sk]).collect()),
+                    false => Fetch::Blocks,
+                }
             }
         }
     }
 
-    /// The pool's landed prefix of `toks[..usable]` for `session`: its
-    /// length, the length its keys reach landed or not, and the objects
-    /// to fetch. Whole blocks for a paged model; for one with a state,
-    /// the exact length of the turn the frontend names (where the
-    /// session's last turn ended) with its blocks under it.
-    fn pooled(&self, session: usize, toks: &[i64], usable: usize, now: f64) -> (usize, usize, Vec<u64>) {
-        let (store, Shape { block, state, .. }) = (&self.store, self.shape);
-        if store.cap == 0 {
-            return (0, 0, Vec::new());
-        }
-        let keys = block_keys(&toks[..usable], block);
-        if state == 0 {
-            let run = |f: &dyn Fn(u64) -> bool| keys.iter().take_while(|&&k| f(k)).count();
-            let n = run(&|k| store.probe(k, now) == Some(true));
-            let any = run(&|k| store.probe(k, now).is_some());
-            return (n * block, any * block, keys[..n].to_vec());
-        }
-        let landed = |n: usize| keys[..n].iter().all(|&k| store.probe(k, now) == Some(true));
-        let found = self.states[session].iter().rev().find(|&&(len, _)| len <= usable).and_then(|&(len, _)| {
-            let sk = state_key(&toks[..len], block);
-            store.probe(sk, now).map(|l| (len, sk, l && landed(len / block)))
-        });
-        match found {
-            Some((len, sk, true)) => (len, len, keys[..len / block].iter().copied().chain([sk]).collect()),
-            Some((len, _, false)) => (0, len, Vec::new()),
-            None => (0, 0, Vec::new()),
-        }
+    /// The pool's landed prefix of whole blocks under `usable`: its
+    /// length, the length its keys reach landed or not, and the objects.
+    fn fetch_blocks(&self, seq: &Seq, usable: usize, now: f64) -> (usize, usize, Vec<u64>) {
+        let (store, Shape { pages, .. }) = (&self.store, self.shape);
+        let block = self.shape.block();
+        let keys: Vec<u64> = (0..usable / block).map(|j| seq.block_key(j, pages)).collect();
+        let run = |f: &dyn Fn(u64) -> bool| keys.iter().take_while(|&&k| f(k)).count();
+        let n = run(&|k| store.probe(k, now) == Some(true));
+        let any = run(&|k| store.probe(k, now).is_some());
+        (n * block, any * block, keys[..n].to_vec())
     }
 
     /// Request `ri` arrives at instance `inst_id` at `now`.
@@ -276,15 +373,33 @@ impl Sim<'_> {
         let trace = self.trace;
         let r = &trace.reqs[ri];
         let Shape { unit, state, .. } = self.shape;
-        let toks = trace.tokens(ri);
+        let seq = Seq::new(trace.tokens(ri), unit);
         let worst = r.input + r.out;
         let usable = r.input.saturating_sub(1);
-        let (pool_len, pool_any, pool_objs) = self.pooled(r.session, &toks, usable, now);
+        let stateful = state > 0;
+        // What the pool offers: a length, its objects, and what to call
+        // the shortfall when the device has nothing longer.
+        let best = if stateful { self.best_mark(r.session, &seq, usable) } else { Err(Cause::First) };
+        let (pool_len, pool_any, pool_objs, cause) = match (self.store.cap > 0, stateful, best) {
+            (false, _, Ok(_)) => (0, 0, Vec::new(), Cause::Evicted),
+            (false, _, Err(c)) => (0, 0, Vec::new(), c),
+            (true, true, Ok((len, sk))) => match self.fetch_state(&seq, len, sk, now) {
+                Fetch::Landed(objs) => (len, len, objs, Cause::Pool),
+                Fetch::Inflight => (0, len, Vec::new(), Cause::Inflight),
+                Fetch::Blocks => (0, 0, Vec::new(), Cause::Blocks),
+                Fetch::Absent => (0, 0, Vec::new(), Cause::Evicted),
+            },
+            (true, true, Err(c)) => (0, 0, Vec::new(), c),
+            (true, false, _) => {
+                let (n, any, objs) = self.fetch_blocks(&seq, usable, now);
+                (n, any, objs, if n > 0 { Cause::Pool } else { Cause::First })
+            }
+        };
 
         let inst = &mut self.fleet[inst_id];
         let mut from_pool = false;
         let mut lease = loop {
-            let attempt = match inst.prefix.lookup(&toks[..r.input]) {
+            let attempt = match inst.prefix.lookup(&seq.toks[..r.input]) {
                 Some(h) if h.len >= pool_len => match h.found {
                     Found::Resident(cp) => inst.pool.restore(&cp, h.len, worst).map(|(l, _)| l),
                     Found::Parked(_) => unreachable!("no host tier"),
@@ -310,51 +425,58 @@ impl Sim<'_> {
         } else {
             lease.prefix()
         };
+        let cause = match (from_pool, hit_len > 0, stateful, best) {
+            (true, ..) => Cause::Pool,
+            (false, true, true, Ok((len, _))) if hit_len == len => Cause::Local,
+            (false, true, false, _) => Cause::Local,
+            _ => cause,
+        };
         let tally = &mut self.tally;
-        tally.lost += (hit_len == 0 && self.finished[r.session]) as u64;
         tally.input += r.input as u64;
         tally.extend.push(r.input - hit_len);
-        if from_pool {
-            tally.pool_hits += 1;
-            tally.pool_hit_tokens += hit_len as u64;
-        } else if hit_len > 0 {
-            tally.local_hits += 1;
-            tally.local_hit_tokens += hit_len as u64;
+        let slot = &mut tally.causes[cause as usize];
+        slot.0 += 1;
+        slot.1 += (r.input - hit_len) as u64;
+        match cause {
+            Cause::Pool => tally.pool_hit_tokens += hit_len as u64,
+            _ => tally.local_hit_tokens += hit_len as u64,
         }
-        tally.inflight_tokens += pool_any.saturating_sub(hit_len.max(pool_len)) as u64;
-        if state == 0 {
+        if !stateful {
+            tally.causes[Cause::Inflight as usize].1 += pool_any.saturating_sub(hit_len.max(pool_len)) as u64;
             // Pages fetched from the pool are whole pages of a fresh lease:
             // they are indexed here too, so the instance hits them itself
             // next time.
             let first = if from_pool { 1 } else { hit_len / unit + 1 };
-            tally.checkpoints += inst.index(&mut lease, &toks, unit, first..=r.input / unit);
-            self.put_blocks(&toks, hit_len, r.input, now);
+            tally.checkpoints += inst.index(&mut lease, &seq.toks, unit, first..=r.input / unit);
+            self.put_blocks(&seq, hit_len, r.input, now);
         }
-        Admit::Live(Live { instance: inst_id, lease, req: ri, hit: hit_len, tokens: toks })
+        self.running[r.session] += 1;
+        Admit::Live(Live { instance: inst_id, lease, req: ri, hit: hit_len, seq })
     }
 
     /// `live` ends at `now`: its output is indexed and pooled.
     fn finish(&mut self, live: Live, now: f64) {
         let r = &self.trace.reqs[live.req];
-        let Shape { unit, kv_bytes, state, block } = self.shape;
-        self.finished[r.session] = true;
+        let Shape { unit, kv_bytes, state, .. } = self.shape;
+        let block = self.shape.block();
+        self.running[r.session] -= 1;
         let total = r.input + r.out;
         let inst = &mut self.fleet[live.instance];
         if state > 0 {
             if total >= 1 {
                 let cp = inst.pool.retire(live.lease, total);
-                inst.prefix.insert(&live.tokens[..total], cp);
+                inst.prefix.insert(&live.seq.toks[..total], cp);
                 self.tally.checkpoints += 1;
-                self.put_blocks(&live.tokens, live.hit, total, now);
-                let sk = state_key(&live.tokens[..total], block);
+                self.put_blocks(&live.seq, live.hit, total, now);
+                let sk = live.seq.state_key(total, unit);
                 self.store.put(sk, state + (total % block) as u64 * kv_bytes, now);
-                self.states[r.session].push((total, sk));
+                self.marks[r.session].push((total, sk));
             }
         } else {
             let mut lease = live.lease;
             let first = r.input.div_ceil(unit).max(live.hit / unit + 1);
-            self.tally.checkpoints += inst.index(&mut lease, &live.tokens, unit, first..=total / unit);
-            self.put_blocks(&live.tokens, r.input.max(live.hit), total, now);
+            self.tally.checkpoints += inst.index(&mut lease, &live.seq.toks, unit, first..=total / unit);
+            self.put_blocks(&live.seq, r.input.max(live.hit), total, now);
         }
     }
 }
@@ -394,7 +516,7 @@ fn main() {
         }
     }
     assert!(instances >= 1 && block_pages >= 1);
-    let shape = Shape { unit, kv_bytes, state, block: block_pages * unit };
+    let shape = Shape { unit, kv_bytes, state, pages: block_pages };
 
     let trace = Trace::load(&traces, sessions_cap, concurrency);
     let (reqs, sessions, order) = (&trace.reqs, trace.sessions, &trace.order);
@@ -417,8 +539,8 @@ fn main() {
         shape,
         fleet,
         store: Store::new(pool_gib << 30, put_ms),
-        states: vec![Vec::new(); sessions],
-        finished: vec![false; sessions],
+        marks: vec![Vec::new(); sessions],
+        running: vec![0; sessions],
         tally: Tally::default(),
     };
     let pick = |ri: usize| match route.as_str() {
@@ -480,26 +602,30 @@ fn main() {
         reqs.len(),
         page_bytes >> 20,
         if state > 0 { format!("recurrent state {} MiB/slot", state >> 20) } else { "paged only".into() },
-        shape.block,
-        (shape.block as u64 * kv_bytes) >> 20,
+        shape.block(),
+        (shape.block() as u64 * kv_bytes) >> 20,
     );
     println!(
-        "hit {:.1}% of {} input tokens: local {} requests ({:.1}%), pool {} requests ({:.1}%); {:.2}% missed in flight; extend p50 {} p90 {} p99 {}; {} checkpoints made; {} waited, {} rejected; {} requests found nothing after their session had finished one",
+        "hit {:.1}% of {} input tokens: local {:.1}%, pool {:.1}%; extend p50 {} p90 {} p99 {}; {} checkpoints made; {} waited, {} rejected",
         share(tally.local_hit_tokens + tally.pool_hit_tokens),
         tally.input,
-        tally.local_hits,
         share(tally.local_hit_tokens),
-        tally.pool_hits,
         share(tally.pool_hit_tokens),
-        share(tally.inflight_tokens),
         pct(&mut tally.extend, 0.5).unwrap_or(0),
         pct(&mut tally.extend, 0.9).unwrap_or(0),
         pct(&mut tally.extend, 0.99).unwrap_or(0),
         tally.checkpoints,
         tally.waited,
         tally.rejected,
-        tally.lost,
     );
+    let causes: Vec<String> = CAUSES
+        .iter()
+        .map(|&c| {
+            let (n, t) = tally.causes[c as usize];
+            format!("{} {:.2}% ({n} req)", c.name(), share(t))
+        })
+        .collect();
+    println!("not hit, by cause (share of input tokens): {}", causes.join(", "));
     println!(
         "pool: {} objects ({:.1} GB) at the end, put {:.1} TB, got {:.1} TB, evicted {:.1} TB; over {span} s of replay: put mean {:.2} GB/s, busy-second p99 {:.1} max {:.1}; get mean {:.2} GB/s, busy-second p99 {:.1} max {:.1}",
         store.objs.len(),
