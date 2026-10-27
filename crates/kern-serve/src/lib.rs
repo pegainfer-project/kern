@@ -233,7 +233,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
                 gpu: o.gpu,
                 kernels: art.kernels.clone(),
                 capacity: o.capacity,
-                max_seqs: o.max_seqs,
+                slots: o.slots(),
                 eager: o.eager,
                 pool: o.pool.config(o.gpu)?,
             };
@@ -246,6 +246,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             gpu: o.gpu,
             kernels: art.kernels.clone(),
             capacity: o.capacity,
+            slots: o.slots(),
             chunk: o.chunk,
             max_seqs: o.max_seqs,
             eager: o.eager,
@@ -266,7 +267,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
         kernels: art.kernels.clone(),
         capacity: Capacity {
             tokens: o.capacity,
-            slots: o.seq_slots.map_or(slots_for(o.max_seqs), |n| (n as u64).max(slots_for(o.max_seqs))) * t,
+            slots: o.slots() * t,
             landings: 0,
         },
         eager: o.eager,
@@ -319,6 +320,13 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
 /// kept prefix.
 fn slots_for(seats: usize) -> u64 {
     seats as u64 + 1
+}
+
+impl ServeOpts {
+    /// The state slots a rank or stage provisions: `--seq-slots`, never fewer than the seats need.
+    fn slots(&self) -> u64 {
+        self.seq_slots.map_or(slots_for(self.max_seqs), |n| (n as u64).max(slots_for(self.max_seqs)))
+    }
 }
 
 /// Logs the verified manifest before any GPU work: buffer kinds, module count, and each program's calls.

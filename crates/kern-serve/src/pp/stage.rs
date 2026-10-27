@@ -28,7 +28,8 @@ pub struct Stage {
     pub gpu: usize,
     pub kernels: Option<std::path::PathBuf>,
     pub capacity: Option<u64>,
-    pub max_seqs: usize,
+    /// State slots, the head's count: its slot ids are this stage's.
+    pub slots: u64,
     pub eager: bool,
     /// The pooled tier the pipeline joins, when it does.
     pub pool: Option<pool::Config>,
@@ -42,8 +43,7 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
     ensure!(cut.stage > 0, "stage 0 is the head; it takes `--listen`");
     let last = cut.stage + 1 == cut.stages;
     let t0 = Instant::now();
-    // The head's slot ids are this stage's: the same slots, by the same rule.
-    let capacity = Capacity { tokens: o.capacity, slots: crate::slots_for(o.max_seqs), landings: LANDINGS as usize };
+    let capacity = Capacity { tokens: o.capacity, slots: o.slots, landings: LANDINGS as usize };
     let mut rt = Runtime::load(&m, o.kernels.as_deref(), o.gpu, Some(capacity), None)?;
     rt.set_eager(o.eager);
     weights.bind(&mut rt)?;

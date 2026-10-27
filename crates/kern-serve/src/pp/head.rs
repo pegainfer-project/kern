@@ -110,6 +110,8 @@ pub struct Head {
     pub gpu: usize,
     pub kernels: Option<std::path::PathBuf>,
     pub capacity: Option<u64>,
+    /// State slots on every stage: the running prompts' and the kept prefixes'.
+    pub slots: u64,
     pub chunk: Option<u64>,
     pub max_seqs: usize,
     pub eager: bool,
@@ -366,7 +368,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         (c, Some(f)) => Some(c.map_or(f * unit, |c| c.min(f * unit))),
         (c, None) => c,
     };
-    let slots = crate::slots_for(h.max_seqs);
+    let slots = h.slots;
     let mut rt = Runtime::load(&m, h.kernels.as_deref(), h.gpu, Some(Capacity { tokens, slots, landings: 0 }), None)?;
     rt.set_eager(h.eager);
     weights.bind(&mut rt)?;
