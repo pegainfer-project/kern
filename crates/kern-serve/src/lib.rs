@@ -257,7 +257,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
 /// wants it. The slots are fixed at load; past them a lease waits for
 /// room (`Busy`), and the scheduler makes it by parking or dropping a
 /// kept prefix.
-pub(crate) fn slots_for(seats: usize) -> u64 {
+fn slots_for(seats: usize) -> u64 {
     seats as u64 + 1
 }
 
