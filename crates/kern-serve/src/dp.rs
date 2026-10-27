@@ -694,8 +694,15 @@ impl Dp {
                 if s.mark == Some(s.pos) {
                     s.mark = None;
                     // The snapshot for the pool alone: a rank's slots are
-                    // few, and the device keeps the prompt's end.
-                    match r.pool.checkpoint(&mut s.lease, s.pos) {
+                    // few, and the device keeps the prompt's end. Room is
+                    // made for it as for a lease: a kept entry goes first.
+                    let got = loop {
+                        match r.pool.checkpoint(&mut s.lease, s.pos) {
+                            Err(Denied::Busy) if r.prefix.evict().is_some() => self.stats.evictions += 1,
+                            got => break got,
+                        }
+                    };
+                    match got {
                         Ok((cp, copies)) => {
                             r.acts.push(Act::Copy(copies.into()));
                             puts.push((q, cp, s.ids[..s.pos].to_vec()));

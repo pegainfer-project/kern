@@ -447,14 +447,18 @@ admit 之后请求经过两次异步往返才开始 prefill：先探，再取。
 Probing / Fetching 的请求持有 lease，计入行数上限；abort 只打标记，lease 到落地才释放，否则
 网卡会写进已经租给别人的页。
 
-### TP 与 PP
+### TP、PP 与 DP
 
 决策相同，差别只在 act 怎么到达、谁回报。TP：一次决策生成一组 act，随 `Order` 到各 rank，
 `Answer.landed` 回报。PP：head 自己的 client 当 stage 0；Probe 只由 head 发（key 已含每个
 stage）；Put / Get 作为 `Job::Acts` 跟在 cache 的拷贝 act 后面发给每个 stage，每个 stage 的
 client 答 `Report::Landed`，head 按 stage 计 `Landing`；没有那种 state 的 stage 对象为空，立即
 落地。head 在 stage 1 取走 item 之前听到的落地推迟到本 turn 之后（落地要 admit，admit 在
-turn 之间）。head 的 `SNAPSHOT_SHORT` 快照不在 `history_marks` 里，不入池。
+turn 之间）。head 的 `SNAPSHOT_SHORT` 快照不在 `history_marks` 里，不入池。DP（prefill tier，
+`dp.rs`，DSV4.1 Flash 的生产形状）：每个 rank 自己的池和前缀树，act 走该 rank 的 `Order`，
+没东西喂而有 act 在外时也发一个只带 act 的 order 收答案；带 state 的快照在 `history_tokens`
+处随 prefill 取一次、put 完就放掉（一个 rank 只有 57 个 slot，device 仍只留 prompt 末尾的
+条目），paged-only 的在 retire 时 put 整条链。
 
 ### 失败模式
 
