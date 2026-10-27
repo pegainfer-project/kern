@@ -1,13 +1,14 @@
 //! The pooled tier's decisions through their public API: keys name tokens
 //! and nothing else, a probe asks one batch and reads the answer, a
-//! landing is whole when every member answered.
+//! member's objects hold its own pages and slot and read back as tokens,
+//! a landing is whole when every member answered.
 
 mod common;
 
 use std::collections::BTreeSet;
 
 use common::Rand;
-use kern_pool::{Chain, Keys, Landing, Probe};
+use kern_pool::{landed, objects, Chain, Keys, Landing, Probe};
 
 fn toks(n: usize) -> Vec<i64> {
     (0..n as i64).map(|i| i * 7 + 3).collect()
@@ -169,5 +170,68 @@ fn a_landing_is_whole_once_every_member_answered_at_the_fewest_tokens() {
             l = l.heard(m, tokens[m]).unwrap();
         }
         assert_eq!(l.done(), tokens.iter().copied().min());
+    }
+}
+
+#[test]
+fn a_members_objects_are_its_own_pages_and_slot_under_the_prefix_keys() {
+    let (k, t, unit) = (ns(), toks(10), 4);
+    let chain = Chain::of(unit, &t);
+    let pages = [40, 41, 42];
+    // The owner (member 1 of 1) moves pages 1..=2 and its state with the
+    // page the prefix ends inside.
+    let own = objects(&k, None, &chain, &t, 1, 1, 1, &pages, Some(9));
+    let keys: Vec<&str> = own.iter().map(|o| o.key.as_str()).collect();
+    assert_eq!(keys, [k.page(None, chain.at(1)), k.page(None, chain.at(2)), k.state(None, 1, chain.at(2), &t[8..])]);
+    assert_eq!(
+        own.iter().map(|o| (o.pages.clone(), o.slot)).collect::<Vec<_>>(),
+        [(vec![40], None), (vec![41], None), (vec![42], Some(9))]
+    );
+    // Another member of the group moves its state alone, under its own key.
+    let other = objects(&k, None, &chain, &t, 1, 0, 1, &[], Some(3));
+    assert_eq!(
+        other.iter().map(|o| (o.key.as_str(), o.pages.clone(), o.slot)).collect::<Vec<_>>(),
+        [(k.state(None, 0, chain.at(2), &t[8..]).as_str(), vec![], Some(3))]
+    );
+    // From page 2, without a state, on a stage: the pages alone, keyed by it.
+    let paged = objects(&k, Some(3), &chain, &t, 2, 0, 0, &pages, None);
+    assert_eq!(
+        paged.iter().map(|o| (o.key.as_str(), o.pages.clone(), o.slot)).collect::<Vec<_>>(),
+        [(k.page(Some(3), chain.at(2)).as_str(), vec![41], None)]
+    );
+    // A prefix ending on a page boundary holds its state in the slot alone.
+    let even = objects(&k, None, &Chain::of(unit, &t[..8]), &t[..8], 1, 0, 0, &pages, Some(9));
+    assert_eq!(even.last().map(|o| (o.pages.clone(), o.slot)), Some((vec![], Some(9))));
+}
+
+#[test]
+fn a_transfer_reads_back_as_tokens_all_or_nothing_with_a_state_by_the_page_without() {
+    assert_eq!(landed(&[true, true, true], true, 10, 1, 4), 10);
+    assert_eq!(landed(&[true, false, true], true, 10, 1, 4), 0);
+    assert_eq!(landed(&[true, true, false], false, 12, 1, 4), 8);
+    assert_eq!(landed(&[true], false, 12, 3, 4), 12);
+    assert_eq!(landed(&[false, true], false, 12, 2, 4), 4);
+    assert_eq!(landed(&[], false, 4, 2, 4), 4);
+    // Every member's flags over a random group land what the
+    // brute-force model says, and the landing takes the fewest.
+    let mut r = Rand::new(11);
+    for _ in 0..300 {
+        let (unit, first) = (1 + r.next(4), 1 + r.next(3));
+        let len = first * unit + r.next(3 * unit);
+        let stateful = r.next(2) == 0;
+        let members = 1 + r.next(3);
+        let flags: Vec<Vec<bool>> = (0..members)
+            .map(|_| (0..(len / unit - first + 1) + usize::from(stateful)).map(|_| r.next(4) != 0).collect())
+            .collect();
+        let want = |ok: &[bool]| match stateful {
+            true => len * usize::from(ok.iter().all(|&b| b)),
+            false => (first - 1 + ok.iter().position(|&b| !b).unwrap_or(ok.len())) * unit,
+        };
+        let mut l = Landing::new(0..members);
+        for (m, ok) in flags.iter().enumerate() {
+            assert_eq!(landed(ok, stateful, len, first, unit), want(ok), "{ok:?} stateful {stateful}");
+            l = l.heard(m, landed(ok, stateful, len, first, unit)).unwrap();
+        }
+        assert_eq!(l.done(), flags.iter().map(|ok| want(ok)).min());
     }
 }

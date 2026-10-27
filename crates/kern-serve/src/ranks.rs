@@ -90,7 +90,7 @@ use infront_engine::SamplingParams;
 use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_pool::{Checkpoint, Copies, Denied, Interleave, Kept, Landing, Lease, Pool};
+use kern_pool::{Checkpoint, Copies, Denied, Interleave, Kept, Landing, Lease, Object, Pool};
 use serde::{Deserialize, Serialize};
 
 use crate::pp::Item;
@@ -165,17 +165,6 @@ impl From<Moves> for Copies {
     fn from(m: Moves) -> Copies {
         Copies { pages: m.pages, slot: m.slot }
     }
-}
-
-/// A pooled object as this rank holds its bytes: every paged state's
-/// `pages`, then every per-sequence state's `slot`, under `key`. A page
-/// object names one page and no slot; a state object a slot and the page
-/// the snapshot ends inside, when it does.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Object {
-    pub key: String,
-    pub pages: Vec<i32>,
-    pub slot: Option<i32>,
 }
 
 /// One decision of a rank's pool, as the rank runs it.

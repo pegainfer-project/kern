@@ -27,6 +27,6 @@ mod store;
 pub use deal::{deal, runs, Deal, Interleave, Pages, RowRun};
 pub use error::{Error, Result};
 pub use pages::{page_unit, row_tokens, Denied, Kind, Lease, Pool, Pooled};
-pub use pooled::{Chain, Hash, Keys, Landing, Probe};
+pub use pooled::{landed, objects, Chain, Hash, Keys, Landing, Object, Probe};
 pub use prefix::{Hit, Kept, Prefix};
 pub use store::{Checkpoint, Copies};

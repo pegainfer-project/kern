@@ -102,19 +102,19 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
+use kern_manifest::protocol::{Forward, Rows, Sampling};
+use kern_manifest::Protocol;
+use kern_pool::{landed, objects, Chain, Denied, Keys, Landing, Prefix, Probe};
 use infront_engine::{
     FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, Request, RequestId, RequestLedger, Scheduler,
     SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
-use kern_manifest::protocol::{Forward, Rows, Sampling};
-use kern_manifest::Protocol;
-use kern_pool::{Chain, Denied, Keys, Landing, Prefix, Probe};
 use tracing::{debug, info, warn};
 
 use crate::executor::Executors;
 use crate::logline;
 use crate::pd::Run;
-use crate::ranks::{Cell, Landed, Object, Rank, Ranks, Row, Snapshot, Staged};
+use crate::ranks::{Cell, Landed, Rank, Ranks, Row, Snapshot, Staged};
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
 /// fits and each bucket owns one captured graph.
@@ -350,58 +350,8 @@ impl Pooled {
 /// Where the frontend says this prompt's history ends and where its
 /// earlier turns ended, newest first: the points a pooled snapshot may
 /// exist at.
-fn marks(r: &Request) -> Vec<usize> {
+pub(crate) fn marks(r: &Request) -> Vec<usize> {
     r.history_tokens.into_iter().chain(r.history_marks.iter().copied()).collect()
-}
-
-/// Member `m`'s objects for tokens `[0, len)` of a group whose owner is
-/// member `me`: whole pages `first..=len / unit` on the owner, and the
-/// state object (the slot, and on the owner the page `len` ends inside)
-/// when the group holds a slot. `page_ids` and `slot` are the member's.
-#[allow(clippy::too_many_arguments)]
-fn objects(
-    keys: &Keys,
-    chain: &Chain,
-    tokens: &[i64],
-    first: usize,
-    m: usize,
-    me: usize,
-    page_ids: &[i32],
-    slot: Option<i32>,
-) -> Vec<Object> {
-    let (unit, len) = (chain.unit(), tokens.len());
-    let whole = len / unit;
-    let pages = (m == me)
-        .then(|| {
-            (first..=whole).map(|k| Object {
-                key: keys.page(None, chain.at(k)),
-                pages: vec![page_ids[k - 1]],
-                slot: None,
-            })
-        })
-        .into_iter()
-        .flatten();
-    let state = slot.map(|s| Object {
-        key: keys.state(None, m as u8, chain.at(whole), &tokens[whole * unit..]),
-        pages: (m == me && len % unit != 0).then(|| page_ids[whole]).into_iter().collect(),
-        slot: Some(s),
-    });
-    pages.chain(state).collect()
-}
-
-/// Tokens one member's fetch landed, from its flags: with a state, all
-/// of `len` or nothing; without, the whole pages from `first` that landed.
-fn landed(ok: &[bool], stateful: bool, len: usize, first: usize, unit: usize) -> usize {
-    match stateful {
-        true => {
-            if ok.iter().all(|&b| b) {
-                len
-            } else {
-                0
-            }
-        }
-        false => (first - 1 + ok.iter().take_while(|&&b| b).count()) * unit,
-    }
 }
 
 pub struct KernScheduler<E = Executors> {
@@ -780,7 +730,7 @@ impl<E: Run> KernScheduler<E> {
             .parts()
             .iter()
             .enumerate()
-            .map(|(m, l)| objects(&pool.keys, &chain, &p.ids[..len], first, m, me, l.page_ids(), l.seq_slot()))
+            .map(|(m, l)| objects(&pool.keys, None, &chain, &p.ids[..len], first, m, me, l.page_ids(), l.seq_slot()))
             .collect();
         let (id, landing) = self.ranks.get(&p.row, objects);
         debug!(request = %p.q.id, device_hit = p.row.prefix(), len, "fetching");
@@ -801,7 +751,7 @@ impl<E: Run> KernScheduler<E> {
             .parts()
             .iter()
             .enumerate()
-            .map(|(m, cp)| objects(&pool.keys, &chain, tokens, first, m, me, &cp.page_ids(), cp.seq_slot()))
+            .map(|(m, cp)| objects(&pool.keys, None, &chain, tokens, first, m, me, &cp.page_ids(), cp.seq_slot()))
             .collect();
         let mark = (!self.every_page).then(|| pool.keys.mark(chain.at(whole), &tokens[whole * unit..]));
         let (id, landing) = self.ranks.put(snap, objects);

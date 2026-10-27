@@ -22,9 +22,11 @@
 //! frontend says the prompt may continue from, newest first, and every
 //! page between the device hit and the newest of them, on every stage.
 //! The pool is asked whether each exists; [`Probe::chosen`] reads the
-//! answer. A [`Landing`] counts a transfer over a group: every member
-//! reports the tokens it landed, and it is whole when all have, at the
-//! fewest.
+//! answer. [`objects`] names what one member moves for a prefix, each an
+//! [`Object`]: a key over the pages and slot holding its bytes on that
+//! member; [`landed`] reads a member's flags back as tokens. A [`Landing`]
+//! counts a transfer over a group: every member reports the tokens it
+//! landed, and it is whole when all have, at the fewest.
 //!
 //! Pure: no client, no clock; the same tokens give the same keys and the
 //! same answers give the same choice.
@@ -32,6 +34,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{bail, Result};
@@ -214,6 +217,70 @@ impl Probe {
             true => (run > 0).then_some((whole - 1) * unit),
             false => self.marks.iter().zip(marks).find(|&(&m, &e)| e && m / unit < whole).map(|(&m, _)| m),
         }
+    }
+}
+
+/// A pooled object as one member holds its bytes: every paged state's
+/// `pages`, then every per-sequence state's `slot`, under `key`. A page
+/// object names one page and no slot; a state object a slot and the page
+/// the snapshot ends inside, when it does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Object {
+    pub key: String,
+    pub pages: Vec<i32>,
+    pub slot: Option<i32>,
+}
+
+/// Member `m`'s objects for tokens `[0, len)` of a group whose owner is
+/// member `me`, on `stage`: whole pages `first..=len / unit` on the owner,
+/// and the state object (the slot, and on the owner the page `len` ends
+/// inside) when the member holds a slot. `page_ids` and `slot` are the
+/// member's own.
+#[allow(clippy::too_many_arguments)]
+pub fn objects(
+    keys: &Keys,
+    stage: Option<u8>,
+    chain: &Chain,
+    tokens: &[i64],
+    first: usize,
+    m: usize,
+    me: usize,
+    page_ids: &[i32],
+    slot: Option<i32>,
+) -> Vec<Object> {
+    let (unit, len) = (chain.unit(), tokens.len());
+    let whole = len / unit;
+    let pages = (m == me)
+        .then(|| {
+            (first..=whole).map(|k| Object {
+                key: keys.page(stage, chain.at(k)),
+                pages: vec![page_ids[k - 1]],
+                slot: None,
+            })
+        })
+        .into_iter()
+        .flatten();
+    let state = slot.map(|s| Object {
+        key: keys.state(stage, m as u8, chain.at(whole), &tokens[whole * unit..]),
+        pages: (m == me && len % unit != 0).then(|| page_ids[whole]).into_iter().collect(),
+        slot: Some(s),
+    });
+    pages.chain(state).collect()
+}
+
+/// Tokens one member's transfer of [`objects`] landed, from one flag per
+/// object: with a state, all of `len` or nothing; without, the whole
+/// pages from `first` that landed.
+pub fn landed(ok: &[bool], stateful: bool, len: usize, first: usize, unit: usize) -> usize {
+    match stateful {
+        true => {
+            if ok.iter().all(|&b| b) {
+                len
+            } else {
+                0
+            }
+        }
+        false => (first - 1 + ok.iter().take_while(|&&b| b).count()) * unit,
     }
 }
 
