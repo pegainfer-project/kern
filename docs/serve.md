@@ -938,7 +938,12 @@ prefill 对 chunk 边界敏感，不带池的实例上同一 prompt 从 0 算和
 的回忆题上 37% 翻转，答案确定的题不翻（冷实例正序 / 倒序 128/128，5 行 / 25 行续算 48/48）。带池路径每个 prompt 在
 `history_tokens`（prompt − 2，assistant 标记前）切一刀，多一个 2 行的尾 chunk，与冷实例的首 token 一致率在同一区间
 （近平局题 57/128，确定题全同）；两个带池 tier 互相一致，各自重放 125/128（差的 3 处是命中路径不同）。logits 级 KL
-门禁等 DSV4.1 有 logits 通路再补。未做：杀 master 照常出结果；K3 PP8（没有 16 张空卡）。
+门禁等 DSV4.1 有 logits 通路再补。
+
+杀 master（同配置，AgentX c32 300 s，+60 s `pkill mooncake_master`，+150 s 重启）：请求 0 失败（993 个，3.0 req/s），
+没 master 的 90 s 里探池全 miss、按 device 前缀算，put 被拒 203 次；第一次探失败（rc -900）立即进 30 s cooldown，
+cooldown 过后再探一次要 4.3 s 才超时、再进 cooldown，所以每 30 s 有一个请求多付 4 s；master 回来后 holder 自己重挂、
+cooldown 一过命中恢复（重启后 33 s 内），全程 TTFT p50 / p90 / p99 379 / 3426 / 10228 ms。未做：K3 PP8（没有 16 张空卡）。
 
 ## 没做（按需要加）
 
