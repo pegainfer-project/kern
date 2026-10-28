@@ -278,16 +278,17 @@ struct PpHead {
     depth: usize,
     max_seqs: usize,
     stages: Vec<TcpStream>,
-    events: mpsc::Receiver<Event>,
-    /// Into the head's own events, for the front's calls.
-    calls: mpsc::Sender<Event>,
+    /// Events from the front, stages, decode tiers and local completions.
+    event_rx: mpsc::Receiver<Event>,
+    /// A sender for the same channel, handed to the front.
+    event_tx: mpsc::Sender<Event>,
     notes: mpsc::Sender<Note>,
     /// Requests the head holds whose clients left, retired at the next touch.
     gone: BTreeSet<RequestId>,
     /// The pool the front was last told of: pages in use and the cache's counters.
     pool_told: (u64, PrefixCacheCounters),
-    /// Events heard while waiting on stage 1 that wait for the next turn.
-    later: VecDeque<Event>,
+    /// Received events awaiting handling, including those deferred during issue.
+    pending_events: VecDeque<Event>,
     /// Where each handed-off request stands on its decode tier.
     tiers: Tiers,
     decode: Vec<Pd>,
@@ -312,7 +313,7 @@ pub fn spawn(m: Verified, weights: Weights, h: Head) -> Result<(Front, Facts)> {
         .name("kern-pp-head".into())
         .spawn(move || match load(m, &weights, h, notes) {
             Ok(head) => {
-                let _ = ready.send(Ok((head.facts(), head.calls.clone(), head.rt.pages_total() as u64)));
+                let _ = ready.send(Ok((head.facts(), head.event_tx.clone(), head.rt.pages_total() as u64)));
                 head.run()
             }
             Err(e) => {
@@ -320,8 +321,8 @@ pub fn spawn(m: Verified, weights: Weights, h: Head) -> Result<(Front, Facts)> {
             }
         })
         .context("spawning the head's thread")?;
-    let (facts, calls, pages) = loaded.recv().context("the head's thread died loading")??;
-    let head = move |c: Call| calls.send(Event::Call(c)).map_err(|_| anyhow::anyhow!("the pipeline head is gone"));
+    let (facts, event_tx, pages) = loaded.recv().context("the head's thread died loading")??;
+    let head = move |c: Call| event_tx.send(Event::Call(c)).map_err(|_| anyhow::anyhow!("the pipeline head is gone"));
     Ok((Front::new(front_notes, head, pages), facts))
 }
 
@@ -381,7 +382,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     };
     let context = p.context.as_ref().map_or(usize::MAX, |c| c.max as usize);
     let bounds = Bounds { rows: chunk, seqs: prefill.groups as usize, context };
-    let (tx, events) = mpsc::channel();
+    let (tx, event_rx) = mpsc::channel();
     let mut states = vec![shapes(&rt.manifest)];
     states.extend(hellos.values().map(|(x, ..)| x.states.clone()));
     let decode: Vec<Pd> = (h.decode.iter().enumerate())
@@ -407,7 +408,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
             let _ = tx.send(Event::Taken);
         }
     })?;
-    let tx_calls = tx.clone();
+    let event_tx = tx.clone();
     let pool = match &h.pool {
         Some(cfg) => {
             let mut client = pool::Client::open(cfg, rt.pooled_spans())?;
@@ -448,12 +449,12 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         depth: cut.stages as usize,
         max_seqs: h.max_seqs,
         stages,
-        events,
-        calls: tx_calls,
+        event_rx,
+        event_tx,
         notes,
         gone: BTreeSet::new(),
         pool_told: (0, PrefixCacheCounters::default()),
-        later: VecDeque::new(),
+        pending_events: VecDeque::new(),
         tiers: Tiers::new(decode.len(), cut.stages as usize),
         decode,
         waiting: VecDeque::new(),
@@ -1045,29 +1046,29 @@ impl PpHead {
         Ok(())
     }
 
-    /// The head's life: hear what came, admit, issue, until the process ends.
-    /// A failed turn ends the process: the stages see the connection close
+    /// The head's life: handle events, admit, issue, until the process ends.
+    /// A failed tick ends the process: the stages see the connection close
     /// and follow, and no half-fed pipeline lingers behind an open port.
     fn run(mut self) {
         loop {
-            if let Err(e) = self.turn() {
+            if let Err(e) = self.tick() {
                 error!("pipeline head: {e:#}");
                 std::process::exit(1);
             }
         }
     }
 
-    fn turn(&mut self) -> Result<()> {
-        if self.later.is_empty() {
-            match self.events.recv_timeout(IDLE) {
-                Ok(e) => self.later.push_back(e),
+    fn tick(&mut self) -> Result<()> {
+        if self.pending_events.is_empty() {
+            match self.event_rx.recv_timeout(IDLE) {
+                Ok(e) => self.pending_events.push_back(e),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => bail!("every connection to the head is gone"),
             }
         }
-        self.later.extend(self.events.try_iter());
-        while let Some(e) = self.later.pop_front() {
-            self.hear(e)?;
+        self.pending_events.extend(self.event_rx.try_iter());
+        while let Some(e) = self.pending_events.pop_front() {
+            self.handle_event(e)?;
         }
         self.retire_gone()?;
         self.admit()?;
@@ -1131,12 +1132,12 @@ impl PpHead {
     fn taken(&mut self) -> Result<()> {
         let t0 = Instant::now();
         while !self.flow.ready()? {
-            match self.events.recv_timeout(super::TIMEOUT.saturating_sub(t0.elapsed())) {
-                // A landing admits, and admission waits for the turn.
+            match self.event_rx.recv_timeout(super::TIMEOUT.saturating_sub(t0.elapsed())) {
+                // A landing admits, and admission waits for the next tick.
                 Ok(e @ (Event::Call(Call::Submit(_) | Call::Gone(_)) | Event::Landed { .. })) => {
-                    self.later.push_back(e)
+                    self.pending_events.push_back(e)
                 }
-                Ok(e) => self.hear(e)?,
+                Ok(e) => self.handle_event(e)?,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     bail!("stage 1 took nothing in {:?}; the stage is gone", super::TIMEOUT)
                 }
@@ -1150,7 +1151,7 @@ impl PpHead {
     /// it carried last (the last stage answers in issue order), or hands
     /// their first token on; a push landed; the decode tier's words; a
     /// submission; a client gone.
-    fn hear(&mut self, e: Event) -> Result<()> {
+    fn handle_event(&mut self, e: Event) -> Result<()> {
         let t = match e {
             Event::Answer(t) => t,
             Event::Pushed { stage, req } => {
