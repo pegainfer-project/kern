@@ -123,6 +123,16 @@ impl Cache {
         std::mem::take(&mut self.counts)
     }
 
+    /// `asked` prompt tokens past the device hit were looked up in the
+    /// pooled tier and `landed` came back from it: hits from a tier the
+    /// metrics cannot name.
+    pub fn pooled(&mut self, asked: usize, landed: usize) {
+        let p = &mut self.prefix_cache;
+        p.host_queries += asked as u64;
+        p.hits += landed as u64;
+        p.external_unspecified_hits += landed as u64;
+    }
+
     /// The acts decided since the last call, in the order the head ran
     /// them: what the next item carries.
     pub fn take_acts(&mut self) -> Vec<Act> {

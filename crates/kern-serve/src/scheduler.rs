@@ -652,6 +652,7 @@ impl<E: Run> KernScheduler<E> {
                 match p.stage.clone() {
                     Stage::Probing(probe) => {
                         self.stats.pool_probes += 1;
+                        self.prefix_cache.host_queries += (p.ids.len() - p.row.prefix()) as u64;
                         match probe.chosen(&l.ok) {
                             Some(len) => {
                                 self.stats.pool_hits += 1;
@@ -821,6 +822,7 @@ impl<E: Run> KernScheduler<E> {
         let c = &mut self.prefix_cache;
         c.queries += prompt as u64;
         c.hits += start as u64;
+        c.external_unspecified_hits += (start - device) as u64;
         debug!(
             request = %id,
             prompt,

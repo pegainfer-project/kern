@@ -778,6 +778,7 @@ impl PpHead {
             match p.asked.clone() {
                 Asked::Probing(probe) => {
                     pool.counts.probes += 1;
+                    self.cache.pooled(p.ids.len() - p.lease.prefix(), 0);
                     match probe.chosen(&l.ok) {
                         Some(len) => {
                             pool.counts.hits += 1;
@@ -802,6 +803,7 @@ impl PpHead {
                         Some(got) if got > device => {
                             pool.counts.fetched += 1;
                             pool.counts.fetched_tokens += (got - device) as u64;
+                            self.cache.pooled(0, got - device);
                             debug!(request = %p.q.id, device_hit = device, fetched = got, "pool hit");
                             p.lease.filled(got);
                             self.cache.keep(&mut self.rt, &mut p.lease, &p.ids[..got])?;

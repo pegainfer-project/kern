@@ -247,6 +247,11 @@ fn a_turn_kept_on_one_instance_is_fetched_by_the_next() {
         // Nothing before the mark was prefilled.
         assert_eq!(log.prefills[0].0 as usize, m, "{:?}", log.prefills);
     }
+    // The mark's tokens are hits, and hits from the pool: the whole prompt
+    // was looked up there, the device having none of it.
+    let pc = b.live.handle.metrics().prefix_cache.expect("the scheduler counts its prefix cache");
+    let n = second.len() as u64;
+    assert_eq!((pc.queries, pc.hits, pc.host_queries, pc.external_unspecified_hits), (n, m as u64, n, m as u64));
     // The same tokens as an instance without a pool gives.
     let mut c = instance(&store, 3, false);
     let id_c = c.submit(second, mark2, 3);
