@@ -37,7 +37,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Args;
 use infront_engine::{drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LiveScheduler, Scheduler};
-use infront_vllm::{Capabilities, ParserSelection, ServeOptions};
+use infront_vllm::{Capabilities, History, ParserSelection, ServeOptions};
 use kern_manifest::{Protocol, Verified};
 use kern_runtime::Capacity;
 use tracing::info;
@@ -441,7 +441,7 @@ where
         tool_call_parser: parser,
         port,
         capabilities: Capabilities { logprobs: false, sampling: samples },
-        history_boundary: true,
+        history: History::Marks,
         ..ServeOptions::new(model_path.to_string_lossy())
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;

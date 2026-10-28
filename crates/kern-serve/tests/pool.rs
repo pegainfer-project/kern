@@ -1,4 +1,4 @@
-//! The scheduler over a pooled tier, driven as pegainfer drives it, its
+//! The scheduler over a pooled tier, driven as infront drives it, its
 //! ranks a fake that answers every pooled act a few replies late out of
 //! one shared in-memory pool: a turn kept on one instance is fetched by
 //! another and prefilled from where it ends, and a pool that loses puts,
@@ -8,16 +8,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use infront_engine::SamplingParams;
+use infront_engine::{
+    spawn_scheduler, EosPolicy, LiveScheduler, Request, RequestId, StepReceiver, StopPolicy, Terminal,
+};
 use kern_manifest::types::Manifest;
 use kern_manifest::{verify, Protocol};
 use kern_pool::{Keys, Pool};
 use kern_serve::pd::Run;
 use kern_serve::ranks::{Act, Answer, Groups, Landed, Order, Ranks};
 use kern_serve::scheduler::{KernScheduler, Policy};
-use infront_engine::{
-    spawn_scheduler, EosPolicy, LiveScheduler, Request, RequestId, StepReceiver, StopPolicy, Terminal,
-};
-use infront_engine::SamplingParams;
 
 mod common;
 use common::Rand;
@@ -160,12 +160,8 @@ impl Instance {
             history_marks: history.1,
             stop_policy: StopPolicy::new(EosPolicy::Ignore, Vec::new()),
             max_tokens,
-            lora_adapter: None,
-            kv_transfer_params: None,
             logprobs: None,
             prompt_logprobs: None,
-            trace_parent: None,
-            client_label: None,
         };
         self.live.handle.submit(request).id()
     }

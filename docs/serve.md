@@ -27,12 +27,13 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 `infront-engine` + `infront-vllm`，底下是 vLLM 官方的 Rust server crates，git dep 钉 infront main 的
 一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 infront `4fa55c7b` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
+当前钉在 infront `c97e412b` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
 `ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
-不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history_boundary`
-打开，chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条）；停止原因并进
-`FinishReason::Stop(StopCause)`。`Request::history_marks`：chat 层对每条后面跟着 assistant 消息的消息
-渲染一次 `messages[..=i]`，最新 8 个边界随请求给引擎，池化层探每一个（下文「池化 KV 层」）。
+不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history: History::Marks`，
+chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条），并对每条后面跟着 assistant 消息的消息
+渲染一次 `messages[..=i]`，最新 8 个边界作为 `Request::history_marks` 随请求给引擎，池化层探每一个
+（下文「池化 KV 层」；infront#13，即 pegainfer#1189 的移植）；停止原因并进
+`FinishReason::Stop(StopCause)`。
 更早在 pegainfer 上的 `f53b282f` bump 带来的：
 停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
 降成一份策略，scheduler 只 `classify`，结束时带 `stop_cause`），kern-serve 不再自己读

@@ -102,13 +102,13 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
-use kern_manifest::protocol::{Forward, Rows, Sampling};
-use kern_manifest::Protocol;
-use kern_pool::{landed, objects, Chain, Denied, Keys, Landing, Prefix, Probe};
 use infront_engine::{
     FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, Request, RequestId, RequestLedger, Scheduler,
     SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
+use kern_manifest::protocol::{Forward, Rows, Sampling};
+use kern_manifest::Protocol;
+use kern_pool::{landed, objects, Chain, Denied, Keys, Landing, Prefix, Probe};
 use tracing::{debug, info, warn};
 
 use crate::executor::Executors;
