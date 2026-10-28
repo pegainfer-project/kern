@@ -94,12 +94,6 @@ use crate::scheduler::Facts;
 
 /// How long the head keeps trying to reach a decode tier still loading.
 const CONNECT: Duration = Duration::from_secs(600);
-/// How far short of where a prompt is kept its snapshot goes. A retried or
-/// edited request parts from the request before it near that one's end:
-/// in AgentX's traces half of them within 448 tokens, three in four within
-/// 4.7k, and a snapshot 4096 short serves 3.6% of all input tokens of the
-/// 4.1% they share.
-const SNAPSHOT_SHORT: usize = 4096;
 
 /// How long the head sleeps with nothing heard before it looks again.
 const IDLE: Duration = Duration::from_millis(1);
@@ -131,8 +125,6 @@ struct Active {
     sampling: Sampling,
     /// Where its rows stop until the prompt so far is kept, gone once it is.
     mark: Option<usize>,
-    /// Where they stop before that for a snapshot, gone once it is taken.
-    snap: Option<usize>,
     /// The frontend says where the next turn parts from it, before its
     /// end: kept there, its end is not kept.
     parts: bool,
@@ -645,8 +637,7 @@ impl PpHead {
     }
 
     /// A leased prompt starts past its lease's prefix: its rows stop at
-    /// the frontend's parting point and a snapshot short of it, when they
-    /// are past the prefix.
+    /// the frontend's parting point when it is past the prefix.
     fn activate(&mut self, q: QueuedRequest, lease: Lease, ids: Vec<i64>, tier: Option<usize>) -> Result<()> {
         let (id, prompt, start) = (q.id, ids.len(), lease.prefix());
         // Admitted on P now, not at its lease: a prompt the pooled tier is
@@ -664,14 +655,10 @@ impl PpHead {
         let parted = q.request.history_tokens.filter(|&m| self.rt.has_seq_state() && m < prompt);
         let mark = parted.filter(|&m| m > start);
         let parts = parted.is_some();
-        let snap = match self.rt.has_seq_state() {
-            true => parted.unwrap_or(prompt).checked_sub(SNAPSHOT_SHORT).filter(|&s| s > start),
-            false => None,
-        };
         let stop = q.request.stop_policy.clone();
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
-        let a = Active { id, lease, ids, pos: start, stop, sampling, mark, snap, parts, handoff, passed: 0 };
+        let a = Active { id, lease, ids, pos: start, stop, sampling, mark, parts, handoff, passed: 0 };
         self.active.push_back(a);
         Ok(())
     }
@@ -905,10 +892,9 @@ impl PpHead {
         a.ids.len() - usize::from(self.step.is_some())
     }
 
-    /// Where the rows of a prompt stop for now: its snapshot, its mark, then
-    /// its chunked rows.
+    /// Where the rows of a prompt stop for now: its mark, then its chunked rows.
     fn upto(&self, a: &Active) -> usize {
-        a.snap.or(a.mark).unwrap_or(self.chunked(a))
+        a.mark.unwrap_or(self.chunked(a))
     }
 
     /// Send what is ready: the next packed chunk while the pipeline takes
@@ -962,10 +948,6 @@ impl PpHead {
         for (at, &(i, n)) in plan.iter().enumerate() {
             let a = &mut self.active[i];
             a.pos += n;
-            if a.snap == Some(a.pos) {
-                a.snap = None;
-                self.cache.snapshot(&mut self.rt, &mut a.lease, &a.ids[..a.pos])?;
-            }
             if a.mark == Some(a.pos) {
                 a.mark = None;
                 if let Some(cp) = self.cache.keep(&mut self.rt, &mut a.lease, &a.ids[..a.pos])? {
@@ -1121,8 +1103,6 @@ impl PpHead {
                 checkpoints = self.cache.entries(),
                 prompt_checkpoints = state.then_some(c.kept),
                 prompt_skips = state.then_some(c.skipped),
-                snapshots = state.then_some(c.snapshots),
-                snapshot_skips = state.then_some(c.snapshot_skips),
                 evictions = c.evictions,
                 superseded = state.then(|| self.cache.superseded()),
                 slots_used = state.then(|| self.rt.seq_slots_used()),

@@ -724,16 +724,26 @@ k % LANDINGS，下一段在 hold 之后先 `Runtime::land` 拷进计算用的 bu
 的空闲在 head：两个 item 之间 host 要 ~4.5 ms 备下一个（stage 0 的间隔 p90 7.4 ms），K3 的 item 大两个数量级，
 这一项在那里小。门禁：首 token 与旧版本逐位比，64 条串行 64/64 同，c32 并发 600 条 600/600 同。
 
-head 的前缀缓存（2026-10-09，tray03 GPU 0+1，`~/bench_results/2026-10-09-pp-head-prefix/`）：head 的池是
-整条流水唯一的账，索引也只在 head（`pp/cache.rs`，与单进程 scheduler 同一个 `Prefix`）。prompt 先查索引，
-命中就 `lease_from`（整页共享、半页与 state slot 拷给新 lease），从命中处开始喂；最后一批行发出去时
-lease 直接 `retire` 进索引（零拷贝，不等末段回 token：之后读这些页的 item 都排在写它们的后面）；带
-recurrent state 的 manifest 改在 `history_tokens` 处停下做一次 checkpoint、结尾不留。另在它（无 `history_tokens` 时是结尾）前 4096 处停一下做 snapshot，与它一样腾地方（它随即被这一轮 supersede，腾地方时排在前面）：重试或改写的请求在上一个请求末尾前不远处分叉（AgentX 256k trace 同一条流内：p50 448、p75 4.7k token），没有它就只能从更早的轮次续，warmup 只回放过上一轮的流则什么都命中不了（2026-10-09 kern P/D c32 计时窗口里 9 条首请求 0 命中，占输入 1.6%）。实测（2026-10-09，GB300，P = PP8 两节点、host 层每段 128 GiB，D = TP8/EP8/DCP8 两节点，AgentX 256k，c24 后接 c32 各 900 s）：命中率 c24 91.8% → 94.1%、c32 91.8% → 94.1%（同数据集 SGLang 93.9%），c32 TTFT p90 3.91 → 3.06 s、p99 48.4 → 21.8 s；只用空闲 slot 的版本 c32 只到 92.5%（slot 常满，snapshot 245 次跳过、18 次拿到）。池满（`Busy`）按
-`Prefix` 的分档丢一个条目再试（host 层 2026-10-27 删除前是 park，见下）。拷贝由 head 的池决定、在 head 上当场执行，同时排进下一个
-`Item` 的 `acts`（2026-10-09 之前是 `copy_pages` / `copy_slots` / `zero_slots`），各段在写 fill 与 launch 之前按序执行
-（`Runtime::copy`），于是每段 stream 上的次序与 head 相同。段不记账：head 与每段按同一条规则（`slots_for`）
-开同样多的 slot，head 只在有空 slot 时取 slot（否则先丢条目）——所以带 state 的流水能缓存的条目只有
-`max_seqs + 1` 个 slot 减去在跑的。
+The PP head owns the pipeline's prefix cache (`pp/cache.rs`, using the same
+`Prefix` as the single-process scheduler). A prompt starts at its longest usable
+cached prefix: `lease_from` shares whole pages and copies the partial page and
+state slot into the new lease. Once its last rows are issued, a prompt without a
+history checkpoint retires its lease into the index without copying; later items
+read those pages after the items that write them.
+
+For recurrent state, the head checkpoints at `history_tokens` when the frontend
+provides that boundary, then releases the running lease at completion. Each turn
+leaves its checkpoint for subsequent turns. An edited request resumes from the
+longest retained checkpoint its tokens still match and recomputes the suffix.
+There is no additional checkpoint inside a turn. On `Busy`, the cache evicts an
+entry in `Prefix` order and retries.
+
+The head executes checkpoint copies on its own runtime and queues them in the
+next `Item`'s `acts`. Each stage executes those acts before staging inputs and
+launching kernels, preserving the same stream order. Stages use the head's page
+and slot IDs; all stages allocate the same slot capacity through `slots_for`.
+Cached checkpoints and running requests share that capacity.
+
 stats 行报 `resident_hits` / `resident_hit_tokens` / `checkpoints` / `evictions`，命中也作为请求的 cached
 tokens 回给客户端。门禁（qwen3-4b 切在 218，chunk 512，与单卡 kern-serve 冷跑比首 token）：`--capacity
 65536` 15/15 同——7 条 gate prompt 冷跑；1500 / 2049 两条再发命中 1488 / 2048；四个第二轮（1500+200、

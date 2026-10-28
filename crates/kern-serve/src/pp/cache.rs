@@ -14,11 +14,8 @@
 //! feeding it there for a checkpoint, which copies the page it ends inside
 //! and the slot; its end is kept nowhere, so a turn leaves one entry,
 //! where every next turn passes whatever reply it renders. A client that
-//! retries or edits its last request parts from the turn shortly before
-//! that point instead, where no state was kept, so the head also stops a
-//! little short of it for a snapshot ([`Cache::snapshot`]), room made for
-//! it as for the turn: the turn supersedes it at once, so it is among the
-//! first taken when room is wanted.
+//! edits a turn continues from the longest earlier checkpoint its prompt
+//! still shares, recomputing the rows after it.
 //!
 //! A `Busy` pool makes room and asks again, dropping the entry worth least
 //! ([`Prefix`]'s order): a turn its conversation has moved past, else the
@@ -76,9 +73,6 @@ pub(super) struct Counts {
     /// of room.
     pub kept: u64,
     pub skipped: u64,
-    /// Snapshots kept short of that point, and those skipped.
-    pub snapshots: u64,
-    pub snapshot_skips: u64,
     /// Entries dropped for room.
     pub evictions: u64,
 }
@@ -180,42 +174,23 @@ impl Cache {
     /// nothing left to make room with, or any other denial, the prompt
     /// goes on without it.
     pub fn keep(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<Option<Checkpoint>, Error> {
-        let kept = self.checkpoint(rt, lease, key)?;
+        let kept = loop {
+            match rt.checkpoint(lease, key.len()) {
+                Ok((cp, copies)) => {
+                    self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
+                    self.prefix.insert(key, cp.clone());
+                    break Some(cp);
+                }
+                Err(Error::Denied(Denied::Busy)) if self.evict() => {}
+                Err(Error::Denied(_)) => break None,
+                Err(e) => return Err(e),
+            }
+        };
         *match kept.is_some() {
             true => &mut self.counts.kept,
             false => &mut self.counts.skipped,
         } += 1;
         Ok(kept)
-    }
-
-    /// [`Cache::keep`] short of where the prompt is kept, counted apart.
-    pub fn snapshot(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<(), Error> {
-        let kept = self.checkpoint(rt, lease, key)?;
-        *match kept.is_some() {
-            true => &mut self.counts.snapshots,
-            false => &mut self.counts.snapshot_skips,
-        } += 1;
-        Ok(())
-    }
-
-    fn checkpoint(
-        &mut self,
-        rt: &mut impl Lessor,
-        lease: &mut Lease,
-        key: &[i64],
-    ) -> Result<Option<Checkpoint>, Error> {
-        loop {
-            match rt.checkpoint(lease, key.len()) {
-                Ok((cp, copies)) => {
-                    self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
-                    self.prefix.insert(key, cp.clone());
-                    return Ok(Some(cp));
-                }
-                Err(Error::Denied(Denied::Busy)) if self.evict() => {}
-                Err(Error::Denied(_)) => return Ok(None),
-                Err(e) => return Err(e),
-            }
-        }
     }
 
     /// A prompt whose last rows are out, all of `key` in its state, as
@@ -427,32 +402,6 @@ mod tests {
         let hits: Vec<bool> = [(1, 5), (0, 6), (1, 7), (0, 8)].map(|(s, n)| turn(&mut c, &mut rt, s, n)).into();
         assert_eq!((hits, c.entries() - c.superseded()), (vec![true; 4], 2));
         assert!(c.take_counts().evictions > 0);
-    }
-
-    #[test]
-    fn a_snapshot_short_of_the_history_serves_a_rewind_and_goes_first_for_room() {
-        // Slot 0 and three slots: the lease's, the snapshot's, the history's.
-        let mut rt = pool(16, 4);
-        let mut c = Cache::new(4);
-        let p1 = prompt(1, 12);
-        let (mut l1, _, _) = c.lease(&mut rt, &p1).unwrap();
-        c.snapshot(&mut rt, &mut l1, &p1[..4]).unwrap();
-        c.keep(&mut rt, &mut l1, &p1[..10]).unwrap();
-        drop(l1);
-        let n = c.take_counts();
-        assert_eq!((n.snapshots, n.kept, n.evictions, c.entries(), c.superseded()), (1, 1, 0, 2, 1));
-        // A retry that rewrites the turn from 7 on parts from the history
-        // before its end: the snapshot is where it continues.
-        let retry: Vec<i64> = p1[..7].iter().copied().chain(prompt(2, 5)).collect();
-        let (mut l2, start, _) = c.lease(&mut rt, &retry).unwrap();
-        assert_eq!(start, 4);
-        // Its lease, the snapshot and the history hold every slot: the
-        // retry's snapshot takes the superseded one's, the history stays.
-        c.snapshot(&mut rt, &mut l2, &retry[..8]).unwrap();
-        let n = c.take_counts();
-        assert_eq!((n.snapshots, n.snapshot_skips, n.evictions, c.entries(), c.superseded()), (1, 0, 1, 2, 0));
-        drop(l2);
-        assert_eq!(c.lease(&mut rt, &p1).unwrap().1, 10);
     }
 
     /// The bytes a stage holds, as the acts and the items leave them: each
