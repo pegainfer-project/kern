@@ -645,11 +645,11 @@ impl<E: Run> KernScheduler<E> {
             let pool = self.pool.as_mut().expect("an inbox needs a pool");
             let member = self.ranks.groups().member(rank.index());
             if let Some(mut p) = pool.pending.remove(&l.id) {
-                if ledger.is_aborted(p.q.id) {
-                    ledger.retire(p.q.id);
-                    continue;
-                }
+                // An aborted fetch keeps its row until every member's get
+                // answered: the others may still be writing into it.
+                let aborted = ledger.is_aborted(p.q.id);
                 match p.stage.clone() {
+                    Stage::Probing(_) if aborted => ledger.retire(p.q.id),
                     Stage::Probing(probe) => {
                         self.stats.pool_probes += 1;
                         self.prefix_cache.host_queries += (p.ids.len() - p.row.prefix()) as u64;
@@ -673,6 +673,7 @@ impl<E: Run> KernScheduler<E> {
                                 p.stage = Stage::Fetching { len, first, landing };
                                 pool.pending.insert(l.id, p);
                             }
+                            Some(_) if aborted => ledger.retire(p.q.id),
                             Some(got) if got > p.row.prefix() => {
                                 let device = p.row.prefix();
                                 self.stats.pool_fetched += 1;
