@@ -378,6 +378,9 @@ fn slot_only_leases_move_the_slot_alone() {
     // Restoring is at its own length and gives a slot-only lease with that prefix.
     let (r, c) = p.restore(&cp, 5, 100).unwrap();
     assert_eq!((r.pages(), r.prefix(), c.pages.len(), c.slot.map(|(a, _)| a)), (0, 5, 0, cp.seq_slot()));
+    // Its copies again, for a fetch that did not land: the slot alone.
+    let again = r.copies_from(&cp);
+    assert_eq!((again.pages.len(), again.slot), (0, c.slot));
     assert_eq!(p.slots_used(), 3);
     drop(r);
     drop(cp);

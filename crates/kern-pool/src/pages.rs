@@ -585,7 +585,8 @@ impl Lease {
     pub fn copies_from(&self, cp: &Checkpoint) -> Copies {
         let unit = self.pool.unit as usize;
         let full = self.prefix / unit;
-        let partial = (!self.prefix.is_multiple_of(unit)).then(|| (cp.page_ids()[full], self.pages[full]));
+        let partial =
+            (self.paged() && !self.prefix.is_multiple_of(unit)).then(|| (cp.page_ids()[full], self.pages[full]));
         Copies { pages: partial.into_iter().collect(), slot: cp.slot_id().zip(self.seq_slot()) }
     }
 
