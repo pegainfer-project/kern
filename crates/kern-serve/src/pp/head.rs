@@ -123,8 +123,8 @@ struct Active {
     pos: usize,
     stop: StopPolicy,
     sampling: Sampling,
-    /// Where its rows stop until the prompt so far is kept, gone once it is.
-    mark: Option<usize>,
+    /// Token position at which to attempt a checkpoint; cleared after the attempt.
+    checkpoint_at: Option<usize>,
     /// The frontend says where the next turn parts from it, before its
     /// end: kept there, its end is not kept.
     parts: bool,
@@ -157,9 +157,9 @@ enum Asked {
     },
 }
 
-/// An entry being put, held so its pages and slot stay until every stage
-/// landed; `mark` is written then, for an entry with a state.
-struct Putting {
+/// A checkpoint being written to the shared cache. Its pages and slot remain
+/// held until every stage completes; then `mark` publishes the stateful entry.
+struct Writeback {
     cp: Checkpoint,
     len: usize,
     landing: Landing,
@@ -186,7 +186,7 @@ struct Pooled {
     unit: usize,
     next: u64,
     pending: BTreeMap<u64, Pending>,
-    puts: BTreeMap<u64, Putting>,
+    puts: BTreeMap<u64, Writeback>,
     /// Marks being written, each holding its entry until it is.
     marks: BTreeMap<u64, Checkpoint>,
     counts: PoolCounts,
@@ -295,7 +295,7 @@ struct PpHead {
     waiting: VecDeque<QueuedRequest>,
     active: VecDeque<Active>,
     /// Per item in flight, oldest first, the prompts its reply finishes.
-    due: VecDeque<Vec<Finish>>,
+    in_flight_items: VecDeque<Vec<Finish>>,
     /// The line tables as the stages last had them written.
     lines: BTreeMap<String, Vec<i64>>,
     cache: Cache,
@@ -459,7 +459,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         decode,
         waiting: VecDeque::new(),
         active: VecDeque::new(),
-        due: VecDeque::new(),
+        in_flight_items: VecDeque::new(),
         lines: BTreeMap::new(),
         cache,
         pool,
@@ -555,7 +555,7 @@ impl PpHead {
 
     /// Prompts leased and not finished.
     fn live(&self) -> usize {
-        self.active.len() + self.pending() + self.due.iter().map(Vec::len).sum::<usize>()
+        self.active.len() + self.pending() + self.in_flight_items.iter().map(Vec::len).sum::<usize>()
     }
 
     /// Prompts leased and waiting on the pooled tier.
@@ -572,7 +572,7 @@ impl PpHead {
         self.waiting.iter().any(|q| q.id == id)
             || self.active.iter().any(|a| a.id == id)
             || self.pool.as_ref().is_some_and(|p| p.pending.values().any(|x| x.q.id == id))
-            || self.due.iter().flatten().any(|f| f.id == id)
+            || self.in_flight_items.iter().flatten().any(|f| f.id == id)
             || self.tiers.open().contains(&id.raw())
     }
 
@@ -654,12 +654,12 @@ impl PpHead {
         // cannot be continued from part of a longer one, and is then the
         // only one kept.
         let parted = q.request.history_tokens.filter(|&m| self.rt.has_seq_state() && m < prompt);
-        let mark = parted.filter(|&m| m > start);
+        let checkpoint_at = parted.filter(|&m| m > start);
         let parts = parted.is_some();
         let stop = q.request.stop_policy.clone();
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
-        let a = Active { id, lease, ids, pos: start, stop, sampling, mark, parts, handoff, passed: 0 };
+        let a = Active { id, lease, ids, pos: start, stop, sampling, checkpoint_at, parts, handoff, passed: 0 };
         self.active.push_back(a);
         Ok(())
     }
@@ -712,7 +712,7 @@ impl PpHead {
         let (id, landing) = (pool.id(), Landing::new(0..pool.stages as usize));
         self.transfer(id, per, true)?;
         let pool = self.pool.as_mut().expect("putting with a pool");
-        pool.puts.insert(id, Putting { cp, len: tokens.len(), landing, mark });
+        pool.puts.insert(id, Writeback { cp, len: tokens.len(), landing, mark });
         Ok(())
     }
 
@@ -893,9 +893,9 @@ impl PpHead {
         a.ids.len() - usize::from(self.step.is_some())
     }
 
-    /// Where the rows of a prompt stop for now: its mark, then its chunked rows.
+    /// Where the rows stop for now: the pending checkpoint, then the chunked rows.
     fn upto(&self, a: &Active) -> usize {
-        a.mark.unwrap_or(self.chunked(a))
+        a.checkpoint_at.unwrap_or(self.chunked(a))
     }
 
     /// Send what is ready: the next packed chunk while the pipeline takes
@@ -909,7 +909,7 @@ impl PpHead {
         let waiting: Vec<Waiting> =
             self.active.iter().map(|a| Waiting { pos: a.pos, left: self.upto(a) - a.pos, passed: a.passed }).collect();
         let plan = pack(&waiting, self.bounds, self.depth);
-        if goes_out(&plan, self.bounds, self.due.len(), self.depth) {
+        if goes_out(&plan, self.bounds, self.in_flight_items.len(), self.depth) {
             for (a, n) in self.active.iter_mut().zip(passed(&waiting, &plan)) {
                 a.passed = n;
             }
@@ -921,14 +921,13 @@ impl PpHead {
             self.send_item(&f, &[(&a.lease, a.pos, &a.ids[a.pos..], a.sampling)])?;
             self.prefilled(&a)?;
             let done = self.leave(a, 0)?;
-            self.due.push_back(vec![done]);
+            self.in_flight_items.push_back(vec![done]);
         }
         Ok(())
     }
 
-    /// One packed chunk item: each planned prompt's next rows; a prompt
-    /// that reaches its mark is kept there, and the prompts the item
-    /// finishes leave the active set for the item's reply.
+    /// One packed chunk item: attempt a checkpoint at its scheduled position.
+    /// Prompts whose last rows are sent leave the active set to await the reply.
     fn send_chunk(&mut self, plan: &[(usize, usize)]) -> Result<()> {
         let f = self.prefill.clone();
         let active = std::mem::take(&mut self.active);
@@ -949,8 +948,8 @@ impl PpHead {
         for (at, &(i, n)) in plan.iter().enumerate() {
             let a = &mut self.active[i];
             a.pos += n;
-            if a.mark == Some(a.pos) {
-                a.mark = None;
+            if a.checkpoint_at == Some(a.pos) {
+                a.checkpoint_at = None;
                 if let Some(cp) = self.cache.keep(&mut self.rt, &mut a.lease, &a.ids[..a.pos])? {
                     kept.push((cp, a.ids[..a.pos].to_vec()));
                 }
@@ -964,14 +963,14 @@ impl PpHead {
         }
         // Highest index first, so each removal leaves the next one's index in place.
         finished.sort_unstable_by(|x, y| y.cmp(x));
-        let mut due = Vec::with_capacity(finished.len());
+        let mut completions = Vec::with_capacity(finished.len());
         for (i, at) in finished {
             let a = self.active.remove(i).expect("planned");
             self.prefilled(&a)?;
-            due.push(self.leave(a, at)?);
+            completions.push(self.leave(a, at)?);
         }
-        due.sort_unstable_by_key(|f| f.at);
-        self.due.push_back(due);
+        completions.sort_unstable_by_key(|f| f.at);
+        self.in_flight_items.push_back(completions);
         Ok(())
     }
 
@@ -1183,8 +1182,8 @@ impl PpHead {
             Event::Taken => return Ok(()),
             Event::Landed { stage, l } => return self.landed(stage, l),
         };
-        let Some(due) = self.due.pop_front() else { bail!("an answer came back for no item") };
-        for r in due {
+        let Some(completions) = self.in_flight_items.pop_front() else { bail!("an answer came back for no item") };
+        for r in completions {
             let Some(&tok) = t.get(r.at) else {
                 bail!("the last stage handed back {} tokens, no token {}", t.len(), r.at)
             };
