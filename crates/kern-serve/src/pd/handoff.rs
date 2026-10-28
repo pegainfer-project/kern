@@ -22,7 +22,8 @@
 //! not asked and stops all asking until D says `Room`.
 //!
 //! Who answers the client: the waiting queue until the request is
-//! admitted on P, these handoffs after, until they finish it, the caller
+//! admitted on P (it starts: a prompt leased and still waiting on the
+//! pooled tier is not admitted yet), these handoffs after, until they finish it, the caller
 //! reports the client gone ([`Handoffs::abort`]) or it starts decoding.
 //! Everything it wants done comes back as [`Out`]s, in order.
 

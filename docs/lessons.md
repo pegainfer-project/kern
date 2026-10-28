@@ -3,6 +3,26 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-10-28，一个请求在哪儿，就由谁来退它；加了新的等待阶段，模拟里也要有它
+
+#99 的 Codex review：流水线头在 lease 时就把请求在 decode tier 上标成 admitted，然后才去池里
+probe / fetch。按 `Handoffs` 的约定，admitted 之后客户端归 tier 管，所以客户端在等池子时走了，
+下一轮的 `retire_gone` 按 `tiers.open()` 退掉它、清掉 gone、放回座位；池子一回话，`resume` 看不
+到 gone，把这个已退的请求重新 activate：front 先收 Retire 再收 Admit，账户重开，整段 prompt
+白 prefill，handoff 也接不上。池化之前 lease 和 activate 是同一刻，"admitted on P"有没有歧义都
+一样；池子在两者之间插进一个阶段，那一刻同时有两个"主人"（池的 pending、tier）都以为该由自己
+退它。没有测试抓到：`PpHead` 拿着 CUDA runtime 和各段的 TCP，离开 GPU 测不了；`tests/sim.rs`
+是照着 head 写的模型，池化进 head 时模型没跟，探索器根本到不了这个状态；K3 的 GPU 门禁里
+AgentX 从不取消请求。
+
+修法先红后绿：模型里加上"lease 后等池子"一步、照当时的 head 写，3000 个调度里第 36 个就收缩到
+15 步的反例（held at the end）；再把 `tiers.admitted` 挪到 `activate`，两边一起改，191 个调度走到
+"池子回话时退掉"、全过。
+
+规则：请求生命周期里每加一个阶段，先问"这时客户端走了由谁退它"，答案只能有一个，是手里攥着
+它资源的那个；`admitted` 这类交接只在资源真的交过去那一刻做。head 加了状态，`tests/sim.rs` 的
+模型同一个 commit 里跟上，且要有一个 `reach` 断言证明调度真的走到了新状态。
+
 ## 2026-10-27，`bytes_per_seq` 的每一字节都要是跨 step 活的
 
 #100：DSV4.1 Flash 的 window state 是个 `128 + max_tokens` 行的环（prefill tier 上 32896 行 × 528 B

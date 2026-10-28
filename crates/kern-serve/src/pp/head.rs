@@ -613,9 +613,6 @@ impl PpHead {
             let reject = match leased {
                 Ok((lease, start, hit)) => {
                     let q = self.waiting.pop_front().unwrap();
-                    if let Some(t) = tier {
-                        self.tiers.admitted(t, id.raw());
-                    }
                     let probe = self.pool.as_ref().and_then(|p| {
                         let marks = crate::scheduler::marks(&q.request);
                         Probe::plan(self.rt.has_seq_state(), p.unit, start, &marks, prompt, Some(p.stages))
@@ -652,6 +649,12 @@ impl PpHead {
     /// are past the prefix.
     fn activate(&mut self, q: QueuedRequest, lease: Lease, ids: Vec<i64>, tier: Option<usize>) -> Result<()> {
         let (id, prompt, start) = (q.id, ids.len(), lease.prefix());
+        // Admitted on P now, not at its lease: a prompt the pooled tier is
+        // still writing into is the pool's to retire, and its tier's once it
+        // starts.
+        if let Some(t) = tier {
+            self.tiers.admitted(t, id.raw());
+        }
         self.note(Note::Admit { id, cached: start })?;
         debug!(request = %id, prompt, prefix_hit = start, "admitted");
         // The prompt's whole self is kept at its end; a parting point is
