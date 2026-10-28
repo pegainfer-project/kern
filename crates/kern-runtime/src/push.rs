@@ -253,7 +253,34 @@ impl Split {
     }
 }
 
+/// A pooled state's allocation as a pooled tier addresses it: object `i`
+/// of `objects` is the `object` bytes at `ptr + i * object`, fixed from
+/// load to drop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    pub state: String,
+    pub kind: Kind,
+    pub ptr: u64,
+    pub object: u64,
+    pub objects: u64,
+}
+
 impl Runtime {
+    /// Every pooled state's allocation, in the pool's order.
+    pub fn pooled_spans(&self) -> Vec<Span> {
+        self.pool
+            .pooled()
+            .iter()
+            .map(|a| Span {
+                state: a.state.clone(),
+                kind: a.kind,
+                ptr: self.states[&a.state].ptr,
+                object: a.object,
+                objects: a.objects as u64,
+            })
+            .collect()
+    }
+
     /// What a peer maps to reach this runtime's pooled states.
     pub fn export_pool(&self) -> Result<PoolHandle> {
         self.ctx.bind_to_thread()?;

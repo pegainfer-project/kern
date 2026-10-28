@@ -123,6 +123,16 @@ impl Cache {
         std::mem::take(&mut self.counts)
     }
 
+    /// `asked` prompt tokens past the device hit were looked up in the
+    /// pooled tier and `landed` came back from it: hits from a tier the
+    /// metrics cannot name.
+    pub fn pooled(&mut self, asked: usize, landed: usize) {
+        let p = &mut self.prefix_cache;
+        p.host_queries += asked as u64;
+        p.hits += landed as u64;
+        p.external_unspecified_hits += landed as u64;
+    }
+
     /// The acts decided since the last call, in the order the head ran
     /// them: what the next item carries.
     pub fn take_acts(&mut self) -> Vec<Act> {
@@ -130,21 +140,24 @@ impl Cache {
     }
 
     /// A lease with room for all of `ids`, continuing from the longest
-    /// entry or fresh, and the tokens it starts past. `Busy` makes room
-    /// and asks again, until the lease fits or nothing is left to make
-    /// room with; every other denial is the caller's.
-    pub fn lease(&mut self, rt: &mut impl Lessor, ids: &[i64]) -> Result<(Lease, usize), Error> {
+    /// entry or fresh, the tokens it starts past, and the entry it
+    /// continues from. `Busy` makes room and asks again, until the lease
+    /// fits or nothing is left to make room with; every other denial is
+    /// the caller's.
+    pub fn lease(&mut self, rt: &mut impl Lessor, ids: &[i64]) -> Result<(Lease, usize, Option<Checkpoint>), Error> {
         loop {
             // Room made last time may have dropped the entry hit then.
             let got = match self.prefix.lookup(ids) {
-                Some(h) => rt.lease_from(&h.found, h.len, ids.len()).map(|(l, c)| (l, Some(Act::Copy(c.into())))),
+                Some(h) => rt
+                    .lease_from(&h.found, h.len, ids.len())
+                    .map(|(l, c)| (l, Some(Act::Copy(c.into())), Some(h.found))),
                 None => rt.lease(ids.len()).map(|l| {
                     let zero = l.seq_slot().map(Act::Zero);
-                    (l, zero)
+                    (l, zero, None)
                 }),
             };
             match got {
-                Ok((lease, act)) => {
+                Ok((lease, act, hit)) => {
                     self.acts.extend(act.filter(|a| !idle(a)));
                     let start = lease.prefix();
                     let c = &mut self.counts;
@@ -153,7 +166,7 @@ impl Cache {
                     let p = &mut self.prefix_cache;
                     p.queries += ids.len() as u64;
                     p.hits += start as u64;
-                    return Ok((lease, start));
+                    return Ok((lease, start, hit));
                 }
                 Err(Error::Denied(Denied::Busy)) if self.evict() => {}
                 Err(e) => return Err(e),
@@ -162,38 +175,44 @@ impl Cache {
     }
 
     /// Keep the first `key.len()` tokens of `lease`, a prompt still being
-    /// fed, which `key` names. `Busy` makes room as a lease does; with
-    /// nothing left to make room with, or any other denial, the prompt goes
-    /// on without it.
-    pub fn keep(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<(), Error> {
+    /// fed, which `key` names: the entry, held by the caller too for as
+    /// long as it wants its pages. `Busy` makes room as a lease does; with
+    /// nothing left to make room with, or any other denial, the prompt
+    /// goes on without it.
+    pub fn keep(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<Option<Checkpoint>, Error> {
         let kept = self.checkpoint(rt, lease, key)?;
-        *match kept {
+        *match kept.is_some() {
             true => &mut self.counts.kept,
             false => &mut self.counts.skipped,
         } += 1;
-        Ok(())
+        Ok(kept)
     }
 
     /// [`Cache::keep`] short of where the prompt is kept, counted apart.
     pub fn snapshot(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<(), Error> {
         let kept = self.checkpoint(rt, lease, key)?;
-        *match kept {
+        *match kept.is_some() {
             true => &mut self.counts.snapshots,
             false => &mut self.counts.snapshot_skips,
         } += 1;
         Ok(())
     }
 
-    fn checkpoint(&mut self, rt: &mut impl Lessor, lease: &mut Lease, key: &[i64]) -> Result<bool, Error> {
+    fn checkpoint(
+        &mut self,
+        rt: &mut impl Lessor,
+        lease: &mut Lease,
+        key: &[i64],
+    ) -> Result<Option<Checkpoint>, Error> {
         loop {
             match rt.checkpoint(lease, key.len()) {
                 Ok((cp, copies)) => {
                     self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
-                    self.prefix.insert(key, cp);
-                    return Ok(true);
+                    self.prefix.insert(key, cp.clone());
+                    return Ok(Some(cp));
                 }
                 Err(Error::Denied(Denied::Busy)) if self.evict() => {}
-                Err(Error::Denied(_)) => return Ok(false),
+                Err(Error::Denied(_)) => return Ok(None),
                 Err(e) => return Err(e),
             }
         }
@@ -201,9 +220,15 @@ impl Cache {
 
     /// A prompt whose last rows are out, all of `key` in its state, as
     /// an entry: its pages and slot become the entry's.
-    pub fn retire(&mut self, rt: &mut impl Lessor, lease: Lease, key: &[i64]) {
+    pub fn retire(&mut self, rt: &mut impl Lessor, lease: Lease, key: &[i64]) -> Checkpoint {
         let cp = rt.retire(lease, key.len());
-        self.prefix.insert(key, cp);
+        self.prefix.insert(key, cp.clone());
+        cp
+    }
+
+    /// An act the head ran on its own states, for the stages to run on theirs.
+    pub fn act(&mut self, a: Act) {
+        self.acts.push(a);
     }
 
     /// Make room: the entry worth least is dropped; `false` when nothing
@@ -302,18 +327,21 @@ mod tests {
         let mut rt = pool(16, 0);
         let mut c = Cache::new(4);
         let p1 = prompt(1, 10);
-        let (l1, start) = c.lease(&mut rt, &p1).unwrap();
-        assert_eq!((start, l1.page_ids(), copies(&mut c)), (0, &[0, 1, 2][..], (vec![], vec![])));
+        let (l1, start, hit) = c.lease(&mut rt, &p1).unwrap();
+        assert_eq!((start, l1.page_ids(), copies(&mut c), hit.is_none()), (0, &[0, 1, 2][..], (vec![], vec![]), true));
         c.retire(&mut rt, l1, &p1);
         // The same prompt again: its last token is never covered, so it
         // continues at the whole pages it shares, nothing copied.
-        let (again, start) = c.lease(&mut rt, &p1).unwrap();
-        assert_eq!((start, again.page_ids(), copies(&mut c)), (8, &[0, 1, 3][..], (vec![], vec![])));
+        let (again, start, hit) = c.lease(&mut rt, &p1).unwrap();
+        assert_eq!(
+            (start, again.page_ids(), copies(&mut c), hit.map(|h| h.tokens())),
+            (8, &[0, 1, 3][..], (vec![], vec![]), Some(10))
+        );
         drop(again);
         // A second turn covers the whole of the first: the page the first
         // ends inside is copied for the new lease, which writes on past it.
         let p2: Vec<i64> = p1.iter().copied().chain(prompt(2, 6)).collect();
-        let (l2, start) = c.lease(&mut rt, &p2).unwrap();
+        let (l2, start, _) = c.lease(&mut rt, &p2).unwrap();
         assert_eq!((start, l2.page_ids(), copies(&mut c)), (10, &[0, 1, 3, 4][..], (vec![(2, 3)], vec![])));
         assert_eq!(c.take_counts(), Counts { hits: 2, hit_tokens: 18, ..Counts::default() });
     }
@@ -325,18 +353,18 @@ mod tests {
         let mut c = Cache::new(4);
         for seed in 1..=2 {
             let p = prompt(seed, 6);
-            let (l, _) = c.lease(&mut rt, &p).unwrap();
+            let (l, _, _) = c.lease(&mut rt, &p).unwrap();
             c.retire(&mut rt, l, &p);
         }
         assert_eq!((c.entries(), rt.pool.used()), (2, 4));
         // A third has no room until the coldest, the first, goes.
         let p3 = prompt(3, 6);
-        let (l3, start) = c.lease(&mut rt, &p3).unwrap();
+        let (l3, start, _) = c.lease(&mut rt, &p3).unwrap();
         assert_eq!((start, l3.page_ids(), c.entries()), (0, &[0, 1][..], 1));
         c.retire(&mut rt, l3, &p3);
         // The second again: the lookup makes it the warmest, so the third
         // goes for the page its lease needs past the shared one.
-        let (l2, start) = c.lease(&mut rt, &prompt(2, 6)).unwrap();
+        let (l2, start, _) = c.lease(&mut rt, &prompt(2, 6)).unwrap();
         assert_eq!((start, l2.page_ids(), c.entries()), (4, &[2, 0][..], 1));
         // A lease held by a prompt is not the cache's to drop: with the
         // entries gone, a prompt that does not fit waits.
@@ -350,7 +378,7 @@ mod tests {
         let mut rt = pool(16, 3);
         let mut c = Cache::new(4);
         let p1 = prompt(1, 10);
-        let (mut l1, _) = c.lease(&mut rt, &p1).unwrap();
+        let (mut l1, _, _) = c.lease(&mut rt, &p1).unwrap();
         // The history ends at 6: the page it ends inside and the slot are
         // copied into the entry's own.
         c.keep(&mut rt, &mut l1, &p1[..6]).unwrap();
@@ -359,13 +387,13 @@ mod tests {
         // left whole takes the freed slot, so both slots are held.
         drop(l1);
         let p0 = prompt(3, 5);
-        let (l0, _) = c.lease(&mut rt, &p0).unwrap();
+        let (l0, _, _) = c.lease(&mut rt, &p0).unwrap();
         c.retire(&mut rt, l0, &p0);
         // The next turn parts from p1 where its history ends and continues
         // from that entry, which the lookup makes the warmer: its slot comes
         // from dropping the other conversation.
         let p2: Vec<i64> = p1[..6].iter().copied().chain(prompt(2, 5)).collect();
-        let (l2, start) = c.lease(&mut rt, &p2).unwrap();
+        let (l2, start, _) = c.lease(&mut rt, &p2).unwrap();
         assert_eq!((start, l2.seq_slot(), copies(&mut c).1), (6, Some(1), vec![(2, 1)]));
         assert_eq!(c.take_counts(), Counts { hits: 1, hit_tokens: 6, kept: 1, evictions: 1, ..Counts::default() });
         // Both slots held: the pool alone has nothing to lease with.
@@ -383,7 +411,7 @@ mod tests {
             // turn renders otherwise: kept where the history ends, the
             // lease then back to the pool.
             let p: Vec<i64> = history[s].iter().copied().chain(prompt(n, 4)).chain([-1, -2]).collect();
-            let (mut l, start) = c.lease(rt, &p).unwrap();
+            let (mut l, start, _) = c.lease(rt, &p).unwrap();
             c.keep(rt, &mut l, &p[..p.len() - 2]).unwrap();
             drop(l);
             let hit = start == history[s].len();
@@ -407,7 +435,7 @@ mod tests {
         let mut rt = pool(16, 4);
         let mut c = Cache::new(4);
         let p1 = prompt(1, 12);
-        let (mut l1, _) = c.lease(&mut rt, &p1).unwrap();
+        let (mut l1, _, _) = c.lease(&mut rt, &p1).unwrap();
         c.snapshot(&mut rt, &mut l1, &p1[..4]).unwrap();
         c.keep(&mut rt, &mut l1, &p1[..10]).unwrap();
         drop(l1);
@@ -416,7 +444,7 @@ mod tests {
         // A retry that rewrites the turn from 7 on parts from the history
         // before its end: the snapshot is where it continues.
         let retry: Vec<i64> = p1[..7].iter().copied().chain(prompt(2, 5)).collect();
-        let (mut l2, start) = c.lease(&mut rt, &retry).unwrap();
+        let (mut l2, start, _) = c.lease(&mut rt, &retry).unwrap();
         assert_eq!(start, 4);
         // Its lease, the snapshot and the history hold every slot: the
         // retry's snapshot takes the superseded one's, the history stays.
@@ -449,6 +477,7 @@ mod tests {
                         m.pages.iter().for_each(|&(a, b)| self.pages[b as usize] = self.pages[a as usize].clone());
                         m.slot.iter().for_each(|&(a, b)| self.slots[b as usize] = self.slots[a as usize].clone());
                     }
+                    a => unreachable!("a pipeline head queues no pooled act: {a:?}"),
                 }
             }
         }
@@ -522,7 +551,7 @@ mod tests {
                         ids.push(word);
                     }
                     ids.extend([-1, -2]);
-                    match c.lease(&mut rt, &ids) {
+                    match c.lease(&mut rt, &ids).map(|(l, s, _)| (l, s)) {
                         Ok((lease, start)) => {
                             st.run(c.take_acts());
                             let (toks, state) = st.read(&lease, start);
@@ -551,7 +580,7 @@ mod tests {
                         turns[f.conv].push(f.ids[..f.mark].to_vec());
                         match rec {
                             true => drop(f.lease),
-                            false => c.retire(&mut rt, f.lease, &f.ids),
+                            false => drop(c.retire(&mut rt, f.lease, &f.ids)),
                         }
                     }
                 }

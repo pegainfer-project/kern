@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use kern_runtime::{Runtime, Safetensors};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +29,30 @@ impl Weights {
         match self {
             Weights::Files(paths) => paths.iter().map(|p| checkpoint_dir(p)).collect(),
         }
+    }
+
+    /// What identifies these weights to a pooled KV tier: a digest of
+    /// every file's size and safetensors header (every tensor's dtype,
+    /// shape and offset), in file order. Reads a few MB, never the
+    /// tensors; two checkpoints with the same tensors laid out the same
+    /// way but different values are told apart by nothing cheaper.
+    pub fn digest(&self) -> Result<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let Weights::Files(paths) = self;
+        let mut h = Sha256::new();
+        for path in crate::shard_files(paths)? {
+            let mut f = std::fs::File::open(&path).with_context(|| path.display().to_string())?;
+            let len = f.metadata()?.len();
+            let mut n = [0u8; 8];
+            f.read_exact(&mut n).with_context(|| format!("{}: no safetensors header", path.display()))?;
+            let mut header = vec![0u8; u64::from_le_bytes(n) as usize];
+            f.read_exact(&mut header).with_context(|| format!("{}: short safetensors header", path.display()))?;
+            h.update(len.to_le_bytes());
+            h.update(n);
+            h.update(&header);
+        }
+        Ok(h.finalize().into())
     }
 
     pub fn bind(&self, rt: &mut Runtime) -> Result<()> {

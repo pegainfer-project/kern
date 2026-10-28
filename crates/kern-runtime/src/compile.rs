@@ -411,7 +411,9 @@ pub(crate) fn resolve_ops(
         }
         ops.insert(name.clone(), ResolvedOp { launches, scratch });
     }
-    for (func, bytes) in shared.into_values().filter(|&(_, bytes)| bytes > 48 * 1024) {
+    // the opt-in is on the sum with the kernel's static shared memory, which the launch alone cannot see, so
+    // every kernel that takes dynamic shared memory gets its largest ask
+    for (func, bytes) in shared.into_values().filter(|&(_, bytes)| bytes > 0) {
         cuda_check(
             unsafe {
                 sys::cuFuncSetAttribute(

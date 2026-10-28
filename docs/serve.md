@@ -9,6 +9,7 @@ target/release/kern-serve --manifest examples/qwen3-4b.json --kernels kernels --
 # state 池默认按显存自动定：权重/激活/scratch 分完后，剩余显存减 1 GiB 全给 state，
 # KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 显式给则照旧。
 # /v1/completions、/v1/chat/completions（流式 + chat template）、/v1/models、/metrics
+# --pool-master host:port --pool-device mlx5_bond_0 加入 Mooncake 池化 KV 层（下文「池化 KV 层」）
 ```
 
 manifest / kernels / weights 走 `--manifest` `--kernels` `--weights`（与 `kern run`
@@ -26,11 +27,14 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 `infront-engine` + `infront-vllm`，底下是 vLLM 官方的 Rust server crates，git dep 钉 infront main 的
 一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 infront `4fa55c7b` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
+当前钉在 infront `ea2db279` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
 `ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
-不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history_boundary`
-打开，chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条）；停止原因并进
-`FinishReason::Stop(StopCause)`。更早在 pegainfer 上的 `f53b282f` bump 带来的：
+不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history: History::Marks`，
+chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条），并对每条后面跟着 assistant 消息的消息
+渲染一次 `messages[..=i]`，最新 8 个边界作为 `Request::history_marks` 随请求给引擎，池化层探每一个
+（下文「池化 KV 层」；infront#13，即 pegainfer#1189 的移植）；停止原因并进
+`FinishReason::Stop(StopCause)`。
+更早在 pegainfer 上的 `f53b282f` bump 带来的：
 停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
 降成一份策略，scheduler 只 `classify`，结束时带 `stop_cause`），kern-serve 不再自己读
 `generation_config.json` 的 eos，`--stop-tokens` 删除；DSV4.1 renderer 的 reasoning effort
@@ -862,6 +866,141 @@ prompt 单独跑和打包跑首 token 12/12 一致；前缀命中 `cached_tokens
 保留把 KV 换成了 slot：c512 × 1k 时每 rank 只剩 ~3200 页。短于 ~800k token 的前缀保留是亏的；策略（每 rank 限
 checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats 行打 `pages=used/live slots=used/live`。
 没做：`history_tokens` 处的快照、host tier、P→D handoff（executor rank 不收 `Push`）。
+
+## 池化 KV 层（Mooncake Store，2026-10-27）
+
+`--pool-master host:port --pool-device <rdma dev>` 让每个 rank（PP 下每个 stage 和 head，DP prefill tier 的每个 rank）各开一个
+Mooncake client，把 `pooled_spans()` 注册给 RDMA；prefix tree 留下的每个快照都被 put，admit 时
+device 没命中的部分先探池、再取回，取回的前缀在 device 池里也建 checkpoint。不给 `--pool-master`
+行为同之前。设计、对象与 key、读写路径、失败模式在 `pool.md` 第 9 节。
+
+| flag | 缺省 | 含义 |
+|---|---|---|
+| `--pool-master` | 无 | Mooncake master，`host:port` |
+| `--pool-metadata` | `P2PHANDSHAKE` | transfer engine 的 metadata server |
+| `--pool-device` | 必填 | 传输用的 RDMA 网卡 |
+| `--pool-hostname` | `<hostname>:17100+gpu` | 本进程在池里的名字，每进程唯一 |
+| `--pool-segment` | 无 | 本 tray 持段进程的段名，put 优先放这里（Mooncake 缺省随机放置，每次 put 都过网卡） |
+| `--pool-library` | loader 路径 | `libmooncake_store.so` |
+| `--pool-cooldown` | 30 s | client 报错后多久内每个 act 直接失败 |
+
+部署：每 tray 一个独立的持段进程（Mooncake 自己的 client，`global_segment_size` 给 DRAM 大小），
+kern 的进程贡献 0 字节。原因是 client 退出时它的段整体消失，kern 重启不能带走池的一份。
+
+client 三个 worker 线程：探测一队，get 一队，put 与 mark 一队。探测不排在别人半秒的 get 后面；
+get 串行让一次 get 独占网卡，10 秒租约从元数据请求起算。worker 只轮询 `Runtime::mark` 的 pinned
+字，从不调 CUDA。
+
+stats 行多了 `pool_probes` / `pool_hits` / `pool_fetched` / `pool_fetched_tokens` / `pool_fetch_fails` /
+`pool_puts` / `pool_put_fails`（PP head 另有 `pool_pending`）；metrics 的 waiting 计入探池中的请求。
+
+**2026-10-27 通过（`~/bench_results/2026-10-27-pooled-kv-e2e/`）**：master 与 64 GB DRAM holder 在 tray03，
+一个会话四轮交替打两个实例（第四轮 max_tokens=1），每轮同时发给池外的冷实例，回复逐字相同，第一轮之后
+每轮都命中池：
+
+| 路径 | 实例 | 第二轮命中 / prompt | B 的取回 |
+|---|---|---|---|
+| paged-only 单卡 | qwen3-4b，tray03 GPU 0 / 1 | 3152 / 3226 | 197 页（页 16），探到落地 33 ms |
+| 带 state（GDN）跨 tray | qwen3.8-27b，tray07 GPU 0 / 1 ↔ tray03 DRAM | 2953 / 3020 | mark 2953 的 state + 46 页（页 64），30 ms |
+| PP 2 段 | qwen3-4b 切在 218，tray03 GPU 0+1 / 2+3 | 3120 / 3154 | 两段各 195 页，30 ms |
+
+`history_marks` 生效：第二轮探 `marks=[3114, 3053]`，取其下每页都在的最新一个；A 写的第一轮 mark 和 B 写的
+第二轮 mark 第三轮在 A 上接上（device 3053，取回 3114）。带 state 跨 tray 的单请求 TTFT：第二轮 32 token
+0.45–1.4 s（冷 0.67 s），第四轮一个 token 0.07–0.27 s；一次取回是一个 147 MiB 的 slot 加页，约 11 GB/s，
+没有调、没有负载。
+
+运维两条：HTTP metadata server 会留着被杀进程的 `rpc_meta/<hostname>`，同名新进程进不去（"Duplicate rpc_meta
+key"），`--pool-metadata` 用缺省 `P2PHANDSHAKE`；被杀的 holder 的段名仍挂在 master 上，同名重挂是 no-op、池 0
+字节、每次 put 被拒（master 日志 "insufficient space"），holder 要换端口重挂。被拒的 batch kern-serve 以 debug
+记一行 `pool refused`，原因看 master 日志。
+
+**2026-10-27 DSV4.1 Flash DP+EP4 通过（同目录）**：tray17 与 tray07 各一个 prefill tier（`dp.rs`，一卡一进程），
+round-robin router 打两边；master 在 tray03，三个 holder 共 1.27 TB DRAM（tray03 500 GB、tray07 / tray17 各 400 GB，
+`--eviction_high_watermark_ratio=0.8`，默认 allocator）。AgentX 经 aiperf，并发 32，600 s，max_tokens=1，ISL 均 106k：
+
+| | 无池 | 池化 |
+|---|---|---|
+| 请求 | 1388（2.2 req/s） | 1570（2.49 req/s） |
+| TTFT p50 / p90 / p99 | 2076 / 4011 / 5746 ms | 344 / 1104 / 2968 ms |
+| GPU 实际 prefill 行数 | 151.4M | 13.5M |
+| 探池命中 | — | 1458 / 1613（90%），每次取回平均 108k token；device 自身只命中平均 8 token |
+| 取回失败 / put 被拒 | — | 0 / 0 |
+| 一次 ~800 MB 的 put / get 落地 | — | 平均 34 ms，最大 189 ms |
+| 池末占用 | — | 934 GB（72%） |
+
+请求数只涨 13%：trace 自带轮间间隔，闭环的速率由 trace 定，收益在 TTFT。DP 层的 device 前缀缓存对多轮几乎无用
+（device 只留 prompt 末尾的条目，下一轮不从那里续），池的 `history_tokens` 快照是第二轮命中的全部来源，所以 dp.rs 给
+这份快照像租约一样腾 slot（没腾之前 600 s 里 501 次 "slots busy"，池里一个 state 都没有）。每次 put 里 712 MiB 是
+window state 的 ring（活的只有 128 行，#100），页只有 ~90 MB；第一次跑时 256 GB 的单 holder 10 分钟被小对象填满、
+state 全被拒（rc -200），holder 要够大、分在多台 tray。
+
+精度：qwen3-4b / qwen3.8-27b / PP2 三条路径逐字同冷实例（上表）。DSV4.1 的首 token 对照不能当门禁：这个 manifest 的
+prefill 对 chunk 边界敏感，不带池的实例上同一 prompt 从 0 算和从 device 续算（completions，尾 chunk 2–28 行）在近平局
+的回忆题上 37% 翻转，答案确定的题不翻（冷实例正序 / 倒序 128/128，5 行 / 25 行续算 48/48）。带池路径每个 prompt 在
+`history_tokens`（prompt − 2，assistant 标记前）切一刀，多一个 2 行的尾 chunk，与冷实例的首 token 一致率在同一区间
+（近平局题 57/128，确定题全同）；两个带池 tier 互相一致，各自重放 125/128（差的 3 处是命中路径不同）。logits 级 KL
+门禁等 DSV4.1 有 logits 通路再补。
+
+杀 master（同配置，AgentX c32 300 s，+60 s `pkill mooncake_master`，+150 s 重启）：请求 0 失败（993 个，3.0 req/s），
+没 master 的 90 s 里探池全 miss、按 device 前缀算，put 被拒 203 次；第一次探失败（rc -900）立即进 30 s cooldown，
+cooldown 过后再探一次要 4.3 s 才超时、再进 cooldown，所以每 30 s 有一个请求多付 4 s；master 回来后 holder 自己重挂、
+cooldown 一过命中恢复（重启后 33 s 内），全程 TTFT p50 / p90 / p99 379 / 3426 / 10228 ms。
+
+**K3 PP8 过池（2026-10-27 晚，`~/bench_results/2026-10-27-k3-pp8-pooled-1p1d`）**：full K3 bf16 KV，P = PP8（tray07+17，
+chunk 8192，`--max-seqs 128 --seq-slots 256`），D = TP8 一个 tier（tray01+02，生成器 `k3_mla_absorb_mma` 上限 64 行，
+所以一个 D 只坐 64 个序列，1P1D 而非 1P2D），P、D 都从 kern-k3-pp-prefill `2d41c94` 一个生成器出（10-20 的 sglang 布局 P
+的 state 叫 `conv.l*/ssm.l*`，和 D 的 `kda.*` 对不上，head 会拒绝）；master tray03，六个 tray 共 3.12 TB DRAM holder。
+AgentX c48 600 s：0 失败，命中 87%（device 73.8M token，池 0.3M——单个 P 自己的 device 就够，池在这里只写不读），
+去掉前 120 s 的 TTFT p50 / p90 1356 / 4471 ms（10-11 带 host tier 的 1P2D c64：1600 / 2970），D step 38 ms；
+gsm8k 5-shot c64：0.9666 / 0.9674 ± 0.0049（10-11 kern-serve bf16 0.9682，10-19 SGLang P + kern D 0.9712，一个标准误内）。
+`--seq-slots` 原来只对 DP tier 生效，pipeline 的 head 和 stage 一直是 `max_seqs + 1`，K3 c64 时 129 / 130 个 slot 占满、
+40–57 个 prompt 排在准入外（TTFT p50 24 s）；已改成 head 和每个 stage 都按它配（`68e1402`）。
+
+1P2D（21:51 凑到 6 个空 tray：P tray07+17，D tray04+06 和 tray08+12 各一个 TP8，7 台各 600 GB holder 共 4.10 TB，
+冷 lane、空池、600 s 一轮，前 9–10 分钟都在消化冷启风暴，看 600 s 之后的请求）：c80 稳（队列空，TTFT p50 / p90
+1923 / 3737 ms，94% < 5 s），c96 不稳（p90 12.6 s，只有 76% < 5 s，两个 D 各 64 座坐满），**一个 PP8 带两个 D 过池约扛
+c88 ± 8**，和 10-11 host tier 的 1P2D 落在同一处（c64 稳、c96 饱和）；命中 83% 对那时的 89–93%，少的那几点是 device
+留不住的前缀（每轮淘汰 2.2–2.4k 条）改由池补（每轮 fetch 6.7–15.3M token）。
+
+P 单独的并发上限（停掉 D，head 自己答、`max_tokens=1`，每轮清池、600 s）：c48 队列空（waiting p50 / p90 0 / 0，
+第 8 分钟起 TTFT p50 1.0–1.8 s，命中 92.9%），c64 开始排队（waiting p50 4，TTFT p50 8.1 s），c80 / c96 崩（11 s / 124 s，
+c96 命中掉到 53%）；c48 起 req/s 就平在 3.15，再加 lane 只是排队。所以 P-only 口径下一个 PP8 过池大约扛 **c56 ± 8**（按请求率换算 3.15 req/s 超过 10-11 的 1P2D c96 的 2.68；带 D 实测见上，c88 ± 8）。顶住的不是算力（c64–c96 新算 29k tok/s，
+10-11 饱和时 24k），是 device 的 page 预算：177640 页 × 64 = 11.4M token 要装 running 的 prompt 加每条 lane 的 kept 前缀
+（80 条 × 90k ≈ 7.2M），`kv_pct` 常年 98–99%，准入是 head-of-line——队首 prompt 等一次淘汰一条地腾地方（`pp/cache.rs`、
+`pp/head.rs::admit`），`waiting` 爬到 90–140、`running` 掉到 20 多，然后一次扫出 100 多条再放一批进来；10-11 的 host tier
+（每段 128 GiB）替 device 兜着 kept 前缀，所以那时 device 页只装 running 的。池的 get 被拒（`rc=1`，整批）c96 73 次、c48 0 次，
+都按设计退回 device 前缀算，没有请求失败。
+
+**2026-10-27 window state 修掉之后（`~/bench_results/2026-10-27-dsv41-window-work`）**：#100 的根因在 kern-dsv41-flash
+的生成器——window state 声明成 `128 + max_tokens` 行的环，只为一步内的行不踩这一步还在读的槽；改成 state 只留 256 个位置、
+一步的 K/V 进 `window.work` 工作区（kern-dsv41-flash `340cf28`），每序列 712 MiB → 5.5 MiB，paged 页 181k → 553k，同路径
+48/48 轮一致。单 tier 带池 AgentX c32 300 s：TTFT p50 627 → 297 ms，每个 put 13 MB、池动作 39 → 4.4 ms。
+
+顺着查到 DP 层 device 从不命中的真正原因：下一轮的渲染在 `history_tokens`（assistant 标记前）之后就和上一轮不同，而 device
+只在 retire 时按整条 prompt 建条目、`history_tokens` 的快照只给池；`8c32e77` 起快照就是该 rank 的 kept entry（有没有池
+都取），prompt 末尾不再另存，`--seq-slots` 单独定 slot 数（默认 `--max-seqs` + 1）。单 tier `--seq-slots 512` 同负载：
+device 命中 0 → 944 / 1056（89%，正是之前池命中的那部分），池 fetch 0，TTFT 不变（p50 282 ms）——13 MB 的 fetch 本来
+就不是成本，device 命中的意义在多 tier。
+
+路由消融（4 tier：tray07 / 17 / 01 / 02，`--seq-slots 512`，池 master tray03 + holder tray03 / tray17 各 200 GB；每个策略
+前重启 4 个 tier 并清池，AgentX c1024 600 s，vllm-router 0.1.15，`power_of_two` 打了让它计 in-flight 的补丁）。第 0 分钟是
+1024 个会话首轮同时到的冷启动风暴（971 个请求 × 122k token，TTFT p50 77 s），决定整段 p99（43–46 s）且与策略无关；
+稳态取第 5–12 分钟启动的请求：
+
+| 策略 | 稳态 TTFT p50 / p90 / p99 | 整段 p50 / p90 / p99 | device 命中 | 池 fetch | 请求 |
+|---|---|---|---|---|---|
+| cache_aware | 2239 / 3191 / 4729 ms | 2590 / 7076 / 46371 | 65% | 61% | 38905 |
+| round_robin | 1760 / 2853 / 4266 ms | 1985 / 7825 / 43258 | 65% | 62% | 39619 |
+| power_of_two | 1365 / 2206 / 3088 ms | 1697 / 3683 / 42722 | 66% | 62% | 41012 |
+| power_of_all（全体里取 in-flight 最少，本地加的策略） | 1836 / 2853 / 3870 ms | 2241 / 6227 / 46144 | 65% | 62% | 39738 |
+| consistent_hash | 1121 / 1827 / 2754 ms | 1443 / 3655 / 43670 | 83% | 1% | 41336 |
+
+consistent_hash 稳态 TTFT 是 round_robin 的 0.64×：会话黏在同一 tier，device 命中 65% → 83%，池只剩写入；收益来自
+命中率而不是省下的 fetch——round_robin 下 35% 的请求两边都没命中（上一轮在别的 tier、快照未落地或已被池淘汰：
+每策略 4 万个 put、池 10 分钟到 80% 水位），黏住后降到 17%。power_of_two 靠最短队列在稳态比 round_robin 快 22%，
+命中率不变；power_of_all（全体最少）和 round_robin 一样——router 的负载是 in-flight 请求数，prompt 30k–250k 差 8 倍，
+请求数不代表行数。这三者各跑一次，1.4–1.8 s 的差距里噪声占多少未定；consistent_hash 的差距是机制性的。cache_aware 最差：按文本前缀树把同源会话堆到一个 tier（burst 期一个 tier 跑 32 个、其余 0），均衡差而
+命中率没涨。c128 时 4 tier in-flight ≤ 8、没有队列，策略之间看不出差别；c512 稳态每 tier 9–18 个仍无队列。
 
 ## 没做（按需要加）
 

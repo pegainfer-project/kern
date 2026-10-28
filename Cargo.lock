@@ -2013,7 +2013,7 @@ dependencies = [
 [[package]]
 name = "infront-engine"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/infront?rev=4fa55c7b8169bc931b197fd079ec2b8228a5ee03#4fa55c7b8169bc931b197fd079ec2b8228a5ee03"
+source = "git+https://github.com/pegainfer-project/infront?rev=ea2db2791c988321d7299a1f405a529e1a1d50b4#ea2db2791c988321d7299a1f405a529e1a1d50b4"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2026,7 +2026,7 @@ dependencies = [
 [[package]]
 name = "infront-vllm"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/infront?rev=4fa55c7b8169bc931b197fd079ec2b8228a5ee03#4fa55c7b8169bc931b197fd079ec2b8228a5ee03"
+source = "git+https://github.com/pegainfer-project/infront?rev=ea2db2791c988321d7299a1f405a529e1a1d50b4#ea2db2791c988321d7299a1f405a529e1a1d50b4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2164,7 +2164,10 @@ dependencies = [
 name = "kern-pool"
 version = "0.3.1"
 dependencies = [
+ "hex",
  "kern-manifest",
+ "serde",
+ "sha2 0.11.0",
  "thiserror",
 ]
 
@@ -2234,8 +2237,10 @@ dependencies = [
  "kern-pool",
  "kern-run",
  "kern-runtime",
+ "mooncake_store",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "tower",
  "tracing",
@@ -2603,6 +2608,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "mooncake_store"
+version = "0.1.0"
+source = "git+https://github.com/kvcache-ai/Mooncake?rev=679ae2517249d38ca99f18ea640b3524cb6dd180#679ae2517249d38ca99f18ea640b3524cb6dd180"
+dependencies = [
+ "libc",
+ "libloading 0.8.9",
+ "thiserror",
 ]
 
 [[package]]

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 580" width="1000" height="580" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="head" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path d="M1,1 L10,6 L1,11" fill="none" stroke="#1e1e1e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <g id="node">
+      <rect x="0" y="0" width="240" height="150" rx="12" fill="#ffffff" stroke="#1e1e1e" stroke-width="2"/>
+      <rect x="18"  y="52" width="44" height="44" rx="6" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+      <rect x="72"  y="52" width="44" height="44" rx="6" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+      <rect x="126" y="52" width="44" height="44" rx="6" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+      <rect x="180" y="52" width="44" height="44" rx="6" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+      <text x="120" y="128" text-anchor="middle" font-size="15" fill="#495057">GPU HBM · L1</text>
+    </g>
+    <g id="dram">
+      <rect x="0" y="0" width="200" height="64" rx="10" fill="#b2f2bb" stroke="#1e1e1e" stroke-width="2"/>
+      <text x="100" y="38" text-anchor="middle" font-size="18" font-weight="600" fill="#1e1e1e">DRAM</text>
+    </g>
+  </defs>
+
+  <rect width="1000" height="580" fill="#ffffff"/>
+
+  <!-- Router -->
+  <rect x="420" y="30" width="160" height="56" rx="12" fill="#ffec99" stroke="#1e1e1e" stroke-width="2"/>
+  <text x="500" y="64" text-anchor="middle" font-size="20" font-weight="600" fill="#1e1e1e">Router</text>
+  <text x="612" y="54" font-size="18" fill="#e03131">no cache-aware routing</text>
+  <text x="612" y="78" font-size="15" fill="#868e96">any node can take any turn</text>
+
+  <g fill="none" stroke="#1e1e1e" stroke-width="2" stroke-linecap="round" marker-end="url(#head)">
+    <path d="M470,88 L190,136"/>
+    <path d="M500,88 L500,136"/>
+    <path d="M530,88 L810,136"/>
+  </g>
+
+  <!-- Prefill nodes -->
+  <use href="#node" x="60" y="142"/>
+  <use href="#node" x="380" y="142"/>
+  <use href="#node" x="700" y="142"/>
+  <text x="78" y="176" font-size="18" font-weight="600" fill="#1e1e1e">Prefill 0</text>
+  <text x="398" y="176" font-size="18" font-weight="600" fill="#1e1e1e">Prefill 1</text>
+  <text x="718" y="176" font-size="18" font-weight="600" fill="#1e1e1e">Prefill 2</text>
+
+  <!-- HBM <-> pool -->
+  <g fill="none" stroke="#1e1e1e" stroke-width="2" stroke-linecap="round" marker-start="url(#head)" marker-end="url(#head)">
+    <path d="M180,298 L180,366"/>
+    <path d="M500,298 L500,366"/>
+    <path d="M820,298 L820,366"/>
+  </g>
+  <text x="834" y="338" font-size="15" fill="#868e96">RDMA</text>
+
+  <!-- Mooncake L3 -->
+  <rect x="60" y="372" width="880" height="178" rx="14" fill="#f3f0ff" stroke="#1e1e1e" stroke-width="2"/>
+  <use href="#dram" x="80" y="394"/>
+  <use href="#dram" x="400" y="394"/>
+  <use href="#dram" x="720" y="394"/>
+  <text x="500" y="500" text-anchor="middle" font-size="20" font-weight="600" fill="#1e1e1e">Mooncake Store · L3</text>
+  <text x="500" y="528" text-anchor="middle" font-size="15" fill="#868e96">every node's DRAM in one pool · no per-node L2</text>
+</svg>

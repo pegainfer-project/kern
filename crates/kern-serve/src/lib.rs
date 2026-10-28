@@ -21,9 +21,10 @@ mod executor;
 pub mod front;
 pub mod logline;
 pub mod pd;
+mod pool;
 mod pp;
 pub mod ranks;
-mod scheduler;
+pub mod scheduler;
 mod watch;
 
 pub use pp::pack;
@@ -36,7 +37,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Args;
 use infront_engine::{drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LiveScheduler, Scheduler};
-use infront_vllm::{Capabilities, ParserSelection, ServeOptions};
+use infront_vllm::{Capabilities, History, ParserSelection, ServeOptions};
 use kern_manifest::{Protocol, Verified};
 use kern_runtime::Capacity;
 use tracing::info;
@@ -87,6 +88,11 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 256)]
     pub max_seqs: usize,
 
+    /// Per-sequence state slots per rank: the running sequences' plus the
+    /// kept prefixes' (default: `--max-seqs` plus one)
+    #[arg(long)]
+    pub seq_slots: Option<usize>,
+
     /// Debug: launch every program eagerly, ignoring the manifest's `graph`
     #[arg(long)]
     pub eager: bool,
@@ -127,6 +133,68 @@ pub struct ServeOpts {
     /// group holds, reserved and running
     #[arg(long, conflicts_with = "head")]
     pub decode_listen: Option<String>,
+
+    #[command(flatten)]
+    pub pool: PoolOpts,
+}
+
+/// The pooled KV tier (Mooncake Store): every rank joins it when
+/// `--pool-master` is given, and every snapshot the prefix tree keeps is
+/// shared with every other instance of the same manifest and weights.
+#[derive(Args, Debug, Clone)]
+pub struct PoolOpts {
+    /// Join the pooled KV tier whose Mooncake master is at host:port
+    #[arg(long)]
+    pub pool_master: Option<String>,
+
+    /// The pool's transfer-engine metadata server
+    /// (`http://host:port/metadata`, or `P2PHANDSHAKE`)
+    #[arg(long, default_value = "P2PHANDSHAKE", requires = "pool_master")]
+    pub pool_metadata: String,
+
+    /// The RDMA device this rank moves pool bytes over
+    #[arg(long, requires = "pool_master")]
+    pub pool_device: Option<String>,
+
+    /// This process's name in the pool, host:port; default: the hostname
+    /// and a port from the GPU index
+    #[arg(long, requires = "pool_master")]
+    pub pool_hostname: Option<String>,
+
+    /// The segment a put prefers (this tray's holder), by its name
+    #[arg(long, requires = "pool_master")]
+    pub pool_segment: Option<String>,
+
+    /// `libmooncake_store.so`, when not on the loader's path
+    #[arg(long, requires = "pool_master")]
+    pub pool_library: Option<PathBuf>,
+
+    /// Seconds every pool act fails outright after a client error
+    #[arg(long, default_value_t = 30, requires = "pool_master")]
+    pub pool_cooldown: u64,
+}
+
+impl PoolOpts {
+    fn config(&self, gpu: usize) -> Result<Option<pool::Config>> {
+        let Some(master) = &self.pool_master else { return Ok(None) };
+        let device = self.pool_device.clone().context("`--pool-master` takes `--pool-device <rdma device>`")?;
+        let hostname = match &self.pool_hostname {
+            Some(h) => h.clone(),
+            None => {
+                let host = std::fs::read_to_string("/proc/sys/kernel/hostname").context("reading the hostname")?;
+                format!("{}:{}", host.trim(), 17100 + gpu)
+            }
+        };
+        Ok(Some(pool::Config {
+            master: master.clone(),
+            metadata: self.pool_metadata.clone(),
+            device,
+            hostname,
+            segment: self.pool_segment.clone(),
+            library: self.pool_library.clone(),
+            cooldown: std::time::Duration::from_secs(self.pool_cooldown),
+        }))
+    }
 }
 
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
@@ -165,8 +233,9 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
                 gpu: o.gpu,
                 kernels: art.kernels.clone(),
                 capacity: o.capacity,
-                max_seqs: o.max_seqs,
+                slots: o.slots(),
                 eager: o.eager,
+                pool: o.pool.config(o.gpu)?,
             };
             return pp::stage::run(manifest, &weights, stage);
         }
@@ -177,10 +246,12 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             gpu: o.gpu,
             kernels: art.kernels.clone(),
             capacity: o.capacity,
+            slots: o.slots(),
             chunk: o.chunk,
             max_seqs: o.max_seqs,
             eager: o.eager,
             decode: o.decode.clone(),
+            pool: o.pool.config(o.gpu)?,
         };
         let load = move || pp::head::spawn(manifest, weights, head);
         return launch(load, served_name, model_path, o.port, samples, parser);
@@ -194,8 +265,9 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let load = executor::Load {
         gpu: o.gpu,
         kernels: art.kernels.clone(),
-        capacity: Capacity { tokens: o.capacity, slots: slots_for(o.max_seqs) * t, landings: 0 },
+        capacity: Capacity { tokens: o.capacity, slots: o.slots() * t, landings: 0 },
         eager: o.eager,
+        pool: o.pool.config(o.gpu)?,
     };
     if let Some(head) = &o.head {
         let q = o.rank.context("`--head` with a topology manifest joins as `--rank <q>`")?;
@@ -225,9 +297,11 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows };
     let load = move || -> Result<(KernScheduler, scheduler::Facts)> {
         let t0 = Instant::now();
-        let (ranks, exec) = executor::head(&manifest, &weights, &load, listen.as_deref())?.ranks()?;
+        let joined = executor::head(&manifest, &weights, &load, listen.as_deref())?;
+        let keys = joined.keys.clone();
+        let (ranks, exec) = joined.ranks()?;
         info!(model = %manifest.model, ranks = ranks.groups().ranks(), load_s = logline::secs(t0.elapsed()), "ranks loaded");
-        let sched = KernScheduler::new(ranks, exec, policy)?;
+        let sched = KernScheduler::new(ranks, exec, policy, keys)?;
         let facts = sched.facts();
         Ok((sched, facts))
     };
@@ -242,6 +316,13 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
 /// kept prefix.
 fn slots_for(seats: usize) -> u64 {
     seats as u64 + 1
+}
+
+impl ServeOpts {
+    /// The state slots a rank or stage provisions: `--seq-slots`, never fewer than the seats need.
+    fn slots(&self) -> u64 {
+        self.seq_slots.map_or(slots_for(self.max_seqs), |n| (n as u64).max(slots_for(self.max_seqs)))
+    }
 }
 
 /// Logs the verified manifest before any GPU work: buffer kinds, module count, and each program's calls.
@@ -360,7 +441,7 @@ where
         tool_call_parser: parser,
         port,
         capabilities: Capabilities { logprobs: false, sampling: samples },
-        history_boundary: true,
+        history: History::Marks,
         ..ServeOptions::new(model_path.to_string_lossy())
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;

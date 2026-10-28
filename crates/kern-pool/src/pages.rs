@@ -570,6 +570,26 @@ impl Lease {
         self.prefix
     }
 
+    /// The first `len` positions are filled now: a pooled tier landed
+    /// them in the lease's own pages and slot. `len` is past the prefix
+    /// and, for a paged lease, within the pages held.
+    pub fn filled(&mut self, len: usize) {
+        assert!(len >= self.prefix, "filling {len} positions, {} already filled", self.prefix);
+        assert!(!self.paged() || len <= self.tokens(), "filling {len} positions of a lease of {}", self.tokens());
+        self.prefix = len;
+    }
+
+    /// The copies [`Pool::restore`] made this lease with from `cp`, to
+    /// queue again: the page the prefix ends inside and the slot. The
+    /// lease must be the one restored from `cp` at its prefix.
+    pub fn copies_from(&self, cp: &Checkpoint) -> Copies {
+        let unit = self.pool.unit as usize;
+        let full = self.prefix / unit;
+        let partial =
+            (self.paged() && !self.prefix.is_multiple_of(unit)).then(|| (cp.page_ids()[full], self.pages[full]));
+        Copies { pages: partial.into_iter().collect(), slot: cp.slot_id().zip(self.seq_slot()) }
+    }
+
     /// The token slot of position `pos` of the sequence, to write into;
     /// `pos` is past the shared prefix and past every page moved into a
     /// chain: a node's page is never written after the node exists, and

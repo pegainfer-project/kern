@@ -90,7 +90,7 @@ use infront_engine::SamplingParams;
 use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
-use kern_pool::{Checkpoint, Copies, Denied, Interleave, Kept, Lease, Pool};
+use kern_pool::{Checkpoint, Copies, Denied, Interleave, Kept, Landing, Lease, Object, Pool};
 use serde::{Deserialize, Serialize};
 
 use crate::pp::Item;
@@ -174,6 +174,16 @@ pub enum Act {
     Zero(i32),
     /// Pages and a slot within the device pool.
     Copy(Moves),
+    /// Ask the pooled tier whether each key exists; answered as `id`.
+    Probe { id: u64, keys: Vec<String> },
+    /// Store each object in the pooled tier once the acts before it have
+    /// landed; answered as `id`, one flag per object.
+    Put { id: u64, objects: Vec<Object> },
+    /// Fetch each object from the pooled tier into its pages and slot once
+    /// the acts before it have landed; answered as `id`, one flag per object.
+    Get { id: u64, objects: Vec<Object> },
+    /// Write the mark saying every object of a snapshot is in the pool.
+    Mark { id: u64, key: String },
 }
 
 /// What a rank is sent: its acts in decision order, then the step's item
@@ -184,12 +194,21 @@ pub struct Order {
     pub item: Option<Item>,
 }
 
+/// The pooled tier's answer to one act: a flag per key or object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Landed {
+    pub id: u64,
+    pub ok: Vec<bool>,
+}
+
 /// A rank's reply to an [`Order`], once its device is done with the item:
-/// the item's `tokens` and `count` outputs (empty without).
+/// the item's `tokens` and `count` outputs (empty without), and every
+/// pooled act answered since the last reply.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answer {
     pub tokens: Vec<i64>,
     pub counts: Vec<i64>,
+    pub landed: Vec<Landed>,
 }
 
 /// One sequence's pieces across its owner's group, one per member in
@@ -216,6 +235,16 @@ impl<X> Group<X> {
         self.owner
     }
 
+    /// The owner's member index: the paged piece is `parts()[me()]`.
+    pub fn me(&self) -> usize {
+        self.me
+    }
+
+    /// Each member's piece, in member order.
+    pub fn parts(&self) -> &[X] {
+        &self.parts
+    }
+
     /// The owner's piece: the one that names positions.
     fn own(&self) -> &X {
         &self.parts[self.me]
@@ -240,11 +269,11 @@ impl Row {
         self.own().prefix()
     }
 
-    /// Each member's lease, in member order: a replicated row's local
-    /// positions on every member, else the owner's pages and its peers'
-    /// slots.
-    pub fn leases(&self) -> &[Lease] {
-        &self.parts
+    /// The first `len` positions landed from the pooled tier on every member.
+    pub fn filled(&mut self, len: usize) {
+        for l in &mut self.parts {
+            l.filled(len);
+        }
     }
 }
 
@@ -303,6 +332,8 @@ pub struct Ranks {
     /// How a replicated group deals positions; `None` when rows are owned.
     dealt: Option<Interleave>,
     accounts: Vec<Account>,
+    /// The last id given to a pooled act.
+    next: u64,
 }
 
 impl Ranks {
@@ -343,7 +374,7 @@ impl Ranks {
                 Ok(Account { pool, pad, acts, held: None })
             })
             .collect::<Result<_>>()?;
-        Ok(Ranks { protocol, groups, dealt, accounts })
+        Ok(Ranks { protocol, groups, dealt, accounts, next: 0 })
     }
 
     pub fn protocol(&self) -> &Protocol {
@@ -534,6 +565,63 @@ impl Ranks {
         Some(row.map(|l| self.accounts[base + m.next().expect("unbounded")].pool.retire(l, len)))
     }
 
+    // ---- the pooled tier: acts answered later, by id, in some reply.
+
+    fn id(&mut self) -> u64 {
+        self.next += 1;
+        self.next
+    }
+
+    /// Ask the pooled tier whether each of `keys` exists, on the head rank.
+    pub fn probe(&mut self, keys: Vec<String>) -> u64 {
+        let id = self.id();
+        self.accounts[0].acts.push(Act::Probe { id, keys });
+        id
+    }
+
+    /// Write the mark `key`, on the head rank.
+    pub fn mark(&mut self, key: String) -> u64 {
+        let id = self.id();
+        self.accounts[0].acts.push(Act::Mark { id, key });
+        id
+    }
+
+    /// Store `objects[m]` from member `m` of `snap`'s group; the landing
+    /// waits on every member given objects.
+    pub fn put(&mut self, snap: &Snapshot, objects: Vec<Vec<Object>>) -> (u64, Landing) {
+        self.transfer(snap, objects, |id, objects| Act::Put { id, objects })
+    }
+
+    /// Fetch `objects[m]` into member `m` of `row`; the landing waits on
+    /// every member given objects.
+    pub fn get(&mut self, row: &Row, objects: Vec<Vec<Object>>) -> (u64, Landing) {
+        self.transfer(row, objects, |id, objects| Act::Get { id, objects })
+    }
+
+    fn transfer<X>(
+        &mut self,
+        g: &Group<X>,
+        objects: Vec<Vec<Object>>,
+        act: fn(u64, Vec<Object>) -> Act,
+    ) -> (u64, Landing) {
+        assert_eq!(objects.len(), g.parts.len(), "objects for every member");
+        let id = self.id();
+        let members: Vec<usize> = objects.iter().enumerate().filter(|(_, o)| !o.is_empty()).map(|(m, _)| m).collect();
+        let mut objects = objects.into_iter();
+        self.queue(g, |_, _| objects.next().filter(|o| !o.is_empty()).map(|o| act(id, o)));
+        (id, Landing::new(members))
+    }
+
+    /// Put `row` back where its device prefix left it, a fetch into it
+    /// having not landed: the copies that restored it from `hit` again,
+    /// or its slots zeroed again.
+    pub fn restore(&mut self, row: &Row, hit: Option<&Snapshot>) {
+        match hit {
+            Some(h) => self.queue(row, |m, l| Some(Act::Copy(l.copies_from(&h.parts[m]).into()))),
+            None => self.queue(row, |_, l| l.seq_slot().map(Act::Zero)),
+        }
+    }
+
     // ---- orders.
 
     /// Every rank's order: its queued acts and its part of the step
@@ -550,10 +638,11 @@ impl Ranks {
             .collect()
     }
 
-    /// Every rank answered, in rank order.
-    pub fn heard(&self, answers: &[Answer]) -> Result<()> {
+    /// Every rank answered, in rank order: what the pooled tier answered
+    /// on each, by rank.
+    pub fn heard(&self, answers: &[Answer]) -> Result<Vec<(Rank, Landed)>> {
         ensure!(answers.len() == self.groups.n, "{} answers from {} ranks", answers.len(), self.groups.n);
-        Ok(())
+        Ok(answers.iter().enumerate().flat_map(|(q, a)| a.landed.iter().map(move |l| (Rank(q), l.clone()))).collect())
     }
 
     // ---- steps.

@@ -53,6 +53,20 @@
 //! fewer seats as it last said ([`pick`]: every grant and every step tells
 //! the tier's [`Load`]). Every stage mirrors every tier's pools, and a push
 //! names its tier.
+//!
+//! With a pooled tier (`--pool-master`) a leased prompt is probed before
+//! it runs: the head asks the pool, once, for the marks its frontend named
+//! and every page past the device hit on every stage, and fetches the
+//! longest it can into the lease on every stage at once, each stage's own
+//! layers under its own keys ([`kern_pool::pooled`]). What landed is kept
+//! as an entry of the head's cache and the prompt starts past it; a fetch
+//! that failed anywhere puts the lease back as the cache leased it and
+//! the prompt starts from the device hit. Every entry the cache keeps
+//! (a kept mark, a retired prompt) is put from every stage, and a state's
+//! put is marked once every stage landed it. The pooled acts ride to the
+//! stages as jobs of their own and are answered by every stage; the head
+//! waits for no answer in a turn, so a prompt waits on the pool only
+//! while others go out.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{TcpListener, TcpStream};
@@ -63,7 +77,7 @@ use anyhow::{bail, ensure, Context, Result};
 use infront_engine::{FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, StopPolicy};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::{Protocol, Verified};
-use kern_pool::{Denied, Lease};
+use kern_pool::{landed, objects, Chain, Checkpoint, Denied, Keys, Landing, Lease, Object, Probe};
 use kern_run::Weights;
 use kern_runtime::{Capacity, Error, Runtime};
 use tracing::{debug, error, info};
@@ -74,6 +88,8 @@ use super::{connect, recv, send, Flow, Hello, Item, Job, Next, Report, Table};
 use crate::front::{Call, Front, Note};
 use crate::pd::mirror::Mirrors;
 use crate::pd::{cover, shapes, Gate, Load, Out, Pools, Push, Refusal, Req, Tell, Tiers};
+use crate::pool;
+use crate::ranks::{Act, Landed};
 use crate::scheduler::Facts;
 
 /// How long the head keeps trying to reach a decode tier still loading.
@@ -94,11 +110,15 @@ pub struct Head {
     pub gpu: usize,
     pub kernels: Option<std::path::PathBuf>,
     pub capacity: Option<u64>,
+    /// State slots on every stage: the running prompts' and the kept prefixes'.
+    pub slots: u64,
     pub chunk: Option<u64>,
     pub max_seqs: usize,
     pub eager: bool,
     /// The decode tiers' heads to hand prompts to, each request to one.
     pub decode: Vec<String>,
+    /// The pooled tier every stage joins, when one does.
+    pub pool: Option<pool::Config>,
 }
 
 /// An admitted prompt with rows still to send.
@@ -120,6 +140,78 @@ struct Active {
     handoff: bool,
     /// Items gone out without it since it last had rows in one.
     passed: usize,
+}
+
+/// A leased prompt waiting on the pooled tier before it runs; its lease
+/// holds the pages the fetch lands in, on every stage.
+struct Pending {
+    q: QueuedRequest,
+    lease: Lease,
+    /// The entry the lease continues from, the fallback's copies.
+    hit: Option<Checkpoint>,
+    ids: Vec<i64>,
+    tier: Option<usize>,
+    asked: Asked,
+}
+
+#[derive(Clone)]
+enum Asked {
+    Probing(Probe),
+    /// Fetching `len` tokens, pages `first..` of them.
+    Fetching {
+        len: usize,
+        first: usize,
+        landing: Landing,
+    },
+}
+
+/// An entry being put, held so its pages and slot stay until every stage
+/// landed; `mark` is written then, for an entry with a state.
+struct Putting {
+    cp: Checkpoint,
+    len: usize,
+    landing: Landing,
+    mark: Option<String>,
+}
+
+#[derive(Default)]
+struct PoolCounts {
+    probes: u64,
+    hits: u64,
+    fetched: u64,
+    fetched_tokens: u64,
+    fetch_fails: u64,
+    puts: u64,
+    put_fails: u64,
+}
+
+/// The pooled tier as the head sees it: its own client (stage 0's), the
+/// namespace its keys are in, and every act awaiting the stages' answers.
+struct Pooled {
+    client: pool::Client,
+    keys: Keys,
+    stages: u8,
+    unit: usize,
+    next: u64,
+    pending: BTreeMap<u64, Pending>,
+    puts: BTreeMap<u64, Putting>,
+    /// Marks being written, each holding its entry until it is.
+    marks: BTreeMap<u64, Checkpoint>,
+    counts: PoolCounts,
+}
+
+impl Pooled {
+    fn id(&mut self) -> u64 {
+        self.next += 1;
+        self.next
+    }
+
+    /// The objects of `tokens` on every stage, from page `first`, as
+    /// `pages` and `slot` hold them (the same ids on every stage).
+    fn objects(&self, tokens: &[i64], first: usize, pages: &[i32], slot: Option<i32>) -> Vec<Vec<Object>> {
+        let chain = Chain::of(self.unit, tokens);
+        (0..self.stages).map(|s| objects(&self.keys, Some(s), &chain, tokens, first, 0, 0, pages, slot)).collect()
+    }
 }
 
 /// A prompt whose last rows are out, its lease left: its token is entry
@@ -160,6 +252,11 @@ enum Event {
     Call(Call),
     /// Stage 1 took an item: a wake for a head waiting on that.
     Taken,
+    /// A stage's answer to a pooled act, the head's own as stage 0.
+    Landed {
+        stage: usize,
+        l: Landed,
+    },
 }
 
 /// A decode tier's connection and mirrors: the head alone writes to it,
@@ -209,6 +306,7 @@ struct PpHead {
     /// The line tables as the stages last had them written.
     lines: BTreeMap<String, Vec<i64>>,
     cache: Cache,
+    pool: Option<Pooled>,
     window: Window,
     flow: Flow,
 }
@@ -270,7 +368,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         (c, Some(f)) => Some(c.map_or(f * unit, |c| c.min(f * unit))),
         (c, None) => c,
     };
-    let slots = crate::slots_for(h.max_seqs);
+    let slots = h.slots;
     let mut rt = Runtime::load(&m, h.kernels.as_deref(), h.gpu, Some(Capacity { tokens, slots, landings: 0 }), None)?;
     rt.set_eager(h.eager);
     weights.bind(&mut rt)?;
@@ -318,16 +416,36 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         }
     })?;
     let tx_calls = tx.clone();
+    let pool = match &h.pool {
+        Some(cfg) => {
+            let mut client = pool::Client::open(cfg, rt.pooled_spans())?;
+            let tx = tx.clone();
+            client.forward(move |l| tx.send(Event::Landed { stage: 0, l }).is_ok())?;
+            Some(Pooled {
+                client,
+                keys: crate::executor::keys(&m, weights)?,
+                stages: cut.stages as u8,
+                unit: rt.page() as usize,
+                next: 0,
+                pending: BTreeMap::new(),
+                puts: BTreeMap::new(),
+                marks: BTreeMap::new(),
+                counts: PoolCounts::default(),
+            })
+        }
+        None => None,
+    };
     let report: super::Sink = Box::new(move |r| match r {
         Report::Pushed(req) => {
             tx.send(Event::Pushed { stage: 0, req }).map_err(|_| anyhow::anyhow!("the head is gone"))
         }
         Report::Tokens(_) => bail!("the head answers no items"),
+        Report::Landed(_) => bail!("the head's own pool answers come by its client"),
     });
 
     let step_name = step.as_ref().map_or("-", |f| f.name.as_str()).to_string();
     info!(pages, page = rt.page(), chunk, seqs = bounds.seqs, prefill = %prefill.name, step = %step_name,
-          seq_slots = rt.has_seq_state().then(|| rt.seq_slots()), "pipeline head ready");
+          seq_slots = rt.has_seq_state().then(|| rt.seq_slots()), pooled = pool.is_some(), "pipeline head ready");
     let cache = Cache::new(rt.page() as usize);
     Ok(PpHead {
         rt,
@@ -351,6 +469,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         due: VecDeque::new(),
         lines: BTreeMap::new(),
         cache,
+        pool,
         window: Window { since: Instant::now(), fed: 0 },
         flow: Flow::new(0, None, Some(next), report, false),
     })
@@ -419,6 +538,7 @@ fn listen(stage: u64, mut r: TcpStream, tx: mpsc::Sender<Event>, last: bool) {
             Ok(Some(Report::Tokens(t))) if last => Event::Answer(t),
             Ok(Some(Report::Tokens(_))) => break "a stage other than the last answered an item".to_string(),
             Ok(Some(Report::Pushed(req))) => Event::Pushed { stage: stage as usize, req },
+            Ok(Some(Report::Landed(l))) => Event::Landed { stage: stage as usize, l },
             Ok(None) => break "stage closed its connection; the pipeline is gone".to_string(),
             Err(e) => break format!("stage connection: {e:#}"),
         };
@@ -442,7 +562,12 @@ impl PpHead {
 
     /// Prompts leased and not finished.
     fn live(&self) -> usize {
-        self.active.len() + self.due.iter().map(Vec::len).sum::<usize>()
+        self.active.len() + self.pending() + self.due.iter().map(Vec::len).sum::<usize>()
+    }
+
+    /// Prompts leased and waiting on the pooled tier.
+    fn pending(&self) -> usize {
+        self.pool.as_ref().map_or(0, |p| p.pending.len())
     }
 
     fn note(&self, n: Note) -> Result<()> {
@@ -453,6 +578,7 @@ impl PpHead {
     fn holds(&self, id: RequestId) -> bool {
         self.waiting.iter().any(|q| q.id == id)
             || self.active.iter().any(|a| a.id == id)
+            || self.pool.as_ref().is_some_and(|p| p.pending.values().any(|x| x.q.id == id))
             || self.due.iter().flatten().any(|f| f.id == id)
             || self.tiers.open().contains(&id.raw())
     }
@@ -478,7 +604,6 @@ impl PpHead {
             self.apply(outs)?;
             let Gate::Lease(tier) = gate else { break };
             let Some(q) = self.waiting.front() else { unreachable!("the request gated is still at the front") };
-            let handoff = tier.is_some();
             let limit = self.rt.max_seq_tokens();
             let ids: Vec<i64> = q.request.prompt_tokens.iter().map(|&t| t as i64).collect();
             let leased = match prompt {
@@ -486,28 +611,15 @@ impl PpHead {
                 _ => self.cache.lease(&mut self.rt, &ids),
             };
             let reject = match leased {
-                Ok((lease, start)) => {
+                Ok((lease, start, hit)) => {
                     let q = self.waiting.pop_front().unwrap();
-                    self.note(Note::Admit { id, cached: start })?;
-                    debug!(request = %id, prompt, prefix_hit = start, "admitted");
-                    // The prompt's whole self is kept at its end; a parting
-                    // point is worth a checkpoint of its own only to a
-                    // recurrent state, which cannot be continued from part
-                    // of a longer one, and is then the only one kept.
-                    let parted = q.request.history_tokens.filter(|&m| self.rt.has_seq_state() && m < prompt);
-                    let mark = parted.filter(|&m| m > start);
-                    let parts = parted.is_some();
-                    let snap = match self.rt.has_seq_state() {
-                        true => parted.unwrap_or(prompt).checked_sub(SNAPSHOT_SHORT).filter(|&s| s > start),
-                        false => None,
-                    };
-                    let stop = q.request.stop_policy.clone();
-                    let sampling = crate::ranks::sampling(&q.request.params);
-                    let a =
-                        Active { id, lease, ids, pos: start, stop, sampling, mark, snap, parts, handoff, passed: 0 };
-                    self.active.push_back(a);
-                    if let Some(t) = tier {
-                        self.tiers.admitted(t, id.raw());
+                    let probe = self.pool.as_ref().and_then(|p| {
+                        let marks = crate::scheduler::marks(&q.request);
+                        Probe::plan(self.rt.has_seq_state(), p.unit, start, &marks, prompt, Some(p.stages))
+                    });
+                    match probe {
+                        Some(probe) => self.probe(Pending { q, lease, hit, ids, tier, asked: Asked::Probing(probe) }),
+                        None => self.activate(q, lease, ids, tier)?,
                     }
                     continue;
                 }
@@ -530,6 +642,212 @@ impl PpHead {
             }
         }
         Ok(())
+    }
+
+    /// A leased prompt starts past its lease's prefix: its rows stop at
+    /// the frontend's parting point and a snapshot short of it, when they
+    /// are past the prefix.
+    fn activate(&mut self, q: QueuedRequest, lease: Lease, ids: Vec<i64>, tier: Option<usize>) -> Result<()> {
+        let (id, prompt, start) = (q.id, ids.len(), lease.prefix());
+        // Admitted on P now, not at its lease: a prompt the pooled tier is
+        // still writing into is the pool's to retire, and its tier's once it
+        // starts.
+        if let Some(t) = tier {
+            self.tiers.admitted(t, id.raw());
+        }
+        self.note(Note::Admit { id, cached: start })?;
+        debug!(request = %id, prompt, prefix_hit = start, "admitted");
+        // The prompt's whole self is kept at its end; a parting point is
+        // worth a checkpoint of its own only to a recurrent state, which
+        // cannot be continued from part of a longer one, and is then the
+        // only one kept.
+        let parted = q.request.history_tokens.filter(|&m| self.rt.has_seq_state() && m < prompt);
+        let mark = parted.filter(|&m| m > start);
+        let parts = parted.is_some();
+        let snap = match self.rt.has_seq_state() {
+            true => parted.unwrap_or(prompt).checked_sub(SNAPSHOT_SHORT).filter(|&s| s > start),
+            false => None,
+        };
+        let stop = q.request.stop_policy.clone();
+        let sampling = crate::ranks::sampling(&q.request.params);
+        let handoff = tier.is_some();
+        let a = Active { id, lease, ids, pos: start, stop, sampling, mark, snap, parts, handoff, passed: 0 };
+        self.active.push_back(a);
+        Ok(())
+    }
+
+    /// A prompt done waiting on the pooled tier starts, unless its client
+    /// left meanwhile: then its lease goes back, now that no stage writes it.
+    fn resume(&mut self, p: Pending) -> Result<()> {
+        if self.gone.remove(&p.q.id) {
+            self.note(Note::Retire(p.q.id))?;
+            let outs = self.tiers.abort(p.q.id.raw());
+            return self.apply(outs);
+        }
+        self.activate(p.q, p.lease, p.ids, p.tier)
+    }
+
+    /// Ask the pooled tier what it holds of `p`'s prompt past its lease's
+    /// prefix, through the head's own client: the keys name every stage.
+    fn probe(&mut self, p: Pending) {
+        let pool = self.pool.as_mut().expect("probing with a pool");
+        let Asked::Probing(probe) = &p.asked else { unreachable!("a pending prompt starts probing") };
+        let keys = probe.keys(&pool.keys, &Chain::of(pool.unit, &p.ids), &p.ids);
+        debug!(request = %p.q.id, device_hit = p.lease.prefix(), marks = ?probe.marks, pages = ?probe.pages, "probing");
+        let id = pool.id();
+        pool.client.probe(id, keys);
+        pool.pending.insert(id, p);
+    }
+
+    /// Fetch `len` tokens of `p`'s prompt into its lease on every stage,
+    /// pages `first..` of them.
+    fn fetch(&mut self, p: Pending, len: usize, first: usize) -> Result<()> {
+        let pool = self.pool.as_mut().expect("fetching with a pool");
+        let per = pool.objects(&p.ids[..len], first, p.lease.page_ids(), p.lease.seq_slot());
+        let (id, landing) = (pool.id(), Landing::new(0..pool.stages as usize));
+        debug!(request = %p.q.id, device_hit = p.lease.prefix(), len, "fetching");
+        self.transfer(id, per, false)?;
+        let pool = self.pool.as_mut().expect("fetching with a pool");
+        pool.pending.insert(id, Pending { asked: Asked::Fetching { len, first, landing }, ..p });
+        Ok(())
+    }
+
+    /// Put the entry `cp`, which holds `tokens`, from every stage: every
+    /// whole page and, with a state, the state after them, marked once
+    /// every stage landed it. Without a pool, nothing.
+    fn put(&mut self, cp: Checkpoint, tokens: &[i64]) -> Result<()> {
+        let Some(pool) = self.pool.as_mut() else { return Ok(()) };
+        let per = pool.objects(tokens, 1, &cp.page_ids(), cp.seq_slot());
+        let whole = tokens.len() / pool.unit;
+        let mark =
+            cp.seq_slot().map(|_| pool.keys.mark(Chain::of(pool.unit, tokens).at(whole), &tokens[whole * pool.unit..]));
+        let (id, landing) = (pool.id(), Landing::new(0..pool.stages as usize));
+        self.transfer(id, per, true)?;
+        let pool = self.pool.as_mut().expect("putting with a pool");
+        pool.puts.insert(id, Putting { cp, len: tokens.len(), landing, mark });
+        Ok(())
+    }
+
+    /// One transfer act, `id`, with each stage's objects: the stages get
+    /// theirs behind the cache's acts since the last item, the head's
+    /// go to its client once its own device is through those.
+    fn transfer(&mut self, id: u64, mut per: Vec<Vec<Object>>, put: bool) -> Result<()> {
+        let act = |objects| match put {
+            true => Act::Put { id, objects },
+            false => Act::Get { id, objects },
+        };
+        let mine = per.remove(0);
+        let shared = self.cache.take_acts();
+        for (w, objects) in self.stages.iter_mut().zip(per) {
+            let acts = shared.iter().cloned().chain([act(objects)]).collect();
+            send(w, &Job::Acts(acts))?;
+        }
+        let after = self.rt.mark()?;
+        let client = &self.pool.as_ref().expect("a transfer needs a pool").client;
+        match put {
+            true => client.put(id, after, &mine),
+            false => client.get(id, after, &mine),
+        }
+        Ok(())
+    }
+
+    /// Put `lease` back as the cache leased it, on the head and the
+    /// stages: a fetch that failed left who knows what in its pages.
+    fn restore(&mut self, lease: &Lease, hit: Option<&Checkpoint>) -> Result<()> {
+        let act = match hit {
+            Some(h) => Act::Copy(lease.copies_from(h).into()),
+            None => match lease.seq_slot() {
+                Some(s) => Act::Zero(s),
+                None => return Ok(()),
+            },
+        };
+        match &act {
+            Act::Copy(m) => self.rt.copy(&m.pages, m.slot.as_slice())?,
+            Act::Zero(s) => self.rt.zero_slot(*s)?,
+            _ => unreachable!("built above"),
+        }
+        self.cache.act(act);
+        Ok(())
+    }
+
+    /// A stage's answer to a pooled act: a probe's choice becomes a fetch,
+    /// a fetch landed on every stage starts its prompt past what landed,
+    /// kept as an entry (the pool holds it already, so it is not put
+    /// again), or failed anywhere restores the lease and starts it from
+    /// the device hit; a put landed on every stage is marked.
+    fn landed(&mut self, stage: usize, l: Landed) -> Result<()> {
+        let pool = self.pool.as_mut().context("a stage answered a pooled act, and the head joined no pooled tier")?;
+        if let Some(mut p) = pool.pending.remove(&l.id) {
+            match p.asked.clone() {
+                Asked::Probing(probe) => {
+                    pool.counts.probes += 1;
+                    self.cache.pooled(p.ids.len() - p.lease.prefix(), 0);
+                    match probe.chosen(&l.ok) {
+                        Some(len) => {
+                            pool.counts.hits += 1;
+                            self.fetch(p, len, probe.pages.start)
+                        }
+                        None => {
+                            debug!(request = %p.q.id, "pool miss");
+                            self.resume(p)
+                        }
+                    }
+                }
+                Asked::Fetching { len, first, landing } => {
+                    let got = landed(&l.ok, self.rt.has_seq_state(), len, first, pool.unit);
+                    let landing = landing.heard(stage, got).context("a fetch's landing")?;
+                    let device = p.lease.prefix();
+                    match landing.done() {
+                        None => {
+                            p.asked = Asked::Fetching { len, first, landing };
+                            pool.pending.insert(l.id, p);
+                            Ok(())
+                        }
+                        Some(got) if got > device => {
+                            pool.counts.fetched += 1;
+                            pool.counts.fetched_tokens += (got - device) as u64;
+                            self.cache.pooled(0, got - device);
+                            debug!(request = %p.q.id, device_hit = device, fetched = got, "pool hit");
+                            p.lease.filled(got);
+                            self.cache.keep(&mut self.rt, &mut p.lease, &p.ids[..got])?;
+                            self.resume(p)
+                        }
+                        Some(_) => {
+                            pool.counts.fetch_fails += 1;
+                            debug!(request = %p.q.id, device_hit = device, asked = len, "pool fetch did not land");
+                            self.restore(&p.lease, p.hit.as_ref())?;
+                            self.resume(p)
+                        }
+                    }
+                }
+            }
+        } else if let Some(mut put) = pool.puts.remove(&l.id) {
+            let whole = l.ok.iter().all(|&b| b);
+            put.landing = put.landing.heard(stage, if whole { put.len } else { 0 }).context("a put's landing")?;
+            match put.landing.done() {
+                None => {
+                    pool.puts.insert(l.id, put);
+                }
+                Some(got) if got == put.len => {
+                    pool.counts.puts += 1;
+                    if let Some(key) = put.mark {
+                        let id = pool.id();
+                        pool.client.mark(id, key);
+                        pool.marks.insert(id, put.cp);
+                    }
+                }
+                Some(_) => {
+                    pool.counts.put_fails += 1;
+                    debug!(tokens = put.len, "pool put did not land");
+                }
+            }
+            Ok(())
+        } else if pool.marks.remove(&l.id).is_some() {
+            pool.counts.put_fails += u64::from(!l.ok.iter().all(|&b| b));
+            Ok(())
+        } else {
+            bail!("stage {stage}: an answer to pooled act {} nobody asked", l.id)
+        }
     }
 
     /// Carry out what the tiers decided, in order.
@@ -615,7 +933,7 @@ impl PpHead {
             let f = self.step.clone().expect("checked");
             self.send_item(&f, &[(&a.lease, a.pos, &a.ids[a.pos..], a.sampling)])?;
             self.prefilled(&a)?;
-            let done = self.leave(a, 0);
+            let done = self.leave(a, 0)?;
             self.due.push_back(vec![done]);
         }
         Ok(())
@@ -640,6 +958,7 @@ impl PpHead {
         sent?;
         let emits = self.step.is_none();
         let mut finished = Vec::new();
+        let mut kept = Vec::new();
         for (at, &(i, n)) in plan.iter().enumerate() {
             let a = &mut self.active[i];
             a.pos += n;
@@ -649,11 +968,16 @@ impl PpHead {
             }
             if a.mark == Some(a.pos) {
                 a.mark = None;
-                self.cache.keep(&mut self.rt, &mut a.lease, &a.ids[..a.pos])?;
+                if let Some(cp) = self.cache.keep(&mut self.rt, &mut a.lease, &a.ids[..a.pos])? {
+                    kept.push((cp, a.ids[..a.pos].to_vec()));
+                }
             }
             if emits && a.pos == a.ids.len() {
                 finished.push((i, at));
             }
+        }
+        for (cp, key) in kept {
+            self.put(cp, &key)?;
         }
         // Highest index first, so each removal leaves the next one's index in place.
         finished.sort_unstable_by(|x, y| y.cmp(x));
@@ -661,7 +985,7 @@ impl PpHead {
         for (i, at) in finished {
             let a = self.active.remove(i).expect("planned");
             self.prefilled(&a)?;
-            due.push(self.leave(a, at));
+            due.push(self.leave(a, at)?);
         }
         due.sort_unstable_by_key(|f| f.at);
         self.due.push_back(due);
@@ -671,12 +995,15 @@ impl PpHead {
     /// A prompt whose last rows are out, its token entry `at` of the item's
     /// reply: its lease becomes an entry, or goes back to the pool when the
     /// next turn parts from it before its end.
-    fn leave(&mut self, a: Active, at: usize) -> Finish {
+    fn leave(&mut self, a: Active, at: usize) -> Result<Finish> {
         match a.parts {
             true => drop(a.lease),
-            false => self.cache.retire(&mut self.rt, a.lease, &a.ids),
+            false => {
+                let cp = self.cache.retire(&mut self.rt, a.lease, &a.ids);
+                self.put(cp, &a.ids)?;
+            }
         }
-        Finish { at, id: a.id, stop: a.stop, handoff: a.handoff }
+        Ok(Finish { at, id: a.id, stop: a.stop, handoff: a.handoff })
     }
 
     /// A prompt whose last rows were just issued: handed off, it is pushed
@@ -802,8 +1129,19 @@ impl PpHead {
                 slots = state.then(|| self.rt.seq_slots()),
                 decode_seats = ?self.tiers.loads().iter().map(|l| l.seats).collect::<Vec<_>>(),
                 decode_kv_pct = ?self.tiers.loads().iter().map(|l| round(l.pages as f64 * 100.0 / l.pages_total.max(1) as f64, 10.0)).collect::<Vec<_>>(),
+                pool_pending = self.pool.as_ref().map(|p| p.pending.len()),
+                pool_probes = self.pool.as_ref().map(|p| p.counts.probes),
+                pool_hits = self.pool.as_ref().map(|p| p.counts.hits),
+                pool_fetched = self.pool.as_ref().map(|p| p.counts.fetched),
+                pool_fetched_tokens = self.pool.as_ref().map(|p| p.counts.fetched_tokens),
+                pool_fetch_fails = self.pool.as_ref().map(|p| p.counts.fetch_fails),
+                pool_puts = self.pool.as_ref().map(|p| p.counts.puts),
+                pool_put_fails = self.pool.as_ref().map(|p| p.counts.put_fails),
                 "stats"
             );
+        }
+        if let Some(p) = &mut self.pool {
+            p.counts = PoolCounts::default();
         }
         self.window = Window { since: Instant::now(), fed: 0 };
     }
@@ -814,7 +1152,10 @@ impl PpHead {
         let t0 = Instant::now();
         while !self.flow.ready()? {
             match self.events.recv_timeout(super::TIMEOUT.saturating_sub(t0.elapsed())) {
-                Ok(e @ Event::Call(Call::Submit(_) | Call::Gone(_))) => self.later.push_back(e),
+                // A landing admits, and admission waits for the turn.
+                Ok(e @ (Event::Call(Call::Submit(_) | Call::Gone(_)) | Event::Landed { .. })) => {
+                    self.later.push_back(e)
+                }
                 Ok(e) => self.hear(e)?,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     bail!("stage 1 took nothing in {:?}; the stage is gone", super::TIMEOUT)
@@ -859,6 +1200,7 @@ impl PpHead {
                 return self.apply(vec![out]);
             }
             Event::Taken => return Ok(()),
+            Event::Landed { stage, l } => return self.landed(stage, l),
         };
         let Some(due) = self.due.pop_front() else { bail!("an answer came back for no item") };
         for r in due {
@@ -924,6 +1266,7 @@ mod tests {
             prompt_tokens: vec![3; 16],
             params: SamplingParams::default(),
             history_tokens: None,
+            history_marks: Vec::new(),
             stop_policy: stop,
             max_tokens: 1,
             logprobs: None,

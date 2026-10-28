@@ -12,7 +12,8 @@
 //! step. A seeded schedule picks which enabled actor moves next. What is
 //! modelled is only what the head's admission does around [`Tiers`] with
 //! P's own pool and runtime: a prompt longer than [`P_LIMIT`] is rejected,
-//! any other leased.
+//! any other leased, and a leased prompt may first wait on the pooled tier
+//! (a probe and a fetch writing into its lease) before it starts.
 //!
 //! What it checks, at every step: no process dies on what a peer sent; no
 //! seat is freed and no abort sent while a push into it is in flight. At
@@ -85,6 +86,8 @@ struct Config {
     leave: usize,
     /// Whether some prompts are longer than P seats (rejected after their grant).
     long: bool,
+    /// Whether some leased prompts wait on the pooled tier before they start.
+    pool: bool,
 }
 
 /// What the protocol let go wrong.
@@ -126,6 +129,8 @@ struct Client {
     end: Option<End>,
     /// The ledger's abort flag: the client left.
     gone: bool,
+    /// Its prompt waits on the pooled tier once leased.
+    pooled: bool,
 }
 
 /// What reaches the P head's event channel.
@@ -171,6 +176,8 @@ enum Step {
     Stage(usize),
     /// The last stage answers the item that carried `req`'s last rows.
     Last(Req),
+    /// The pooled tier answers the probe or fetch `req`'s lease waits on.
+    Pool(Req),
 }
 
 struct Head {
@@ -178,6 +185,8 @@ struct Head {
     outbox: VecDeque<(usize, Out)>,
     events: VecDeque<Event>,
     waiting: VecDeque<Req>,
+    /// Leased, waiting on the pooled tier: the lease and its decode tier.
+    pooling: BTreeMap<Req, (kern_pool::Lease, Option<usize>)>,
     /// Admitted, last rows not yet issued: the lease and whether it hands off.
     admitted: BTreeMap<Req, (kern_pool::Lease, bool)>,
     gone: BTreeSet<Req>,
@@ -230,7 +239,8 @@ impl Sim {
                 _ => 1 + rand.next(60),
             };
             let max_tokens = [1, 2, 3, 5, 9][rand.next(5)];
-            clients.insert(req, Client { prompt, max_tokens, tokens: Vec::new(), end: None, gone: false });
+            let pooled = cfg.pool && rand.next(2) == 0;
+            clients.insert(req, Client { prompt, max_tokens, tokens: Vec::new(), end: None, gone: false, pooled });
         }
         let d = Decoder::new(replicated_of(m, W, 1, cfg.slots), Fake, cfg.seats).unwrap();
         Sim {
@@ -239,6 +249,7 @@ impl Sim {
                 outbox: VecDeque::new(),
                 events: VecDeque::new(),
                 waiting: clients.keys().copied().collect(),
+                pooling: BTreeMap::new(),
                 admitted: BTreeMap::new(),
                 gone: BTreeSet::new(),
                 turn: true,
@@ -286,6 +297,7 @@ impl Sim {
                 v.extend(self.head.admitted.keys().map(|&r| Step::HeadPrefill(r)));
             }
         }
+        v.extend(self.head.pooling.keys().map(|&r| Step::Pool(r)));
         if !self.front.notes.is_empty() {
             v.push(Step::FrontNote);
         }
@@ -391,7 +403,35 @@ impl Sim {
                 self.head.events.push_back(Event::First { req, handoff });
                 Ok(())
             }
+            Step::Pool(req) => {
+                let (lease, tier) = self.head.pooling.remove(&req).expect("enabled");
+                self.resume(req, lease, tier)
+            }
         }
+    }
+
+    /// A prompt done waiting on the pooled tier starts, unless its client
+    /// left meanwhile, as `PpHead::resume`.
+    fn resume(&mut self, req: Req, lease: kern_pool::Lease, tier: Option<usize>) -> Checked<()> {
+        if self.head.gone.remove(&req) {
+            self.say("retired".into());
+            self.front.notes.push_back(Note::Retire(RequestId::new(req)));
+            let outs = self.head.tiers.abort(req);
+            self.head.outbox.extend(outs);
+            return Ok(());
+        }
+        self.say("started".into());
+        self.activate(req, lease, tier);
+        Ok(())
+    }
+
+    /// A leased prompt starts, as `PpHead::activate`.
+    fn activate(&mut self, req: Req, lease: kern_pool::Lease, tier: Option<usize>) {
+        if let Some(t) = tier {
+            self.head.tiers.admitted(t, req);
+        }
+        self.front.notes.push_back(Note::Admit { id: RequestId::new(req), cached: 0 });
+        self.head.admitted.insert(req, (lease, tier.is_some()));
     }
 
     /// The head carries out one decision, as `PpHead::apply`.
@@ -507,6 +547,7 @@ impl Sim {
             Event::Abort { tier, req } => vec![Self::died(self.head.tiers.stop(tier, req))?],
             Event::Gone(req) => {
                 let holds = self.head.waiting.contains(&req)
+                    || self.head.pooling.contains_key(&req)
                     || self.head.admitted.contains_key(&req)
                     || self.firsts.contains_key(&req)
                     || self.head.tiers.open().contains(&req);
@@ -558,11 +599,12 @@ impl Sim {
                 continue;
             }
             let lease = self.p_pool.lease(prompt).expect("P's pool holds every prompt");
-            self.front.notes.push_back(Note::Admit { id, cached: 0 });
-            if let Some(t) = tier {
-                self.head.tiers.admitted(t, req);
+            match self.clients[&req].pooled {
+                true => {
+                    self.head.pooling.insert(req, (lease, tier));
+                }
+                false => self.activate(req, lease, tier),
             }
-            self.head.admitted.insert(req, (lease, tier.is_some()));
         }
         Ok(())
     }
@@ -723,7 +765,7 @@ fn report(name: &str, found: &(u64, Vec<usize>, Vec<String>, Violation)) {
 /// theirs.
 #[test]
 fn with_nothing_leaving_and_slots_to_spare_every_schedule_ends_cleanly() {
-    let cfg = Config { requests: 6, slots: 10, seats: 3, leave: 0, long: false };
+    let cfg = Config { requests: 6, slots: 10, seats: 3, leave: 0, long: false, pool: false };
     if let Some(f) = explore(cfg, 300) {
         report("control", &f);
         panic!("the control violates {:?}", f.3);
@@ -737,7 +779,7 @@ fn with_nothing_leaving_and_slots_to_spare_every_schedule_ends_cleanly() {
 #[test]
 fn a_full_tier_says_busy_and_room_until_every_request_has_its_seat() {
     for leave in [0, 3] {
-        let cfg = Config { requests: 6, slots: 3, seats: 3, leave, long: true };
+        let cfg = Config { requests: 6, slots: 3, seats: 3, leave, long: true, pool: false };
         if let Some(f) = explore(cfg, 1000) {
             report("busy", &f);
             panic!("leave {leave}: {:?}", f.3);
@@ -753,7 +795,7 @@ fn a_full_tier_says_busy_and_room_until_every_request_has_its_seat() {
 /// to the front lands behind the head's `Start`, never ahead of it.
 #[test]
 fn an_abort_from_the_front_comes_behind_the_heads_start() {
-    let cfg = Config { requests: 4, slots: 10, seats: 3, leave: 4, long: false };
+    let cfg = Config { requests: 4, slots: 10, seats: 3, leave: 4, long: false, pool: false };
     if let Some(f) = explore(cfg, 3000) {
         report("abort and start", &f);
         panic!("{:?}", f.3);
@@ -761,4 +803,26 @@ fn an_abort_from_the_front_comes_behind_the_heads_start() {
     let reached = reach(cfg, 3000, "FrontSweep | abort");
     eprintln!("of 3000 schedules, {reached} have the front abort a decoding request");
     assert!(reached > 20, "{reached} of 3000");
+}
+
+/// A prompt may wait on the pooled tier between its lease and its start,
+/// its lease being written meanwhile; a client leaving then is retired once,
+/// when the pool answers, and its seats go back.
+#[test]
+fn a_client_leaving_while_its_prompt_waits_on_the_pool_is_retired_once() {
+    let cfg = Config { requests: 4, slots: 10, seats: 3, leave: 4, long: false, pool: true };
+    if let Some(f) = explore(cfg, 3000) {
+        report("pool and leave", &f);
+        panic!("{:?}", f.3);
+    }
+    let reached = reach(cfg, 3000, "| retired");
+    eprintln!("of 3000 schedules, {reached} retire a prompt the pool answered for");
+    assert!(reached > 20, "{reached} of 3000");
+    // A full tier and prompts P rejects besides: a seat held through the
+    // pool's wait still goes back for the next request.
+    let busy = Config { requests: 6, slots: 3, seats: 3, leave: 3, long: true, pool: true };
+    if let Some(f) = explore(busy, 1000) {
+        report("pool, busy and leave", &f);
+        panic!("{:?}", f.3);
+    }
 }

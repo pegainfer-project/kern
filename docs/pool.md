@@ -20,8 +20,8 @@ MambaRadixCache 和它的 Rust 内核（`rust/sglang-radix-tree`）。
   按 id 查的镜像表。
 - **一个 tier（2026-10-27 起）。** 只有 device 一层：`Checkpoint` 是具体类型（`store.rs`），
   `Storage` trait、`Store<T>`、`Host` / `Parked`、节点的 host twin、`Tier` / `Found` 随
-  host 层一起删除——跨机的第二层是 Mooncake 池（roadmap），按 key 存对象，不是本 crate
-  的一个 `Storage` 实现。2026-09-14 到 10-27 之间的两层设计留在下文标了"历史"的段落里。
+  host 层一起删除——跨机的第二层是 Mooncake 池（第 9 节），按 key 存对象，本 crate 只出
+  纯决策（`pooled.rs`）。2026-09-14 到 10-27 之间的两层设计留在下文标了"历史"的段落里。
 - **单线程。** 索引与池由 scheduler 线程独占，`&mut` 修改，没有并发；`Arc` 和一把从不
   争用的 `Mutex` 只为 `Send`（句柄可能在别的线程 drop）。
 
@@ -368,3 +368,117 @@ random + 池是 90.2%，差的 7 个点全是回退 / 分叉到更老一轮的 p
   先不改。
 - 树是否需要按 `KeyNamespace`（SGLang 的 extra_key / cache_salt）分片：LoRA 或多模型
   共用一个池时才需要，现在没有。
+
+## 9. 池化层：Mooncake Store（2026-10-27）
+
+Mooncake Store 是 device 池之外唯一的一层：跨 tray 共享，RDMA 直接读写 GPU 内存，一个
+session 的下一轮落到任意 tray 都能接上前一轮的前缀，路由不需要 cache 感知。fleet 回放
+（第 7 节）说收益在哪：random 路由下 K3 形状 70.1% → 97.2%，qwen3.8 形状 58.9% → 88.3%，
+池补的是跨实例的那一段。100 Gb/s 网卡上取回和重算同一量级（`~/bench_results/2026-10-27-mooncake-gdr/`：
+跨 tray 11 GB/s，K3 约 420k token/s），所以省的是 prefill 算力，TTFT 只要求不退化。
+
+正确性靠三条规则，其余都是展开：
+
+1. **池里的对象只能证实，不能信任。** 探测结果只是提示；get 对每个 key 核对存储字节数等于
+   本地要写的字节数，任何一个不符整体算没命中。
+2. **网卡和 compute stream 不同时碰同一块内存。** Put / Get 前面排着的清零和拷贝是 stream 上的
+   异步操作，网卡等 `Runtime::mark` 的 pinned 字翻过再读写；网卡还在写的页不进任何 item；
+   worker 线程不调 CUDA（lessons.md 2026-10-08 的死锁）。
+3. **失败只有一种结果：按 device 前缀重算。** 不重试、不删对象、不给 Mooncake 提示。失败的
+   get 可能已经写了 slot，所以重算前把 device 快照的拷贝（或 Zero）重新排一次。
+
+固定的决定：只有两层；池视为无限，kern 不删、不 pin、不设 TTL；快照策略同 device；每次快照
+把 [0, m) 全部重 put，靠 Mooncake 去重（scheduler 不知道上一轮的页还在不在，只写新页会让
+mark 盖住有洞的前缀）；TP 各成员各写各的，一次决策发给全组，mark 等全组；PP head 决策，
+mark 等全部 stage；get 异步，没有同步版本；replicated（dealt）组不留 checkpoint，池对它关闭。
+
+### 决策在 kern-pool，client 在 kern-serve
+
+`crates/kern-pool/src/pooled.rs` 是纯函数：同样的 token 给同样的 key，同样的答案给同样的选择。
+Mooncake client（`crates/kern-serve/src/pool.rs`）只搬字节、报落地；scheduler 和 PP head
+从不调 Mooncake。kern-runtime 多暴露 `pooled_spans()`（每个 pooled state 的地址段，注册给
+RDMA）和已有的 `mark()`。
+
+| 类型 / 函数 | 做什么 |
+|---|---|
+| `Chain` | 逐页的前缀摘要：第 k 页 = sha256(第 k−1 页 ‖ 该页 token)，`at(k)` 是前 k 页 |
+| `Keys` | namespace（manifest 规范 JSON、权重 header 摘要、PP 的 cut id 的 sha256）下的 `page(stage, chain)`、`state(stage, member, chain, tail)`、`mark(chain, tail)` |
+| `Probe::plan / keys / chosen` | 一次 batch 探什么、读回来选哪个长度 |
+| `objects` | 一个成员为前缀 [0, len) 要搬的对象：owner 搬页，持 slot 的搬 state |
+| `landed` | 成员的一组落地标志读成 token 数：带 state 全有或全无，paged-only 按页 |
+| `Landing` | 一次传输等全组成员回报，全到齐取最小 |
+
+三种对象，key 里只有 token，没有 session、没有请求 id：
+
+| 对象 | key | 值 |
+|---|---|---|
+| 页 | namespace，stage（PP），第 k 页末的摘要 | 每个 paged state 在该页的字节 |
+| state | namespace，stage，成员号，摘要，半页内的 token | 每个 per-seq state 的 slot，加半页 |
+| mark | namespace，摘要，半页内的 token | 1 字节：这个快照的全部对象都写完了 |
+
+页 key 没有成员维度：页只在 owner 上，owner 按负载选，同一 session 两轮可能落在不同成员。
+state 每个成员内容不同，所以有。半页里的 token 直接进 state 和 mark 的 key，快照点差一个
+token 就是不同的对象。manifest 或权重改一个字节池就冷，没有兼容层。
+
+### 写路径
+
+每个快照（带 state 的在 `history_tokens` 处，paged-only 的每封一页，PP head 的 keep 和
+retire）生成一个 `Put`：owner 带 [0, m) 的整页加半页加 slot，peer 只带 slot。executor 在
+Put 前记 stream mark，worker 等它翻过再 batch put（已存在的 key 只有元数据来回）。
+scheduler 持 `Snapshot` / `Checkpoint` 的 clone 到落地，传输中页不会被回收。全组落地后
+owner 写 mark；任一成员失败就不写、放掉 clone、计数。paged-only 的页对象就是自己的 mark。
+
+### 读路径
+
+admit 之后请求经过两次异步往返才开始 prefill：先探，再取。两次都不堵 scheduler。
+
+1. lease 从 device_hit 起，持 device 快照的 clone（否则这几百毫秒里 make_room 可能把它淘汰，
+   失败后重拷的源页已经租给别人）。
+2. `Probe::plan`：带 state 的探 `history_marks` 里大于 device_hit 且小于 prompt 的每个 mark
+   （新到旧），加 device_hit 到最新 mark 之间每页的 key（PP 下每页每 stage 一个）；paged-only
+   探到最后一整页。一个 batch exist，每个存在的 key 得 10 秒读租约，这是老页唯一的续命途径。
+3. `Probe::chosen`：带 state 选最新的、其下每页都在的 mark（fleet 回放：只探最新一个 mark 少
+   7 个点）；paged-only 取最长连续段。没有可用的就按 device_hit 开跑。
+4. `Get`：owner 取页加半页加 slot，peer 取 slot，同样等 stream mark。每个成员回报落地的 token
+   数（`landed`），`Landing` 取最小：带 state 要求全员完整，paged-only 取最小作命中长度。
+5. 落地：`Row::filled(got)` / `Lease::filled(got)`，从 got 开跑，落地的前缀在 device 池里也建
+   checkpoint（不再 put，池里已有）。失败：重排 device 快照的拷贝或 Zero，从 device_hit 开跑。
+
+Probing / Fetching 的请求持有 lease，计入行数上限；abort 只打标记，lease 到落地才释放，否则
+网卡会写进已经租给别人的页。
+
+### TP、PP 与 DP
+
+决策相同，差别只在 act 怎么到达、谁回报。TP：一次决策生成一组 act，随 `Order` 到各 rank，
+`Answer.landed` 回报。PP：head 自己的 client 当 stage 0；Probe 只由 head 发（key 已含每个
+stage）；Put / Get 作为 `Job::Acts` 跟在 cache 的拷贝 act 后面发给每个 stage，每个 stage 的
+client 答 `Report::Landed`，head 按 stage 计 `Landing`；没有那种 state 的 stage 对象为空，立即
+落地。head 在 stage 1 取走 item 之前听到的落地推迟到本 turn 之后（落地要 admit，admit 在
+turn 之间）。head 的 `SNAPSHOT_SHORT` 快照不在 `history_marks` 里，不入池。DP（prefill tier，
+`dp.rs`，DSV4.1 Flash 的生产形状）：每个 rank 自己的池和前缀树，act 走该 rank 的 `Order`，
+没东西喂而有 act 在外时也发一个只带 act 的 order 收答案；带 state 的快照在 `history_tokens`
+处随 prefill 取一次、put 完就放掉（一个 rank 只有 57 个 slot，device 仍只留 prompt 末尾的
+条目），paged-only 的在 retire 时 put 整条链。
+
+### 失败模式
+
+| 情形 | 结果 |
+|---|---|
+| put 中途进程挂或断网 | mark 没写，读者探不到；残页由池淘汰 |
+| mark 写后某页被淘汰 | get 核对字节数失败，按 device 前缀重算 |
+| 两个实例同时 put 同一 key，一个在 PutEnd 前崩溃 | 另一个收到"成功"但对象不完整；读者 get 失败 |
+| get 部分成员失败 | 整体失败；重排 device 拷贝后从 device_hit prefill |
+| 10 秒租约内没传完 | 返回错误，按失败处理 |
+| master 不可达 | 探测失败，`--pool-cooldown` 内全部直接 miss，decode 不受影响 |
+
+### 门禁
+
+- `crates/kern-pool/tests/pooled.rs`：摘要链对前缀单调、key 随 kind / stage / member / tail /
+  namespace 各异；`Probe` 对随机 unit / hit / marks / 存在集与穷举模型一致；`objects` / `landed`
+  对随机组与模型一致；`Landing` 对任意到达顺序结论相同、重复成员报错。全绿。
+- `crates/kern-serve/tests/pool.rs`：fake executor 上的两个实例共一个 fake 池，答案延后 0–2 步、
+  随机丢 act：一个实例留下的轮次被另一个实例取回、第二次 prefill 从 mark 起；40 种子下丢 act
+  的池对客户端看到的输出没有影响。全绿。
+- e2e **2026-10-27 过**（serve.md「池化 KV 层」，`~/bench_results/2026-10-27-pooled-kv-e2e/`）：一个会话四轮
+  交替打两个实例，paged-only 单卡、带 state 跨 tray、PP 2 段三条路径，每轮回复与池外冷实例逐字相同，第二轮起
+  每轮命中池；B 命中的 token 数等于上一轮的 `history_tokens`。杀 master 的退化路径与生产形状未跑。

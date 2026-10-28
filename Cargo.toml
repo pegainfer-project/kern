@@ -34,8 +34,8 @@ kern-run = { path = "crates/kern-run" }
 # model_type. `vllm-chat`, `vllm-text` and `vllm-tokenizer` (its test
 # tokenizer) are the vLLM rev infront pins, so the renderer tests read the
 # crate the server runs.
-infront-engine = { git = "https://github.com/pegainfer-project/infront", rev = "4fa55c7b8169bc931b197fd079ec2b8228a5ee03" }
-infront-vllm = { git = "https://github.com/pegainfer-project/infront", rev = "4fa55c7b8169bc931b197fd079ec2b8228a5ee03" }
+infront-engine = { git = "https://github.com/pegainfer-project/infront", rev = "ea2db2791c988321d7299a1f405a529e1a1d50b4" }
+infront-vllm = { git = "https://github.com/pegainfer-project/infront", rev = "ea2db2791c988321d7299a1f405a529e1a1d50b4" }
 vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
 vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
 vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
@@ -63,6 +63,9 @@ serde = { version = "1", features = ["derive"] }
 safetensors = "=0.8.0"
 serde_json = "1"
 sha2 = "0.11"
+# The Mooncake Store client, loaded at run time (`dlopen`): kern-serve's pooled KV tier. Pinned to the
+# upstream commit that merged multi-buffer batch put/get (kvcache-ai/Mooncake#4984).
+mooncake-store = { git = "https://github.com/kvcache-ai/Mooncake", rev = "679ae2517249d38ca99f18ea640b3524cb6dd180", package = "mooncake_store", default-features = false, features = ["dlopen"] }
 thiserror = "2"
 tokenizers = "=0.23.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

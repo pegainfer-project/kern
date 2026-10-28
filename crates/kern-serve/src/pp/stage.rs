@@ -8,7 +8,7 @@
 //! at start and runs every push the head sends behind the item before it.
 
 use std::net::TcpListener;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -19,6 +19,7 @@ use tracing::{error, info};
 
 use super::{arrivals, connect, recv, send, Answer, Flow, Hello, Job, Next, Prev, Report, Table, LANDINGS};
 use crate::pd::{mirror::Mirrors, shapes};
+use crate::pool;
 use crate::ranks::Act;
 
 /// How a stage loads and where its head listens.
@@ -27,8 +28,11 @@ pub struct Stage {
     pub gpu: usize,
     pub kernels: Option<std::path::PathBuf>,
     pub capacity: Option<u64>,
-    pub max_seqs: usize,
+    /// State slots, the head's count: its slot ids are this stage's.
+    pub slots: u64,
     pub eager: bool,
+    /// The pooled tier the pipeline joins, when it does.
+    pub pool: Option<pool::Config>,
 }
 
 /// How long a stage keeps trying to reach a head that is not up yet.
@@ -39,8 +43,7 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
     ensure!(cut.stage > 0, "stage 0 is the head; it takes `--listen`");
     let last = cut.stage + 1 == cut.stages;
     let t0 = Instant::now();
-    // The head's slot ids are this stage's: the same slots, by the same rule.
-    let capacity = Capacity { tokens: o.capacity, slots: crate::slots_for(o.max_seqs), landings: LANDINGS as usize };
+    let capacity = Capacity { tokens: o.capacity, slots: o.slots, landings: LANDINGS as usize };
     let mut rt = Runtime::load(&m, o.kernels.as_deref(), o.gpu, Some(capacity), None)?;
     rt.set_eager(o.eager);
     weights.bind(&mut rt)?;
@@ -86,7 +89,8 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         table.decode.into_iter().map(|d| Mirrors::map(&rt, d, &mine)).collect::<Result<_>>()?;
     let prev = Prev::accept(&rt, &listener, hello.arrivals.keys().cloned().collect())?;
     kern_run::run_once(&rt, &p)?;
-    info!(stage = cut.stage, head = %o.head, last, "stage serving");
+    let mut client = o.pool.as_ref().map(|cfg| pool::Client::open(cfg, rt.pooled_spans())).transpose()?;
+    info!(stage = cut.stage, head = %o.head, last, pooled = client.is_some(), "stage serving");
 
     let (tx, jobs) = mpsc::channel::<Job>();
     std::thread::spawn({
@@ -110,8 +114,16 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         }
     });
 
-    let mut w = head.try_clone()?;
-    let report = Box::new(move |r: Report| send(&mut w, &r));
+    // The watch thread and the pool's answers both report to the head:
+    // one frame at a time.
+    let w = Arc::new(Mutex::new(head.try_clone()?));
+    let report = Box::new({
+        let w = Arc::clone(&w);
+        move |r: Report| send(&mut w.lock().expect("not poisoned"), &r)
+    });
+    if let Some(c) = &mut client {
+        c.forward(move |l| send(&mut w.lock().expect("not poisoned"), &Report::Landed(l)).is_ok())?;
+    }
     let mut flow = Flow::new(cut.stage, Some(prev), next, report, last);
     let holds = (rt.pages_total() > 0, rt.seq_slots() > 0);
     for job in jobs {
@@ -125,12 +137,18 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
                 flow.pushed(&rt, push.req)?;
                 continue;
             }
+            super::Job::Acts(acts) => {
+                for act in acts {
+                    self::act(&mut rt, act, holds, client.as_ref())?;
+                }
+                continue;
+            }
         };
         let vars: Vars = item.vars.into_iter().filter(|(k, _)| rt.manifest.vars.contains_key(k)).collect();
         // The acts, fills and tables are stream-ordered behind the item
         // before, so they go over while the activations are still on their way.
         for act in item.acts {
-            self::act(&mut rt, act, holds)?;
+            self::act(&mut rt, act, holds, client.as_ref())?;
         }
         for (name, v) in &item.rows {
             kern_run::write_named(&mut rt, &p, name, v, &vars)?;
@@ -153,14 +171,26 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
 
 /// Run one of the head's acts on this stage's states, the kinds it
 /// `holds` (pages, slots) only: a stage without paged or per-sequence
-/// state has nothing the head's ids of that kind name.
-fn act(rt: &mut Runtime, act: Act, holds: (bool, bool)) -> Result<()> {
+/// state has nothing the head's ids of that kind name. A pooled act goes
+/// to the stage's client, after a mark on what was queued before it.
+fn act(rt: &mut Runtime, act: Act, holds: (bool, bool), client: Option<&pool::Client>) -> Result<()> {
+    let client = || client.context("a pooled act, but this stage joined no pooled tier");
     match act {
         Act::Zero(slot) if holds.1 => rt.zero_slot(slot)?,
         Act::Zero(_) => {}
         Act::Copy(m) => {
             let pages = if holds.0 { m.pages } else { Vec::new() };
             rt.copy(&pages, m.slot.filter(|_| holds.1).as_slice())?
+        }
+        Act::Probe { id, keys } => client()?.probe(id, keys),
+        Act::Mark { id, key } => client()?.mark(id, key),
+        Act::Put { id, objects } => {
+            let after = rt.mark()?;
+            client()?.put(id, after, &objects)
+        }
+        Act::Get { id, objects } => {
+            let after = rt.mark()?;
+            client()?.get(id, after, &objects)
         }
     }
     Ok(())

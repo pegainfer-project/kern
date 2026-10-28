@@ -29,6 +29,7 @@ fn request(max_tokens: usize, stop: StopPolicy) -> Request {
         prompt_tokens: vec![3; 16],
         params: SamplingParams::default(),
         history_tokens: None,
+        history_marks: Vec::new(),
         stop_policy: stop,
         max_tokens,
         logprobs: None,
@@ -294,7 +295,8 @@ fn the_front_reports_the_pool_the_head_last_told_it() {
     let before = c.metrics();
     assert_eq!((before.kv_used_blocks, before.kv_total_blocks), (0, 100));
     assert_eq!(before.prefix_cache, Some(PrefixCacheCounters::default()));
-    let counters = PrefixCacheCounters { queries: 48, hits: 16, host_queries: 48, host_hits: 8 };
+    let counters =
+        PrefixCacheCounters { queries: 48, hits: 16, host_queries: 48, host_hits: 8, external_unspecified_hits: 4 };
     assert!(c.note(Note::Pool { pages: 7, prefix_cache: counters }).unwrap().is_empty());
     let after = c.metrics();
     assert_eq!((after.kv_used_blocks, after.prefix_cache), (7, Some(counters)));
