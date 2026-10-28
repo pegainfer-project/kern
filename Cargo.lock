@@ -2013,7 +2013,7 @@ dependencies = [
 [[package]]
 name = "infront-engine"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/infront?rev=c97e412b3f046e03a83939d37e68eb6177b4a5ec#c97e412b3f046e03a83939d37e68eb6177b4a5ec"
+source = "git+https://github.com/pegainfer-project/infront?rev=ea2db2791c988321d7299a1f405a529e1a1d50b4#ea2db2791c988321d7299a1f405a529e1a1d50b4"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2026,7 +2026,7 @@ dependencies = [
 [[package]]
 name = "infront-vllm"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/infront?rev=c97e412b3f046e03a83939d37e68eb6177b4a5ec#c97e412b3f046e03a83939d37e68eb6177b4a5ec"
+source = "git+https://github.com/pegainfer-project/infront?rev=ea2db2791c988321d7299a1f405a529e1a1d50b4#ea2db2791c988321d7299a1f405a529e1a1d50b4"
 dependencies = [
  "anyhow",
  "axum",

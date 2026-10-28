@@ -27,7 +27,7 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 `infront-engine` + `infront-vllm`，底下是 vLLM 官方的 Rust server crates，git dep 钉 infront main 的
 一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 infront `c97e412b` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
+当前钉在 infront `ea2db279` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
 `ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
 不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history: History::Marks`，
 chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条），并对每条后面跟着 assistant 消息的消息
