@@ -1,17 +1,18 @@
 //! `kern-serve`: an OpenAI-compatible HTTP endpoint over a kern manifest.
 //!
-//! The HTTP/protocol stack is pegainfer's frontend (vLLM's Rust server
-//! crates underneath: completions, chat completions, streaming, chat
-//! templates, stop strings). This crate contributes the engine behind it:
-//! `scheduler::KernScheduler`, the pegainfer `Scheduler` contract over
+//! The HTTP/protocol stack is infront (vLLM's Rust server crates
+//! underneath: completions, chat completions, streaming, chat templates,
+//! stop strings). This crate contributes the engine behind it:
+//! `scheduler::KernScheduler`, infront's `Scheduler` contract over
 //! [`ranks::Ranks`] — every rank's accounting, kept by the head — and
 //! `executor::Executors`, one process per GPU running what it decided.
 //! A cut manifest is served by `pp` instead, one process per stage, its
 //! head behind a [`front::Front`], and may hand each prompt to a decode
-//! tier ([`pd`]). What the frontend would admit but no manifest can
-//! serve is refused at the HTTP layer ([`refuse`]). The crate's public
-//! surface is [`serve`], its option structs, and the accounting,
-//! protocols, packing policy and refusals its tests drive.
+//! tier ([`pd`]). What the frontend would admit but no manifest can serve
+//! (logprobs; a draw from a manifest without sampling fills) is declared to
+//! infront, which refuses it at the HTTP layer. The crate's public surface
+//! is [`serve`], its option structs, and the accounting, protocols and
+//! packing policy its tests drive.
 
 #![deny(unsafe_code)]
 
@@ -22,24 +23,22 @@ pub mod logline;
 pub mod pd;
 mod pp;
 pub mod ranks;
-pub mod refuse;
 mod scheduler;
 mod watch;
 
 pub use pp::pack;
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Args;
+use infront_engine::{drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LiveScheduler, Scheduler};
+use infront_vllm::{Capabilities, ParserSelection, ServeOptions};
 use kern_manifest::{Protocol, Verified};
 use kern_runtime::Capacity;
-use pegainfer_frontend::engine::{
-    drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LaunchedEngine, LiveScheduler, Scheduler,
-};
-use pegainfer_frontend::vllm::{self, ParserSelection};
 use tracing::info;
 
 use scheduler::{KernScheduler, Policy};
@@ -343,33 +342,30 @@ where
             .context("scheduler thread died before reporting readiness")?
             .context("scheduler thread died before reporting readiness")??;
         info!(model = %model, port, model_dir = %model_dir.display(), "serving");
-        Ok(LaunchedEngine::Stepped(Engine {
+        let block_size = NonZeroUsize::new(facts.block_size).context("the pool's block size is zero")?;
+        Ok(Engine {
             schedulers: vec![LiveScheduler { handle, join }],
             info: EngineInfo {
-                kv_capacity: Some(KvCapacity { total_blocks: facts.total_blocks, block_size: facts.block_size }),
+                kv_capacity: Some(KvCapacity { total_blocks: facts.total_blocks, block_size }),
                 servable_len: Some(facts.max_request_tokens as u32),
             },
-            lora: None,
-        }))
+        })
     };
 
+    // A manifest hands back token ids, never logits; one without sampling
+    // fills draws nothing. The state cannot roll back, so every chat
+    // request carries where its history ends.
+    let options = ServeOptions {
+        served_model_names: vec![served_name],
+        tool_call_parser: parser,
+        port,
+        capabilities: Capabilities { logprobs: false, sampling: samples },
+        history_boundary: true,
+        ..ServeOptions::new(model_path.to_string_lossy())
+    };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    rt.block_on(async move {
-        // Needs the runtime: it spawns the signal listener.
-        let shutdown = vllm::shutdown_token_from_ctrl_c();
-        vllm::serve_with_router_extension(
-            engine,
-            &model_path,
-            vec![served_name],
-            parser,
-            port,
-            None,
-            1,
-            shutdown,
-            move |vllm| refuse::routes(vllm, samples),
-        )
-        .await
-    })
+    // The ctrl-c token needs the runtime: it spawns the signal listener.
+    rt.block_on(async move { infront_vllm::serve(engine, options, infront_vllm::shutdown_token_from_ctrl_c()).await })
 }
 
 #[cfg(test)]

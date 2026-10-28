@@ -33,9 +33,9 @@
 //! load, and a state slot is taken only while one is free, room made for
 //! it otherwise.
 
+use infront_engine::PrefixCacheCounters;
 use kern_pool::{Checkpoint, Copies, Denied, Lease, Prefix};
 use kern_runtime::{Error, Runtime};
-use pegainfer_frontend::engine::PrefixCacheCounters;
 
 use crate::ranks::Act;
 

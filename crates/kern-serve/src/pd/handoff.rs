@@ -29,9 +29,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
+use infront_engine::FinishReason;
 use kern_manifest::protocol::Sampling;
 use kern_pool::Lease;
-use pegainfer_frontend::engine::{FinishReason, StopCause};
 
 use super::{Ask, Push, Refusal, Relay, Req, Seat, Tell};
 
@@ -48,7 +48,6 @@ pub enum Out {
     Finish {
         req: Req,
         why: FinishReason,
-        cause: Option<StopCause>,
     },
     /// The waiting front's reserve was refused: reject it.
     Reject {
@@ -211,9 +210,9 @@ impl Handoffs {
         let mut out = Vec::new();
         if !h.closed {
             out.push(Out::Emit { req, tok });
-            if let Some((why, cause)) = h.relay.take(tok) {
+            if let Some(why) = h.relay.take(tok) {
                 h.closed = true;
-                out.push(Out::Finish { req, why, cause });
+                out.push(Out::Finish { req, why });
             }
         }
         out.extend(self.settle(req));

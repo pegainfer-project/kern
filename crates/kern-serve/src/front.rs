@@ -1,4 +1,4 @@
-//! A pipeline head's front: the pegainfer [`Scheduler`] on the driver
+//! A pipeline head's front: infront's [`Scheduler`] on the driver
 //! thread, apart from the head that feeds the pipeline.
 //!
 //! The head waits on its device and on stage 1 for as long as an item
@@ -30,9 +30,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use pegainfer_frontend::engine::{
+use infront_engine::{
     FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
-    SchedulerMetrics, StopCause,
+    SchedulerMetrics,
 };
 
 use crate::pd::{Ask, Out, Relay, Relays, Req};
@@ -60,7 +60,6 @@ pub enum Note {
     Finish {
         id: RequestId,
         why: FinishReason,
-        cause: Option<StopCause>,
     },
     Retire(RequestId),
     /// Starting on decode tier `tier`: its tokens are the front's to relay.
@@ -110,7 +109,6 @@ pub enum Write {
     Finish {
         id: RequestId,
         why: FinishReason,
-        cause: Option<StopCause>,
     },
     Retire(RequestId),
     /// Tell the head the client left (`Call::Gone`).
@@ -176,9 +174,9 @@ impl Clients {
                 vec![Write::Reject { id, why }]
             }
             Note::Emit { id, tok } => vec![Write::Tokens { id, tok }],
-            Note::Finish { id, why, cause } => {
+            Note::Finish { id, why } => {
                 self.open.remove(&id);
-                vec![Write::Finish { id, why, cause }]
+                vec![Write::Finish { id, why }]
             }
             Note::Retire(id) => {
                 self.open.remove(&id);
@@ -206,10 +204,10 @@ impl Clients {
         for o in outs {
             w.push(match o {
                 Out::Emit { req, tok } => Write::Tokens { id: RequestId::new(req), tok },
-                Out::Finish { req, why, cause } => {
+                Out::Finish { req, why } => {
                     let id = RequestId::new(req);
                     self.open.remove(&id);
-                    Write::Finish { id, why, cause }
+                    Write::Finish { id, why }
                 }
                 Out::Ask(Ask::Abort { req }) => {
                     let tier = *self.tiers.get(&req).context("an abort of a request on no decode tier")?;
@@ -260,7 +258,7 @@ impl Clients {
     }
 }
 
-/// The front as pegainfer drives it: the head's notes in, [`Clients`]'
+/// The front as infront drives it: the head's notes in, [`Clients`]'
 /// writes carried out against the ledger and the head.
 pub struct Front {
     notes: mpsc::Receiver<Note>,
@@ -288,7 +286,7 @@ impl Front {
                 }
                 Write::Reject { id, why } => ledger.reject(id, why),
                 Write::Tokens { id, tok } => ledger.push_tokens(id, &[tok], &[]),
-                Write::Finish { id, why, cause } => ledger.finish_with_cause(id, why, cause),
+                Write::Finish { id, why } => ledger.finish(id, why),
                 Write::Retire(id) => ledger.retire(id),
                 Write::Gone(id) => (self.head)(Call::Gone(id))?,
                 Write::Abort { tier, req } => (self.head)(Call::Abort { tier, req })?,

@@ -86,11 +86,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use anyhow::{bail, ensure, Result};
+use infront_engine::SamplingParams;
 use kern_manifest::protocol::{Axis, Filled, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::{Checkpoint, Copies, Denied, Interleave, Kept, Lease, Pool};
-use pegainfer_frontend::sampler::SamplingParams;
 use serde::{Deserialize, Serialize};
 
 use crate::pp::Item;

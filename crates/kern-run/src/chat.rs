@@ -2,7 +2,7 @@
 //! into vLLM's `ChatRequest` the way vLLM's server converts it, rendered
 //! by the renderer the checkpoint's `config.json` selects, tokenized
 //! without added special tokens. kern-serve reaches the same renderer
-//! through pegainfer; the conversion is private to `vllm-server`, so its
+//! through infront; the conversion is private to `vllm-server`, so its
 //! rules are restated here: `reasoning_content` is an alias of
 //! `reasoning`, empty reasoning is dropped, a tool call without
 //! `arguments` has `{}`.

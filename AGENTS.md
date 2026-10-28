@@ -51,13 +51,13 @@ the schema golden, lints) belongs in CI, not here.
   launches kern-serve. Around it: `kern.toml` (`config`), where inputs and
   weights come from (`inputs`, `weights`), chats rendered through vLLM's
   renderers (`chat`), and the real `Side` over `Runtime`.
-- `crates/kern-serve` — the OpenAI-compatible server: pegainfer's frontend
+- `crates/kern-serve` — the OpenAI-compatible server: infront's frontend
   over `KernScheduler` (`scheduler`), which decides every rank's pool in one
   place (`ranks`) while each GPU is a process of its own (`executor`, and
   `watch` to fail the group fast); pipeline-stage prefill over a cut
   manifest (`pp/`); prefill/decode disaggregation, a pipeline head handing
   prompts to decode tiers (`pd/`). Outside `default-members`: it needs
-  protoc and the pegainfer/vLLM serving stack, so it builds by name where
+  protoc and the infront/vLLM serving stack, so it builds by name where
   those are (the kernel-lab container, CI, the release runner).
 - `crates/kern-py` — `import kern`, the runtime for a Python host (a
   cdylib built by maturin), and the `kern_vllm` / `kern_sglang` plugins that
@@ -119,7 +119,7 @@ fields and public API. A type is the noun for the thing (`Lease`, not
 `LeaseManager`). No `Helper`, `Util`, `Manager`, `_v2`, `new_`, `_impl`.
 
 **Small.** No abstraction for one caller. No trait until there are two
-implementations (`Scheduler` is pegainfer's, not ours). Prefer deleting to
+implementations (`Scheduler` is infront's, not ours). Prefer deleting to
 adding. When a file outgrows what its module doc describes, split along a
 contract, not along a line count.
 
@@ -128,7 +128,7 @@ golden. No shims, no deprecated paths, no flags that keep old behavior alive.
 
 **Dependencies are decisions.** A new crate is named in the commit message
 with the reason it is worth its weight. CUDA-adjacent crates stay pinned
-exact; pegainfer stays pinned by rev and is bumped deliberately.
+exact; infront stays pinned by rev and is bumped deliberately.
 
 ## Gates
 

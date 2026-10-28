@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
-use pegainfer_frontend::engine::{FinishReason, StopCause, StopPolicy};
+use infront_engine::{FinishReason, StopPolicy};
 
 use super::{Ask, Out, Req};
 
@@ -35,11 +35,11 @@ impl Relay {
     }
 
     /// `tok` generated: how it ends the request, if it does.
-    pub(super) fn take(&mut self, tok: u32) -> Option<(FinishReason, Option<StopCause>)> {
+    pub(super) fn take(&mut self, tok: u32) -> Option<FinishReason> {
         self.generated += 1;
         match self.stop.classify(tok, |_| false) {
-            Some(c) => Some((FinishReason::Stop, Some(c))),
-            None if self.generated >= self.max_tokens => Some((FinishReason::Length, None)),
+            Some(c) => Some(FinishReason::Stop(c)),
+            None if self.generated >= self.max_tokens => Some(FinishReason::Length),
             None => None,
         }
     }
@@ -83,13 +83,13 @@ impl Relays {
             let Some(r) = self.live.get_mut(&req) else { continue };
             out.push(Out::Emit { req, tok });
             match (r.take(tok), done) {
-                (Some((why, cause)), true) => {
+                (Some(why), true) => {
                     self.live.remove(&req);
-                    out.push(Out::Finish { req, why, cause });
+                    out.push(Out::Finish { req, why });
                 }
-                (Some((why, cause)), false) => {
+                (Some(why), false) => {
                     self.live.remove(&req);
-                    out.push(Out::Finish { req, why, cause });
+                    out.push(Out::Finish { req, why });
                     out.push(Out::Ask(Ask::Abort { req }));
                 }
                 (None, true) => {

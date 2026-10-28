@@ -9,9 +9,9 @@
 //! the head to carry out without deciding anything.
 
 use anyhow::{bail, Result};
+use infront_engine::StopPolicy;
 use kern_manifest::protocol::Sampling;
 use kern_pool::Lease;
-use pegainfer_frontend::engine::StopPolicy;
 
 use super::{pick, Ask, Handoffs, Load, Out, Relay, Req, Standing, Tell};
 

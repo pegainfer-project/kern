@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use anyhow::Result;
+use infront_engine::{EosPolicy, FinishReason, StopCause, StopPolicy};
 use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
 use kern_pool::{Lease, Pool};
@@ -16,7 +17,6 @@ use kern_serve::pd::{
     Shape, Standing, Tell,
 };
 use kern_serve::ranks::{Act, Answer, Order};
-use pegainfer_frontend::engine::{EosPolicy, FinishReason, StopPolicy};
 
 mod common;
 use common::{dealt, replicated, replicated_with, Rand};
@@ -483,7 +483,11 @@ impl World {
             self.waiting.pop_front();
             let c = self.clients.get_mut(&req).unwrap();
             c.tokens = vec![first_token(req)];
-            let why = if first_token(req) == STOP { FinishReason::Stop } else { FinishReason::Length };
+            let why = if first_token(req) == STOP {
+                FinishReason::Stop(StopCause::Token(STOP))
+            } else {
+                FinishReason::Length
+            };
             c.end = Some(End::Finished(c.tokens.clone(), why));
             self.moved += 1;
             return;
@@ -615,7 +619,11 @@ fn every_schedule_hands_off_in_order_and_ends_every_request_once() {
             while chain.len() < c.max_tokens && *chain.last().unwrap() != STOP {
                 chain.push(next(*chain.last().unwrap() as i64) as u32);
             }
-            let why = if *chain.last().unwrap() == STOP { FinishReason::Stop } else { FinishReason::Length };
+            let why = if *chain.last().unwrap() == STOP {
+                FinishReason::Stop(StopCause::Token(STOP))
+            } else {
+                FinishReason::Length
+            };
             match &c.end {
                 Some(End::Finished(t, r)) => assert_eq!((t, *r), (&chain, why), "case {case}: request {req}"),
                 Some(End::Rejected) => assert!(c.prompt > P_LIMIT, "case {case}: request {req} rejected"),
