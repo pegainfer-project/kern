@@ -9,14 +9,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use infront_engine::SamplingParams;
+use infront_engine::{
+    spawn_scheduler, EosPolicy, FinishReason, LiveScheduler, PrefixCacheCounters, Request, RequestId, StepReceiver,
+    StopCause, StopPolicy, Terminal,
+};
 use kern_manifest::protocol::Sampling;
 use kern_serve::front::{Call, Clients, Front, Note};
 use kern_serve::pd::{Ask, Relay, Req};
-use pegainfer_frontend::engine::{
-    spawn_scheduler, EosPolicy, FinishReason, LiveScheduler, PrefixCacheCounters, Request, RequestId, StepReceiver,
-    StopPolicy, Terminal,
-};
-use pegainfer_frontend::sampler::SamplingParams;
 
 const STEP: Duration = Duration::from_millis(25);
 const ITEM: Duration = Duration::from_millis(500);
@@ -31,12 +31,8 @@ fn request(max_tokens: usize, stop: StopPolicy) -> Request {
         history_tokens: None,
         stop_policy: stop,
         max_tokens,
-        lora_adapter: None,
-        kv_transfer_params: None,
         logprobs: None,
         prompt_logprobs: None,
-        trace_parent: None,
-        client_label: None,
     }
 }
 
@@ -273,7 +269,7 @@ fn the_front_ends_what_decodes_and_tells_the_head_the_rest() {
     let ended = l.sent[&a.raw()][4];
     assert_eq!(
         (seen.ids(a), finished(seen.ends.get(&a))),
-        (vec![FIRST, 101, 102, 103, 104, 105], Some((FinishReason::Stop, 6)))
+        (vec![FIRST, 101, 102, 103, 104, 105], Some((FinishReason::Stop(StopCause::Token(105)), 6)))
     );
     assert!(
         l.aborted[&a.raw()] - ended <= STEP,

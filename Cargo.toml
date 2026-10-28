@@ -28,14 +28,17 @@ kern-runtime = { path = "crates/kern-runtime" }
 kern-test = { path = "crates/kern-test" }
 kern-run = { path = "crates/kern-run" }
 
-# Pinned to a pegainfer main commit; bump deliberately. Its vLLM crates carry
-# the chat renderers, picked by the checkpoint's model_type. `vllm-chat` and
-# `vllm-tokenizer` (its test tokenizer) are the same vLLM rev pegainfer pins,
-# so the renderer tests read the crate the server runs.
-pegainfer-frontend = { git = "https://github.com/pegainfer-project/pegainfer", rev = "ca25b80fa4491509ccef418467b37d4d6fd64e9b" }
-vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
-vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
-vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "fce64bc5c2c939a4521bfb9b462c8c74c1c13893" }
+# The serving frontend (infront: the scheduler contract and vLLM's Rust
+# frontend behind it), pinned to a main commit and bumped deliberately. Its
+# vLLM crates carry the chat renderers, picked by the checkpoint's
+# model_type. `vllm-chat`, `vllm-text` and `vllm-tokenizer` (its test
+# tokenizer) are the vLLM rev infront pins, so the renderer tests read the
+# crate the server runs.
+infront-engine = { git = "https://github.com/pegainfer-project/infront", rev = "4fa55c7b8169bc931b197fd079ec2b8228a5ee03" }
+infront-vllm = { git = "https://github.com/pegainfer-project/infront", rev = "4fa55c7b8169bc931b197fd079ec2b8228a5ee03" }
+vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
+vllm-tokenizer = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
+vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
 
 anyhow = "1"
 # The frontend's own HTTP stack; kern-serve puts its refusals in front of it.

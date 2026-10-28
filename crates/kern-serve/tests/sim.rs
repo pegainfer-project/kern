@@ -24,13 +24,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use infront_engine::{EosPolicy, FinishReason, RejectReason, RequestId, StopCause, StopPolicy};
 use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
 use kern_pool::Pool;
 use kern_serve::front::{Clients, Note, Write};
 use kern_serve::pd::{Ask, Decoder, Gate, Out, Push, Refusal, Req, Run, Tell, Tiers};
 use kern_serve::ranks::{Answer, Order};
-use pegainfer_frontend::engine::{EosPolicy, FinishReason, RejectReason, RequestId, StopPolicy};
 
 mod common;
 use common::{dealt, replicated_of, Rand};
@@ -407,9 +407,9 @@ impl Sim {
                 return self.push(0, &p);
             }
             Out::Emit { req, tok } => Note::Emit { id: RequestId::new(req), tok },
-            Out::Finish { req, why, cause } => {
+            Out::Finish { req, why } => {
                 self.head.gone.remove(&req);
-                Note::Finish { id: RequestId::new(req), why, cause }
+                Note::Finish { id: RequestId::new(req), why }
             }
             Out::Decode { req, relay } => {
                 self.head.gone.remove(&req);
@@ -497,10 +497,10 @@ impl Sim {
             Event::First { req, handoff: false } => {
                 let id = RequestId::new(req);
                 let tok = first_token(req);
-                let why = if tok == STOP { FinishReason::Stop } else { FinishReason::Length };
+                let why = if tok == STOP { FinishReason::Stop(StopCause::Token(STOP)) } else { FinishReason::Length };
                 match self.head.gone.remove(&req) {
                     true => self.front.notes.push_back(Note::Retire(id)),
-                    false => self.front.notes.extend([Note::Emit { id, tok }, Note::Finish { id, why, cause: None }]),
+                    false => self.front.notes.extend([Note::Emit { id, tok }, Note::Finish { id, why }]),
                 }
                 Vec::new()
             }
@@ -615,7 +615,11 @@ impl Sim {
             while chain.len() < c.max_tokens && *chain.last().unwrap() != STOP {
                 chain.push(next(*chain.last().unwrap() as i64) as u32);
             }
-            let why = if *chain.last().unwrap() == STOP { FinishReason::Stop } else { FinishReason::Length };
+            let why = if *chain.last().unwrap() == STOP {
+                FinishReason::Stop(StopCause::Token(STOP))
+            } else {
+                FinishReason::Length
+            };
             let ok = match &c.end {
                 Some(End::Finished(t, r)) => (t, *r) == (&chain, why),
                 Some(End::Rejected) => c.prompt > P_LIMIT,

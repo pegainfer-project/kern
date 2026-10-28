@@ -60,14 +60,12 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
+use infront_engine::{FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, StopPolicy};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::{Denied, Lease};
 use kern_run::Weights;
 use kern_runtime::{Capacity, Error, Runtime};
-use pegainfer_frontend::engine::{
-    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, StopPolicy,
-};
 use tracing::{debug, error, info};
 
 use super::cache::Cache;
@@ -136,9 +134,8 @@ struct Finish {
 impl Finish {
     /// Complete a request on P, preserving why its first token stopped it.
     fn notes(&self, tok: u32) -> [Note; 2] {
-        let cause = self.stop.classify(tok, |_| false);
-        let why = if cause.is_some() { FinishReason::Stop } else { FinishReason::Length };
-        [Note::Emit { id: self.id, tok }, Note::Finish { id: self.id, why, cause }]
+        let why = self.stop.classify(tok, |_| false).map_or(FinishReason::Length, FinishReason::Stop);
+        [Note::Emit { id: self.id, tok }, Note::Finish { id: self.id, why }]
     }
 }
 
@@ -542,10 +539,10 @@ impl PpHead {
                 Out::Ask(a) => send(&mut self.decode[tier].d, &a)?,
                 Out::Push(p) => self.push(&p)?,
                 Out::Emit { req, tok } => self.note(Note::Emit { id: RequestId::new(req), tok })?,
-                Out::Finish { req, why, cause } => {
+                Out::Finish { req, why } => {
                     let id = RequestId::new(req);
                     self.gone.remove(&id);
-                    self.note(Note::Finish { id, why, cause })?;
+                    self.note(Note::Finish { id, why })?;
                 }
                 Out::Decode { req, relay } => {
                     let id = RequestId::new(req);
@@ -903,8 +900,8 @@ impl PpHead {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pegainfer_frontend::engine::{spawn_scheduler, EosPolicy, Request, StopCause, Terminal};
-    use pegainfer_frontend::sampler::SamplingParams;
+    use infront_engine::SamplingParams;
+    use infront_engine::{spawn_scheduler, EosPolicy, Request, StopCause, Terminal};
 
     /// Exercise the actual head completion notes through Front and the ledger,
     /// without loading a model. The bridge appends a compatibility EOS for a
@@ -929,12 +926,8 @@ mod tests {
             history_tokens: None,
             stop_policy: stop,
             max_tokens: 1,
-            lora_adapter: None,
-            kv_transfer_params: None,
             logprobs: None,
             prompt_logprobs: None,
-            trace_parent: None,
-            client_label: None,
         });
         let mut tokens = Vec::new();
         let mut terminal = None;
@@ -966,18 +959,18 @@ mod tests {
         // EOS wins over an explicit stop for the same token; an explicit stop
         // remains active when EOS is ignored.
         let cases = [
-            (EosPolicy::Token(2), vec![2, 43], 2, FinishReason::Stop, Some(StopCause::Eos(2))),
-            (EosPolicy::Token(2), vec![43], 43, FinishReason::Stop, Some(StopCause::Token(43))),
-            (EosPolicy::Ignore, vec![43], 43, FinishReason::Stop, Some(StopCause::Token(43))),
+            (EosPolicy::Token(2), vec![2, 43], 2, StopCause::Eos(2)),
+            (EosPolicy::Token(2), vec![43], 43, StopCause::Token(43)),
+            (EosPolicy::Ignore, vec![43], 43, StopCause::Token(43)),
         ];
-        for (eos, stops, tok, reason, stop_cause) in cases {
+        for (eos, stops, tok, cause) in cases {
             let (tokens, terminal) = first_token(StopPolicy::new(eos, stops), tok);
             assert_eq!(tokens, vec![tok]);
             assert!(
                 matches!(terminal, Terminal::Finished {
-                    reason: got_reason, stop_cause: got_cause, prompt_tokens: 16, completion_tokens: 1,
-                } if got_reason == reason && got_cause == stop_cause),
-                "first token {tok}: {terminal:?}, expected {reason:?}/{stop_cause:?}"
+                    reason, prompt_tokens: 16, completion_tokens: 1,
+                } if reason == FinishReason::Stop(cause)),
+                "first token {tok}: {terminal:?}, expected a stop on {cause:?}"
             );
         }
     }
@@ -989,12 +982,7 @@ mod tests {
             assert_eq!(tokens, vec![tok]);
             assert!(matches!(
                 terminal,
-                Terminal::Finished {
-                    reason: FinishReason::Length,
-                    stop_cause: None,
-                    prompt_tokens: 16,
-                    completion_tokens: 1,
-                }
+                Terminal::Finished { reason: FinishReason::Length, prompt_tokens: 16, completion_tokens: 1 }
             ));
         }
     }

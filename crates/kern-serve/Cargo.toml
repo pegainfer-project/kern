@@ -9,7 +9,8 @@ kern-manifest.workspace = true
 kern-pool.workspace = true
 kern-runtime.workspace = true
 kern-run.workspace = true
-pegainfer-frontend.workspace = true
+infront-engine.workspace = true
+infront-vllm.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true

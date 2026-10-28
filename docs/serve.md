@@ -19,14 +19,18 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 `--tool-call-parser <name|none|auto>` 显式给值压过它，两边都没有才按模型目录名猜；
 启动日志的 `chat` 行打印选的和解析到的名字。选错的症状：`tool_calls: null`、
 `finish_reason: "stop"`、content 里是裸的 XML / JSON 且少了开头的 `<tool_call>` 标签
-（解析器吃掉了它再放弃）。reasoning parser 现在还是前端按目录名猜，pegainfer 的 serve
+（解析器吃掉了它再放弃）。reasoning parser 现在还是前端按目录名猜，infront 的 serve
 接口接它之后同样走 manifest（#67）。
 **前端**要的 HF 目录（config.json、tokenizer、chat template、`generation_config.json`
-的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名。前端整个来自 pegainfer（`pegainfer-frontend`，底下是 vLLM 官方的
-Rust server crates，git dep 钉 pegainfer main 的一个 rev），kern 只贡献引擎：`crates/kern-serve`。
+的 eos）就是 `--weights` 第一项所在的目录：目录本身，或去掉 `.safetensors` 文件名。前端整个来自 [infront](https://github.com/pegainfer-project/infront)（从 pegainfer 拆出来的
+`infront-engine` + `infront-vllm`，底下是 vLLM 官方的 Rust server crates，git dep 钉 infront main 的
+一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 pegainfer `18d0c29d` / vLLM `f4dde313`（2026-10-08）。`18d0c29d` 是 pegainfer #1140：chat 层量出
-`Request::history_tokens`（见下文"带循环状态"一条）。之前的 `f53b282f` bump 带来的：
+当前钉在 infront `4fa55c7b` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
+`ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
+不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history_boundary`
+打开，chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条）；停止原因并进
+`FinishReason::Stop(StopCause)`。更早在 pegainfer 上的 `f53b282f` bump 带来的：
 停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
 降成一份策略，scheduler 只 `classify`，结束时带 `stop_cause`），kern-serve 不再自己读
 `generation_config.json` 的 eos，`--stop-tokens` 删除；DSV4.1 renderer 的 reasoning effort
@@ -38,8 +42,8 @@ fixture 的期望随之更新。更早的 #56260 仍在：DSV4/V4.1 历史 tool 
 
 ## 分工
 
-- **`kern-serve::scheduler::KernScheduler`** 实现 pegainfer 的 `Scheduler`
-  契约（`submit` / `step` / `metrics`），跑在 pegainfer 的 `drive` 轮询线程
+- **`kern-serve::scheduler::KernScheduler`** 实现 infront 的 `Scheduler`
+  契约（`submit` / `step` / `metrics`），跑在 infront 的 `drive` 轮询线程
   上，独占一个 `Runtime`。策略刻意简单：
   - prefill 优先、不混批：每步先把 waiting 里能坐下的请求按序逐个（bs=1、
     按 `--chunk` 切块、逐 launch 不走图）整条 prefill 完，再对全部 running
@@ -66,9 +70,9 @@ fixture 的期望随之更新。更早的 #56260 仍在：DSV4/V4.1 历史 tool 
     没给 seed 的请求准入时抽一个。seed 只承诺"同一 batch 布局下重放一致"：
     FlashInfer 用 `(seed, 行号, 位置)` 起 Philox，行在 batch 里的位置进了随机流，
     跨布局不保证（2026-10-26，issue #66）。不带 sampling fills 的 manifest 只会
-    argmax：显式要 temperature > 0 的请求在 HTTP 层 400（`refuse.rs`），
+    argmax：显式要 temperature > 0 的请求在 HTTP 层 400（infront 的 `Capabilities`），
     generation_config 默认值带来的非 greedy 参数 warn 一次后按 greedy 服务。
-    停止 token 带着 `stop_cause` 交给 ledger（pegainfer 约定：前端像 vLLM
+    停止 token 带着 `FinishReason::Stop(cause)` 交给 ledger（infront 约定：前端像 vLLM
     一样把它计入 `completion_tokens`、从文本里剥掉），计入 `max_tokens`。
 - **manifest**（`tools/gen_qwen3_decode.py`）多了一个 var `seqs`（≤256）和
   一个 program：
@@ -163,7 +167,7 @@ tok/s，普通模式 353 / 2048 / 6800——交叉点在 bs 16–32，v4 没有�
   （那半页和 state slot 拷给快照）：chat template 的 generation prompt（qwen3.8 是
   `<|im_start|>assistant\n<think>\n`）在下一轮的历史里渲染成别的样子（`<think>\n\n</think>`），
   所以两轮 prompt 共享的前缀到最后一条消息结束为止；这个位置由前端量，不由 scheduler 猜——
-  pegainfer 的 chat 层在 `/v1/chat/completions` 前把请求的最后一条消息单独渲染两遍（带 / 不带
+  infront 的 chat 层在 `/v1/chat/completions` 前把请求的最后一条消息单独渲染两遍（带 / 不带
   generation prompt），两份 token 不共享的尾巴长度写进 `vllm_xargs.generation_prompt_tokens`，
   bridge 算成 `Request::history_tokens = prompt_len - 尾巴`（跨边界的 token 算进尾巴，快照只会
   提前不会越界；`add_generation_prompt=false` / `continue_final_message` 时尾巴为 0）。这是这一轮
@@ -863,5 +867,5 @@ checkpoint 数，或有 checkpoint 可丢时不从页切 slot）待定，stats �
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
 投机 round 下的采样（rejection sampling；投机 manifest 不带 sampling fills，要 draw 的请求 400）、logprobs / echo（要 logprobs 的请求在
-HTTP 层就按 400 拒掉并点名参数，`refuse.rs`，2026-10-26；经 scheduler 的 reject 到 vLLM wire 只会变成 500）、
+HTTP 层就按 400 拒掉并点名参数，infront 的 `Capabilities`（原 `refuse.rs`，2026-10-26）；经 scheduler 的 reject 到 vLLM wire 只会变成 500）、
 bs 2–16 的 split-KV decode、步间 host 空转（token 反馈进图）。

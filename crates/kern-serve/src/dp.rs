@@ -34,13 +34,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{bail, ensure, Result};
+use infront_engine::{
+    FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
+};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::{Denied, Lease, Pool, Prefix};
-use pegainfer_frontend::engine::{
-    FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
-};
 use tracing::{debug, info, warn};
 
 use crate::executor::{Executors, Joined};
@@ -69,7 +69,7 @@ struct Seq {
     /// Rows in the state: the prefix it started from plus what was fed.
     pos: usize,
     passed: usize,
-    stop: pegainfer_frontend::engine::StopPolicy,
+    stop: infront_engine::StopPolicy,
     sampling: Sampling,
     admitted: Instant,
 }
@@ -453,10 +453,9 @@ impl Dp {
             done.sort_unstable_by_key(|&(i, _)| std::cmp::Reverse(i));
             for (i, tok) in done {
                 let s = r.seqs.swap_remove(i);
-                let cause = s.stop.classify(tok, |_| false);
+                let why = s.stop.classify(tok, |_| false).map_or(FinishReason::Length, FinishReason::Stop);
                 ledger.push_tokens(s.id, &[tok], &[]);
-                let why = if cause.is_some() { FinishReason::Stop } else { FinishReason::Length };
-                ledger.finish_with_cause(s.id, why, cause);
+                ledger.finish(s.id, why);
                 self.stats.finished += 1;
                 debug!(request = %s.id, prompt = s.ids.len(), elapsed_ms = logline::ms(s.admitted.elapsed()), "finished");
                 r.prefix.insert(&s.ids, r.pool.retire(s.lease, s.pos));

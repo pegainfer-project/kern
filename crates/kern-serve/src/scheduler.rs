@@ -1,6 +1,6 @@
 //! The kern scheduler: every rank, many sequences.
 //!
-//! Implements the pegainfer frontend's [`Scheduler`] contract — `submit`,
+//! Implements infront's [`Scheduler`] contract — `submit`,
 //! `step`, `metrics` — over a kern manifest whose every rank's accounting
 //! is a [`Ranks`] (`ranks.rs` is the design: lockstep, owners, staging)
 //! and whose ranks run what it decides through [`Executors`] (one process
@@ -40,8 +40,8 @@
 //!   staged from the request (`Cell::sampling`: its parameters, a seed
 //!   drawn at admission without one). A manifest without them is greedy:
 //!   a request that asks for a draw is refused at the endpoint
-//!   (`refuse.rs`), and one made non-greedy by the generation config's
-//!   defaults is logged once and served greedily;
+//!   (infront's `Capabilities`), and one made non-greedy by the generation
+//!   config's defaults is logged once and served greedily;
 //! - a speculative round is a forward of several rows per sequence whose
 //!   `tokens` output is `[groups, rows]` and whose `count` output says how
 //!   many of a sequence's the device accepted: the rows past the count
@@ -85,13 +85,13 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{bail, Result};
-use kern_manifest::protocol::{Forward, Rows, Sampling};
-use kern_manifest::Protocol;
-use kern_pool::{Denied, Prefix};
-use pegainfer_frontend::engine::{
+use infront_engine::{
     FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
     SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
+use kern_manifest::protocol::{Forward, Rows, Sampling};
+use kern_manifest::Protocol;
+use kern_pool::{Denied, Prefix};
 use tracing::{debug, info, warn};
 
 use crate::executor::Executors;
@@ -218,7 +218,7 @@ impl Seq {
     }
 
     /// Account `toks` as generated, as far as [`cut`] takes them. The stop
-    /// token goes to the ledger with its cause (pegainfer convention: the
+    /// token goes to the ledger with its cause (infront's convention: the
     /// frontend counts it as vLLM does and strips it from the text) but not
     /// into `emitted`. Finishes the request in the ledger when it is done,
     /// otherwise the last token is the next step's input. Returns how many
@@ -233,9 +233,9 @@ impl Seq {
         }
         let done = match end {
             Some(end) => {
-                let (reason, cause) = match end {
-                    End::Stop(c) => (FinishReason::Stop, Some(c)),
-                    End::Length => (FinishReason::Length, None),
+                let reason = match end {
+                    End::Stop(c) => FinishReason::Stop(c),
+                    End::Length => FinishReason::Length,
                 };
                 debug!(
                     request = %self.id,
@@ -245,7 +245,7 @@ impl Seq {
                     elapsed_s = logline::secs(self.admitted.elapsed()),
                     "finished"
                 );
-                ledger.finish_with_cause(self.id, reason, cause);
+                ledger.finish(self.id, reason);
                 true
             }
             None => {
@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn a_sequence_takes_tokens_through_its_stop_or_its_length() {
-        use pegainfer_frontend::engine::EosPolicy;
+        use infront_engine::EosPolicy;
         let stop = StopPolicy::new(EosPolicy::Token(9), vec![7]);
         assert_eq!(cut(&[1, 2, 3], 0, 10, &stop), (3, None));
         assert_eq!(cut(&[1, 9, 3], 0, 10, &stop), (2, Some(End::Stop(StopCause::Eos(9)))));

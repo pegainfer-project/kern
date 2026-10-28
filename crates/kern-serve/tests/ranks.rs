@@ -4,12 +4,12 @@
 
 use std::collections::BTreeMap;
 
+use infront_engine::SamplingParams;
 use kern_manifest::protocol::{Sampling, Values};
 use kern_manifest::types::Manifest;
 use kern_manifest::{verify, Protocol};
 use kern_pool::{Denied, Pool};
 use kern_serve::ranks::{sampling, Act, Answer, Cell, Groups, Order, Ranks, Row};
-use pegainfer_frontend::sampler::SamplingParams;
 
 mod common;
 use common::{dealt, replicated, Rand};
@@ -276,8 +276,7 @@ fn a_rank_sent_only_the_tables_that_changed_holds_every_steps_tables() {
 #[test]
 fn a_request_draws_as_it_asks_or_takes_the_most_likely_token() {
     assert_eq!(sampling(&SamplingParams::default()), Sampling::GREEDY);
-    let asked =
-        SamplingParams { temperature: 0.7, top_k: 40, top_p: 0.9, min_p: 0.1, seed: Some(3), ignore_eos: false };
+    let asked = SamplingParams { temperature: 0.7, top_k: 40, top_p: 0.9, min_p: 0.1, seed: Some(3) };
     assert_eq!(sampling(&asked), Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, min_p: 0.1, seed: 3 });
     // One survivor is the most likely token, whatever the temperature.
     assert_eq!(sampling(&SamplingParams { top_k: 1, ..asked }), Sampling::GREEDY);
