@@ -29,10 +29,10 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 
 当前钉在 infront `ea2db279` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
 `ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
-不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history: History::Marks`，
-chat 层量出 `Request::history_tokens`（见下文"带循环状态"一条），并对每条后面跟着 assistant 消息的消息
-渲染一次 `messages[..=i]`，最新 8 个边界作为 `Request::history_marks` 随请求给引擎，池化层探每一个
-（下文「池化 KV 层」；infront#13，即 pegainfer#1189 的移植）；停止原因并进
+不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history: History::Boundary`，
+chat 层渲染一次量出 `Request::history_tokens`（见下文"带循环状态"一条）。之前是 `History::Marks`，
+另外对最近 8 轮各渲染一次给 `history_marks` 供池化层探；2026-10-28 起池化层在 prompt 的每个页边界探
+mark，不再需要前端说更早的轮次在哪，这 8 次渲染省掉（下文「池化 KV 层」）；停止原因并进
 `FinishReason::Stop(StopCause)`。
 更早在 pegainfer 上的 `f53b282f` bump 带来的：
 停止条件改为请求自带的 `StopPolicy`（前端按 vLLM 的规则把 EOS、`ignore_eos`、显式 stop id
@@ -981,6 +981,40 @@ c96 命中掉到 53%）；c48 起 req/s 就平在 3.15，再加 lane 只是排�
 `pp/head.rs::admit`），`waiting` 爬到 90–140、`running` 掉到 20 多，然后一次扫出 100 多条再放一批进来；10-11 的 host tier
 （每段 128 GiB）替 device 兜着 kept 前缀，所以那时 device 页只装 running 的。池的 get 被拒（`rc=1`，整批）c96 73 次、c48 0 次，
 都按设计退回 device 前缀算，没有请求失败。
+
+**K3 PP8 命中对账（2026-10-28 / 29，`~/bench_results/2026-10-28-k3-nvlink-pool`）**：问的是 P 命中的是否就是设计承诺的，
+一条不差。负载是 AgentX 语料按块哈希合成的 token id（每个哈希 64 个 token，按 trace 与 salt 播种），每个 trace 一条 lane 串行，
+`max_tokens=1` 打 P 自己（`--decode` 不给）；`hitreport.py` 对每条请求算出 lcp（同 trace 之前请求的最长公共前缀，即无限 token 级
+缓存）与 expect（无淘汰时的设计承诺：state 只在 33,920 的网格点和每个结束 prompt 的末尾页边界，取不过最后一个 token 之前的页），
+与服务端的 `cached_tokens` 逐条比。P = PP8（tray03+17 或 tray10+04），池走 `--pool-protocol nvlink`，EGM holder 1.37–1.66 TB。
+
+| 负载 | lcp | expect | cached | 低于 expect |
+|---|---|---|---|---|
+| c16，32 trace × 前 48 条，1384 条 / 141M token，修之前 | 94.5% | 94.0% | 93.2% | 26 条，1.1M token |
+| 同上，修之后 | 94.5% | 94.0% | **94.0%** | 3 条，7.7k |
+| c16，32 条完整 trace，9249 条 / 1.74B token，最长 920k | 97.9% | 97.6% | **97.5%** | 46 条，1.5M |
+| c64，128 trace × 前 72 条，7201 条 / 0.79B token | 95.6% | 95.2% | 94.9% | 49 条，2.9M |
+| 同上，Mooncake master 带 #5066 | 95.6% | 95.2% | **95.1%** | 32 条，1.3M |
+
+修之前：池专用快照只用空 slot，device 条目两分钟内占满 257 个 slot，之后 `pool_snapshots=0`、`pool_puts=0`，一个会话的 device 条目
+一被淘汰下一轮就整段重算（172k 的 prompt 命中 0）；改成像 keep 一样淘汰 device 条目腾地方（`pp/cache.rs`）。同一批 token 上 vLLM
+nightly（TP8 EP8，prefix caching 64 token 匹配单位、MooncakeStoreConnector）94.1%：续写时它总停在 prompt 末尾前 64 token（kern 多
+1156 条），在更早的 prompt 中间分叉时它每 1536 token 有一份 state、kern 每 33,920（vLLM 多 50 条）。grid 消融（expect）：1536 /
+8192 / 16960 / 33920 / 67840 → 94.5 / 94.4 / 94.3 / 94.0 / 93.8%，现在的 grid 比每 1536 一份多算 141M 里的 0.8M，池里的 state 少 22 倍。
+
+剩下的差额三类，"其他"为 0：
+- **容量**：池满后（每条请求写 ~600 MB：state 每段 58.6 MB、八段 469 MB，加新的 KV；c64 下池约 5 分钟换一遍）前缀几分钟没用就被
+  LRU 淘汰。c64 原版 master 上还有一种不是容量的：快照每次从第 1 页整条重 put，Mooncake 对已存在的 key 当成功返回、不刷新淘汰序，
+  热前缀的头页停在第一次写入的年龄、最先被淘汰，整条链没有一个 mark 下面是完整的，刚用过的 271k 前缀命中 0。master 让这种 put 像
+  `ExistKey` 一样续租（kvcache-ai/Mooncake#5066）之后，32 条（2.5M）降到 17 条（1.1M），剩下的上一次用都在 260–750 s 前。
+- **mark 竞态**：mark 要等八段都落地，而一段的 put 排在它前面已经入队的 item 之后，最后一段要算完这条 prompt 才放 put，mark 与完成
+  同时落地；下一轮紧跟着来就探不到（冒烟里两个 mark 落在 58.572 / 58.578，重复请求 58.570 探测；隔 1 s 再发就命中）。每轮 0.1–0.4M。
+- **尾部小竞态**：同一原因，末尾快照晚到，退到前一个点，每条几千 token，合计 0.02–0.05M。
+
+吞吐（8 张 GB300，P-only）：c16 每段 busy ~51%、item 平均 3.5k / 8192 行（一条 lane 一次只有一条请求在 P 上，95% 命中时每条只有
+~5k 新 token），新算 20–26k tok/s、含命中 450–530k tok/s，延迟 p50 ~3 s，每卡 ~1085 W。c64 item 8191 行，第 0–6 段 busy 84%、第 7 段
+70%（每 item 210 对 254 ms），新算 27–34k tok/s（~4k/卡）、含命中 530–620k tok/s，p50 ~10 s（多出的是排队），每卡 ~1140 W；head 同时
+最多喂 `bounds.seqs` = 16 条 prompt，再加并发只排队。
 
 **2026-10-27 window state 修掉之后（`~/bench_results/2026-10-27-dsv41-window-work`）**：#100 的根因在 kern-dsv41-flash
 的生成器——window state 声明成 `128 + max_tokens` 行的环，只为一步内的行不踩这一步还在读的槽；改成 state 只留 256 个位置、

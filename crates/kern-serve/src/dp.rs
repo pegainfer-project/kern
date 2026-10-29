@@ -21,21 +21,23 @@
 //! completion's pages are a decode tier's business. Its last rows out, the
 //! call's token for it is the answer, the request finishes, and its lease
 //! retires into the rank's [`Prefix`], where a longer prompt extending
-//! it continues from. A prompt with a state is kept at the frontend's
-//! parting point (`history_tokens`, the rows before the turn's assistant
-//! tag): the next turn renders the history differently past it, so a
-//! snapshot taken as the rows reach that point is what it hits, and the
-//! prompt's end is not kept once the snapshot is. A prompt without one
+//! it continues from. A prompt with a state is kept at the last page
+//! boundary before the frontend's parting point (`history_tokens`, the
+//! rows before the turn's assistant tag): the next turn renders the
+//! history differently past it, so a snapshot taken as the rows reach
+//! that boundary is what it hits, and the prompt's end is not kept once
+//! the snapshot is. A prompt without one
 //! is kept whole at retirement. Room for a lease is made by dropping the
 //! rank's coldest entry; the slots come from `--seq-slots`.
 //!
 //! With a pooled tier (`--pool-master`) a leased prompt is probed before
-//! it runs, on its rank: the marks its frontend named and every page past
-//! the device hit, in one batch; the longest usable is fetched into the
-//! lease and the prompt starts past it, a fetch that failed puts the
-//! lease back as leased and the prompt starts from the device hit. What
-//! goes in is what the rank keeps: the snapshot at `history_tokens`, put
-//! as it is taken; without a state, every whole page at retirement. The
+//! it runs, on its rank: every page past the device hit and, with a
+//! state, the mark on each of their boundaries, in one batch; the longest
+//! usable is fetched into the lease and the prompt starts past it, a
+//! fetch that failed puts the lease back as leased and the prompt starts
+//! from the device hit. What goes in is what the rank keeps: the snapshot
+//! at the parting point's page boundary, put as it is taken; without a
+//! state, every whole page at retirement. The
 //! acts ride the rank's orders and its answers bring the landings, so a
 //! rank with nothing to feed still gets an order while an act of its is
 //! out.
@@ -64,7 +66,7 @@ use crate::logline;
 use crate::pack::{self, Bounds, Waiting};
 use crate::pp::Item;
 use crate::ranks::{Act, Answer, Landed, Order};
-use crate::scheduler::{marks, Facts};
+use crate::scheduler::Facts;
 
 /// Items a sequence with rows left is passed over before it goes ahead
 /// of every sequence passed over fewer times.
@@ -84,7 +86,7 @@ struct Seq {
     ids: Vec<i64>,
     /// Rows in the state: the prefix it started from plus what was fed.
     pos: usize,
-    /// Where its rows stop for the snapshot at `history_tokens`.
+    /// Where its rows stop for the snapshot at `history_tokens`' page boundary.
     mark: Option<usize>,
     /// The snapshot is in the rank's prefix tree; the end will not be.
     kept: bool,
@@ -432,7 +434,7 @@ impl Dp {
             }
             let probe = self.pool.as_ref().and_then(|_| {
                 let unit = self.ranks[q_at].pool.unit() as usize;
-                Probe::plan(lease.seq_slot().is_some(), unit, start, &marks(&q.request), prompt, None)
+                Probe::plan(lease.seq_slot().is_some(), unit, start, prompt, None)
             });
             match probe {
                 Some(probe) => self.probe(Pending { q, rank: q_at, lease, hit, ids, asked: Asked::Probing(probe) }),
@@ -443,9 +445,9 @@ impl Dp {
     }
 
     /// A leased prompt starts on its rank past its lease's prefix, unless
-    /// its client left meanwhile: with a state, its rows stop at the
-    /// frontend's parting point past the prefix for the pooled tier's
-    /// snapshot.
+    /// its client left meanwhile: with a state, its rows stop at the page
+    /// boundary before the frontend's parting point, past the prefix, for
+    /// the pooled tier's snapshot.
     fn activate(&mut self, q: QueuedRequest, rank: usize, lease: Lease, ids: Vec<i64>, ledger: &mut RequestLedger) {
         let (id, prompt, start) = (q.id, ids.len(), lease.prefix());
         if ledger.is_aborted(id) {
@@ -456,7 +458,8 @@ impl Dp {
         ledger.set_cached_tokens(id, start);
         debug!(request = %id, prompt, rank, prefix_hit = start, "admitted");
         let stateful = lease.seq_slot().is_some();
-        let mark = q.request.history_tokens.filter(|&m| stateful && m > start && m < prompt);
+        let unit = self.ranks[rank].pool.unit() as usize;
+        let mark = q.request.history_tokens.map(|m| m / unit * unit).filter(|&m| stateful && m > start && m < prompt);
         self.ranks[rank].seqs.push(Seq {
             id,
             lease,
@@ -477,8 +480,8 @@ impl Dp {
         let pool = self.pool.as_mut().expect("probing with a pool");
         let Asked::Probing(probe) = &p.asked else { unreachable!("a pending prompt starts probing") };
         let unit = self.ranks[p.rank].pool.unit() as usize;
-        let keys = probe.keys(&pool.keys, &Chain::of(unit, &p.ids), &p.ids);
-        debug!(request = %p.q.id, rank = p.rank, device_hit = p.lease.prefix(), marks = ?probe.marks, pages = ?probe.pages, "probing");
+        let keys = probe.keys(&pool.keys, &Chain::of(unit, &p.ids));
+        debug!(request = %p.q.id, rank = p.rank, device_hit = p.lease.prefix(), pages = ?probe.pages, "probing");
         let id = pool.id();
         self.ranks[p.rank].acts.push(Act::Probe { id, keys });
         pool.pending.insert(id, p);
@@ -505,7 +508,7 @@ impl Dp {
         let chain = Chain::of(unit, tokens);
         let objs = objects(&pool.keys, None, &chain, tokens, 1, 0, 0, &cp.page_ids(), cp.seq_slot());
         let whole = tokens.len() / unit;
-        let mark = cp.seq_slot().map(|_| pool.keys.mark(chain.at(whole), &tokens[whole * unit..]));
+        let mark = cp.seq_slot().map(|_| pool.keys.mark(chain.at(whole)));
         let id = pool.id();
         self.ranks[q].acts.push(Act::Put { id, objects: objs });
         pool.puts.insert(id, Putting { cp, len: tokens.len(), mark });

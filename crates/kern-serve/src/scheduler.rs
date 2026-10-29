@@ -57,13 +57,14 @@
 //!   whole page as a sequence fills it — free, a shared page — so any
 //!   earlier prompt or output is reusable at page granularity. A recurrent
 //!   state cannot roll back, so a manifest with one checkpoints where its
-//!   state is worth continuing and nowhere else. Once where the next
-//!   turn's prompt parts from this one, `Request::history_tokens`: the
-//!   frontend's chat layer measured where the rendered conversation ends
-//!   and the template's generation prompt begins, since the next turn
-//!   renders the reply as history and the generation prompt anew; the
-//!   prefill stops there for it, and the page it ends inside and the
-//!   state slots are copied into the snapshot's own. That is the turn's
+//!   state is worth continuing and nowhere else. Once at the last page
+//!   boundary before the next turn's prompt parts from this one,
+//!   `Request::history_tokens`: the frontend's chat layer measured where
+//!   the rendered conversation ends and the template's generation prompt
+//!   begins, since the next turn renders the reply as history and the
+//!   generation prompt anew; the prefill stops there for it, and the state
+//!   slots are copied into the snapshot's own. On a page boundary the
+//!   snapshot shares every page and is what the pooled tier can name. That is the turn's
 //!   one snapshot: the next turn renders a reply after it (ours or a
 //!   recorded one, as an agent trace replays) and pays for the reply and
 //!   what follows it. Only a request with no such point is kept where it
@@ -84,12 +85,12 @@
 //!   joined one: every snapshot the prefix tree keeps is also put to the
 //!   pool, whole pages and the state object of each member, and marked
 //!   once every member's put landed, so a prompt arriving on any instance
-//!   of the same manifest and weights finds it. A prompt the device holds
-//!   less of than the frontend's history marks say it could is probed
-//!   (one batch: the marks, and every page between the device hit and the
-//!   newest), fetched into its own lease from the newest mark whose pages
-//!   all exist, and prefilled from there; a paged-only manifest fetches the
-//!   longest run of pages instead. Probing and fetching requests hold
+//!   of the same manifest and weights finds it. A prompt is probed past
+//!   the device hit (one batch: every page short of its last token and,
+//!   with a state, the mark on each of their boundaries), fetched into its
+//!   own lease from the newest mark whose pages all exist, and prefilled
+//!   from there; a paged-only manifest fetches the longest run of pages
+//!   instead. Probing and fetching requests hold
 //!   their row and count toward the rank's rows, so a slow pool delays only
 //!   its own request; a fetch that does not land puts the row back where
 //!   the device left it (the snapshot's copies again, or the slot zeroed)
@@ -103,7 +104,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use infront_engine::{
-    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, Request, RequestId, RequestLedger, Scheduler,
+    FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
     SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
 };
 use kern_manifest::protocol::{Forward, Rows, Sampling};
@@ -345,13 +346,6 @@ impl Pooled {
     fn busy(&self) -> bool {
         !self.pending.is_empty() || !self.puts.is_empty() || !self.marks.is_empty()
     }
-}
-
-/// Where the frontend says this prompt's history ends and where its
-/// earlier turns ended, newest first: the points a pooled snapshot may
-/// exist at.
-pub(crate) fn marks(r: &Request) -> Vec<usize> {
-    r.history_tokens.into_iter().chain(r.history_marks.iter().copied()).collect()
 }
 
 pub struct KernScheduler<E = Executors> {
@@ -612,9 +606,10 @@ impl<E: Run> KernScheduler<E> {
                 }
             };
             let q = self.waiting.pop_front().unwrap();
-            let probe = self.pool.as_ref().and_then(|_| {
-                Probe::plan(!self.every_page, self.ranks.page(), row.prefix(), &marks(&q.request), prompt, None)
-            });
+            let probe = self
+                .pool
+                .as_ref()
+                .and_then(|_| Probe::plan(!self.every_page, self.ranks.page(), row.prefix(), prompt, None));
             match probe {
                 Some(probe) => self.probe(q, row, hit, ids, probe),
                 None => {
@@ -630,8 +625,8 @@ impl<E: Run> KernScheduler<E> {
     /// `row.prefix()`; the answer admits it (`landed`).
     fn probe(&mut self, q: QueuedRequest, row: Row, hit: Option<Snapshot>, ids: Vec<i64>, probe: Probe) {
         let pool = self.pool.as_mut().expect("probing with a pool");
-        let keys = probe.keys(&pool.keys, &Chain::of(self.ranks.page(), &ids), &ids);
-        debug!(request = %q.id, device_hit = row.prefix(), marks = ?probe.marks, pages = ?probe.pages, "probing");
+        let keys = probe.keys(&pool.keys, &Chain::of(self.ranks.page(), &ids));
+        debug!(request = %q.id, device_hit = row.prefix(), pages = ?probe.pages, "probing");
         let id = self.ranks.probe(keys);
         pool.pending.insert(id, Pending { q, row, hit, ids, stage: Stage::Probing(probe) });
     }
@@ -755,7 +750,7 @@ impl<E: Run> KernScheduler<E> {
             .enumerate()
             .map(|(m, cp)| objects(&pool.keys, None, &chain, tokens, first, m, me, &cp.page_ids(), cp.seq_slot()))
             .collect();
-        let mark = (!self.every_page).then(|| pool.keys.mark(chain.at(whole), &tokens[whole * unit..]));
+        let mark = (!self.every_page).then(|| pool.keys.mark(chain.at(whole)));
         let (id, landing) = self.ranks.put(snap, objects);
         pool.puts.insert(id, Putting { snap: snap.clone(), len, landing, mark });
     }
@@ -791,16 +786,19 @@ impl<E: Run> KernScheduler<E> {
         // Every prompt token goes through the chunk forward when it hands
         // the first generated token back itself; otherwise everything but
         // the last, which is the first step's input. A snapshot hit skips
-        // its tokens (never the last one). A recurrent state is kept where
-        // the frontend says the next turn parts from this prompt, so the
-        // prefill stops there once; a state the pool landed exactly there
-        // is kept too (nothing is prefilled for it), and not put again.
+        // its tokens (never the last one). A recurrent state is kept at the
+        // page boundary before the frontend says the next turn parts from
+        // this prompt, so the prefill stops there once; a state the pool
+        // landed exactly there is kept too (nothing is prefilled for it),
+        // and not put again.
         let parts = !self.every_page && q.request.history_tokens.is_some_and(|m| m < prompt);
         let f = self.plan.chunk.clone();
         let n_pre = if f.emits.is_some() { prompt } else { prompt - 1 };
+        let unit = self.ranks.page();
         let mark = (!self.every_page)
             .then_some(q.request.history_tokens)
             .flatten()
+            .map(|m| m / unit * unit)
             .filter(|&m| m > device && m >= start && m <= n_pre);
         let first = match mark {
             Some(m) => {

@@ -17,10 +17,11 @@
 //! ([`Cache`]): the copies that costs run on the head as they are decided
 //! and ride the next item to every stage. Once its last rows are out it
 //! leaves all of itself in the cache, except that a recurrent state is
-//! kept only where the frontend says the next turn parts from the prompt:
-//! its rows stop there until the checkpoint is taken, and the state at its
-//! end goes back to the pool: one checkpoint a turn, where every next turn
-//! of the conversation passes whatever reply it renders.
+//! kept only at the last page boundary before the frontend says the next
+//! turn parts from the prompt: its rows stop there until the checkpoint is
+//! taken, and the state at its end goes back to the pool: one checkpoint a
+//! turn, where every next turn of the conversation passes whatever reply
+//! it renders.
 //!
 //! Each item is sent to every stage before the head stages and issues it
 //! itself, so a stage waiting for an item always has it on the way. The
@@ -55,18 +56,23 @@
 //! names its tier.
 //!
 //! With a pooled tier (`--pool-master`) a leased prompt is probed before
-//! it runs: the head asks the pool, once, for the marks its frontend named
-//! and every page past the device hit on every stage, and fetches the
-//! longest it can into the lease on every stage at once, each stage's own
-//! layers under its own keys ([`kern_pool::pooled`]). What landed is kept
-//! as an entry of the head's cache and the prompt starts past it; a fetch
-//! that failed anywhere puts the lease back as the cache leased it and
-//! the prompt starts from the device hit. Every entry the cache keeps
-//! (a kept mark, a retired prompt) is put from every stage, and a state's
-//! put is marked once every stage landed it. The pooled acts ride to the
-//! stages as jobs of their own and are answered by every stage; the head
-//! waits for no answer in a turn, so a prompt waits on the pool only
-//! while others go out.
+//! it runs: the head asks the pool, once, for every page past the device
+//! hit on every stage and, with a state, the mark on each of their
+//! boundaries, and fetches the longest it can into the lease on every
+//! stage at once, each stage's own layers under its own keys
+//! ([`kern_pool::pooled`]). What landed is kept as an entry of the head's
+//! cache and the prompt starts past it; a fetch that failed anywhere puts
+//! the lease back as the cache leased it and the prompt starts from the
+//! device hit. Every entry the cache keeps is put from every stage (a
+//! retired prompt's pages alone with a state, whose end is off the page
+//! grid), and a state's put is marked once every stage landed it. A
+//! recurrent prompt also stops on the pool's grid and at its last page
+//! boundary ([`snapshots`]) for snapshots the pool alone keeps: each is
+//! put and let go, so a prompt that parts from it anywhere resumes within
+//! a grid's length of where it parts, and one that passes all of it within
+//! a page of its end. The pooled acts ride to the stages as jobs of their
+//! own and are answered by every stage; the head waits for no answer in a
+//! turn, so a prompt waits on the pool only while others go out.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{TcpListener, TcpStream};
@@ -77,7 +83,7 @@ use anyhow::{bail, ensure, Context, Result};
 use infront_engine::{FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, StopPolicy};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::{Protocol, Verified};
-use kern_pool::{landed, objects, Chain, Checkpoint, Denied, Keys, Landing, Lease, Object, Probe};
+use kern_pool::{landed, objects, snapshots, Chain, Checkpoint, Denied, Keys, Landing, Lease, Object, Probe};
 use kern_run::Weights;
 use kern_runtime::{Capacity, Error, Runtime};
 use tracing::{debug, error, info};
@@ -123,8 +129,12 @@ struct Active {
     pos: usize,
     stop: StopPolicy,
     sampling: Sampling,
-    /// Token position at which to attempt a checkpoint; cleared after the attempt.
-    checkpoint_at: Option<usize>,
+    /// Where its rows stop for a checkpoint, ascending, each gone once
+    /// attempted.
+    stops: VecDeque<usize>,
+    /// The stop kept in the cache, the turn's own; the others are the
+    /// pool's alone.
+    keep: Option<usize>,
     /// The frontend says where the next turn parts from it, before its
     /// end: kept there, its end is not kept.
     parts: bool,
@@ -184,6 +194,8 @@ struct Pooled {
     keys: Keys,
     stages: u8,
     unit: usize,
+    /// The spacing of a recurrent prompt's snapshots for the pool.
+    grid: usize,
     next: u64,
     pending: BTreeMap<u64, Pending>,
     puts: BTreeMap<u64, Writeback>,
@@ -419,6 +431,10 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
                 keys: crate::executor::keys(&m, weights)?,
                 stages: cut.stages as u8,
                 unit: rt.page() as usize,
+                grid: {
+                    let bytes = |f: fn(&kern_manifest::types::State) -> u64| m.states.values().map(f).sum();
+                    kern_pool::grid(rt.page() as usize, bytes(|s| s.bytes_per_seq), bytes(|s| s.bytes_per_token))
+                },
                 next: 0,
                 pending: BTreeMap::new(),
                 puts: BTreeMap::new(),
@@ -606,10 +622,10 @@ impl PpHead {
             let reject = match leased {
                 Ok((lease, start, hit)) => {
                     let q = self.waiting.pop_front().unwrap();
-                    let probe = self.pool.as_ref().and_then(|p| {
-                        let marks = crate::scheduler::marks(&q.request);
-                        Probe::plan(self.rt.has_seq_state(), p.unit, start, &marks, prompt, Some(p.stages))
-                    });
+                    let probe = self
+                        .pool
+                        .as_ref()
+                        .and_then(|p| Probe::plan(self.rt.has_seq_state(), p.unit, start, prompt, Some(p.stages)));
                     match probe {
                         Some(probe) => self.probe(Pending { q, lease, hit, ids, tier, asked: Asked::Probing(probe) }),
                         None => self.activate(q, lease, ids, tier)?,
@@ -638,7 +654,8 @@ impl PpHead {
     }
 
     /// A leased prompt starts past its lease's prefix: its rows stop at
-    /// the frontend's parting point when it is past the prefix.
+    /// the page boundary before the frontend's parting point when it is
+    /// past the prefix, and with a pooled tier at its snapshots too.
     fn activate(&mut self, q: QueuedRequest, lease: Lease, ids: Vec<i64>, tier: Option<usize>) -> Result<()> {
         let (id, prompt, start) = (q.id, ids.len(), lease.prefix());
         // Admitted on P now, not at its lease: a prompt the pooled tier is
@@ -653,13 +670,20 @@ impl PpHead {
         // worth a checkpoint of its own only to a recurrent state, which
         // cannot be continued from part of a longer one, and is then the
         // only one kept.
-        let parted = q.request.history_tokens.filter(|&m| self.rt.has_seq_state() && m < prompt);
-        let checkpoint_at = parted.filter(|&m| m > start);
+        let (stateful, unit) = (self.rt.has_seq_state(), self.rt.page() as usize);
+        let parted = q.request.history_tokens.filter(|&m| stateful && m < prompt);
+        let keep = parted.map(|m| m / unit * unit).filter(|&m| m > start);
+        let stops = match self.pool.as_ref().filter(|_| stateful) {
+            Some(p) => {
+                snapshots(unit, p.grid, start, parted.unwrap_or(prompt - usize::from(self.step.is_some()))).into()
+            }
+            None => keep.into_iter().collect(),
+        };
         let parts = parted.is_some();
         let stop = q.request.stop_policy.clone();
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
-        let a = Active { id, lease, ids, pos: start, stop, sampling, checkpoint_at, parts, handoff, passed: 0 };
+        let a = Active { id, lease, ids, pos: start, stop, sampling, stops, keep, parts, handoff, passed: 0 };
         self.active.push_back(a);
         Ok(())
     }
@@ -680,8 +704,8 @@ impl PpHead {
     fn probe(&mut self, p: Pending) {
         let pool = self.pool.as_mut().expect("probing with a pool");
         let Asked::Probing(probe) = &p.asked else { unreachable!("a pending prompt starts probing") };
-        let keys = probe.keys(&pool.keys, &Chain::of(pool.unit, &p.ids), &p.ids);
-        debug!(request = %p.q.id, device_hit = p.lease.prefix(), marks = ?probe.marks, pages = ?probe.pages, "probing");
+        let keys = probe.keys(&pool.keys, &Chain::of(pool.unit, &p.ids));
+        debug!(request = %p.q.id, device_hit = p.lease.prefix(), pages = ?probe.pages, "probing");
         let id = pool.id();
         pool.client.probe(id, keys);
         pool.pending.insert(id, p);
@@ -706,9 +730,7 @@ impl PpHead {
     fn put(&mut self, cp: Checkpoint, tokens: &[i64]) -> Result<()> {
         let Some(pool) = self.pool.as_mut() else { return Ok(()) };
         let per = pool.objects(tokens, 1, &cp.page_ids(), cp.seq_slot());
-        let whole = tokens.len() / pool.unit;
-        let mark =
-            cp.seq_slot().map(|_| pool.keys.mark(Chain::of(pool.unit, tokens).at(whole), &tokens[whole * pool.unit..]));
+        let mark = cp.seq_slot().map(|_| pool.keys.mark(Chain::of(pool.unit, tokens).at(tokens.len() / pool.unit)));
         let (id, landing) = (pool.id(), Landing::new(0..pool.stages as usize));
         self.transfer(id, per, true)?;
         let pool = self.pool.as_mut().expect("putting with a pool");
@@ -893,9 +915,9 @@ impl PpHead {
         a.ids.len() - usize::from(self.step.is_some())
     }
 
-    /// Where the rows stop for now: the pending checkpoint, then the chunked rows.
+    /// Where the rows stop for now: the next checkpoint, then the chunked rows.
     fn upto(&self, a: &Active) -> usize {
-        a.checkpoint_at.unwrap_or(self.chunked(a))
+        a.stops.front().copied().unwrap_or(self.chunked(a))
     }
 
     /// Send what is ready: the next packed chunk while the pipeline takes
@@ -926,7 +948,8 @@ impl PpHead {
         Ok(())
     }
 
-    /// One packed chunk item: attempt a checkpoint at its scheduled position.
+    /// One packed chunk item: a prompt that reaches a stop is checkpointed
+    /// there and the checkpoint put, the turn's own kept in the cache too.
     /// Prompts whose last rows are sent leave the active set to await the reply.
     fn send_chunk(&mut self, plan: &[(usize, usize)]) -> Result<()> {
         let f = self.prefill.clone();
@@ -948,11 +971,13 @@ impl PpHead {
         for (at, &(i, n)) in plan.iter().enumerate() {
             let a = &mut self.active[i];
             a.pos += n;
-            if a.checkpoint_at == Some(a.pos) {
-                a.checkpoint_at = None;
-                if let Some(cp) = self.cache.keep(&mut self.rt, &mut a.lease, &a.ids[..a.pos])? {
-                    kept.push((cp, a.ids[..a.pos].to_vec()));
-                }
+            if a.stops.front() == Some(&a.pos) {
+                a.stops.pop_front();
+                let cp = match a.keep == Some(a.pos) {
+                    true => self.cache.keep(&mut self.rt, &mut a.lease, &a.ids[..a.pos])?,
+                    false => self.cache.snapshot(&mut self.rt, &mut a.lease, a.pos)?,
+                };
+                kept.extend(cp.map(|cp| (cp, a.ids[..a.pos].to_vec())));
             }
             if emits && a.pos == a.ids.len() {
                 finished.push((i, at));
@@ -976,13 +1001,17 @@ impl PpHead {
 
     /// A prompt whose last rows are out, its token entry `at` of the item's
     /// reply: its lease becomes an entry, or goes back to the pool when the
-    /// next turn parts from it before its end.
+    /// next turn parts from it before its end. A state's end is off the
+    /// page grid, so a recurrent entry is the device's alone: the pooled
+    /// tier took its last boundary as a snapshot.
     fn leave(&mut self, a: Active, at: usize) -> Result<Finish> {
         match a.parts {
             true => drop(a.lease),
             false => {
                 let cp = self.cache.retire(&mut self.rt, a.lease, &a.ids);
-                self.put(cp, &a.ids)?;
+                if cp.seq_slot().is_none() {
+                    self.put(cp, &a.ids)?;
+                }
             }
         }
         Ok(Finish { at, id: a.id, stop: a.stop, handoff: a.handoff })
@@ -1103,6 +1132,8 @@ impl PpHead {
                 checkpoints = self.cache.entries(),
                 prompt_checkpoints = state.then_some(c.kept),
                 prompt_skips = state.then_some(c.skipped),
+                pool_snapshots = self.pool.as_ref().filter(|_| state).map(|_| c.snapshots),
+                pool_snapshot_skips = self.pool.as_ref().filter(|_| state).map(|_| c.snapshot_skips),
                 evictions = c.evictions,
                 superseded = state.then(|| self.cache.superseded()),
                 slots_used = state.then(|| self.rt.seq_slots_used()),

@@ -4,25 +4,32 @@
 //! The pool (Mooncake Store, driven by kern-serve) holds three kinds of
 //! object, each named by the tokens it holds and nothing else: a *page*,
 //! every paged state's bytes for one whole page; a *state*, every
-//! per-sequence state's slot after a snapshot's tokens plus the page the
-//! snapshot ends inside; and a *mark*, one byte saying every object of a
-//! snapshot landed. A page is written by the one member holding it, so
+//! per-sequence state's slot after a snapshot's tokens; and a *mark*, one
+//! byte saying every object of a snapshot landed. A page is written by the one member holding it, so
 //! its key has no member; a state is written by every member of a group,
 //! so its key has one; a mark is written once per snapshot by whoever
 //! decided it. A pipeline stage holds its own layers of each, so page and
 //! state keys carry the stage.
 //!
 //! Every key is a [`Keys`] namespace (the manifest, the weights, the cut)
-//! over a [`Chain`] digest of the whole pages before the object and the
-//! tokens of the page it ends inside. The same tokens under the same
-//! namespace are the same key on every instance; a prompt that differs by
-//! one token differs in every key from that page on.
+//! over a [`Chain`] digest of the whole pages up to the object. A state
+//! sits on a page boundary, so its key, like a page's, is the chain at
+//! that boundary: the same tokens under the same namespace are the same
+//! key on every instance, and a prompt that differs by one token differs
+//! in every key from that page on.
 //!
-//! A [`Probe`] is what to ask about a prompt in one batch: the marks the
-//! frontend says the prompt may continue from, newest first, and every
-//! page between the device hit and the newest of them, on every stage.
-//! The pool is asked whether each exists; [`Probe::chosen`] reads the
-//! answer. [`objects`] names what one member moves for a prefix, each an
+//! A [`Probe`] is what to ask about a prompt in one batch: every page
+//! between the device hit and the prompt's last token on every stage and,
+//! with a state, the mark at every one of those page boundaries. Nobody
+//! has to say where a snapshot was taken: whatever any instance left on
+//! a boundary the prompt passes is asked for. The pool is asked whether
+//! each exists; [`Probe::chosen`] reads the answer.
+//!
+//! Where a prompt leaves states for the pool alone is [`snapshots`]: on a
+//! grid spaced by what a state costs against the pages it covers
+//! ([`grid`]), and at the last boundary it reaches, so a cold prompt
+//! leaves somewhere to resume from at every stretch of its length and a
+//! turn the next one edits leaves its own boundary. [`objects`] names what one member moves for a prefix, each an
 //! [`Object`]: a key over the pages and slot holding its bytes on that
 //! member; [`landed`] reads a member's flags back as tokens. A [`Landing`]
 //! counts a transfer over a group: every member reports the tokens it
@@ -114,116 +121,118 @@ impl Keys {
     /// A namespace over `parts`: whatever identifies the manifest, the
     /// weights and the cut, in a fixed order.
     pub fn new(parts: &[&[u8]]) -> Keys {
-        let mut all: Vec<&[u8]> = vec![b"kern-pool/1"];
+        let mut all: Vec<&[u8]> = vec![b"kern-pool/2"];
         all.extend_from_slice(parts);
         Keys { ns: sha(&all) }
     }
 
-    fn key(&self, kind: &[u8], stage: Option<u8>, member: Option<u8>, chain: Hash, tail: &[i64]) -> String {
+    fn key(&self, kind: &[u8], stage: Option<u8>, member: Option<u8>, chain: Hash) -> String {
         let stage = stage.map(|s| vec![s]).unwrap_or_default();
         let member = member.map(|m| vec![m]).unwrap_or_default();
-        hex::encode(sha(&[&self.ns, kind, &stage, &member, &chain, &le(tail)]))
+        hex::encode(sha(&[&self.ns, kind, &stage, &member, &chain]))
     }
 
     /// The page whose whole pages up to and including it digest to `chain`.
     pub fn page(&self, stage: Option<u8>, chain: Hash) -> String {
-        self.key(b"page", stage, None, chain, &[])
+        self.key(b"page", stage, None, chain)
     }
 
-    /// Member `member`'s state after the pages in `chain` and `tail`.
-    pub fn state(&self, stage: Option<u8>, member: u8, chain: Hash, tail: &[i64]) -> String {
-        self.key(b"state", stage, Some(member), chain, tail)
+    /// Member `member`'s state after the pages in `chain`.
+    pub fn state(&self, stage: Option<u8>, member: u8, chain: Hash) -> String {
+        self.key(b"state", stage, Some(member), chain)
     }
 
-    /// The mark of the snapshot after the pages in `chain` and `tail`.
-    pub fn mark(&self, chain: Hash, tail: &[i64]) -> String {
-        self.key(b"mark", None, None, chain, tail)
+    /// The mark of the snapshot after the pages in `chain`.
+    pub fn mark(&self, chain: Hash) -> String {
+        self.key(b"mark", None, None, chain)
     }
 }
 
-/// What to ask the pool about one prompt, in one batch: the marks it may
-/// continue from, newest first, and the whole pages between the device
-/// hit and the newest of them, on every stage. The answer, one flag per
+/// What to ask the pool about one prompt, in one batch: the whole pages
+/// between the device hit and the last token, on every stage, and with a
+/// state the mark at each of their boundaries. The answer, one flag per
 /// key in [`Probe::keys`] order, is read by [`Probe::chosen`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
-    /// Mark lengths, newest first; empty for a manifest without a state.
-    pub marks: Vec<usize>,
     /// Page numbers (1-based, as [`Chain::at`] counts) to ask about.
     pub pages: Range<usize>,
     /// Stages to ask each page about: `None` asks once without a stage.
     pub stages: Option<u8>,
+    /// Whether a mark is asked at the end of every page.
+    pub stateful: bool,
     unit: usize,
 }
 
 impl Probe {
     /// What to ask for a prompt of `prompt` tokens with `device_hit` of
-    /// them on the device. With a state, the marks are `marks` filtered
-    /// to those past the hit and short of the last token (which always
-    /// goes through a program), and the pages run up to the newest of
-    /// them; without one there are no marks and the pages run up to the
-    /// last whole page short of the last token. `None` when nothing is
-    /// worth asking.
-    pub fn plan(
-        stateful: bool,
-        unit: usize,
-        device_hit: usize,
-        marks: &[usize],
-        prompt: usize,
-        stages: Option<u8>,
-    ) -> Option<Probe> {
-        let first = device_hit / unit + 1;
-        let (marks, last) = match stateful {
-            true => {
-                let marks: Vec<usize> = marks.iter().copied().filter(|&m| m > device_hit && m < prompt).collect();
-                let last = marks.iter().copied().max()? / unit;
-                (marks, last)
-            }
-            false => (Vec::new(), prompt.saturating_sub(1) / unit),
-        };
-        let pages = first..last + 1;
-        (!marks.is_empty() || !pages.is_empty()).then_some(Probe { marks, pages, stages, unit })
+    /// them on the device: every page past the hit's whole pages and short
+    /// of the last token, which always goes through a program. `None`
+    /// when no such page exists.
+    pub fn plan(stateful: bool, unit: usize, device_hit: usize, prompt: usize, stages: Option<u8>) -> Option<Probe> {
+        let pages = device_hit / unit + 1..prompt.saturating_sub(1) / unit + 1;
+        (!pages.is_empty()).then_some(Probe { pages, stages, stateful, unit })
     }
 
-    /// The keys to ask about, marks first, then every page on every stage.
-    pub fn keys(&self, keys: &Keys, chain: &Chain, tokens: &[i64]) -> Vec<String> {
-        let unit = chain.unit();
-        let marks = self.marks.iter().map(|&m| keys.mark(chain.at(m / unit), &tokens[m / unit * unit..m]));
-        let pages = self.pages.clone().flat_map(|k| {
-            let stages: Vec<Option<u8>> = match self.stages {
-                Some(n) => (0..n).map(Some).collect(),
-                None => vec![None],
-            };
-            stages.into_iter().map(move |s| (k, s))
-        });
-        marks.chain(pages.map(|(k, s)| keys.page(s, chain.at(k)))).collect()
+    /// The keys to ask about: with a state the marks, newest first, then
+    /// every page on every stage.
+    pub fn keys(&self, keys: &Keys, chain: &Chain) -> Vec<String> {
+        let marks = self.marks().map(|k| keys.mark(chain.at(k)));
+        let per: Vec<Option<u8>> = match self.stages {
+            Some(n) => (0..n).map(Some).collect(),
+            None => vec![None],
+        };
+        let pages = self.pages.clone().flat_map(|k| per.iter().map(move |&s| keys.page(s, chain.at(k))));
+        marks.chain(pages).collect()
+    }
+
+    /// The page boundaries a mark is asked at, newest first.
+    fn marks(&self) -> impl Iterator<Item = usize> {
+        let asked = if self.stateful { self.pages.clone() } else { 0..0 };
+        asked.rev()
     }
 
     /// The length a prompt can continue from, given one flag per key of
-    /// [`Probe::keys`]: with marks, the newest mark every whole page
+    /// [`Probe::keys`]: with a state, the newest mark every whole page
     /// below which exists on every stage; without, the longest run of
     /// such pages from the first asked. `None` when nothing is usable.
     pub fn chosen(&self, exists: &[bool]) -> Option<usize> {
-        let unit = self.unit;
         let per = self.stages.map_or(1, usize::from);
-        let (marks, pages) = exists.split_at(self.marks.len());
+        let (marks, pages) = exists.split_at(self.marks().count());
         let page_ok = |k: usize| -> bool {
             let i = (k - self.pages.start) * per;
             pages.get(i..i + per).is_some_and(|s| s.iter().all(|&b| b))
         };
-        let run = self.pages.clone().take_while(|&k| page_ok(k)).count();
-        let whole = self.pages.start + run;
-        match self.marks.is_empty() {
-            true => (run > 0).then_some((whole - 1) * unit),
-            false => self.marks.iter().zip(marks).find(|&(&m, &e)| e && m / unit < whole).map(|(&m, _)| m),
-        }
+        let whole = self.pages.start + self.pages.clone().take_while(|&k| page_ok(k)).count();
+        let last = match self.stateful {
+            true => self.marks().zip(marks).find(|&(k, &e)| e && k < whole).map(|(k, _)| k),
+            false => (whole > self.pages.start).then(|| whole - 1),
+        };
+        last.map(|k| k * self.unit)
     }
+}
+
+/// The spacing of a prompt's pooled snapshots, in tokens: whole pages of
+/// `unit` tokens covering twice a state's `slot_bytes` in `token_bytes`
+/// per token, so the states a cold prompt leaves cost at most half its
+/// pages. One page when a token weighs nothing.
+pub fn grid(unit: usize, slot_bytes: u64, token_bytes: u64) -> usize {
+    let tokens = (2 * slot_bytes).div_ceil(token_bytes.max(1)) as usize;
+    tokens.div_ceil(unit).max(1) * unit
+}
+
+/// Where a prompt fed from `start` to `end` snapshots its state for the
+/// pool, ascending: every multiple of `grid` past `start` and short of
+/// `end`, then the last page boundary at or before `end` when it is past
+/// `start`. `grid` is whole pages of `unit` tokens.
+pub fn snapshots(unit: usize, grid: usize, start: usize, end: usize) -> Vec<usize> {
+    let tail = end / unit * unit;
+    let on_grid = (start / grid + 1..).map(|k| k * grid).take_while(|&p| p < tail);
+    on_grid.chain(Some(tail).filter(|&t| t > start)).collect()
 }
 
 /// A pooled object as one member holds its bytes: every paged state's
 /// `pages`, then every per-sequence state's `slot`, under `key`. A page
-/// object names one page and no slot; a state object a slot and the page
-/// the snapshot ends inside, when it does.
+/// object names one page and no slot; a state object a slot alone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Object {
     pub key: String,
@@ -233,8 +242,8 @@ pub struct Object {
 
 /// Member `m`'s objects for tokens `[0, len)` of a group whose owner is
 /// member `me`, on `stage`: whole pages `first..=len / unit` on the owner,
-/// and the state object (the slot, and on the owner the page `len` ends
-/// inside) when the member holds a slot. `page_ids` and `slot` are the
+/// and the state object when the member holds a slot, which only a
+/// prefix ending on a page boundary does. `page_ids` and `slot` are the
 /// member's own.
 #[allow(clippy::too_many_arguments)]
 pub fn objects(
@@ -260,11 +269,9 @@ pub fn objects(
         })
         .into_iter()
         .flatten();
-    let state = slot.map(|s| Object {
-        key: keys.state(stage, m as u8, chain.at(whole), &tokens[whole * unit..]),
-        pages: (m == me && len % unit != 0).then(|| page_ids[whole]).into_iter().collect(),
-        slot: Some(s),
-    });
+    assert!(slot.is_none() || len % unit == 0, "a pooled state of {len} tokens is not on a page of {unit}");
+    let state =
+        slot.map(|s| Object { key: keys.state(stage, m as u8, chain.at(whole)), pages: Vec::new(), slot: Some(s) });
     pages.chain(state).collect()
 }
 
