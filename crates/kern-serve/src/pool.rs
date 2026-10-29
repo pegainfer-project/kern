@@ -41,6 +41,30 @@ use kern_pool::Object;
 
 use crate::ranks::Landed;
 
+/// How pool bytes move: RDMA through one NIC, or multi-node NVLink to
+/// holders that mount EGM host memory.
+#[derive(Debug, Clone)]
+pub enum Transport {
+    Rdma { device: String },
+    Nvlink,
+}
+
+impl Transport {
+    fn protocol(&self) -> &str {
+        match self {
+            Transport::Rdma { .. } => "rdma",
+            Transport::Nvlink => "nvlink",
+        }
+    }
+
+    fn device(&self) -> &str {
+        match self {
+            Transport::Rdma { device } => device,
+            Transport::Nvlink => "",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The master, `host:port`.
@@ -48,8 +72,7 @@ pub struct Config {
     /// The transfer engine's metadata server (`http://host:port/metadata`,
     /// or `P2PHANDSHAKE`).
     pub metadata: String,
-    /// The RDMA device the transfer engine binds.
-    pub device: String,
+    pub transport: Transport,
     /// This client's name in the pool, `host:port`, unique per process.
     pub hostname: String,
     /// The segment this tray's holder mounted, which a put prefers.
@@ -265,7 +288,15 @@ impl Client {
         }
         let store = MooncakeStore::new().context("creating the Mooncake Store client")?;
         store
-            .setup(&cfg.hostname, &cfg.metadata, 0, LOCAL_BUFFER, "rdma", &cfg.device, &cfg.master)
+            .setup(
+                &cfg.hostname,
+                &cfg.metadata,
+                0,
+                LOCAL_BUFFER,
+                cfg.transport.protocol(),
+                cfg.transport.device(),
+                &cfg.master,
+            )
             .with_context(|| format!("pool: connecting to master {} as {}", cfg.master, cfg.hostname))?;
         let mut registered = 0u64;
         for s in &spans {
@@ -280,7 +311,7 @@ impl Client {
         info!(
             master = %cfg.master,
             hostname = %cfg.hostname,
-            device = %cfg.device,
+            transport = ?cfg.transport,
             segment = ?cfg.segment,
             states = spans.len(),
             registered_gib = registered as f64 / (1u64 << 30) as f64,

@@ -888,7 +888,8 @@ device 没命中的部分先探池、再取回，取回的前缀在 device 池�
 |---|---|---|
 | `--pool-master` | 无 | Mooncake master，`host:port` |
 | `--pool-metadata` | `P2PHANDSHAKE` | transfer engine 的 metadata server |
-| `--pool-device` | 必填 | 传输用的 RDMA 网卡 |
+| `--pool-protocol` | `rdma` | `rdma` 走 `--pool-device` 网卡；`nvlink` 走 MNNVL，持段进程以 `protocol=nvlink` + `enable_egm_store_pool` 挂 EGM 主存 |
+| `--pool-device` | rdma 必填 | 传输用的 RDMA 网卡；`nvlink` 不收 |
 | `--pool-hostname` | `<hostname>:17100+gpu` | 本进程在池里的名字，每进程唯一 |
 | `--pool-segment` | 无 | 本 tray 持段进程的段名，put 优先放这里（Mooncake 缺省随机放置，每次 put 都过网卡） |
 | `--pool-library` | loader 路径 | `libmooncake_store.so` |

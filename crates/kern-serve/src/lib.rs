@@ -34,7 +34,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use infront_engine::{drive, scheduler_pair, Engine, EngineInfo, KvCapacity, LiveScheduler, Scheduler};
 use infront_vllm::{Capabilities, History, ParserSelection, ServeOptions};
@@ -152,6 +152,11 @@ pub struct PoolOpts {
     #[arg(long, default_value = "P2PHANDSHAKE", requires = "pool_master")]
     pub pool_metadata: String,
 
+    /// How pool bytes move: `rdma` over `--pool-device`, or `nvlink`
+    /// (multi-node NVLink to holders mounting EGM host memory)
+    #[arg(long, value_enum, default_value_t = PoolProtocol::Rdma, requires = "pool_master")]
+    pub pool_protocol: PoolProtocol,
+
     /// The RDMA device this rank moves pool bytes over
     #[arg(long, requires = "pool_master")]
     pub pool_device: Option<String>,
@@ -174,10 +179,21 @@ pub struct PoolOpts {
     pub pool_cooldown: u64,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub enum PoolProtocol {
+    Rdma,
+    Nvlink,
+}
+
 impl PoolOpts {
     fn config(&self, gpu: usize) -> Result<Option<pool::Config>> {
         let Some(master) = &self.pool_master else { return Ok(None) };
-        let device = self.pool_device.clone().context("`--pool-master` takes `--pool-device <rdma device>`")?;
+        let transport = match (self.pool_protocol, &self.pool_device) {
+            (PoolProtocol::Rdma, Some(d)) => pool::Transport::Rdma { device: d.clone() },
+            (PoolProtocol::Rdma, None) => bail!("`--pool-protocol rdma` takes `--pool-device <rdma device>`"),
+            (PoolProtocol::Nvlink, None) => pool::Transport::Nvlink,
+            (PoolProtocol::Nvlink, Some(_)) => bail!("`--pool-device` is RDMA's; `--pool-protocol nvlink` takes none"),
+        };
         let hostname = match &self.pool_hostname {
             Some(h) => h.clone(),
             None => {
@@ -188,7 +204,7 @@ impl PoolOpts {
         Ok(Some(pool::Config {
             master: master.clone(),
             metadata: self.pool_metadata.clone(),
-            device,
+            transport,
             hostname,
             segment: self.pool_segment.clone(),
             library: self.pool_library.clone(),
