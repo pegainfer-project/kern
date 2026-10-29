@@ -113,7 +113,7 @@ cut                          cut      流水线的一段：id、第几段、共�
     module 里同名的 Triton constexpr 实例靠 `params` 布局区分）+ `entry`
     （module 里的入口点）+ 几何；**extern launch**：`entry` 写
     `extern:<name>` 表示 runtime 内置（`cublaslt_bf16_tn` / `_acc` /
-    `cublas_bf16_tn_f32` / `cublaslt_fp8_tn` / `cublaslt_fp8_tn_f32`，NCCL collective `nccl_allreduce_{f32,bf16}` /
+    `cublas_bf16_tn_f32` / `cublaslt_fp8_tn` / `cublaslt_fp8_tn_f32` / `cublaslt_mxfp8_tn`，NCCL collective `nccl_allreduce_{f32,bf16}` /
     `nccl_allgather_{f32,bf16}` / `nccl_reducescatter_{f32,bf16}` / `nccl_alltoall_{f32,bf16}`，见 runtime.md），没有 module 也没有几何。其余字段：
     `params`（该 launch 自己的 ABI；**不写 = 同接口**）、
     `block`/`grid`（grid 用下述表达式集合，某一维为 0 时该 launch 什么都不做——

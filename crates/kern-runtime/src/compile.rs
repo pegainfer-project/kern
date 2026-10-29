@@ -18,7 +18,7 @@ use kern_manifest::types::{
 use std::os::raw::c_void;
 
 use crate::cubin::{param_sizes, LoadedModule, MulticastScan};
-use crate::cublas::{bf16_operands, Pinned};
+use crate::cublas::{bf16_operands, Fp8Scale, Pinned};
 use crate::device::{alloc, DeviceBuf};
 use crate::error::{bail, cuda_check, Error, Result};
 use crate::nccl::{Coll, Elem};
@@ -173,8 +173,9 @@ pub(crate) enum LaunchKind {
     /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
     GemmF32,
     /// `extern:cublaslt_fp8_tn` / `..._f32`: e4m3 operands with per-tensor
-    /// device scales, `[a, w, c, a_scale, w_scale, m, n, k]` (+ C row stride).
-    GemmFp8 { f32_out: bool },
+    /// device scales, `[a, w, c, a_scale, w_scale, m, n, k]` (+ C row stride);
+    /// `extern:cublaslt_mxfp8_tn`: the same over MXFP8 block scales, bf16 out.
+    GemmFp8 { f32_out: bool, scale: Fp8Scale },
     /// `extern:nccl_*`: a collective over `group`, `[send, recv, count, rank]`.
     Nccl { coll: Coll, elem: Elem, group: String },
 }
@@ -239,9 +240,10 @@ enum LaunchImpl {
     },
     /// cublasGemmEx with an f32 result (`extern:cublas_bf16_tn_f32`).
     GemmBf16TnF32,
-    /// cublasLt fp8 with a bf16 or f32 result (`extern:cublaslt_fp8_tn[_f32]`).
+    /// cublasLt fp8 with a bf16 or f32 result (`extern:cublaslt_fp8_tn[_f32]`, `extern:cublaslt_mxfp8_tn`).
     GemmFp8Tn {
         f32_out: bool,
+        scale: Fp8Scale,
     },
     /// `extern:nccl_<coll>_<elem>` over the group the launch's rank arg names.
     Nccl {
@@ -328,8 +330,15 @@ pub(crate) fn resolve_ops(
                             launches.push(LaunchImpl::GemmBf16Tn { beta, algo });
                         }
                         "cublas_bf16_tn_f32" => launches.push(LaunchImpl::GemmBf16TnF32),
-                        "cublaslt_fp8_tn" => launches.push(LaunchImpl::GemmFp8Tn { f32_out: false }),
-                        "cublaslt_fp8_tn_f32" => launches.push(LaunchImpl::GemmFp8Tn { f32_out: true }),
+                        "cublaslt_fp8_tn" => {
+                            launches.push(LaunchImpl::GemmFp8Tn { f32_out: false, scale: Fp8Scale::Tensor })
+                        }
+                        "cublaslt_fp8_tn_f32" => {
+                            launches.push(LaunchImpl::GemmFp8Tn { f32_out: true, scale: Fp8Scale::Tensor })
+                        }
+                        "cublaslt_mxfp8_tn" => {
+                            launches.push(LaunchImpl::GemmFp8Tn { f32_out: false, scale: Fp8Scale::Block32 })
+                        }
                         _ => match crate::nccl::extern_op(ext) {
                             Some((coll, elem)) => {
                                 let group = l.args_of(op).iter().find_map(|a| match a {
@@ -639,7 +648,7 @@ fn compile_call(
                     _ => LaunchKind::GemmF32,
                 }
             }
-            LaunchImpl::GemmFp8Tn { f32_out } => {
+            LaunchImpl::GemmFp8Tn { f32_out, scale } => {
                 if touches_peer {
                     bail!(Manifest, "launch #{li}: a peer buffer reaches the extern gemm; runtime built-ins never receive peer memory");
                 }
@@ -650,7 +659,7 @@ fn compile_call(
                         slots.len()
                     );
                 }
-                LaunchKind::GemmFp8 { f32_out: *f32_out }
+                LaunchKind::GemmFp8 { f32_out: *f32_out, scale: *scale }
             }
             LaunchImpl::Nccl { coll, elem, group } => {
                 if touches_peer {

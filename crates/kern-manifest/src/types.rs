@@ -1048,7 +1048,8 @@ pub struct KernelLaunch {
 #[serde(deny_unknown_fields)]
 pub struct ExternLaunch {
     /// `extern:<name>`: `cublaslt_bf16_tn` (C = A·Wᵀ), `cublaslt_bf16_tn_acc` (C += A·Wᵀ),
-    /// `cublas_bf16_tn_f32`, `cublaslt_fp8_tn[_f32]` (e4m3 operands, device scales) or an `nccl_*` collective.
+    /// `cublas_bf16_tn_f32`, `cublaslt_fp8_tn[_f32]` (e4m3 operands, device scales), `cublaslt_mxfp8_tn` (e4m3
+    /// operands, e8m0 scales a 32-element block) or an `nccl_*` collective.
     pub entry: String,
     /// This launch's own ABI when it differs from the op's params.
     #[serde(default, skip_serializing_if = "Option::is_none")]

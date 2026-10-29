@@ -122,6 +122,11 @@ bf16 / f32 结果，参数 `[a, w, c, a_scale, w_scale, m, n, k]`，可追加第
 两个 scale 是 device 上的单个 f32（cublasLt 的 per-tensor `A/B_SCALE_POINTER`），
 所以激活的 amax+量化可以在图内做，GEMM 不看任何 host 值。列主序映射与 bf16 路径
 相同，正好就是 cublasLt 对 fp8 的要求（A 转置、B 不转置）；k 必须是 16 的倍数。
+`extern:cublaslt_mxfp8_tn`：同样的映射和参数，操作数是 MXFP8，结果 bf16：`a_scale` / `w_scale`
+换成每行 K 方向每 32 个元素一个 e8m0 字节（cublasLt 的 `VEC32_UE8M0` scale mode），按 cuBLAS 的
+128x4 分块布局（即 FlashInfer 的 `F8_128x4`）：行补齐到 128、K 块补齐到 4，块 (r / 128, b / 4)
+起始于 `512 (r / 128 · ⌈K/128⌉ + b / 4)`，(r, b) 在块内偏移 `(r % 32) 16 + (r % 128 / 32) 4 + b % 4`；
+k 必须是 32 的倍数。
 `extern:nccl_allreduce_{f32,bf16}` / `extern:nccl_allgather_{f32,bf16}` /
 `extern:nccl_reducescatter_{f32,bf16}` / `extern:nccl_alltoall_{f32,bf16}`：组 collective 走 NCCL（`nccl.rs`），
 launch 连线 `[send, recv, count, {"rank": g}]`，rank 参点名 topology 组，count 是
