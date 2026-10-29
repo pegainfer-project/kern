@@ -9,13 +9,15 @@
 //! fed from there. A prompt whose last rows are out leaves all of itself:
 //! its lease retires into the index, its pages and slot becoming the
 //! entry's, nothing copied. A recurrent state cannot roll back, so a
-//! manifest with one keeps a prompt instead where the frontend says the
-//! next turn parts from it (`Request::history_tokens`): the head stops
-//! feeding it there for a checkpoint, which copies the page it ends inside
-//! and the slot; its end is kept nowhere, so a turn leaves one entry,
-//! where every next turn passes whatever reply it renders. A client that
-//! edits a turn continues from the longest earlier checkpoint its prompt
-//! still shares, recomputing the rows after it.
+//! manifest with one keeps a prompt instead at the last page boundary
+//! before the frontend says the next turn parts from it
+//! (`Request::history_tokens`): the head stops feeding it there for a
+//! checkpoint, which shares the pages and copies the slot; its end is
+//! kept nowhere, so a turn leaves one entry, where every next turn passes
+//! whatever reply it renders. A client that edits a turn continues from
+//! the longest earlier checkpoint its prompt still shares, recomputing
+//! the rows after it. A snapshot for the pooled tier is a checkpoint the
+//! index never holds: the head puts it and lets it go.
 //!
 //! A `Busy` pool makes room and asks again, dropping the entry worth least
 //! ([`Prefix`]'s order): a turn its conversation has moved past, else the
@@ -73,6 +75,10 @@ pub(super) struct Counts {
     /// of room.
     pub kept: u64,
     pub skipped: u64,
+    /// Snapshots taken for the pooled tier, and those skipped for want of
+    /// room.
+    pub snapshots: u64,
+    pub snapshot_skips: u64,
     /// Entries dropped for room.
     pub evictions: u64,
 }
@@ -191,6 +197,35 @@ impl Cache {
             false => &mut self.counts.skipped,
         } += 1;
         Ok(kept)
+    }
+
+    /// The first `len` tokens of `lease`, a prompt still being fed, as a
+    /// checkpoint the caller alone holds: kept in no index, its slot back
+    /// when it is dropped. `Busy` makes room as a keep does, since the
+    /// pool outlasts any entry; with nothing left to make room with, or
+    /// any other denial, the prompt goes on without it.
+    pub fn snapshot(
+        &mut self,
+        rt: &mut impl Lessor,
+        lease: &mut Lease,
+        len: usize,
+    ) -> Result<Option<Checkpoint>, Error> {
+        let taken = loop {
+            match rt.checkpoint(lease, len) {
+                Ok((cp, copies)) => {
+                    self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
+                    break Some(cp);
+                }
+                Err(Error::Denied(Denied::Busy)) if self.evict() => {}
+                Err(Error::Denied(_)) => break None,
+                Err(e) => return Err(e),
+            }
+        };
+        *match taken.is_some() {
+            true => &mut self.counts.snapshots,
+            false => &mut self.counts.snapshot_skips,
+        } += 1;
+        Ok(taken)
     }
 
     /// A prompt whose last rows are out, all of `key` in its state, as
@@ -373,6 +408,34 @@ mod tests {
         assert_eq!(c.take_counts(), Counts { hits: 1, hit_tokens: 6, kept: 1, evictions: 1, ..Counts::default() });
         // Both slots held: the pool alone has nothing to lease with.
         assert_eq!(Pool::lease(&rt.pool, 4).err(), Some(Denied::Busy));
+    }
+
+    #[test]
+    fn a_snapshot_for_the_pool_is_held_by_its_taker_and_drops_an_entry_for_room() {
+        // Slot 0 and three slots: the lease's and two more.
+        let mut rt = pool(16, 4);
+        let mut c = Cache::new(4);
+        let p1 = prompt(1, 10);
+        let (mut l1, _, _) = c.lease(&mut rt, &p1).unwrap();
+        // On a page boundary the snapshot shares the pages and copies the slot.
+        let snap = c.snapshot(&mut rt, &mut l1, 8).unwrap().expect("a free slot");
+        assert_eq!((snap.tokens(), copies(&mut c)), (8, (vec![], vec![(1, 2)])));
+        // The index never holds it: a prompt sharing it starts from nothing.
+        let p2: Vec<i64> = p1[..8].iter().copied().chain(prompt(2, 4)).collect();
+        assert_eq!(c.prefix.lookup(&p2).map(|h| h.len), None);
+        // The last slot goes to an entry, which the next snapshot drops: the
+        // pool outlasts it.
+        assert!(c.keep(&mut rt, &mut l1, &p1[..4]).unwrap().is_some());
+        assert_eq!(c.entries(), 1);
+        let again = c.snapshot(&mut rt, &mut l1, 8).unwrap().expect("room made");
+        assert_eq!(c.entries(), 0);
+        // Every slot held by a taker: nothing to drop, the snapshot is skipped.
+        assert!(c.snapshot(&mut rt, &mut l1, 8).unwrap().is_none());
+        // Let go, its slot is free again.
+        drop((snap, again));
+        assert!(c.snapshot(&mut rt, &mut l1, 8).unwrap().is_some());
+        let n = c.take_counts();
+        assert_eq!((n.snapshots, n.snapshot_skips, n.evictions), (3, 1, 1));
     }
 
     #[test]

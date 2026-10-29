@@ -222,10 +222,11 @@ run 只在两侧的页物理相邻时跨页：64 行一页、8 个成员时，P 
 
 三条规则贯穿全部操作：**整页共享、半页拷给新持有者、写者只有 lease。** `restore` 和
 `fork` 本来就这样，`checkpoint` 是唯一的例外，改成一致。半页拷贝只在页中间
-checkpoint 时发生；scheduler 在页边界（纯 KV，零拷贝）和带 state 模型的 history 末尾
-（`Request::history_tokens`，前端量出的 prompt 与 generation prompt 的分界）留快照，没有
-history 末尾的请求才在结束时留（`retire`，零拷贝）——history 末尾那次付一次半页拷贝加一份
-state 拷贝，换来回放别人回复的下一轮（AgentX）也能命中上一轮的 prompt，每轮只留这一份。K1c 的显式断点（system prompt 末尾）是同一种页中间 checkpoint。
+checkpoint 时发生；scheduler 在页边界（纯 KV，零拷贝）和带 state 模型的 history 末尾之前的最后一个
+页边界（`Request::history_tokens`，前端量出的 prompt 与 generation prompt 的分界，向下取整到页）留
+快照，没有 history 末尾的请求才在结束时留（`retire`，零拷贝）——history 那次只付一份 state 拷贝，
+换来回放别人回复的下一轮（AgentX）也能命中上一轮的 prompt，每轮只留这一份；落在页边界，池化层
+才叫得出它的名字（第 9 节），下一轮多算不到一页。K1c 的显式断点（system prompt 末尾）是同一种页中间 checkpoint。
 
 **wake 直接醒进请求的租约（历史：host 层于 2026-10-27 删除；"一个请求的房间只问一次"
 这条对池化层的取回同样成立）。** 2026-09-14 的版本让 wake 得到一个 `Checkpoint`，scheduler
@@ -402,8 +403,9 @@ RDMA）和已有的 `mark()`。
 | 类型 / 函数 | 做什么 |
 |---|---|
 | `Chain` | 逐页的前缀摘要：第 k 页 = sha256(第 k−1 页 ‖ 该页 token)，`at(k)` 是前 k 页 |
-| `Keys` | namespace（manifest 规范 JSON、权重 header 摘要、PP 的 cut id 的 sha256）下的 `page(stage, chain)`、`state(stage, member, chain, tail)`、`mark(chain, tail)` |
+| `Keys` | namespace（manifest 规范 JSON、权重 header 摘要、PP 的 cut id 的 sha256）下的 `page(stage, chain)`、`state(stage, member, chain)`、`mark(chain)` |
 | `Probe::plan / keys / chosen` | 一次 batch 探什么、读回来选哪个长度 |
+| `grid` / `snapshots` | 带 state 的 prompt 给池留快照的间距（state 字节的两倍折成整页）和位置（网格点加最后一个页边界） |
 | `objects` | 一个成员为前缀 [0, len) 要搬的对象：owner 搬页，持 slot 的搬 state |
 | `landed` | 成员的一组落地标志读成 token 数：带 state 全有或全无，paged-only 按页 |
 | `Landing` | 一次传输等全组成员回报，全到齐取最小 |
@@ -413,17 +415,30 @@ RDMA）和已有的 `mark()`。
 | 对象 | key | 值 |
 |---|---|---|
 | 页 | namespace，stage（PP），第 k 页末的摘要 | 每个 paged state 在该页的字节 |
-| state | namespace，stage，成员号，摘要，半页内的 token | 每个 per-seq state 的 slot，加半页 |
-| mark | namespace，摘要，半页内的 token | 1 字节：这个快照的全部对象都写完了 |
+| state | namespace，stage，成员号，页边界处的摘要 | 每个 per-seq state 的 slot |
+| mark | namespace，页边界处的摘要 | 1 字节：这个快照的全部对象都写完了 |
 
 页 key 没有成员维度：页只在 owner 上，owner 按负载选，同一 session 两轮可能落在不同成员。
-state 每个成员内容不同，所以有。半页里的 token 直接进 state 和 mark 的 key，快照点差一个
-token 就是不同的对象。manifest 或权重改一个字节池就冷，没有兼容层。
+state 每个成员内容不同，所以有。**state 只落在页边界上**，key 就是那个边界的摘要，和页同一套名字：
+读者不用别人告诉它快照在哪，prompt 经过的每个页边界都可以问（读路径第 2 步）。manifest 或权重改一个
+字节池就冷，没有兼容层；key 格式变了 namespace 前缀跟着升（`kern-pool/2`，2026-10-28）。
 
 ### 写路径
 
-每个快照（带 state 的在 `history_tokens` 处，paged-only 的每封一页，PP head 的 keep 和
-retire）生成一个 `Put`：owner 带 [0, m) 的整页加半页加 slot，peer 只带 slot。executor 在
+每个快照（带 state 的在 `history_tokens` 之前的最后一个页边界，paged-only 的每封一页，PP head 的
+keep、不带 state 的 retire，以及下面的池专用快照）生成一个 `Put`：owner 带 [0, m) 的整页加 slot，
+peer 只带 slot。带 state 的 retire 停在 prompt 末尾、不在页边界上，只留 device。
+
+PP head 给带 state 的 prompt 另留**池专用快照**（`snapshots`）：网格点（间距 `grid`：state 字节的
+两倍折成整页，K3 bf16 是八段合计 469 MB 的 state 对每 token 27.6 KB 的 KV，33,920 token）和 prompt 最后
+一个页边界（有 `history_tokens` 时就是 keep 本身）。行在这些点停一下，`Cache::snapshot` 拷一份 slot、
+不进前缀树，put 落地、mark 写完就放掉；没有空 slot 就像 keep 一样淘汰一个 device 条目腾地方（池比任何
+device 条目留得久），无可淘汰才跳过。只用空 slot 时，device 条目两分钟内占满全部 slot，之后每个池专用
+快照都被跳过、池里不再有新 state，device 条目一被淘汰下一轮就整段重算（2026-10-28 K3 回放：172k 的
+prompt 命中 0，serve.md「K3 PP8 命中对账」）。冷 prefill 因此每隔
+一个网格留一个可以续的点，一个 lane 首次进入后的下一轮即使在 keep 之前分叉，也只退到最近的网格点，
+而不是从头算（2026-10-28 nvlink c64 预热里 677k 的 req-160 整段重算就是这个）。state 字节约是这段
+KV 的一半，只在冷的那段付。executor 在
 Put 前记 stream mark，worker 等它翻过再 batch put（已存在的 key 只有元数据来回）。
 scheduler 持 `Snapshot` / `Checkpoint` 的 clone 到落地，传输中页不会被回收。全组落地后
 owner 写 mark；任一成员失败就不写、放掉 clone、计数。paged-only 的页对象就是自己的 mark。
@@ -434,12 +449,14 @@ admit 之后请求经过两次异步往返才开始 prefill：先探，再取。
 
 1. lease 从 device_hit 起，持 device 快照的 clone（否则这几百毫秒里 make_room 可能把它淘汰，
    失败后重拷的源页已经租给别人）。
-2. `Probe::plan`：带 state 的探 `history_marks` 里大于 device_hit 且小于 prompt 的每个 mark
-   （新到旧），加 device_hit 到最新 mark 之间每页的 key（PP 下每页每 stage 一个）；paged-only
-   探到最后一整页。一个 batch exist，每个存在的 key 得 10 秒读租约，这是老页唯一的续命途径。
-3. `Probe::chosen`：带 state 选最新的、其下每页都在的 mark（fleet 回放：只探最新一个 mark 少
-   7 个点）；paged-only 取最长连续段。没有可用的就按 device_hit 开跑。
-4. `Get`：owner 取页加半页加 slot，peer 取 slot，同样等 stream mark。每个成员回报落地的 token
+2. `Probe::plan`：device_hit 之后、最后一个 token 之前的每页的 key（PP 下每页每 stage 一个），
+   带 state 的再加每个页边界上的 mark（新到旧）。不靠前端：任何实例在 prompt 经过的任何页边界留的
+   快照都问得到（之前只探前端 `history_marks` 给的最近几轮，fleet 回放：只探最新一个少 7 个点）。
+   PP 8 段下每页 9 个 key，比只探页多 1/8。一个 batch exist，每个存在的 key 得 10 秒读租约，这是
+   老页唯一的续命途径。
+3. `Probe::chosen`：带 state 选最新的、其下每页都在的 mark；paged-only 取最长连续段。没有可用的
+   就按 device_hit 开跑。
+4. `Get`：owner 取页加 slot，peer 取 slot，同样等 stream mark。每个成员回报落地的 token
    数（`landed`），`Landing` 取最小：带 state 要求全员完整，paged-only 取最小作命中长度。
 5. 落地：`Row::filled(got)` / `Lease::filled(got)`，从 got 开跑，落地的前缀在 device 池里也建
    checkpoint（不再 put，池里已有）。失败：重排 device 快照的拷贝或 Zero，从 device_hit 开跑。
@@ -456,8 +473,8 @@ client 答 `Report::Landed`，head 按 stage 计 `Landing`；没有那种 state 
 落地。head 在 stage 1 取走 item 之前听到的落地推迟到本 turn 之后（落地要 admit，admit 在
 turn 之间）。DP（prefill tier，
 `dp.rs`，DSV4.1 Flash 的生产形状）：每个 rank 自己的池和前缀树，act 走该 rank 的 `Order`，
-没东西喂而有 act 在外时也发一个只带 act 的 order 收答案；带 state 的快照在 `history_tokens`
-处随 prefill 取一次、put 完就放掉（一个 rank 只有 57 个 slot，device 仍只留 prompt 末尾的
+没东西喂而有 act 在外时也发一个只带 act 的 order 收答案；带 state 的快照在 `history_tokens` 之前的
+最后一个页边界随 prefill 取一次、put 完就放掉（一个 rank 只有 57 个 slot，device 仍只留 prompt 末尾的
 条目），paged-only 的在 retire 时 put 整条链。
 
 ### 失败模式
@@ -473,12 +490,14 @@ turn 之间）。DP（prefill tier，
 
 ### 门禁
 
-- `crates/kern-pool/tests/pooled.rs`：摘要链对前缀单调、key 随 kind / stage / member / tail /
-  namespace 各异；`Probe` 对随机 unit / hit / marks / 存在集与穷举模型一致；`objects` / `landed`
-  对随机组与模型一致；`Landing` 对任意到达顺序结论相同、重复成员报错。全绿。
+- `crates/kern-pool/tests/pooled.rs`：摘要链对前缀单调、key 随 kind / stage / member / namespace
+  各异；`Probe` 对随机 unit / hit / 存在集与穷举模型一致；`snapshots` 对随机 unit / grid / 区间与
+  穷举模型一致；`objects` / `landed` 对随机组与模型一致，不在页边界的 state 拒绝入池；`Landing`
+  对任意到达顺序结论相同、重复成员报错。全绿。
 - `crates/kern-serve/tests/pool.rs`：fake executor 上的两个实例共一个 fake 池，答案延后 0–2 步、
-  随机丢 act：一个实例留下的轮次被另一个实例取回、第二次 prefill 从 mark 起；40 种子下丢 act
-  的池对客户端看到的输出没有影响。全绿。
+  随机丢 act：一个实例留下的轮次被另一个实例取回（没有前端告诉它上一轮在哪）、第二次 prefill 从
+  history 之前的页边界起；40 种子下丢 act 的池对客户端看到的输出没有影响。全绿。
+  `pp/cache.rs` 的单测：池专用快照不进前缀树、放掉就还 slot、没有空 slot 时跳过而不淘汰。
 - e2e **2026-10-27 过**（serve.md「池化 KV 层」，`~/bench_results/2026-10-27-pooled-kv-e2e/`）：一个会话四轮
   交替打两个实例，paged-only 单卡、带 state 跨 tray、PP 2 段三条路径，每轮回复与池外冷实例逐字相同，第二轮起
   每轮命中池；B 命中的 token 数等于上一轮的 `history_tokens`。杀 master 的退化路径与生产形状未跑。

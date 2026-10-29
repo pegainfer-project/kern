@@ -1,8 +1,9 @@
 //! The scheduler over a pooled tier, driven as infront drives it, its
 //! ranks a fake that answers every pooled act a few replies late out of
-//! one shared in-memory pool: a turn kept on one instance is fetched by
-//! another and prefilled from where it ends, and a pool that loses puts,
-//! gets or probes at random changes what the client gets by nothing.
+//! one shared in-memory pool: a turn kept on one instance at the page
+//! boundary before its history ends is fetched by another and prefilled
+//! from there, and a pool that loses puts, gets or probes at random
+//! changes what the client gets by nothing.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -152,12 +153,12 @@ fn instance(store: &Arc<Mutex<Store>>, seed: u64, pooled: bool) -> Instance {
 }
 
 impl Instance {
-    fn submit(&self, prompt: Vec<u32>, history: (Option<usize>, Vec<usize>), max_tokens: usize) -> RequestId {
+    fn submit(&self, prompt: Vec<u32>, history: usize, max_tokens: usize) -> RequestId {
         let request = Request {
             prompt_tokens: prompt,
             params: SamplingParams::default(),
-            history_tokens: history.0,
-            history_marks: history.1,
+            history_tokens: Some(history),
+            history_marks: Vec::new(),
             stop_policy: StopPolicy::new(EosPolicy::Ignore, Vec::new()),
             max_tokens,
             logprobs: None,
@@ -192,24 +193,22 @@ impl Instance {
 
 /// A conversation: turn `k` is the turns before it, each a prompt, the
 /// two-token generation prompt and the reply, then `k`'s own tokens; the
-/// history is where the generation prompt begins, the marks where the
-/// earlier turns' did, newest first.
-fn turns(seed: u64, n: usize) -> Vec<(Vec<u32>, (Option<usize>, Vec<usize>))> {
+/// history is where the generation prompt begins, past the first page.
+fn turns(seed: u64, n: usize) -> Vec<(Vec<u32>, usize)> {
     let mut r = Rand(seed * 977 + 13);
-    let mut prompt: Vec<u32> = (0..6 + r.next(7)).map(|_| 2 + r.next(90) as u32).collect();
-    let mut out: Vec<(Vec<u32>, (Option<usize>, Vec<usize>))> = Vec::new();
+    let mut prompt: Vec<u32> = (0..17 + r.next(8)).map(|_| 2 + r.next(90) as u32).collect();
+    let mut out: Vec<(Vec<u32>, usize)> = Vec::new();
     for _ in 0..n {
-        let mark = prompt.len();
+        let history = prompt.len();
         prompt.extend([1, 1]);
-        let earlier = out.iter().rev().filter_map(|(_, (m, _))| *m).collect();
-        out.push((prompt.clone(), (Some(mark), earlier)));
+        out.push((prompt.clone(), history));
         // The reply the fake gives: the greedy chain from the last token.
         let mut t = 1;
         for _ in 0..3 {
             t = next(t);
             prompt.push(t as u32);
         }
-        prompt.extend((0..3 + r.next(6)).map(|_| 2 + r.next(90) as u32));
+        prompt.extend((0..1 + r.next(3)).map(|_| 2 + r.next(90) as u32));
     }
     out
 }
@@ -218,16 +217,17 @@ fn turns(seed: u64, n: usize) -> Vec<(Vec<u32>, (Option<usize>, Vec<usize>))> {
 fn a_turn_kept_on_one_instance_is_fetched_by_the_next() {
     let store = Arc::new(Mutex::new(Store::default()));
     let conversation = turns(1, 2);
-    let (first, mark) = conversation[0].clone();
-    let m = mark.0.unwrap();
+    let (first, history) = conversation[0].clone();
+    // The snapshot sits on the last page boundary before the history ends.
+    let m = history / 16 * 16;
 
     let mut a = instance(&store, 1, true);
-    let id = a.submit(first.clone(), mark, 3);
+    let id = a.submit(first.clone(), history, 3);
     let got_a = a.finish(&[id]);
     {
         let log = a.log.lock().unwrap();
-        // Prefilled from 0 to the mark, then on past it; the snapshot at
-        // the mark was put and marked.
+        // Prefilled from 0 to the boundary, then on past it; the snapshot
+        // there was put and marked.
         assert_eq!(log.prefills[0].0, 0);
         assert!(log.prefills.iter().any(|&(p, n)| p as usize + n == m), "{:?}", log.prefills);
         assert_eq!(log.acts, ["probe", "put", "mark"]);
@@ -236,15 +236,15 @@ fn a_turn_kept_on_one_instance_is_fetched_by_the_next() {
     assert_eq!(store.lock().unwrap().keys.len(), m / 16 + 2);
 
     // The next turn on another instance, sharing nothing but the pool.
-    let (second, mark2) = conversation[1].clone();
-    assert_eq!(mark2.1, [m]);
+    let (second, history2) = conversation[1].clone();
     let mut b = instance(&store, 2, true);
-    let id_b = b.submit(second.clone(), mark2.clone(), 3);
+    let id_b = b.submit(second.clone(), history2, 3);
     let got_b = b.finish(&[id_b]);
     {
         let log = b.log.lock().unwrap();
         assert_eq!(&log.acts[..2], ["probe", "get"]);
-        // Nothing before the mark was prefilled.
+        // Nothing before the boundary was prefilled: the probe found it
+        // without being told where the first turn ended.
         assert_eq!(log.prefills[0].0 as usize, m, "{:?}", log.prefills);
     }
     // The mark's tokens are hits, and hits from the pool: the whole prompt
@@ -254,7 +254,7 @@ fn a_turn_kept_on_one_instance_is_fetched_by_the_next() {
     assert_eq!((pc.queries, pc.hits, pc.host_queries, pc.external_unspecified_hits), (n, m as u64, n, m as u64));
     // The same tokens as an instance without a pool gives.
     let mut c = instance(&store, 3, false);
-    let id_c = c.submit(second, mark2, 3);
+    let id_c = c.submit(second, history2, 3);
     let got_c = c.finish(&[id_c]);
     assert_eq!((got_b[&id_b].clone(), got_a[&id].len()), (got_c[&id_c].clone(), 3));
     assert_eq!(c.log.lock().unwrap().prefills[0].0, 0);
@@ -278,7 +278,7 @@ fn a_pool_that_loses_acts_changes_nothing_the_client_sees() {
             // Every conversation's turns in order, the three interleaved.
             for turn in 0..3 {
                 let ids: Vec<RequestId> =
-                    conversations.iter().map(|c| inst.submit(c[turn].0.clone(), c[turn].1.clone(), 3)).collect();
+                    conversations.iter().map(|c| inst.submit(c[turn].0.clone(), c[turn].1, 3)).collect();
                 let tokens = inst.finish(&ids);
                 got.extend(ids.iter().map(|id| tokens[id].clone()));
             }
@@ -292,8 +292,7 @@ fn a_pool_that_loses_acts_changes_nothing_the_client_sees() {
         // A second instance over the lossy pool: whatever landed is used,
         // whatever did not is prefilled.
         let mut inst = instance(&lossy, seed * 3 + 2, true);
-        let ids: Vec<RequestId> =
-            conversations.iter().map(|c| inst.submit(c[2].0.clone(), c[2].1.clone(), 3)).collect();
+        let ids: Vec<RequestId> = conversations.iter().map(|c| inst.submit(c[2].0.clone(), c[2].1, 3)).collect();
         let tokens = inst.finish(&ids);
         let got: Vec<Vec<u32>> = ids.iter().map(|id| tokens[id].clone()).collect();
         assert_eq!(got, want[6..], "seed {seed}");

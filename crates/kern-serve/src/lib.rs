@@ -457,7 +457,7 @@ where
         tool_call_parser: parser,
         port,
         capabilities: Capabilities { logprobs: false, sampling: samples },
-        history: History::Marks,
+        history: History::Boundary,
         ..ServeOptions::new(model_path.to_string_lossy())
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
