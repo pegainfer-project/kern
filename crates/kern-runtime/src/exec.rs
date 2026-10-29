@@ -493,7 +493,9 @@ impl Runtime {
                 gemm_bf16_tn_pinned(&self.blt, &self.blas, &self.stream, &vals, *beta, algo)
             }
             LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
-            LaunchKind::GemmFp8 { f32_out } => gemm_fp8_tn(&self.blt, &self.blas, &self.stream, &vals, *f32_out),
+            LaunchKind::GemmFp8 { f32_out, scale } => {
+                gemm_fp8_tn(&self.blt, &self.blas, &self.stream, &vals, *f32_out, *scale)
+            }
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];

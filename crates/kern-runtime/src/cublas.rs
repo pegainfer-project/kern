@@ -377,6 +377,13 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
     Ok(())
 }
 
+/// How an fp8 GEMM's operands are scaled: one f32 a tensor, or an e8m0 a 32-element block of K (MXFP8).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Fp8Scale {
+    Tensor,
+    Block32,
+}
+
 /// `extern:cublaslt_fp8_tn` / `extern:cublaslt_fp8_tn_f32`: row-major
 /// `C[m,n] = (a_scale * w_scale) * A[m,k] @ W[n,k]^T`, e4m3 operands, f32
 /// accumulation, bf16 or f32 result; args `[a, w, c, a_scale, w_scale, m,
@@ -385,12 +392,19 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
 /// the activation in-graph. Same column-major mapping as the bf16 path,
 /// which is exactly cublasLt's fp8 rule (A transposed, B not). The
 /// workspace is `Blas`'s: every GEMM runs on the one stream.
+///
+/// `extern:cublaslt_mxfp8_tn` ([`Fp8Scale::Block32`]): the same product over
+/// MXFP8 operands, bf16 result: `a_scale` / `w_scale` are e8m0 bytes, one per
+/// 32 elements of a row's K, in cuBLAS's 128x4 tiled layout (FlashInfer's
+/// `F8_128x4`): rows padded to 128 and K blocks to 4, tile (r / 128, b / 4) at
+/// `512 (r / 128 · ⌈K/128⌉ + b / 4)`, entry (r, b) at `(r % 32) 16 + (r % 128 / 32) 4 + b % 4` in it.
 pub(crate) fn gemm_fp8_tn(
     blt: &CudaBlasLT,
     blas: &Blas,
     stream: &Arc<CudaStream>,
     args: &[RVal],
     f32_out: bool,
+    scale: Fp8Scale,
 ) -> Result<()> {
     let (a, w, c, a_scale, w_scale, m, n, k, ldc) = match args {
         [a, w, c, sa, sw, m, n, k] => (a, w, c, sa, sw, m.val, n.val, k.val, n.val),
@@ -400,27 +414,34 @@ pub(crate) fn gemm_fp8_tn(
     if ldc < n {
         bail!(Manifest, "fp8 gemm: ldc {ldc} < n {n}");
     }
-    if k % 16 != 0 {
-        bail!(Manifest, "fp8 gemm: k {k} is not a multiple of 16 (cublasLt fp8 operand rows are 16-byte aligned)");
+    let k_align = if scale == Fp8Scale::Block32 { 32 } else { 16 };
+    if k % k_align != 0 {
+        bail!(Manifest, "fp8 gemm: k {k} is not a multiple of {k_align}");
     }
     if m == 0 || n == 0 || k == 0 {
         return Ok(());
     }
+    let sf_bytes = |rows: u64| match scale {
+        Fp8Scale::Tensor => 4,
+        Fp8Scale::Block32 => rows.div_ceil(128) * 128 * (k / 32).div_ceil(4) * 4,
+    };
     let out = if f32_out { 4 } else { 2 };
     if a.bytes < m * k
         || w.bytes < n * k
         || c.bytes < ((m - 1) * ldc + n) * out
-        || a_scale.bytes < 4
-        || w_scale.bytes < 4
+        || a_scale.bytes < sf_bytes(m)
+        || w_scale.bytes < sf_bytes(n)
     {
-        bail!(Manifest, "fp8 gemm: operands too small for m={m} n={n} k={k} ldc={ldc}");
+        bail!(Manifest, "fp8 gemm: operands or scales too small for m={m} n={n} k={k} ldc={ldc}");
     }
     use cublaslt::result;
-    use cublaslt::sys::{cublasComputeType_t, cublasLtMatmulDescAttributes_t as Attr, cudaDataType};
+    use cublaslt::sys::{
+        cublasComputeType_t, cublasLtMatmulDescAttributes_t as Attr, cublasLtMatmulMatrixScale_t as Mode, cudaDataType,
+    };
     let e4m3 = cudaDataType::CUDA_R_8F_E4M3;
     let cd = if f32_out { cudaDataType::CUDA_R_32F } else { cudaDataType::CUDA_R_16BF };
     let lt = |e: cublaslt::result::CublasError, what: &str| {
-        Error::Cuda(format!("cublasLt fp8 {what} (m={m} n={n} k={k}): {e:?}"))
+        Error::Cuda(format!("cublasLt fp8 {what} (m={m} n={n} k={k}, {scale:?} scales): {e:?}"))
     };
     unsafe {
         let a_layout = result::create_matrix_layout(e4m3, k, n, k as i64).map_err(|e| lt(e, "layout"))?;
@@ -434,6 +455,11 @@ pub(crate) fn gemm_fp8_tn(
         let (t, nt) = (cublas::sys::cublasOperation_t::CUBLAS_OP_T, cublas::sys::cublasOperation_t::CUBLAS_OP_N);
         set(Attr::CUBLASLT_MATMUL_DESC_TRANSA, &t as *const _ as *const c_void, 4)?;
         set(Attr::CUBLASLT_MATMUL_DESC_TRANSB, &nt as *const _ as *const c_void, 4)?;
+        if scale == Fp8Scale::Block32 {
+            let mode = Mode::CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+            set(Attr::CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &mode as *const _ as *const c_void, 4)?;
+            set(Attr::CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &mode as *const _ as *const c_void, 4)?;
+        }
         let (sa, sw) = (a_scale.val as *const c_void, w_scale.val as *const c_void);
         set(Attr::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &sw as *const _ as *const c_void, 8)?;
         set(Attr::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &sa as *const _ as *const c_void, 8)?;
