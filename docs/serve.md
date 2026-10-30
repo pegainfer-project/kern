@@ -1034,6 +1034,25 @@ head 要等 k−9 的答复。item 耗时随它的行看的上下文变（同一
 延迟反而低了：64 条 lane 是闭环，请求的等是排在别人后面，流水线快了省下的比第 0 段前多排 3 个 item 多等的多。剩下第 0–6 段 5–9%
 的等是 item 耗时的散布本身。
 
+**item 的行数按流水线深度定（2026-10-30，`~/bench_results/2026-10-30-k3-agentx-spread`）**：半载时 TTFT 是延迟问题不是
+吞吐问题（AgentX c64，每段 busy 47%，TTFT p50 2.24 s）。流水线满着时 item k 离开最后一段的时间是前 k 个 item 的段耗时之和加
+（段数 − 1）× 其中最长的：一个 16k 满 chunk（每段 ~300 ms）让排在它后面的每个 item 多等 7 × 300 ms，新 token < 2k 的 prompt
+TTFT p50 仍有 1.94 s。`--pp-spread` / `--pp-floor`：下一个 item 的行数封顶在所有已 admit 的 prompt 剩下的行摊到 24 个 item
+上（整页，在 [2048, `--chunk`] 内）。只有一条 prompt 时它被切小、同时铺满八段，新到的短 prompt 只排在一个小 item 后面；积压时
+仍是满 chunk，那时每 item 一次权重读才是瓶颈。先在按实测逐段耗时拟合的模拟器里选的规则（模拟 P 延迟 p50 / p90 1.15 / 2.40 s），
+同负载实测（P PP8 tray03 + tray17，D 两个 63 层 tier，24 张 GB300，AgentX c64 3600 s）：
+
+| | `--chunk 16384` | `--pp-spread 24 --pp-floor 2048` |
+|---|---|---|
+| TTFT p50 / p90 / p99 | 2.24 / 5.03 / 10.16 s | **1.23 / 2.61 / 7.54 s** |
+| 新 token < 2k，TTFT p50 / p90 | 1.94 / 4.67 s | **1.09 / 2.16 s** |
+| 新 token ≥ 16k，TTFT p50 / p90 | 3.75 / 7.40 s | 3.15 / 8.35 s |
+| tok/s/GPU / ITL p50 | 13999 / 11.3 ms | **14534** / 11.5 ms |
+| 第 0–6 段 busy，item 耗时 p99 | 47–48%，600 ms | 57–59%，242 ms |
+
+吞吐只涨 3.8%：一条 lane 一轮 ~10 s E2E 加 ~19 s trace 空档，省下的一秒只是一轮的零头。长冷 prompt 的尾部变差：别人在时它被
+切成 2–4k 行的 item，每个都付一次权重读。
+
 **2026-10-27 window state 修掉之后（`~/bench_results/2026-10-27-dsv41-window-work`）**：#100 的根因在 kern-dsv41-flash
 的生成器——window state 声明成 `128 + max_tokens` 行的环，只为一步内的行不踩这一步还在读的槽；改成 state 只留 256 个位置、
 一步的 K/V 进 `window.work` 工作区（kern-dsv41-flash `340cf28`），每序列 712 MiB → 5.5 MiB，paged 页 181k → 553k，同路径

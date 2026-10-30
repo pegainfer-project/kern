@@ -89,7 +89,7 @@ use kern_runtime::{Capacity, Error, Runtime};
 use tracing::{debug, error, info};
 
 use super::cache::Cache;
-use super::pack::{goes_out, pack, passed, Bounds, Waiting};
+use super::pack::{cap, goes_out, pack, passed, Bounds, Waiting};
 use super::{connect, recv, send, Flow, Hello, Item, Job, Next, Report, Table};
 use crate::front::{Call, Front, Note};
 use crate::pd::mirror::Mirrors;
@@ -116,6 +116,10 @@ pub struct Head {
     pub max_seqs: usize,
     /// Full items queued in front of stage 0.
     pub ahead: usize,
+    /// Items the admitted prompts' rows are spread over, and the fewest
+    /// rows an item is capped at ([`cap`]).
+    pub spread: usize,
+    pub floor: usize,
     pub eager: bool,
     /// The decode tiers' heads to hand prompts to, each request to one.
     pub decode: Vec<String>,
@@ -291,6 +295,8 @@ struct PpHead {
     /// sequence may be passed over before it goes first: the stages.
     depth: usize,
     ahead: usize,
+    spread: usize,
+    floor: usize,
     max_seqs: usize,
     stages: Vec<TcpStream>,
     /// Events from the front, stages, decode tiers and local completions.
@@ -467,6 +473,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         bounds,
         depth: cut.stages as usize,
         ahead: h.ahead,
+        spread: h.spread,
+        floor: h.floor,
         max_seqs: h.max_seqs,
         stages,
         event_rx,
@@ -934,8 +942,11 @@ impl PpHead {
     fn issue(&mut self) -> Result<()> {
         let waiting: Vec<Waiting> =
             self.active.iter().map(|a| Waiting { pos: a.pos, left: self.upto(a) - a.pos, passed: a.passed }).collect();
-        let plan = pack(&waiting, self.bounds, self.depth);
-        if goes_out(&plan, self.bounds, self.in_flight_items.len(), self.depth, self.ahead) {
+        let togo = self.active.iter().map(|a| self.chunked(a) - a.pos).sum();
+        let rows = cap(togo, self.spread, self.rt.page() as usize, self.floor, self.bounds.rows);
+        let b = Bounds { rows, ..self.bounds };
+        let plan = pack(&waiting, b, self.depth);
+        if goes_out(&plan, b, self.in_flight_items.len(), self.depth, self.ahead) {
             for (a, n) in self.active.iter_mut().zip(passed(&waiting, &plan)) {
                 a.passed = n;
             }
