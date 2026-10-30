@@ -93,6 +93,16 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 4)]
     pub pp_ahead: usize,
 
+    /// On the head of a pipeline: items the admitted prompts' rows are
+    /// spread over, which caps the next item's rows
+    #[arg(long, default_value_t = 24)]
+    pub pp_spread: usize,
+
+    /// On the head of a pipeline: the fewest rows an item is capped at,
+    /// below which it is mostly its weight pass
+    #[arg(long, default_value_t = 2048)]
+    pub pp_floor: usize,
+
     /// Per-sequence state slots per rank: the running sequences' plus the
     /// kept prefixes' (default: `--max-seqs` plus one)
     #[arg(long)]
@@ -271,6 +281,8 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             chunk: o.chunk,
             max_seqs: o.max_seqs,
             ahead: o.pp_ahead,
+            spread: o.pp_spread,
+            floor: o.pp_floor,
             eager: o.eager,
             decode: o.decode.clone(),
             pool: o.pool.config(o.gpu)?,

@@ -1,7 +1,7 @@
 //! The pipeline head's packing policy: what an item carries, in what turn,
 //! and when it goes out.
 
-use kern_serve::pack::{goes_out, pack, passed, turn, Bounds, Waiting};
+use kern_serve::pack::{cap, goes_out, pack, passed, turn, Bounds, Waiting};
 
 const B: Bounds = Bounds { rows: 8, seqs: 3, context: 20 };
 
@@ -65,6 +65,34 @@ fn a_full_item_runs_ahead_of_the_stages_and_a_partial_one_does_not() {
     assert_eq!((at(&seqs_full, 4, 1), at(&seqs_full, 5, 1)), (true, false));
     assert_eq!((at(&partial, 3, 4), at(&partial, 4, 4)), (true, false));
     assert!(!at(&[], 0, 4));
+}
+
+/// K3's shape: 64-token pages, a 16k chunk, a 2k floor, spread over 24
+/// items. A lone hit or a few cold prompts go in small items, a backlog in
+/// full chunks.
+#[test]
+fn an_item_takes_the_admitted_rows_spread_over_the_pipeline() {
+    let at = |togo| cap(togo, 24, 64, 2_048, 16_384);
+    assert_eq!((at(0), at(1_000), at(48_000)), (2_048, 2_048, 2_048));
+    assert_eq!((at(100_000), at(200_000), at(1_000_000)), (4_224, 8_384, 16_384));
+    assert_eq!(cap(100_000, 24, 64, 2_048, 1_024), 1_024);
+}
+
+/// Over small inputs: the cap stays within the floor and the chunk, is
+/// whole units, and `spread` items of it carry every row left unless the
+/// chunk holds it back.
+#[test]
+fn the_cap_is_whole_units_between_floor_and_chunk_and_carries_the_rows() {
+    for (unit, floor, most) in [(1, 1, 9), (4, 8, 32), (4, 32, 8), (8, 0, 64)] {
+        for spread in 0..6 {
+            for togo in 0..200 {
+                let c = cap(togo, spread, unit, floor, most);
+                assert!(c <= most && c >= floor.min(most), "{togo} {spread} {unit} {floor} {most}: {c}");
+                assert_eq!(c % unit, 0, "{togo} {spread} {unit} {floor} {most}: {c}");
+                assert!(c == most || c * spread.max(1) >= togo, "{togo} {spread} {unit} {floor} {most}: {c}");
+            }
+        }
+    }
 }
 
 /// Every small arrival pattern, fed to the end against the rules stated
