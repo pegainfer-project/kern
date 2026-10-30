@@ -114,6 +114,8 @@ pub struct Head {
     pub slots: u64,
     pub chunk: Option<u64>,
     pub max_seqs: usize,
+    /// Full items queued in front of stage 0.
+    pub ahead: usize,
     pub eager: bool,
     /// The decode tiers' heads to hand prompts to, each request to one.
     pub decode: Vec<String>,
@@ -288,6 +290,7 @@ struct PpHead {
     /// Items in flight below which a partial item goes out, and items a
     /// sequence may be passed over before it goes first: the stages.
     depth: usize,
+    ahead: usize,
     max_seqs: usize,
     stages: Vec<TcpStream>,
     /// Events from the front, stages, decode tiers and local completions.
@@ -463,6 +466,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         step,
         bounds,
         depth: cut.stages as usize,
+        ahead: h.ahead,
         max_seqs: h.max_seqs,
         stages,
         event_rx,
@@ -931,7 +935,7 @@ impl PpHead {
         let waiting: Vec<Waiting> =
             self.active.iter().map(|a| Waiting { pos: a.pos, left: self.upto(a) - a.pos, passed: a.passed }).collect();
         let plan = pack(&waiting, self.bounds, self.depth);
-        if goes_out(&plan, self.bounds, self.in_flight_items.len(), self.depth) {
+        if goes_out(&plan, self.bounds, self.in_flight_items.len(), self.depth, self.ahead) {
             for (a, n) in self.active.iter_mut().zip(passed(&waiting, &plan)) {
                 a.passed = n;
             }

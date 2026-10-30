@@ -21,10 +21,10 @@
 //!
 //! Answers are collected and prompts admitted only between items, and each
 //! send waits on the head's device, so how far the head runs ahead of the
-//! stages is how late it decides. A full item goes out while at most as
-//! many items as stages are in flight (one queued ahead of stage 0), a
-//! partial one only while fewer: packing waits for rows only when the
-//! stages have work, and a burst of long prompts neither stops the head
+//! stages is how late it decides. A full item goes out while fewer than
+//! the stages and `ahead` more are in flight (`ahead` queued in front of
+//! stage 0), a partial one only while fewer than the stages: packing waits
+//! for rows only when the stages have work, and a burst of long prompts neither stops the head
 //! answering and admitting nor puts the hit arriving behind it after every
 //! item the burst could fill.
 
@@ -93,10 +93,13 @@ pub fn passed(seqs: &[Waiting], plan: &[(usize, usize)]) -> Vec<usize> {
 }
 
 /// Whether `plan` goes out with `flying` items in a pipeline of `depth`
-/// stages: a full item (all its rows or all its sequences) while at most
-/// `depth` are in flight, a partial one while fewer.
-pub fn goes_out(plan: &[(usize, usize)], b: Bounds, flying: usize, depth: usize) -> bool {
+/// stages: a full item (all its rows or all its sequences) while fewer
+/// than `depth + ahead` are in flight, a partial one while fewer than
+/// `depth`. Item times vary with the context their rows attend to, and the
+/// items queued ahead absorb that: with one, a slow item stalls the head
+/// until its answer is back.
+pub fn goes_out(plan: &[(usize, usize)], b: Bounds, flying: usize, depth: usize, ahead: usize) -> bool {
     let rows: usize = plan.iter().map(|&(_, n)| n).sum();
     let full = rows == b.rows || plan.len() == b.seqs;
-    !plan.is_empty() && flying < depth + usize::from(full)
+    !plan.is_empty() && flying < depth + if full { ahead } else { 0 }
 }

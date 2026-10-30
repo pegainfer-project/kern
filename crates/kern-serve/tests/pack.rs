@@ -55,15 +55,16 @@ fn a_hit_goes_ahead_of_cold_prompts() {
 }
 
 #[test]
-fn a_full_item_runs_one_ahead_of_the_stages_and_a_partial_one_none() {
+fn a_full_item_runs_ahead_of_the_stages_and_a_partial_one_does_not() {
     let full = [(0, 8)];
     let partial = [(0, 3)];
     let seqs_full = [(0, 1), (1, 1), (2, 1)];
-    let at = |plan: &[(usize, usize)], flying| goes_out(plan, B, flying, 4);
-    assert_eq!((at(&full, 4), at(&full, 5)), (true, false));
-    assert_eq!((at(&seqs_full, 4), at(&seqs_full, 5)), (true, false));
-    assert_eq!((at(&partial, 3), at(&partial, 4)), (true, false));
-    assert!(!at(&[], 0));
+    let at = |plan: &[(usize, usize)], flying, ahead| goes_out(plan, B, flying, 4, ahead);
+    assert_eq!((at(&full, 4, 1), at(&full, 5, 1)), (true, false));
+    assert_eq!((at(&full, 7, 4), at(&full, 8, 4)), (true, false));
+    assert_eq!((at(&seqs_full, 4, 1), at(&seqs_full, 5, 1)), (true, false));
+    assert_eq!((at(&partial, 3, 4), at(&partial, 4, 4)), (true, false));
+    assert!(!at(&[], 0, 4));
 }
 
 /// Every small arrival pattern, fed to the end against the rules stated

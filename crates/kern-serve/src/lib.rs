@@ -88,6 +88,11 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 256)]
     pub max_seqs: usize,
 
+    /// On the head of a pipeline: full items queued in front of stage 0,
+    /// which absorb the spread of item times
+    #[arg(long, default_value_t = 4)]
+    pub pp_ahead: usize,
+
     /// Per-sequence state slots per rank: the running sequences' plus the
     /// kept prefixes' (default: `--max-seqs` plus one)
     #[arg(long)]
@@ -265,6 +270,7 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
             slots: o.slots(),
             chunk: o.chunk,
             max_seqs: o.max_seqs,
+            ahead: o.pp_ahead,
             eager: o.eager,
             decode: o.decode.clone(),
             pool: o.pool.config(o.gpu)?,
