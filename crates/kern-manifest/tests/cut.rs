@@ -274,6 +274,50 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
 }
 
 #[test]
+fn a_table_whose_state_a_stage_dropped_indexes_a_kept_state_of_its_layout() {
+    // Two per-sequence states a layer, of different sizes: a line index
+    // counts lines of its state's size, so a stage's window table must
+    // index a window, never the conv state that sorts first.
+    let layer = |l: u64| {
+        json!({"op": "layer", "label": format!("l{l}"), "args": [
+            {"buf": "conv_lines"}, {"buf": "window_lines"},
+            {"state": format!("conv.{l}")}, {"state": format!("window.{l}")}, {"buf": "x"}]})
+    };
+    let m = json!({
+        "schema_version": 7, "model": "t",
+        "vars": {"tokens": {"max": 8, "axis": "rows"}, "seqs": {"max": 4, "axis": "groups"}},
+        "states": {"conv.0": {"bytes_per_seq": 8}, "conv.1": {"bytes_per_seq": 8},
+                   "window.0": {"bytes_per_seq": 24}, "window.1": {"bytes_per_seq": 24}},
+        "buffers": {
+            "token_ids": {"kind": "input", "dtype": "i64", "shape": ["tokens"], "fill": "token"},
+            "conv_lines": {"kind": "input", "dtype": "i32", "shape": [1, "seqs"], "domain": {"index_into": "conv.0", "stride": 8}},
+            "window_lines": {"kind": "input", "dtype": "i32", "shape": [3, "seqs"], "domain": {"index_into": "window.0", "stride": 8}},
+            "x": {"kind": "workspace", "dtype": "f32", "shape": ["tokens", 4]},
+            "next_token": {"kind": "output", "dtype": "i64", "shape": ["seqs"], "fill": "tokens"}
+        },
+        "modules": {},
+        "ops": {
+            "embed": {"params": ["in buffer<i64>", "out buffer<f32>"], "impl": {"launches": [{"entry": "extern:x"}]}},
+            "layer": {"params": ["in buffer<i32>", "in buffer<i32>", "inout state", "inout state", "inout buffer<f32>"],
+                      "impl": {"launches": [{"entry": "extern:x"}]}},
+            "head": {"params": ["in buffer<f32>", "out buffer<i64>"], "impl": {"launches": [{"entry": "extern:x"}]}}
+        },
+        "programs": {"prefill": {"batch": {"groups": 1, "rows": "tokens"}, "calls": [
+            {"op": "embed", "args": [{"buf": "token_ids"}, {"buf": "x"}]},
+            layer(0), layer(1),
+            {"op": "head", "args": [{"buf": "x"}, {"buf": "next_token"}]}
+        ]}}
+    });
+    let m = verify(Manifest::from_json(&m.to_string()).unwrap()).unwrap_or_else(|e| panic!("{e}"));
+    let stages = cut(&m, &[2]).unwrap_or_else(|e| panic!("{e}"));
+    let table = |s: usize, b: &str| stages[s].buffers[b].domain.as_ref().and_then(|d| d.index_into.clone());
+    assert_eq!(
+        (table(0, "conv_lines"), table(0, "window_lines"), table(1, "conv_lines"), table(1, "window_lines")),
+        (Some("conv.0".into()), Some("window.0".into()), Some("conv.1".into()), Some("window.1".into()))
+    );
+}
+
+#[test]
 fn a_cut_says_why_it_cannot_be_made() {
     let n = qwen3().programs["prefill"].calls.len();
     for at in [vec![], vec![0], vec![5, 5], vec![n]] {
