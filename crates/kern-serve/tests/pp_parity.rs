@@ -6,7 +6,7 @@
 //! The fixture is the first 400 requests of a K3 admit trace made replayable on
 //! DeepSeek V4.1 Flash, compressed nine times, under the four-rung ladder
 //! and DSV4.1 PP4's cost model. `PP_PARITY` names longer logs to check the
-//! same way, `;`-separated `<events>,<costfit>,<policy>`.
+//! same way, `;`-separated `<events>,<costfit>,<policy>[,<backlog s>]`.
 
 use kern_serve::cost::Cost;
 use kern_serve::frontier::{apply, goes_out, pack, Seq, Turn};
@@ -18,8 +18,8 @@ const CONTEXT: i64 = 1 << 20;
 
 /// Replays `events` under `policy`; the decisions matched by the ladder
 /// rung each took, or the first that did not match.
-fn replay(events: &str, policy: &Policy, cost: &Cost) -> Result<Vec<usize>, String> {
-    let (mut seqs, mut meter, mut flying, mut req) = (Vec::<Seq>::new(), Meter::new(STAGES, AHEAD), 0, 0);
+fn replay(events: &str, policy: &Policy, cost: &Cost, backlog: f64) -> Result<Vec<usize>, String> {
+    let (mut seqs, mut meter, mut flying, mut req) = (Vec::<Seq>::new(), Meter::new(STAGES, AHEAD, backlog), 0, 0);
     let mut decided = Vec::new();
     for (n, line) in events.lines().enumerate() {
         let f: Vec<&str> = line.split(' ').collect();
@@ -69,18 +69,30 @@ fn replay(events: &str, policy: &Policy, cost: &Cost) -> Result<Vec<usize>, Stri
 fn the_ladder_decides_as_the_simulator_does() {
     let cost = Cost::parse(include_str!("fixtures/pp/dsv41-pp4-cost.json")).unwrap();
     let policy = Policy::parse("ladder").unwrap();
-    let rungs = replay(include_str!("fixtures/pp/ladder-load9.events"), &policy, &cost).unwrap();
+    let rungs = replay(include_str!("fixtures/pp/ladder-load9.events"), &policy, &cost, 0.0).unwrap();
     assert_eq!((rungs.iter().sum::<usize>(), rungs.iter().filter(|&&n| n > 0).count()), (1807, 4), "{rungs:?}");
+}
+
+#[test]
+fn the_ladder_reading_its_backlog_decides_as_the_simulator_does() {
+    let cost = Cost::parse(include_str!("fixtures/pp/dsv41-pp4-cost.json")).unwrap();
+    let policy = Policy::parse("ladder").unwrap();
+    let rungs = replay(include_str!("fixtures/pp/ladder-backlog2-load9.events"), &policy, &cost, 2.0).unwrap();
+    assert_eq!(rungs, [111, 15, 59, 1255], "{rungs:?}");
 }
 
 #[test]
 fn longer_logs_decide_as_the_simulator_does() {
     let Ok(runs) = std::env::var("PP_PARITY") else { return };
     for run in runs.split(';').filter(|r| !r.is_empty()) {
-        let [events, costfit, policy] = run.split(',').collect::<Vec<_>>()[..] else { panic!("`{run}`") };
+        let (events, costfit, policy, backlog) = match run.split(',').collect::<Vec<_>>()[..] {
+            [e, c, p] => (e, c, p, 0.0),
+            [e, c, p, b] => (e, c, p, b.parse().unwrap()),
+            _ => panic!("`{run}`"),
+        };
         let cost = Cost::parse(&std::fs::read_to_string(costfit).unwrap()).unwrap();
         let policy = Policy::parse(policy).unwrap();
-        let decided = replay(&std::fs::read_to_string(events).unwrap(), &policy, &cost)
+        let decided = replay(&std::fs::read_to_string(events).unwrap(), &policy, &cost, backlog)
             .unwrap_or_else(|e| panic!("{events} under {policy:?}: {e}"));
         eprintln!("{events}: {} decisions match, by rung {decided:?}", decided.iter().sum::<usize>());
     }

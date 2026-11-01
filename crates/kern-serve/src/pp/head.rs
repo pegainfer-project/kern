@@ -122,6 +122,8 @@ pub struct Head {
     /// What caps an item's rows, and the cost model it reads, if it reads one.
     pub policy: Option<Policy>,
     pub cost: Option<Cost>,
+    /// Seconds the backlog load reading spreads the waiting work over (0: none).
+    pub backlog: f64,
     pub eager: bool,
     /// The decode tiers' heads to hand prompts to, each request to one.
     pub decode: Vec<String>,
@@ -507,7 +509,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         ahead: h.ahead,
         policy,
         cost,
-        meter: Meter::new(depth, h.ahead),
+        meter: Meter::new(depth, h.ahead, h.backlog),
         epoch: Instant::now(),
         fresh: true,
         max_seqs: h.max_seqs,

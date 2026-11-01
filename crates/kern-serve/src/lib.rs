@@ -108,6 +108,12 @@ pub struct ServeOpts {
     #[arg(long)]
     pub pp_cost: Option<std::path::PathBuf>,
 
+    /// On the head of a pipeline: a third offered-load reading, the
+    /// waiting prompts' remaining work spread over this many seconds
+    /// (`pp::policy::Meter`; 0, the default, reads only admissions)
+    #[arg(long, default_value_t = 0.0)]
+    pub pp_backlog: f64,
+
     /// Per-sequence state slots per rank: the running sequences' plus the
     /// kept prefixes' (default: `--max-seqs` plus one)
     #[arg(long)]
@@ -352,6 +358,7 @@ fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
                     pp::cost::Cost::parse(&text).with_context(|| format!("--pp-cost {}", p.display()))
                 })
                 .transpose()?,
+            backlog: o.pp_backlog,
             eager: o.eager,
             decode: o.decode.clone(),
             pool: o.pool.config(o.gpu)?,

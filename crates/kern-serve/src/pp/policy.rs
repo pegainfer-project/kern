@@ -255,6 +255,9 @@ impl Policy {
 pub struct Meter {
     stages: usize,
     ahead: usize,
+    /// Seconds the waiting prompts' remaining work is spread over for a
+    /// third load reading (0: none).
+    backlog: f64,
     /// Admissions: (time, hit, prompt), and each one's slowest-stage time
     /// as offered load counts it.
     recent: VecDeque<(f64, i64, i64)>,
@@ -265,10 +268,11 @@ pub struct Meter {
 }
 
 impl Meter {
-    pub fn new(stages: usize, ahead: usize) -> Meter {
+    pub fn new(stages: usize, ahead: usize, backlog: f64) -> Meter {
         Meter {
             stages,
             ahead,
+            backlog,
             recent: VecDeque::new(),
             work: VecDeque::new(),
             busy: VecDeque::new(),
@@ -279,10 +283,7 @@ impl Meter {
     /// A prompt admitted at `now` with `hit` of its `prompt` rows kept.
     pub fn admit(&mut self, now: f64, hit: i64, prompt: i64, m: &Cost) {
         self.recent.push_back((now, hit, prompt));
-        let end = prompt.min(hit + LOAD_CAP);
-        self.work.push_back(
-            (hit..end).step_by(LOAD_CHUNK as usize).map(|p| m.slowest(&[(p, LOAD_CHUNK.min(end - p))])).sum(),
-        );
+        self.work.push_back(work(m, hit, prompt));
         self.forget(now);
     }
 
@@ -307,14 +308,21 @@ impl Meter {
         }
     }
 
-    /// Offered load at `now`.
-    pub fn load(&self, now: f64) -> f64 {
+    /// Offered load at `now` with `active` waiting: the larger of the last
+    /// minute's and the last 15 s's admissions, and, with a backlog
+    /// horizon, the waiting prompts' remaining work spread over it, which
+    /// sees a queue the admissions stopped showing.
+    pub fn load(&self, now: f64, active: &[Seq], m: &Cost) -> f64 {
         let over = |secs: f64| {
             let since = now - secs * 1e6;
             let busy: f64 = self.recent.iter().zip(&self.work).filter(|(s, _)| s.0 >= since).map(|(_, x)| x).sum();
             busy / (secs * 1e6)
         };
-        over(WINDOW / 1e6).max(over(FAST))
+        let l = over(WINDOW / 1e6).max(over(FAST));
+        match self.backlog > 0.0 {
+            true => l.max(active.iter().map(|q| work(m, q.pos, q.end)).sum::<f64>() / (self.backlog * 1e6)),
+            false => l,
+        }
     }
 
     /// Utilization at `now`.
@@ -344,8 +352,15 @@ impl Meter {
             ahead: self.ahead,
             context,
             rate: self.recent.len() as f64 / WINDOW,
-            load: self.load(now),
+            load: self.load(now, active, m),
             util: self.util(now),
         }
     }
+}
+
+/// Slowest-stage time of rows [`from`, `to`) in `LOAD_CHUNK`-row chunks, at
+/// most `LOAD_CAP` rows: what offered load prices a prompt at.
+fn work(m: &Cost, from: i64, to: i64) -> f64 {
+    let end = to.min(from + LOAD_CAP);
+    (from..end).step_by(LOAD_CHUNK as usize).map(|p| m.slowest(&[(p, LOAD_CHUNK.min(end - p))])).sum()
 }

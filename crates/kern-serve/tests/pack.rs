@@ -71,7 +71,7 @@ fn a_full_item_runs_ahead_of_the_stages_and_a_partial_one_does_not() {
 fn depth(togo: i64) -> i64 {
     let seqs: Vec<Seq> = (togo > 0).then(|| Seq::new(0, 0, togo, 0)).into_iter().collect();
     let cost = Cost::free(4);
-    Policy::parse("depth2048/16384/24").unwrap().cap(&Meter::new(4, 4).decision(0.0, &seqs, 0, &cost, 1 << 20))
+    Policy::parse("depth2048/16384/24").unwrap().cap(&Meter::new(4, 4, 0.0).decision(0.0, &seqs, 0, &cost, 1 << 20))
 }
 
 /// K3's shape: a 16k chunk, a 2k floor, spread over 24 items. A lone hit
