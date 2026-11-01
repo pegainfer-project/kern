@@ -43,7 +43,7 @@
 //! and a generator that gives each piece its own state (one per layer)
 //! lets a stage carry only its own. A table whose state a stage dropped
 //! indexes a kept state of the same kind: a pool hands every paged state
-//! the same ids.
+//! the same ids, and every per-sequence state of one size the same lines.
 //!
 //! A manifest with a topology is never cut: a stage is one rank. That
 //! includes every manifest whose states a group shards, so a stage never
@@ -235,8 +235,10 @@ fn stage(
         calls.iter().flat_map(|c| state_args(c)).map(|(st, _)| (st.to_string(), m.states[st].clone())).collect();
     let names: BTreeSet<String> = buffers.keys().chain(states.keys()).cloned().collect();
     // A table hands the same ids to every state of its kind: one naming a
-    // state this stage dropped names a kept state of that kind instead.
-    let kind = |s: &State| (s.bytes_per_token > 0, s.bytes_per_seq > 0, s.is_owned());
+    // state this stage dropped names a kept state of that kind instead. A
+    // line index counts lines of its state's size, so a per-sequence one
+    // names a state of the same size.
+    let kind = |s: &State| (s.bytes_per_token > 0, s.bytes_per_seq, s.is_owned());
     for b in buffers.values_mut() {
         let Some(t) = b.domain.as_ref().and_then(|d| d.index_into.clone()).filter(|t| !names.contains(t)) else {
             continue;
