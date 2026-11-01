@@ -10,21 +10,22 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
-use infront_engine::{FinishReason, StopPolicy};
+use infront_engine::FinishReason;
 
 use super::{Ask, Out, Req};
+use crate::Stop;
 
 /// A request's tokens as the client sees them: each one counts toward
 /// `max_tokens` and may be its stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relay {
     pub(super) max_tokens: usize,
-    stop: StopPolicy,
+    stop: Stop,
     pub(super) generated: usize,
 }
 
 impl Relay {
-    pub fn new(max_tokens: usize, stop: StopPolicy) -> Relay {
+    pub fn new(max_tokens: usize, stop: Stop) -> Relay {
         Relay { max_tokens, stop, generated: 0 }
     }
 
@@ -36,8 +37,9 @@ impl Relay {
 
     /// `tok` generated: how it ends the request, if it does.
     pub(super) fn take(&mut self, tok: u32) -> Option<FinishReason> {
+        let at = self.generated;
         self.generated += 1;
-        match self.stop.classify(tok, |_| false) {
+        match self.stop.cause(at, tok) {
             Some(c) => Some(FinishReason::Stop(c)),
             None if self.generated >= self.max_tokens => Some(FinishReason::Length),
             None => None,

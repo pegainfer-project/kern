@@ -25,16 +25,17 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use infront_engine::{EosPolicy, FinishReason, RejectReason, RequestId, StopCause, StopPolicy};
+use infront_engine::{EosPolicy, FinishReason, RejectReason, RequestId, StopPolicy};
 use kern_manifest::protocol::Sampling;
 use kern_manifest::types::Manifest;
 use kern_pool::Pool;
 use kern_serve::front::{Clients, Note, Write};
 use kern_serve::pd::{Ask, Decoder, Gate, Out, Push, Refusal, Req, Run, Tell, Tiers};
 use kern_serve::ranks::{Answer, Order};
+use kern_serve::Stop;
 
 mod common;
-use common::{dealt, replicated_of, Rand};
+use common::{chain, dealt, replicated_of, Rand};
 
 const STAGES: usize = 3;
 /// D's group: two members, each holding every row's every other position.
@@ -125,6 +126,7 @@ enum End {
 struct Client {
     prompt: usize,
     max_tokens: usize,
+    min_tokens: usize,
     tokens: Vec<u32>,
     end: Option<End>,
     /// The ledger's abort flag: the client left.
@@ -239,8 +241,10 @@ impl Sim {
                 _ => 1 + rand.next(60),
             };
             let max_tokens = [1, 2, 3, 5, 9][rand.next(5)];
+            let min_tokens = [0, rand.next(max_tokens + 1)][rand.next(2)];
             let pooled = cfg.pool && rand.next(2) == 0;
-            clients.insert(req, Client { prompt, max_tokens, tokens: Vec::new(), end: None, gone: false, pooled });
+            let c = Client { prompt, max_tokens, min_tokens, tokens: Vec::new(), end: None, gone: false, pooled };
+            clients.insert(req, c);
         }
         let d = Decoder::new(replicated_of(m, W, 1, cfg.slots), Fake, cfg.seats).unwrap();
         Sim {
@@ -537,7 +541,8 @@ impl Sim {
             Event::First { req, handoff: false } => {
                 let id = RequestId::new(req);
                 let tok = first_token(req);
-                let why = if tok == STOP { FinishReason::Stop(StopCause::Token(STOP)) } else { FinishReason::Length };
+                let stop = Stop::new(stop(), self.clients[&req].min_tokens);
+                let why = stop.cause(0, tok).map_or(FinishReason::Length, FinishReason::Stop);
                 match self.head.gone.remove(&req) {
                     true => self.front.notes.push_back(Note::Retire(id)),
                     false => self.front.notes.extend([Note::Emit { id, tok }, Note::Finish { id, why }]),
@@ -584,8 +589,9 @@ impl Sim {
                 self.head.outbox.extend(outs);
                 continue;
             }
-            let (prompt, max_tokens) = (self.clients[&req].prompt, self.clients[&req].max_tokens);
-            let (gate, outs) = Self::died(self.head.tiers.gate(req, prompt + max_tokens, max_tokens, &stop()))?;
+            let c = &self.clients[&req];
+            let (prompt, max_tokens, stop) = (c.prompt, c.max_tokens, Stop::new(stop(), c.min_tokens));
+            let (gate, outs) = Self::died(self.head.tiers.gate(req, prompt + max_tokens, max_tokens, &stop))?;
             self.head.outbox.extend(outs);
             let Gate::Lease(tier) = gate else { return Ok(()) };
             self.head.waiting.pop_front();
@@ -653,15 +659,7 @@ impl Sim {
     /// At quiescence: every client's end is right and nothing is held.
     fn settled(&self) -> Checked<()> {
         for (req, c) in &self.clients {
-            let mut chain = vec![first_token(*req)];
-            while chain.len() < c.max_tokens && *chain.last().unwrap() != STOP {
-                chain.push(next(*chain.last().unwrap() as i64) as u32);
-            }
-            let why = if *chain.last().unwrap() == STOP {
-                FinishReason::Stop(StopCause::Token(STOP))
-            } else {
-                FinishReason::Length
-            };
+            let (chain, why) = chain(first_token(*req), |t| next(t as i64) as u32, STOP, c.min_tokens, c.max_tokens);
             let ok = match &c.end {
                 Some(End::Finished(t, r)) => (t, *r) == (&chain, why),
                 Some(End::Rejected) => c.prompt > P_LIMIT,

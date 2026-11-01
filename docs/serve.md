@@ -27,9 +27,13 @@ tool call 的解析器按 manifest 的 `chat.tool_parser` 选（manifest.md「�
 `infront-engine` + `infront-vllm`，底下是 vLLM 官方的 Rust server crates，git dep 钉 infront main 的
 一个 rev），kern 只贡献引擎：`crates/kern-serve`。
 
-当前钉在 infront `ea2db279` / vLLM `08b989da`（2026-10-28），之前是 pegainfer-frontend。infront 在
+当前钉在 infront `97873e19` / vLLM `08b989da`（2026-11-01），之前是 pegainfer-frontend。infront 在
 `ServeOptions` 里声明引擎能做什么：kern-serve 声明不给 logprobs、没有 sampling fills 的 manifest
-不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；`history: History::Boundary`，
+不采样，HTTP 层就把这类请求 400 掉（原来 kern 自己的 `refuse.rs` 删了）；任何引擎契约都带不了的参数
+（frequency / presence / repetition penalty、`min_p` ∉ [0, 1)、`logprobs: -1`、transfer params）也在
+HTTP 层 400、点名参数。`97873e19` 之前它们和 `min_tokens` 一样在 bridge 拒，客户端看到的是 500 或
+流中途的 `"Internal server error"`；`min_tokens` 现在随请求带进来（`Request::min_tokens`，语义见下文
+「分工」的停止 token 一条）；`history: History::Boundary`，
 chat 层渲染一次量出 `Request::history_tokens`（见下文"带循环状态"一条）。之前是 `History::Marks`，
 另外对最近 8 轮各渲染一次给 `history_marks` 供池化层探；2026-10-28 起池化层在 prompt 的每个页边界探
 mark，不再需要前端说更早的轮次在哪，这 8 次渲染省掉（下文「池化 KV 层」）；停止原因并进
@@ -78,6 +82,13 @@ fixture 的期望随之更新。更早的 #56260 仍在：DSV4/V4.1 历史 tool 
     generation_config 默认值带来的非 greedy 参数 warn 一次后按 greedy 服务。
     停止 token 带着 `FinishReason::Stop(cause)` 交给 ledger（infront 约定：前端像 vLLM
     一样把它计入 `completion_tokens`、从文本里剥掉），计入 `max_tokens`。
+    `min_tokens`：第 `min_tokens` 个生成 token（从 0 数）之前抽到的停止 token 是普通 token，照常
+    输出、计入长度，请求继续；`min_tokens > max_tokens` 由 vLLM 的路由 400。单进程的 `cut`、PP head
+    的首 token、PD 的 relay 都走同一个判断（`kern_serve::Stop`）。输出长度与 vLLM 一致；但 vLLM 把
+    停止 token 从采样里 mask 掉，manifest 只交回 token id、没有 logits 可 mask，所以停止 token 可能
+    作为普通输出 token 出现在 `min_tokens` 之前，之后的续写也就和 vLLM 不同。vllm-bench 的 chat 路径
+    带 `min_tokens`（`max_tokens=1` 时是 1），之前每条都在 infront 的 bridge 被拒（2026-11-01 DSV4.1
+    PP4），现在不再需要 `--extra-body '{"min_tokens":null}'`。
 - **manifest**（`tools/gen_qwen3_decode.py`）多了一个 var `seqs`（≤256）和
   一个 program：
   - `decode`：原样，bs=1 契约（3D split-KV unified + reduce_segments——挖到

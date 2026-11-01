@@ -17,6 +17,7 @@ use infront_engine::{
 use kern_manifest::protocol::Sampling;
 use kern_serve::front::{Call, Clients, Front, Note};
 use kern_serve::pd::{Ask, Relay, Req};
+use kern_serve::Stop;
 
 const STEP: Duration = Duration::from_millis(25);
 const ITEM: Duration = Duration::from_millis(500);
@@ -32,6 +33,7 @@ fn request(max_tokens: usize, stop: StopPolicy) -> Request {
         history_marks: Vec::new(),
         stop_policy: stop,
         max_tokens,
+        min_tokens: 0,
         logprobs: None,
         prompt_logprobs: None,
     }
@@ -85,9 +87,7 @@ fn head(calls: mpsc::Receiver<Call>, notes: mpsc::Sender<Note>, d: mpsc::Sender<
             }
             notes.send(Note::Admit { id, cached: 0 }).unwrap();
             notes.send(Note::Emit { id, tok: FIRST }).unwrap();
-            notes
-                .send(Note::Decode { id, relay: Relay::new(max - 1, q.request.stop_policy.clone()), tier: 0 })
-                .unwrap();
+            notes.send(Note::Decode { id, relay: Relay::new(max - 1, Stop::of(&q.request)), tier: 0 }).unwrap();
             d.send(Ask::Start {
                 req: id.raw(),
                 first: FIRST,
