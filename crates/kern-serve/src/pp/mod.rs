@@ -48,8 +48,11 @@
 //! dead stage before shows as the head going.
 
 mod cache;
+pub mod cost;
+pub mod frontier;
 pub mod head;
 pub mod pack;
+pub mod policy;
 pub mod stage;
 
 use std::collections::BTreeMap;

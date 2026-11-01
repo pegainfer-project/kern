@@ -1,7 +1,10 @@
 //! The pipeline head's packing policy: what an item carries, in what turn,
 //! and when it goes out.
 
-use kern_serve::pack::{cap, goes_out, pack, passed, turn, Bounds, Waiting};
+use kern_serve::cost::Cost;
+use kern_serve::frontier::{self, goes_out, Seq, Turn, SEQS};
+use kern_serve::pack::{pack, passed, turn, Bounds, Waiting};
+use kern_serve::policy::{Meter, Policy};
 
 const B: Bounds = Bounds { rows: 8, seqs: 3, context: 20 };
 
@@ -56,42 +59,61 @@ fn a_hit_goes_ahead_of_cold_prompts() {
 
 #[test]
 fn a_full_item_runs_ahead_of_the_stages_and_a_partial_one_does_not() {
-    let full = [(0, 8)];
-    let partial = [(0, 3)];
-    let seqs_full = [(0, 1), (1, 1), (2, 1)];
-    let at = |plan: &[(usize, usize)], flying, ahead| goes_out(plan, B, flying, 4, ahead);
-    assert_eq!((at(&full, 4, 1), at(&full, 5, 1)), (true, false));
-    assert_eq!((at(&full, 7, 4), at(&full, 8, 4)), (true, false));
-    assert_eq!((at(&seqs_full, 4, 1), at(&seqs_full, 5, 1)), (true, false));
-    assert_eq!((at(&partial, 3, 4), at(&partial, 4, 4)), (true, false));
-    assert!(!at(&[], 0, 4));
+    let at = |rows, seqs, flying, ahead| goes_out(rows, seqs, 8, flying, 4, ahead);
+    assert_eq!((at(8, 1, 4, 1), at(8, 1, 5, 1)), (true, false));
+    assert_eq!((at(8, 1, 7, 4), at(8, 1, 8, 4)), (true, false));
+    assert_eq!((at(3, SEQS, 4, 1), at(3, SEQS, 5, 1)), (true, false));
+    assert_eq!((at(3, 1, 3, 4), at(3, 1, 4, 4)), (true, false));
+    assert!(!at(0, 0, 0, 4));
 }
 
-/// K3's shape: 64-token pages, a 16k chunk, a 2k floor, spread over 24
-/// items. A lone hit or a few cold prompts go in small items, a backlog in
-/// full chunks.
+/// The cap `depth2048/16384/24` sets for `togo` rows waiting in one prompt.
+fn depth(togo: i64) -> i64 {
+    let seqs: Vec<Seq> = (togo > 0).then(|| Seq::new(0, 0, togo, 0)).into_iter().collect();
+    let cost = Cost::free(4);
+    Policy::parse("depth2048/16384/24").unwrap().cap(&Meter::new(4, 4).decision(0.0, &seqs, 0, &cost, 1 << 20))
+}
+
+/// K3's shape: a 16k chunk, a 2k floor, spread over 24 items. A lone hit
+/// or a few cold prompts go in small items, a backlog in full chunks.
 #[test]
 fn an_item_takes_the_admitted_rows_spread_over_the_pipeline() {
-    let at = |togo| cap(togo, 24, 64, 2_048, 16_384);
-    assert_eq!((at(0), at(1_000), at(48_000)), (2_048, 2_048, 2_048));
-    assert_eq!((at(100_000), at(200_000), at(1_000_000)), (4_224, 8_384, 16_384));
-    assert_eq!(cap(100_000, 24, 64, 2_048, 1_024), 1_024);
+    assert_eq!((depth(0), depth(1_000), depth(48_000)), (2_048, 2_048, 2_048));
+    assert_eq!((depth(100_000), depth(200_000), depth(1_000_000)), (4_224, 8_384, 16_384));
 }
 
-/// Over small inputs: the cap stays within the floor and the chunk, is
-/// whole units, and `spread` items of it carry every row left unless the
-/// chunk holds it back.
+/// The pipeline head packs over its own view of a sequence
+/// (`frontier::pack`), the single-process scheduler over `Waiting`: over
+/// random waiting sets they pack the same item.
 #[test]
-fn the_cap_is_whole_units_between_floor_and_chunk_and_carries_the_rows() {
-    for (unit, floor, most) in [(1, 1, 9), (4, 8, 32), (4, 32, 8), (8, 0, 64)] {
-        for spread in 0..6 {
-            for togo in 0..200 {
-                let c = cap(togo, spread, unit, floor, most);
-                assert!(c <= most && c >= floor.min(most), "{togo} {spread} {unit} {floor} {most}: {c}");
-                assert_eq!(c % unit, 0, "{togo} {spread} {unit} {floor} {most}: {c}");
-                assert!(c == most || c * spread.max(1) >= togo, "{togo} {spread} {unit} {floor} {most}: {c}");
-            }
-        }
+fn the_head_packs_as_the_scheduler_does() {
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rand = |n: u64| {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x % n
+    };
+    for _ in 0..20_000 {
+        let n = rand(24) as usize;
+        let w: Vec<Waiting> = (0..n)
+            .map(|_| Waiting {
+                pos: rand(64) as usize,
+                left: rand(3) as usize * rand(40) as usize,
+                passed: rand(6) as usize,
+            })
+            .collect();
+        let (cap, context, patience) = (1 + rand(80) as i64, 1 + rand(400) as i64, 1 + rand(4) as usize);
+        let seqs: Vec<Seq> = (w.iter().enumerate())
+            .map(|(i, s)| {
+                let end = (s.pos + s.left) as i64;
+                Seq::at(i, 0, s.pos as i64, end, end, s.passed as u32, 0)
+            })
+            .collect();
+        let (plan, _) = frontier::pack(&seqs, &Turn::of(&seqs, patience), cap, context);
+        let ours: Vec<(usize, usize)> = plan.iter().map(|&(k, r)| (k, r as usize)).collect();
+        let b = Bounds { rows: cap as usize, seqs: SEQS, context: context as usize };
+        assert_eq!(ours, pack(&w, b, patience), "{w:?} cap {cap} context {context} patience {patience}");
     }
 }
 

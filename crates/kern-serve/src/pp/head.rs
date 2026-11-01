@@ -9,9 +9,10 @@
 //! last chunk's token the answer. A chunk program over several sequences
 //! takes the admitted prompts' next rows packed back to back, shortest
 //! remaining first, and goes out only a bounded way ahead of the stages
-//! ([`pack`]). The head sends one chunk a turn and admits between turns, up
-//! to as many prompts as a chunk carries, so a prompt arriving while
-//! another goes out shares its items.
+//! ([`frontier`]), its rows capped by the item-size policy ([`policy`]),
+//! decided on the head's thread from what it admitted and sent, right
+//! before the send. The head sends one chunk a turn and admits between
+//! turns, so a prompt arriving while another goes out shares its items.
 //!
 //! A prompt starts past the longest prefix of it the head has kept
 //! ([`Cache`]): the copies that costs run on the head as they are decided
@@ -89,7 +90,9 @@ use kern_runtime::{Capacity, Error, Runtime};
 use tracing::{debug, error, info};
 
 use super::cache::Cache;
-use super::pack::{cap, goes_out, pack, passed, Bounds, Waiting};
+use super::cost::Cost;
+use super::frontier::{goes_out, pack, parts_of, Seq, Turn, SEQS};
+use super::policy::{Meter, Policy};
 use super::{connect, recv, send, Flow, Hello, Item, Job, Next, Report, Table};
 use crate::front::{Call, Front, Note};
 use crate::pd::mirror::Mirrors;
@@ -116,10 +119,9 @@ pub struct Head {
     pub max_seqs: usize,
     /// Full items queued in front of stage 0.
     pub ahead: usize,
-    /// Items the admitted prompts' rows are spread over, and the fewest
-    /// rows an item is capped at ([`cap`]).
-    pub spread: usize,
-    pub floor: usize,
+    /// What caps an item's rows, and the cost model it reads, if it reads one.
+    pub policy: Option<Policy>,
+    pub cost: Option<Cost>,
     pub eager: bool,
     /// The decode tiers' heads to hand prompts to, each request to one.
     pub decode: Vec<String>,
@@ -277,6 +279,14 @@ struct Pd {
     mirrors: Mirrors,
 }
 
+/// What one call may hold.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    rows: usize,
+    seqs: usize,
+    context: usize,
+}
+
 /// Rows fed since the stats line was last logged.
 struct Window {
     since: Instant,
@@ -295,8 +305,16 @@ struct PpHead {
     /// sequence may be passed over before it goes first: the stages.
     depth: usize,
     ahead: usize,
-    spread: usize,
-    floor: usize,
+    policy: Policy,
+    /// The policy's cost model, a free one for a policy that reads none.
+    cost: Cost,
+    /// What the head admitted and sent, as its policy reads it, on the
+    /// clock of `epoch`.
+    meter: Meter,
+    epoch: Instant,
+    /// Whether anything was admitted or answered since an item last could
+    /// not go: the policy decides again only then.
+    fresh: bool,
     max_seqs: usize,
     stages: Vec<TcpStream>,
     /// Events from the front, stages, decode tiers and local completions.
@@ -402,7 +420,19 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         Some(c) => bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
     };
     let context = p.context.as_ref().map_or(usize::MAX, |c| c.max as usize);
-    let bounds = Bounds { rows: chunk, seqs: prefill.groups as usize, context };
+    let bounds = Bounds { rows: chunk, seqs: (prefill.groups as usize).min(SEQS), context };
+    let depth = cut.stages as usize;
+    let policy = h.policy.unwrap_or(Policy::Depth { lo: 2048, hi: chunk as i64, n: 24 });
+    let cost = match h.cost {
+        Some(c) => {
+            ensure!(c.stages() == depth, "--pp-cost models {} stages, the pipeline has {depth}", c.stages());
+            c
+        }
+        None => {
+            ensure!(!policy.needs_cost(), "--pp-policy {policy:?} reads a cost model; give one with --pp-cost");
+            Cost::free(depth)
+        }
+    };
     let (tx, event_rx) = mpsc::channel();
     let mut states = vec![shapes(&rt.manifest)];
     states.extend(hellos.values().map(|(x, ..)| x.states.clone()));
@@ -464,7 +494,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
 
     let step_name = step.as_ref().map_or("-", |f| f.name.as_str()).to_string();
     info!(pages, page = rt.page(), chunk, seqs = bounds.seqs, prefill = %prefill.name, step = %step_name,
-          seq_slots = rt.has_seq_state().then(|| rt.seq_slots()), pooled = pool.is_some(), "pipeline head ready");
+          seq_slots = rt.has_seq_state().then(|| rt.seq_slots()), pooled = pool.is_some(), policy = ?policy,
+          "pipeline head ready");
     let cache = Cache::new(rt.page() as usize);
     Ok(PpHead {
         rt,
@@ -472,10 +503,13 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         prefill,
         step,
         bounds,
-        depth: cut.stages as usize,
+        depth,
         ahead: h.ahead,
-        spread: h.spread,
-        floor: h.floor,
+        policy,
+        cost,
+        meter: Meter::new(depth, h.ahead),
+        epoch: Instant::now(),
+        fresh: true,
         max_seqs: h.max_seqs,
         stages,
         event_rx,
@@ -617,8 +651,9 @@ impl PpHead {
                 self.apply(outs)?;
                 continue;
             }
-            // More prompts feeding than an item carries would only hold pages.
-            if self.live() >= self.max_seqs || self.active.len() >= self.bounds.seqs {
+            // Every admitted prompt is in the policy's rollout, so admission
+            // is bounded by the seats alone.
+            if self.live() >= self.max_seqs {
                 break;
             }
             let (prompt, max_tokens) = (q.request.prompt_tokens.len(), q.request.max_tokens);
@@ -697,8 +732,16 @@ impl PpHead {
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
         let a = Active { id, lease, ids, pos: start, stop, sampling, stops, keep, parts, handoff, passed: 0 };
+        let now = self.clock();
+        self.meter.admit(now, start as i64, self.chunked(&a) as i64, &self.cost);
         self.active.push_back(a);
+        self.fresh = true;
         Ok(())
+    }
+
+    /// µs since the head loaded: the clock its policy reads.
+    fn clock(&self) -> f64 {
+        self.epoch.elapsed().as_nanos() as f64 / 1e3
     }
 
     /// A prompt done waiting on the pooled tier starts, unless its client
@@ -939,17 +982,9 @@ impl PpHead {
     /// A prompt whose last rows are out goes into the cache at once:
     /// whatever reads its pages next is an item behind the ones writing them.
     fn issue(&mut self) -> Result<()> {
-        let waiting: Vec<Waiting> =
-            self.active.iter().map(|a| Waiting { pos: a.pos, left: self.upto(a) - a.pos, passed: a.passed }).collect();
-        let togo = self.active.iter().map(|a| self.chunked(a) - a.pos).sum();
-        let rows = cap(togo, self.spread, self.rt.page() as usize, self.floor, self.bounds.rows);
-        let b = Bounds { rows, ..self.bounds };
-        let plan = pack(&waiting, b, self.depth);
-        if goes_out(&plan, b, self.in_flight_items.len(), self.depth, self.ahead) {
-            for (a, n) in self.active.iter_mut().zip(passed(&waiting, &plan)) {
-                a.passed = n;
-            }
-            self.send_chunk(&plan)?;
+        let flying = self.in_flight_items.len();
+        if self.fresh && !self.active.is_empty() && flying < self.depth + self.ahead {
+            self.feed(flying)?;
         }
         while let Some(i) = self.step.as_ref().and(self.active.iter().position(|a| a.pos == self.chunked(a))) {
             let a = self.active.remove(i).expect("found");
@@ -959,6 +994,48 @@ impl PpHead {
             let done = self.leave(a, 0)?;
             self.in_flight_items.push_back(vec![done]);
         }
+        Ok(())
+    }
+
+    /// Size the next chunk item by the policy and send it if it may go. A
+    /// refused item waits for something to be admitted or answered.
+    fn feed(&mut self, flying: usize) -> Result<()> {
+        let seqs: Vec<Seq> = (self.active.iter().enumerate())
+            .map(|(i, a)| {
+                let (pos, end, stop) = (a.pos as i64, self.chunked(a) as i64, self.upto(a) as i64);
+                Seq::at(i, a.lease.prefix() as i64, pos, end, stop, a.passed as u32, 0)
+            })
+            .collect();
+        let context = self.bounds.context.min(i64::MAX as usize) as i64;
+        let now = self.clock();
+        self.meter.forget(now);
+        let d = self.meter.decision(now, &seqs, flying, &self.cost, context);
+        let (load, util) = (d.load, d.util);
+        let t0 = Instant::now();
+        let cap = self.policy.cap(&d).min(self.bounds.rows as i64);
+        let decide_us = t0.elapsed().as_micros() as u64;
+        let turn = Turn::of(&seqs, self.depth);
+        let (plan, rows) = pack(&seqs, &turn, cap, context);
+        if !goes_out(rows, plan.len(), cap, flying, self.depth, self.ahead) {
+            self.fresh = false;
+            return Ok(());
+        }
+        for (a, &l) in self.active.iter_mut().zip(&turn.left) {
+            a.passed += usize::from(l > 0);
+        }
+        for &(k, _) in plan.iter() {
+            self.active[k].passed = 0;
+        }
+        let parts = parts_of(&seqs, &plan);
+        let go = self.clock();
+        let item = self.flow.item;
+        let waiting = turn.left.iter().filter(|&&l| l > 0).count();
+        let togo: i64 = seqs.iter().map(|s| s.end - s.pos).sum();
+        let plan: Vec<(usize, usize)> = plan.iter().map(|&(k, n)| (k, n as usize)).collect();
+        self.send_chunk(&plan)?;
+        self.meter.sent(go, &parts, &self.cost);
+        info!(item, cap, rows, seqs = plan.len(), waiting, togo, flying, load, util, rung = self.policy.rung(load),
+              decide_us, parts = ?&parts[..], "pp plan");
         Ok(())
     }
 
@@ -1228,6 +1305,7 @@ impl PpHead {
             Event::Landed { stage, l } => return self.landed(stage, l),
         };
         let Some(completions) = self.in_flight_items.pop_front() else { bail!("an answer came back for no item") };
+        self.fresh = true;
         for r in completions {
             let Some(&tok) = t.get(r.at) else {
                 bail!("the last stage handed back {} tokens, no token {}", t.len(), r.at)

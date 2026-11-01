@@ -30,7 +30,7 @@ pub mod ranks;
 pub mod scheduler;
 mod watch;
 
-pub use pp::pack;
+pub use pp::{cost, frontier, pack, policy};
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
@@ -96,15 +96,17 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 4)]
     pub pp_ahead: usize,
 
-    /// On the head of a pipeline: items the admitted prompts' rows are
-    /// spread over, which caps the next item's rows
-    #[arg(long, default_value_t = 24)]
-    pub pp_spread: usize,
+    /// On the head of a pipeline: what caps the next item's rows, in the
+    /// simulator's syntax (`fixed16384`, `depth2048/16384/24`, `time12288`,
+    /// `mpca12288/196608`, `ladder`, ...; `pp::policy`). Default: the
+    /// admitted rows spread over 24 items, within 2048 and the chunk
+    #[arg(long)]
+    pub pp_policy: Option<String>,
 
-    /// On the head of a pipeline: the fewest rows an item is capped at,
-    /// below which it is mostly its weight pass
-    #[arg(long, default_value_t = 2048)]
-    pub pp_floor: usize,
+    /// On the head of a pipeline: the per-stage cost model a policy reads,
+    /// a costfit JSON (`pp::cost`)
+    #[arg(long)]
+    pub pp_cost: Option<std::path::PathBuf>,
 
     /// Per-sequence state slots per rank: the running sequences' plus the
     /// kept prefixes' (default: `--max-seqs` plus one)
@@ -343,8 +345,13 @@ fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
             chunk: o.chunk,
             max_seqs: o.max_seqs,
             ahead: o.pp_ahead,
-            spread: o.pp_spread,
-            floor: o.pp_floor,
+            policy: o.pp_policy.as_deref().map(pp::policy::Policy::parse).transpose()?,
+            cost: (o.pp_cost.as_ref())
+                .map(|p| {
+                    let text = std::fs::read_to_string(p).with_context(|| format!("--pp-cost {}", p.display()))?;
+                    pp::cost::Cost::parse(&text).with_context(|| format!("--pp-cost {}", p.display()))
+                })
+                .transpose()?,
             eager: o.eager,
             decode: o.decode.clone(),
             pool: o.pool.config(o.gpu)?,

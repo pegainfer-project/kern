@@ -19,26 +19,9 @@
 //! rows left is in at least one of every `patience + n` items, `n` the
 //! sequences waiting.
 //!
-//! Answers are collected and prompts admitted only between items, and each
-//! send waits on the head's device, so how far the head runs ahead of the
-//! stages is how late it decides. A full item goes out while fewer than
-//! the stages and `ahead` more are in flight (`ahead` queued in front of
-//! stage 0), a partial one only while fewer than the stages: packing waits
-//! for rows only when the stages have work, and a burst of long prompts neither stops the head
-//! answering and admitting nor puts the hit arriving behind it after every
-//! item the burst could fill.
-//!
-//! How many rows an item takes is decided over the pipeline's depth, not
-//! one item at a time. With every stage busy, an item leaves the last
-//! stage once stage 0 has run every item up to it, plus `stages - 1` times
-//! the longest of them: a full chunk costs every item behind it that many
-//! of its stage times, and a prompt cut into k items runs on k stages at
-//! once. So an item's rows are capped at what every admitted prompt has to
-//! go, spread over `spread` items, between a floor below which an item is
-//! mostly its weight pass and the chunk: a lone prompt goes through in
-//! small items that keep every stage on it and leave a hit arriving behind
-//! one small item, and a backlog goes in full chunks, where the weight
-//! pass per item is what limits.
+//! A pipeline head sizes and sends its items by the rules of
+//! [`frontier`](super::frontier), which packs the same way over its own
+//! view of a sequence.
 
 use std::cmp::Reverse;
 
@@ -57,13 +40,6 @@ pub struct Bounds {
     pub rows: usize,
     pub seqs: usize,
     pub context: usize,
-}
-
-/// The rows the next item may take: `togo`, the rows every admitted prompt
-/// has left, spread over `spread` items in whole `unit`s, no fewer than
-/// `floor` and no more than `most`.
-pub fn cap(togo: usize, spread: usize, unit: usize, floor: usize, most: usize) -> usize {
-    (togo.div_ceil(spread.max(1) * unit) * unit).max(floor).min(most)
 }
 
 /// The indices of the sequences with rows left, in their turn: those
@@ -109,16 +85,4 @@ pub fn passed(seqs: &[Waiting], plan: &[(usize, usize)]) -> Vec<usize> {
             false => s.passed,
         })
         .collect()
-}
-
-/// Whether `plan` goes out with `flying` items in a pipeline of `depth`
-/// stages: a full item (all its rows or all its sequences) while fewer
-/// than `depth + ahead` are in flight, a partial one while fewer than
-/// `depth`. Item times vary with the context their rows attend to, and the
-/// items queued ahead absorb that: with one, a slow item stalls the head
-/// until its answer is back.
-pub fn goes_out(plan: &[(usize, usize)], b: Bounds, flying: usize, depth: usize, ahead: usize) -> bool {
-    let rows: usize = plan.iter().map(|&(_, n)| n).sum();
-    let full = rows == b.rows || plan.len() == b.seqs;
-    !plan.is_empty() && flying < depth + if full { ahead } else { 0 }
 }
