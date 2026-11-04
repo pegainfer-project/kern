@@ -6,7 +6,8 @@
 //! process, and once on it stays on. On Blackwell the GPU writes a kernel's
 //! start and end itself, so a captured graph pays about a tenth of a
 //! microsecond per kernel node for its timestamps and an eager launch the
-//! CUPTI launch hook; nothing is inserted between kernels.
+//! CUPTI launch hook; nothing is inserted between kernels. Every call is
+//! CUPTI's subscriber-scoped (V2) API, which libcupti 13.3 and newer have.
 //!
 //! While tracing, every issue carries a tag as CUPTI's external
 //! correlation id: its high bits the issue's sequence number, its low bits
@@ -28,10 +29,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use cudarc::cupti::result::activity;
 use cudarc::cupti::sys as cupti;
 
 use crate::{Error, Result};
@@ -51,6 +51,7 @@ const KIND: cupti::CUpti_ExternalCorrelationKind =
 pub(crate) const NO_KV: u64 = u64::MAX;
 
 static ON: AtomicBool = AtomicBool::new(false);
+static SUBSCRIBER: AtomicPtr<cupti::CUpti_Subscriber_st> = AtomicPtr::new(std::ptr::null_mut());
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static SEQ: AtomicU64 = AtomicU64::new(1);
 static SINK: Mutex<Sink> = Mutex::new(Sink { kernels: Vec::new(), links: Vec::new(), names: BTreeMap::new() });
@@ -208,27 +209,65 @@ struct Sink {
     names: BTreeMap<usize, Arc<str>>,
 }
 
-fn check(r: std::result::Result<(), cudarc::cupti::result::CuptiError>, what: &str) -> Result<()> {
-    r.map_err(|e| Error::Cuda(format!("CUPTI {what}: {e:?}")))
+/// The libcupti the subscriber-scoped (V2) API needs: 13.3, where it left
+/// beta. An older one is refused at [`start`] rather than missing a symbol
+/// mid-serve.
+const CUPTI_MIN: u32 = 130300;
+const ENABLE_HES: cupti::CUpti_ActivityAttribute = cupti::CUpti_ActivityAttribute::CUPTI_ACTIVITY_ATTR_ENABLE_HES;
+
+fn ok(r: cupti::CUptiResult, what: &str) -> Result<()> {
+    match r {
+        cupti::CUptiResult::CUPTI_SUCCESS => Ok(()),
+        r => Err(Error::Cuda(format!("CUPTI {what}: {r:?}"))),
+    }
+}
+
+fn subscriber() -> cupti::CUpti_SubscriberHandle {
+    SUBSCRIBER.load(Ordering::Acquire)
 }
 
 /// Subscribes the process to kernel records through HES; before any CUDA
 /// context exists. `flush_ms` is how often CUPTI hands buffers over on its
 /// own (HES does not flush unless asked).
 pub fn start(flush_ms: u32) -> Result<()> {
-    hes_attribute("cuptiActivitySetAttribute", 1)?;
-    check(activity::register_callbacks(Some(requested), Some(completed)), "register callbacks")?;
-    check(activity::enable(cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL), "enable kernels")?;
+    let mut version = 0;
+    ok(unsafe { cupti::cuptiGetVersion(&mut version) }, "version")?;
+    if version < CUPTI_MIN {
+        return Err(Error::Cuda(format!(
+            "CUPTI: tracing needs libcupti API {CUPTI_MIN} (CUDA 13.3) or newer, got {version}"
+        )));
+    }
+    let mut params = cupti::CUpti_SubscriberParams {
+        structSize: std::mem::size_of::<cupti::CUpti_SubscriberParams>(),
+        subscriberName: c"kern".as_ptr(),
+        oldSubscriberName: std::ptr::null_mut(),
+        oldSubscriberSize: 0,
+        allowMultipleSubscribers: 0,
+        padding: [0; 7],
+    };
+    let mut s = std::ptr::null_mut();
+    ok(unsafe { cupti::cuptiSubscribe_v2(&mut s, None, std::ptr::null_mut(), &mut params) }, "subscribe")?;
+    SUBSCRIBER.store(s, Ordering::Release);
+    // HES is chosen before any kind is enabled.
+    let (mut on, mut size) = (1u8, 1usize);
+    ok(
+        unsafe { cupti::cuptiActivitySetAttribute_v2(s, ENABLE_HES, &mut size, &mut on as *mut u8 as *mut _) },
+        "set ENABLE_HES",
+    )?;
+    ok(unsafe { cupti::cuptiActivityRegisterCallbacks_v2(s, Some(requested), Some(completed)) }, "register callbacks")?;
+    use cupti::CUpti_ActivityKind::*;
     // A correlation record is written beside the API record of the call
     // it tags, so API records must be on (cuBLAS launches some kernels
     // through the runtime API); they are dropped unread.
-    check(activity::enable(cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_DRIVER), "enable driver records")?;
-    check(activity::enable(cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_RUNTIME), "enable runtime records")?;
-    check(
-        activity::enable(cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION),
-        "enable external correlation",
-    )?;
-    check(activity::flush_period(flush_ms), "flush period")?;
+    [
+        (CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL, "enable kernels"),
+        (CUPTI_ACTIVITY_KIND_DRIVER, "enable driver records"),
+        (CUPTI_ACTIVITY_KIND_RUNTIME, "enable runtime records"),
+        (CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION, "enable external correlation"),
+    ]
+    .into_iter()
+    .try_for_each(|(kind, what)| ok(unsafe { cupti::cuptiActivityEnable_v2(s, kind, std::ptr::null_mut()) }, what))?;
+    ok(unsafe { cupti::cuptiActivityFlushPeriod(flush_ms) }, "flush period")?;
     ON.store(true, Ordering::Release);
     Ok(())
 }
@@ -236,35 +275,21 @@ pub fn start(flush_ms: u32) -> Result<()> {
 /// Whether HES is what CUPTI uses: meaningful once a context exists, since
 /// CUPTI falls back to its software timestamps silently.
 pub fn hes() -> Result<bool> {
-    Ok(hes_attribute("cuptiActivityGetAttribute", 0)? == 1)
-}
-
-/// `CUPTI_ACTIVITY_ATTR_ENABLE_HES` through `f` (the set or the get), by
-/// its value: the attribute is newer than the CUDA API this binary binds.
-fn hes_attribute(f: &str, value: u8) -> Result<u8> {
-    const ENABLE_HES: u32 = 13;
-    type Attribute = unsafe extern "C" fn(u32, *mut usize, *mut std::ffi::c_void) -> u32;
-    let mut v = value;
-    let mut size = std::mem::size_of::<u8>();
-    let r = unsafe {
-        let call = cupti::culib()
-            .get::<Attribute>(format!("{f}\0").as_bytes())
-            .map_err(|e| Error::Cuda(format!("CUPTI {f}: {e}")))?;
-        call(ENABLE_HES, &mut size, &mut v as *mut u8 as *mut _)
-    };
-    match r {
-        0 => Ok(v),
-        r => Err(Error::Cuda(format!("CUPTI {f}(ENABLE_HES): error {r}"))),
-    }
+    let (mut v, mut size) = (0u8, 1usize);
+    ok(
+        unsafe {
+            cupti::cuptiActivityGetAttribute_v2(subscriber(), ENABLE_HES, &mut size, &mut v as *mut u8 as *mut _)
+        },
+        "get ENABLE_HES",
+    )?;
+    Ok(v == 1)
 }
 
 /// CUPTI's clock, the one kernel records are stamped in, in nanoseconds.
 pub fn now() -> Result<u64> {
     let mut t = 0;
-    match unsafe { cupti::cuptiGetTimestamp(&mut t) } {
-        cupti::CUptiResult::CUPTI_SUCCESS => Ok(t),
-        r => Err(Error::Cuda(format!("CUPTI timestamp: {r:?}"))),
-    }
+    ok(unsafe { cupti::cuptiGetTimestamp_v2(subscriber(), &mut t) }, "timestamp")?;
+    Ok(t)
 }
 
 /// Records CUPTI dropped for want of buffer space since [`start`].
@@ -287,16 +312,16 @@ pub(crate) fn begin(issue: Issue) -> u64 {
 /// thread's correlation stack.
 pub(crate) fn tagged<T>(seq: u64, call: Option<usize>, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let tag = seq << CALL_BITS | call.map_or(0, |c| c as u64 + 1);
-    check(activity::push_external_correlation_id(KIND, tag), "push correlation")?;
+    ok(unsafe { cupti::cuptiActivityPushExternalCorrelationId_v2(subscriber(), KIND, tag) }, "push correlation")?;
     let r = f();
     let mut last = 0;
-    check(unsafe { activity::pop_external_correlation_id(KIND, &mut last) }, "pop correlation")?;
+    ok(unsafe { cupti::cuptiActivityPopExternalCorrelationId_v2(subscriber(), KIND, &mut last) }, "pop correlation")?;
     r
 }
 
 /// Flushes CUPTI's finished buffers and joins what arrived.
 pub fn collect() -> Result<Collected> {
-    check(activity::flush_all(0), "flush")?;
+    ok(unsafe { cupti::cuptiActivityFlushAll(0) }, "flush")?;
     // The sink before the issues: a kernel is launched after its issue is
     // registered, so every kernel taken here finds its issue below.
     let (kernels, links) = {
@@ -313,7 +338,12 @@ fn layout() -> std::alloc::Layout {
     std::alloc::Layout::from_size_align(BUFFER, ALIGN).expect("constant layout")
 }
 
-unsafe extern "C" fn requested(buffer: *mut *mut u8, size: *mut usize, max_records: *mut usize) {
+unsafe extern "C" fn requested(
+    buffer: *mut *mut u8,
+    size: *mut usize,
+    max_records: *mut usize,
+    _: *mut cupti::CUpti_BufferCallbackRequestInfo,
+) {
     unsafe {
         *buffer = std::alloc::alloc(layout());
         *size = if (*buffer).is_null() { 0 } else { BUFFER };
@@ -322,14 +352,13 @@ unsafe extern "C" fn requested(buffer: *mut *mut u8, size: *mut usize, max_recor
 }
 
 unsafe extern "C" fn completed(
-    ctx: cudarc::driver::sys::CUcontext,
-    stream: u32,
     buffer: *mut u8,
     _: usize,
     valid: usize,
+    _: *mut cupti::CUpti_BufferCallbackCompleteInfo,
 ) {
-    let mut lost = 0;
-    if unsafe { cupti::cuptiActivityGetNumDroppedRecords(ctx as _, stream, &mut lost) }
+    let (s, mut lost) = (subscriber(), 0);
+    if unsafe { cupti::cuptiActivityGetNumDroppedRecords_v2(s, std::ptr::null_mut(), 0, &mut lost) }
         == cupti::CUptiResult::CUPTI_SUCCESS
     {
         DROPPED.fetch_add(lost as u64, Ordering::Relaxed);
@@ -337,14 +366,16 @@ unsafe extern "C" fn completed(
     if buffer.is_null() {
         return;
     }
-    let mut s = SINK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut sink = SINK.lock().unwrap_or_else(|e| e.into_inner());
     let mut record: *mut cupti::CUpti_Activity = std::ptr::null_mut();
-    while unsafe { activity::get_next_record(buffer, valid, &mut record) }.is_ok() {
+    while unsafe { cupti::cuptiActivityGetNextRecord_v2(s, buffer, valid, &mut record) }
+        == cupti::CUptiResult::CUPTI_SUCCESS
+    {
         match unsafe { (*record).kind } {
             cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL => {
                 // Newer CUPTI versions append fields; the prefix is this one.
                 let k = unsafe { std::ptr::read_unaligned(record as *const cupti::CUpti_ActivityKernel9) };
-                let name = s
+                let name = sink
                     .names
                     .entry(k.name as usize)
                     .or_insert_with(|| match k.name.is_null() {
@@ -352,7 +383,7 @@ unsafe extern "C" fn completed(
                         false => Arc::from(unsafe { CStr::from_ptr(k.name) }.to_string_lossy().as_ref()),
                     })
                     .clone();
-                s.kernels.push(Kernel {
+                sink.kernels.push(Kernel {
                     correlation: k.correlationId,
                     device: k.deviceId,
                     start: k.start,
@@ -363,12 +394,12 @@ unsafe extern "C" fn completed(
             cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION => {
                 let c = unsafe { std::ptr::read_unaligned(record as *const cupti::CUpti_ActivityExternalCorrelation) };
                 if c.externalKind == KIND {
-                    s.links.push((c.correlationId, c.externalId));
+                    sink.links.push((c.correlationId, c.externalId));
                 }
             }
             _ => {}
         }
     }
-    drop(s);
+    drop(sink);
     unsafe { std::alloc::dealloc(buffer, layout()) };
 }

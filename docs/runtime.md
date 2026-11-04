@@ -236,7 +236,9 @@ placement、export、`bind` 的张量都相同——直接当作已填，`load_w
 
 **Tracing (`kern_runtime::trace`)**: `trace::start(flush_ms)` subscribes the process to CUPTI's
 hardware event system (HES) and must run before any CUDA context exists (HES is chosen once per
-process); off, the runtime touches nothing of it. While on, every program `issue` registers an `Issue`
+process); off, the runtime touches nothing of it. It speaks CUPTI's subscriber-scoped (V2) API, so it
+needs libcupti 13.3 or newer at run time and refuses an older one; a process that already holds a V1
+CUPTI subscription (kineto, nsys) cannot also trace. While on, every program `issue` registers an `Issue`
 (program, the var values it reads, graph or eager, `kv` = the sum of the last `Fill::SeqLen` input
 written since the previous issue, and for a graph the call each kernel node came from, recorded at
 capture: a program captured off one stream is a chain, so its kernels run in node order) and runs under
