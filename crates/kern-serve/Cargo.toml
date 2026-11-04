@@ -13,10 +13,13 @@ infront-engine.workspace = true
 infront-vllm.workspace = true
 
 anyhow.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
 axum.workspace = true
 clap.workspace = true
 hex.workspace = true
 mooncake-store.workspace = true
+parquet.workspace = true
 serde.workspace = true
 sha2.workspace = true
 serde_json.workspace = true

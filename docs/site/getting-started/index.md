@@ -76,6 +76,15 @@ as `content`. `/v1/models` lists what is served, `/metrics` is Prometheus.
 topology runs one process per GPU in lockstep: rank 0 adds `--listen host:port`,
 rank q runs `--gpu g --head host:port --rank q`; this one is single-GPU.
 
+`--trace` times every kernel on the GPU itself and keeps four counters per
+rank: the device's time split into compute, communication and idle, each
+step's compute time and count by program, shape and context length, and the
+records it missed. `--trace-port <port>` serves them at `/kern/metrics` on
+that port, on every rank. `--trace-dir <dir>` also keeps every kernel and
+step on disk, one pair of Parquet files per rank and quarter hour under
+`<dir>/date=YYYY-MM-DD/rank=<q>/`; `POST /kern/trace/rotate` closes the pair
+being written so it can be read now.
+
 ## Generate without a server
 
 ```sh
