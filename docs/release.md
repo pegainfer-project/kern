@@ -18,7 +18,7 @@ kern 的 release 是两样东西，Linux x86_64 与 aarch64 各一份，都不�
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
-kern --version          # kern 0.3.0 (<commit>, cuda 13.0)
+kern --version          # kern 0.3.0 (<commit>, cuda 13.3)
 pip install kern-llm    # import kern; vllm / sglang serve 时插件自动加载
 ```
 
@@ -47,7 +47,7 @@ pip install kern-llm    # import kern; vllm / sglang serve 时插件自动加载
 2. **构建**：两个 target 各自在 Ubuntu 24.04 runner 上原生编（aarch64 用
    GitHub 的 arm runner，不交叉），apt 装 protoc 与 libssl-dev，`--locked` 一次编出
    kern-run 与 kern-serve。cudarc 绑定的 CUDA 版本由 Cargo.toml 的
-   `cuda-13000` feature 钉死，构建机不装 toolkit；`KERN_COMMIT` 传 tag 的 commit。
+   `cuda-13030` feature 钉死，构建机不装 toolkit；`KERN_COMMIT` 传 tag 的 commit。
    tag 名必须等于 workspace version（`v` + `cargo pkgid`），不等就停。
 3. **自检**（`package_release.sh`，在 runner 上跑）：两个 binary `--version` 报的版本 =
    tag；`NEEDED` 里没有任何 CUDA 库；`kern verify examples/qwen3-4b.json` 与
@@ -85,7 +85,7 @@ GitHub runner 没有 GPU，流水线只能证明 binary 起得来。release 发�
 
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
-kern --version                  # commit 与 tag 一致，cuda 13.0
+kern --version                  # commit 与 tag 一致，cuda 13.3
 cd <kern checkout> && kern test qwen3-4b   # 最后一行 PASS
 pip install kern-llm==0.3.0 && python -c 'import kern; print(kern.__version__)'   # 引擎的 venv 里
 ```

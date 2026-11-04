@@ -112,7 +112,10 @@ measured = "2026-09-xx tray07"
 launch 几何、上传 blob、写 TOML（variant 按 name 排序）。`import_handwritten.py`
 在 kernel-lab 容器里 build `tools/kernels-src/<name>.cu`、上传、写条目——从此
 生成器不再在本机 nvcc（`handwritten.hw()` 今天每次生成都重编，且 sha 只有
-kernel-lab 的 nvcc 13.0 能复现；改成"CI 编一次、index 钉 sha"之后这个坑消失）。
+编它的那个 nvcc 能复现；改成"CI 编一次、index 钉 sha"之后这个坑消失）。index 里
+现有的手写核 sha 是 kernel-lab 的 nvcc 13.0 编的（容器里仍在 `/usr/local/cuda-13.0`），
+容器默认的 nvcc 已是 13.3：用默认 nvcc 重新导入一个核会换掉它的 sha，按 lessons
+的规则走一次门禁。
 `[[pick]]` 由 `kern bench` 的结果写入，是唯一由人触发的条目，也要带 report。
 
 **索引检查（无 GPU，CI 每次跑）：** `tools/kernels/check.py`——TOML 可解析；sha 是

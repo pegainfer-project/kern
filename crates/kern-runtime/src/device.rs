@@ -184,7 +184,7 @@ fn alloc_prop(dev: i32, handle_type: sys::CUmemAllocationHandleType) -> sys::CUm
     prop.type_ = sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED;
     prop.requestedHandleTypes = handle_type;
     prop.location.type_ = sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE;
-    prop.location.id = dev;
+    prop.location.__bindgen_anon_1.id = dev;
     prop
 }
 
@@ -220,7 +220,7 @@ fn map_handle(
     }
     let mut access: sys::CUmemAccessDesc = unsafe { std::mem::zeroed() };
     access.location.type_ = sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE;
-    access.location.id = dev;
+    access.location.__bindgen_anon_1.id = dev;
     access.flags = sys::CUmemAccess_flags::CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
     if let Err(e) = cuda_check(unsafe { sys::cuMemSetAccess(va, size, &access, 1) }, "cuMemSetAccess") {
         unsafe {
