@@ -305,6 +305,8 @@ impl Runtime {
             resolution,
             n_modules: modules.len(),
             graphs: BTreeMap::new(),
+            traced: BTreeMap::new(),
+            kv: std::sync::atomic::AtomicU64::new(crate::trace::NO_KV),
             eager: false,
             gpu,
             nccl: BTreeMap::new(),

@@ -67,6 +67,11 @@ impl Dense {
             .map(Dense)
     }
 
+    /// The values of the vars `used` marks, by name.
+    pub(crate) fn named(&self, m: &Manifest, used: &[bool]) -> Vec<(String, u64)> {
+        m.vars.keys().zip(used).zip(&self.0).filter(|((_, u), _)| **u).map(|((s, _), v)| (s.clone(), *v)).collect()
+    }
+
     /// `var=value` in manifest var order, for error messages.
     pub(crate) fn describe(&self, m: &Manifest) -> String {
         m.vars.keys().zip(&self.0).map(|(s, v)| format!("{s}={v}")).collect::<Vec<_>>().join(", ")

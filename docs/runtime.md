@@ -234,6 +234,22 @@ placement、export、`bind` 的张量都相同——直接当作已填，`load_w
 同一个 rank（gpu 和 rank 不同时 `load_over` 拒绝）。host placement 的权重不走
 这条路，它们本来就经 `HostWeights` 在同一 scope 内共享。
 
+**Tracing (`kern_runtime::trace`)**: `trace::start(flush_ms)` subscribes the process to CUPTI's
+hardware event system (HES) and must run before any CUDA context exists (HES is chosen once per
+process); off, the runtime touches nothing of it. While on, every program `issue` registers an `Issue`
+(program, the var values it reads, graph or eager, `kv` = the sum of the last `Fill::SeqLen` input
+written since the previous issue, and for a graph the call each kernel node came from, recorded at
+capture: a program captured off one stream is a chain, so its kernels run in node order) and runs under
+a CUPTI external correlation id: the issue's sequence number, plus the call for an eager program.
+`trace::collect()` flushes CUPTI and returns `Collected { steps, unclaimed }`: each `Step` is an issue
+with its kernels as `Span`s (call, kernel name, start, end in CUPTI's clock, `trace::now()`), complete
+once a graph has a record for every node, a later issue on its device has kernels, or a few collects
+brought it nothing; `unclaimed` are the kernels no issue tagged (the runtime's own copies and fills).
+The joining is a pure fold over the records; the CUPTI callbacks only copy records out.
+`trace::dropped()` counts records CUPTI dropped, `trace::hes()` says whether HES is what CUPTI ended
+up using (it falls back to software timestamps silently). No kernel is inserted; the consumer is
+kern-serve's `--trace` (serve.md "Tracing").
+
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、
 `KernelArtifact`（cubin 缺失/哈希不符/ABI 不匹配/peer launch 含 multicast
