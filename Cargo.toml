@@ -52,8 +52,8 @@ arrow-schema = "=60.0.0"
 parquet = { version = "=60.0.0", default-features = false, features = ["arrow", "snap"] }
 clap = { version = "4", features = ["derive"] }
 # The CUDA API kern binds is a fact about the binary, not about the build
-# machine: `cuda-13000` pins it, and no toolkit is needed to build.
-cudarc = { version = "=0.19.7", features = ["cuda-13000", "f16", "nccl"] }
+# machine: `cuda-13030` pins it, and no toolkit is needed to build.
+cudarc = { version = "=0.19.10", features = ["cuda-13030", "f16", "nccl"] }
 half = "=2.7.1"
 hex = "0.4"
 libc = "0.2"

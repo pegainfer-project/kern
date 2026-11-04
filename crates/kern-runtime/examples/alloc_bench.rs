@@ -24,14 +24,14 @@ fn prop(dev: i32) -> sys::CUmemAllocationProp {
     p.type_ = sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED;
     p.requestedHandleTypes = sys::CUmemAllocationHandleType::CU_MEM_HANDLE_TYPE_NONE;
     p.location.type_ = sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE;
-    p.location.id = dev;
+    p.location.__bindgen_anon_1.id = dev;
     p
 }
 
 fn access(dev: i32) -> sys::CUmemAccessDesc {
     let mut a: sys::CUmemAccessDesc = unsafe { std::mem::zeroed() };
     a.location.type_ = sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE;
-    a.location.id = dev;
+    a.location.__bindgen_anon_1.id = dev;
     a.flags = sys::CUmemAccess_flags::CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
     a
 }
