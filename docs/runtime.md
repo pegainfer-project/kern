@@ -234,7 +234,7 @@ placement、export、`bind` 的张量都相同——直接当作已填，`load_w
 同一个 rank（gpu 和 rank 不同时 `load_over` 拒绝）。host placement 的权重不走
 这条路，它们本来就经 `HostWeights` 在同一 scope 内共享。
 
-**Tracing (`kern_runtime::trace`)**: `trace::start(flush_ms)` subscribes the process to CUPTI's
+**Tracing (`kern_runtime::trace`)**: `trace::start()` subscribes the process to CUPTI's
 hardware event system (HES) and must run before any CUDA context exists (HES is chosen once per
 process); off, the runtime touches nothing of it. It speaks CUPTI's subscriber-scoped (V2) API, so it
 needs libcupti 13.3 or newer at run time and refuses an older one; a process that already holds a V1
@@ -243,12 +243,21 @@ CUPTI subscription (kineto, nsys) cannot also trace. While on, every program `is
 written since the previous issue, and for a graph the call each kernel node came from, recorded at
 capture: a program captured off one stream is a chain, so its kernels run in node order) and runs under
 a CUPTI external correlation id: the issue's sequence number, plus the call for an eager program.
-`trace::collect()` flushes CUPTI and returns `Collected { steps, unclaimed }`: each `Step` is an issue
+`trace::collect()` flushes CUPTI twice and returns `Collected { steps, unclaimed }`: each `Step` is an issue
 with its kernels as `Span`s (call, kernel name, start, end in CUPTI's clock, `trace::now()`), complete
 once a graph has a record for every node, a later issue on its device has kernels, or a few collects
 brought it nothing; `unclaimed` are the kernels no issue tagged (the runtime's own copies and fills).
 The joining is a pure fold over the records; the CUPTI callbacks only copy records out.
-`trace::dropped()` counts records CUPTI dropped, `trace::hes()` says whether HES is what CUPTI ended
+CUPTI hands a buffer over only when asked: a periodic flush (`cuptiActivityFlushPeriod`) hands over only
+full ones, and an 8 MiB buffer holds 20–30 thousand kernels, seconds of serving. Under HES a flush seals
+the buffer eager launches are filling while its newest records still wait for their timestamps and
+gives it to the next flush, so one flush per collect leaves an eager kernel a whole collect behind and
+the second takes it now. Measured on GB300 at kern-serve's 200 ms collect, p50 delivery eager / graph:
+one flush 300 / 98 ms, one flush and a 100 ms period 193 / 54 ms, two flushes 104 / 98 ms; p99 stays
+near one collect in all three, well inside the 2 s the counters settle behind. `trace::finish()` is the
+last collect: a forced flush on top, kernel records with no end yet dropped, and every issue still
+waiting returned with the kernels it has. `trace::dropped()` counts records CUPTI dropped or handed
+over unfinished, `trace::hes()` says whether HES is what CUPTI ended
 up using (it falls back to software timestamps silently). No kernel is inserted; the consumer is
 kern-serve's `--trace` (serve.md "Tracing").
 

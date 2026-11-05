@@ -251,7 +251,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Subscribes CUPTI (before any context) and starts the thread that folds
 /// what it collects, and writes it under `dir` when given.
 pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String, String)>) -> anyhow::Result<Shared> {
-    trace::start(100)?;
+    trace::start()?;
     let t = Arc::new(Tracing {
         board: Mutex::new(Board::new(m, rank)),
         recorder: dir.map(|d| Mutex::new(Recorder::new(d, rank, meta))),

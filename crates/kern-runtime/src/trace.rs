@@ -21,6 +21,16 @@
 //! is complete once a graph's every node has a record, a later issue on
 //! its device has kernels, or [`PATIENCE`] collects brought it nothing.
 //!
+//! CUPTI hands a buffer over only when asked; a periodic flush would hand
+//! over only full ones, and a buffer of eight megabytes takes seconds to
+//! fill. `collect` asks twice: under HES a flush seals the buffer eager
+//! launches are filling while its newest records still wait for their
+//! timestamps, holds it back, and gives it to the next flush, so without
+//! the second ask a kernel waits a whole collect longer. [`finish`] is
+//! the last collect: CUPTI gives up every buffer, a kernel record with no
+//! end yet is dropped, and every issue still waiting is returned with the
+//! kernels it has.
+//!
 //! An issue also carries its context: the sum of the `seq_len` fill the
 //! caller wrote before it, the KV rows its sequences read.
 //!
@@ -178,14 +188,27 @@ impl Ledger {
             })
             .map(|(seq, _)| *seq)
             .collect();
-        let steps = done.into_iter().filter_map(|seq| self.issues.remove(&seq).map(|p| finish(seq, p))).collect();
+        let steps = done.into_iter().filter_map(|seq| self.issues.remove(&seq).map(|p| step(seq, p))).collect();
         let live: BTreeSet<u64> = self.issues.keys().copied().collect();
         self.links.retain(|_, tag| live.contains(&(*tag >> CALL_BITS)));
         Collected { steps, unclaimed }
     }
+
+    /// Everything still waiting: the issues with kernels as steps, the
+    /// kernels still without a tag as unclaimed.
+    fn drain(&mut self) -> Collected {
+        let unclaimed = std::mem::take(&mut self.waiting).into_iter().map(|(k, _)| k).collect();
+        let steps = std::mem::take(&mut self.issues)
+            .into_iter()
+            .filter(|(_, p)| !p.kernels.is_empty())
+            .map(|(seq, p)| step(seq, p))
+            .collect();
+        self.links.clear();
+        Collected { steps, unclaimed }
+    }
 }
 
-fn finish(seq: u64, p: Pending) -> Step {
+fn step(seq: u64, p: Pending) -> Step {
     let mut kernels = p.kernels;
     kernels.sort_by_key(|(k, _)| (k.start, k.end));
     let matched = kernels.len() == p.issue.kernels.len();
@@ -227,9 +250,8 @@ fn subscriber() -> cupti::CUpti_SubscriberHandle {
 }
 
 /// Subscribes the process to kernel records through HES; before any CUDA
-/// context exists. `flush_ms` is how often CUPTI hands buffers over on its
-/// own (HES does not flush unless asked).
-pub fn start(flush_ms: u32) -> Result<()> {
+/// context exists.
+pub fn start() -> Result<()> {
     let mut version = 0;
     ok(unsafe { cupti::cuptiGetVersion(&mut version) }, "version")?;
     if version < CUPTI_MIN {
@@ -267,7 +289,6 @@ pub fn start(flush_ms: u32) -> Result<()> {
     ]
     .into_iter()
     .try_for_each(|(kind, what)| ok(unsafe { cupti::cuptiActivityEnable_v2(s, kind, std::ptr::null_mut()) }, what))?;
-    ok(unsafe { cupti::cuptiActivityFlushPeriod(flush_ms) }, "flush period")?;
     ON.store(true, Ordering::Release);
     Ok(())
 }
@@ -292,7 +313,8 @@ pub fn now() -> Result<u64> {
     Ok(t)
 }
 
-/// Records CUPTI dropped for want of buffer space since [`start`].
+/// Kernel records lost since [`start`]: dropped by CUPTI for want of
+/// buffer space, or handed over by [`finish`] before the kernel ended.
 pub fn dropped() -> u64 {
     DROPPED.load(Ordering::Relaxed)
 }
@@ -319,9 +341,27 @@ pub(crate) fn tagged<T>(seq: u64, call: Option<usize>, f: impl FnOnce() -> Resul
     r
 }
 
+fn flush(flag: u32) -> Result<()> {
+    ok(unsafe { cupti::cuptiActivityFlushAll(flag) }, "flush")
+}
+
 /// Flushes CUPTI's finished buffers and joins what arrived.
 pub fn collect() -> Result<Collected> {
-    ok(unsafe { cupti::cuptiActivityFlushAll(0) }, "flush")?;
+    flush(0)?;
+    flush(0)?;
+    Ok(join(false))
+}
+
+/// The last collect, once nothing more is launched: every buffer CUPTI
+/// holds and every issue still waiting.
+pub fn finish() -> Result<Collected> {
+    flush(0)?;
+    flush(0)?;
+    flush(cupti::CUpti_ActivityFlag::CUPTI_ACTIVITY_FLAG_FLUSH_FORCED as u32)?;
+    Ok(join(true))
+}
+
+fn join(last: bool) -> Collected {
     // The sink before the issues: a kernel is launched after its issue is
     // registered, so every kernel taken here finds its issue below.
     let (kernels, links) = {
@@ -331,7 +371,13 @@ pub fn collect() -> Result<Collected> {
     let issued = std::mem::take(&mut *ISSUED.lock().unwrap_or_else(|e| e.into_inner()));
     let mut ledger = LEDGER.lock().unwrap_or_else(|e| e.into_inner());
     issued.into_iter().for_each(|(seq, issue)| ledger.issue(seq, issue));
-    Ok(ledger.fold(kernels, links))
+    let mut c = ledger.fold(kernels, links);
+    if last {
+        let rest = ledger.drain();
+        c.steps.extend(rest.steps);
+        c.unclaimed.extend(rest.unclaimed);
+    }
+    c
 }
 
 fn layout() -> std::alloc::Layout {
@@ -375,6 +421,11 @@ unsafe extern "C" fn completed(
             cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL => {
                 // Newer CUPTI versions append fields; the prefix is this one.
                 let k = unsafe { std::ptr::read_unaligned(record as *const cupti::CUpti_ActivityKernel9) };
+                // Only a forced flush hands over a kernel still running.
+                if k.end < k.start || k.end == 0 {
+                    DROPPED.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 let name = sink
                     .names
                     .entry(k.name as usize)
@@ -402,4 +453,35 @@ unsafe extern "C" fn completed(
     }
     drop(sink);
     unsafe { std::alloc::dealloc(buffer, layout()) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kernel(correlation: u32, start: u64) -> Kernel {
+        Kernel { correlation, device: 0, start, end: start + 1, name: Arc::from("k") }
+    }
+
+    fn eager() -> Issue {
+        Issue { program: "p".into(), vars: Vec::new(), graph: false, kv: None, kernels: Arc::new([]) }
+    }
+
+    #[test]
+    fn the_last_collect_returns_what_a_periodic_one_still_waits_for() {
+        let mut l = Ledger::new();
+        l.issue(1, eager());
+        l.issue(2, eager());
+        let tag = |seq: u64, call: u64| seq << CALL_BITS | (call + 1);
+        // Issue 1 has a kernel, issue 2 none; kernel 9's tag has not arrived.
+        let c = l.fold(vec![kernel(7, 10), kernel(9, 20)], vec![(7, tag(1, 0))]);
+        assert_eq!((c.steps.len(), c.unclaimed.len()), (0, 0));
+        let c = l.drain();
+        let steps: Vec<(u64, Vec<Option<u32>>)> =
+            c.steps.iter().map(|s| (s.seq, s.spans.iter().map(|k| k.call).collect())).collect();
+        let unclaimed: Vec<u32> = c.unclaimed.iter().map(|k| k.correlation).collect();
+        assert_eq!((steps, unclaimed), (vec![(1, vec![Some(0)])], vec![9]));
+        let c = l.drain();
+        assert_eq!((c.steps.len(), c.unclaimed.len(), l.links.len()), (0, 0, 0));
+    }
 }
