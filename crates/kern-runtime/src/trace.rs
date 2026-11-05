@@ -12,10 +12,12 @@
 //! While tracing, every issue carries a tag as CUPTI's external
 //! correlation id: its high bits the issue's sequence number, its low bits
 //! the call plus one for an eager program, zero for a graph's single
-//! launch. A program is captured off one stream, so its graph is a chain
-//! and its kernels run in the order their nodes were added: capture keeps,
-//! per kernel node, the call that added it, and a graph's records sorted
-//! by start are that list. [`collect`] flushes CUPTI and returns every
+//! launch. Capture keeps, per kernel node, the call that added it, keyed
+//! by the node's local id: CUPTI's graph node id is the graph's id in its
+//! high half and the node's local id in its low half, and instantiation
+//! keeps the local ids, so a kernel record of the graph exec names its
+//! call exactly, whatever order a program's lanes ran in. [`collect`]
+//! flushes CUPTI and returns every
 //! [`Step`] whose kernels have all arrived, and the kernels no issue
 //! claims (the runtime's own copies and fills between programs). An issue
 //! is complete once a graph's every node has a record, a later issue on
@@ -79,6 +81,9 @@ pub struct Kernel {
     pub start: u64,
     pub end: u64,
     pub name: Arc<str>,
+    /// The local id of the graph node that launched it; `None` for an
+    /// eager launch.
+    pub node: Option<u32>,
 }
 
 /// What the runtime said a tag is when it issued it.
@@ -90,15 +95,15 @@ pub struct Issue {
     pub graph: bool,
     /// The sum of the `seq_len` fill written for this issue.
     pub kv: Option<u64>,
-    /// A graph's kernels in run order, each the index of the call that
-    /// added it; empty for an eager issue.
-    pub kernels: Arc<[u32]>,
+    /// A graph's kernel nodes by local id, each to the index of the call
+    /// that added it; empty for an eager issue.
+    pub kernels: Arc<BTreeMap<u32, u32>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Span {
-    /// Index into the program's calls; `None` where a graph's records did
-    /// not match its capture one to one.
+    /// Index into the program's calls; `None` for a graph record whose
+    /// node the capture did not see.
     pub call: Option<u32>,
     pub name: Arc<str>,
     pub start: u64,
@@ -211,12 +216,13 @@ impl Ledger {
 fn step(seq: u64, p: Pending) -> Step {
     let mut kernels = p.kernels;
     kernels.sort_by_key(|(k, _)| (k.start, k.end));
-    let matched = kernels.len() == p.issue.kernels.len();
     let spans = kernels
         .iter()
-        .enumerate()
-        .map(|(i, (k, call))| Span {
-            call: if p.issue.graph { matched.then(|| p.issue.kernels[i]) } else { *call },
+        .map(|(k, call)| Span {
+            call: match p.issue.graph {
+                true => k.node.and_then(|n| p.issue.kernels.get(&n).copied()),
+                false => *call,
+            },
             name: k.name.clone(),
             start: k.start,
             end: k.end,
@@ -341,6 +347,14 @@ pub(crate) fn tagged<T>(seq: u64, call: Option<usize>, f: impl FnOnce() -> Resul
     r
 }
 
+/// A graph node's local id, the half of CUPTI's id its records keep
+/// through instantiation.
+pub(crate) fn node(node: cudarc::driver::sys::CUgraphNode) -> Result<u32> {
+    let mut id = 0u64;
+    ok(unsafe { cupti::cuptiGetGraphNodeId(node, &mut id) }, "graph node id")?;
+    Ok(id as u32)
+}
+
 fn flush(flag: u32) -> Result<()> {
     ok(unsafe { cupti::cuptiActivityFlushAll(flag) }, "flush")
 }
@@ -440,6 +454,8 @@ unsafe extern "C" fn completed(
                     start: k.start,
                     end: k.end,
                     name,
+                    // Zero for an eager launch: a graph's id, the high half, starts at one.
+                    node: (k.graphNodeId != 0).then_some(k.graphNodeId as u32),
                 });
             }
             cupti::CUpti_ActivityKind::CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION => {
@@ -460,11 +476,23 @@ mod tests {
     use super::*;
 
     fn kernel(correlation: u32, start: u64) -> Kernel {
-        Kernel { correlation, device: 0, start, end: start + 1, name: Arc::from("k") }
+        Kernel { correlation, device: 0, start, end: start + 1, name: Arc::from("k"), node: None }
     }
 
     fn eager() -> Issue {
-        Issue { program: "p".into(), vars: Vec::new(), graph: false, kv: None, kernels: Arc::new([]) }
+        Issue { program: "p".into(), vars: Vec::new(), graph: false, kv: None, kernels: Arc::default() }
+    }
+
+    #[test]
+    fn a_graph_record_names_its_call_by_node_whatever_order_the_lanes_ran_in() {
+        let mut l = Ledger::new();
+        // Nodes 0..3 from calls 0, 1, 1, 2; call 1 ran on a side lane and finished first.
+        let nodes = BTreeMap::from([(0, 0), (1, 1), (2, 1), (3, 2)]);
+        l.issue(1, Issue { graph: true, kernels: Arc::new(nodes), ..eager() });
+        let at = |node: u32, start: u64| Kernel { node: Some(node), ..kernel(5, start) };
+        let c = l.fold(vec![at(3, 40), at(1, 10), at(0, 20), at(2, 15), at(9, 50)], vec![(5, 1 << CALL_BITS)]);
+        let calls: Vec<(u64, Option<u32>)> = c.steps[0].spans.iter().map(|s| (s.start, s.call)).collect();
+        assert_eq!(calls, vec![(10, Some(1)), (15, Some(1)), (20, Some(0)), (40, Some(2)), (50, None)]);
     }
 
     #[test]

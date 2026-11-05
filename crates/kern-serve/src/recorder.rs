@@ -247,10 +247,10 @@ mod tests {
             vars: vec![("seqs".into(), 4)],
             graph: true,
             kv: Some(4096),
-            kernels: Arc::new([0, 1]),
+            kernels: Arc::new([(0, 0), (1, 1)].into()),
         };
         let step = Step { seq, issue, spans: vec![span(0, at, at + 10), span(1, at + 10, at + 30)] };
-        let copy = Kernel { correlation: 0, device: 0, start: at + 40, end: at + 45, name: "copy".into() };
+        let copy = Kernel { correlation: 0, device: 0, start: at + 40, end: at + 45, name: "copy".into(), node: None };
         Collected { steps: vec![step], unclaimed: vec![copy] }
     }
 

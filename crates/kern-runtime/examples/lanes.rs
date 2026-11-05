@@ -3,7 +3,11 @@
 //! one must take the time of its longest lane, eagerly and as a graph.
 //!
 //!   nvcc -cubin -arch=sm_103a -O3 -o target/cubins/lanes.cubin tools/kernels-src/lanes.cu
-//!   cargo run --release -p kern-runtime --example lanes -- --cubin target/cubins/lanes.cubin [--gpu 0]
+//!   cargo run --release -p kern-runtime --example lanes -- --cubin target/cubins/lanes.cubin [--gpu 0] [--trace]
+//!
+//! `--trace` runs everything under the CUPTI tracer, which must leave the
+//! lanes concurrent, and checks that every kernel of a laned run is named
+//! by the call that launched it.
 //!
 //! Lane 0 runs two steps of `--us` (a globaltimer spin), lane 1 two of
 //! twice that, and each a cuBLAS GEMM, so the two GEMMs run side by side on
@@ -16,7 +20,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use kern_runtime::{Capacity, Runtime};
+use kern_runtime::{trace, Capacity, Runtime};
 use serde_json::{json, Value};
 
 const N: usize = 1024;
@@ -28,6 +32,7 @@ fn main() {
     let mut cubin = PathBuf::from("target/cubins/lanes.cubin");
     let mut gpu = 0usize;
     let mut us = 500i64;
+    let mut traced = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut v = || args.next().expect("value");
@@ -35,6 +40,7 @@ fn main() {
             "--cubin" => cubin = PathBuf::from(v()),
             "--gpu" => gpu = v().parse().unwrap(),
             "--us" => us = v().parse().unwrap(),
+            "--trace" => traced = true,
             _ => panic!("unknown arg {a}"),
         }
     }
@@ -97,11 +103,14 @@ fn main() {
             "gemm": {"params": ["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32"],
                      "impl": {"launches": [{"entry": "extern:cublaslt_bf16_tn"}]}}
         },
-        "programs": {"serial": program(serial), "laned": program(laned)}
+        "programs": {"serial": program(serial), "laned": program(laned.clone())}
     });
     let json = serde_json::to_string_pretty(&manifest).unwrap();
     let verified = kern_manifest::Verified::from_json(&json).unwrap_or_else(|e| panic!("{e}"));
 
+    if traced {
+        trace::start().unwrap();
+    }
     let capacity = Capacity { tokens: Some(1), slots: 1, landings: 0 };
     let mut rt = Runtime::load(&verified, Some(&kernels), gpu, Some(capacity), None).unwrap();
     let x =
@@ -165,6 +174,33 @@ fn main() {
             println!("{}: laned {laned:.3} ms is not below 0.75 x serial {serial:.3} ms", mode(pair[0].0));
             ok = false;
         }
+    }
+    if traced {
+        let ops: Vec<&str> = laned.iter().map(|c| c["op"].as_str().unwrap()).collect();
+        let steps = trace::finish().unwrap().steps;
+        let laned_steps: Vec<_> = steps.iter().filter(|s| s.issue.program == "laned").collect();
+        let wrong: Vec<String> = laned_steps
+            .iter()
+            .flat_map(|s| &s.spans)
+            .filter(|k| {
+                let op = k.call.map(|c| ops[c as usize]);
+                let entry = |e: &str| k.name.contains(e);
+                match op {
+                    Some("step") => !entry("kern_lanes_step"),
+                    Some("join") => !entry("kern_lanes_join"),
+                    Some(_) => entry("kern_lanes"),
+                    None => true,
+                }
+            })
+            .map(|k| format!("{} as call {:?}", k.name, k.call))
+            .collect();
+        println!(
+            "trace: {} laned steps, {} kernels misnamed {:?}",
+            laned_steps.len(),
+            wrong.len(),
+            &wrong[..wrong.len().min(4)]
+        );
+        ok &= laned_steps.len() >= 48 && wrong.is_empty();
     }
     println!("{}", if ok { "PASS" } else { "FAIL" });
     std::process::exit(if ok { 0 } else { 1 });

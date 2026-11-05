@@ -184,7 +184,7 @@ pub struct Runtime {
     /// one per batch bucket).
     graphs: BTreeMap<(String, Dense), sys::CUgraphExec>,
     /// Per graph captured while tracing: the call each kernel node came from.
-    traced: BTreeMap<(String, Dense), Arc<[u32]>>,
+    traced: BTreeMap<(String, Dense), Arc<BTreeMap<u32, u32>>>,
     /// While tracing, the sum of the `seq_len` fill last written, which
     /// the next issue takes ([`trace::NO_KV`]: none since the last).
     kv: std::sync::atomic::AtomicU64,

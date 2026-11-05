@@ -30,7 +30,9 @@
 //! every lane it runs `after` records its event and the call's stream
 //! waits on it: concurrent streams when issued eagerly, parallel branches
 //! of the graph under capture. The program starts and ends on the compute
-//! stream (verify), so everything around it is unchanged. Running a range
+//! stream (verify), so everything around it is unchanged. Tracing runs
+//! the same lanes: the tracer tags each call as it is issued and the
+//! capture keys each kernel node to its call. Running a range
 //! of calls (the harness, the profiler) stays on lane 0 in list order,
 //! which verify made equal to any concurrent run.
 
@@ -426,15 +428,9 @@ impl Runtime {
             vars: vars.named(&self.manifest, &prog.vars),
             graph: false,
             kv: self.take_kv(),
-            kernels: Arc::new([]),
+            kernels: Arc::default(),
         });
-        prog.call_ranges.iter().enumerate().try_for_each(|(c, &(lo, hi))| {
-            trace::tagged(seq, Some(c), || {
-                prog.launches[lo..hi].iter().try_for_each(|l| {
-                    self.launch(l, &vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })
-                })
-            })
-        })
+        self.replay_each(prog, &vars, |c, issue| trace::tagged(seq, Some(c), issue))
     }
 
     /// Capture one program into an instantiated CUDA graph. Grid dims and
@@ -495,23 +491,23 @@ impl Runtime {
         Some(self.kv.swap(trace::NO_KV, Ordering::Relaxed)).filter(|&v| v != trace::NO_KV)
     }
 
-    /// Replay into the capture, keeping per kernel node the call that
-    /// added it: the graph is a chain, so this is the order they run in.
-    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<Vec<u32>> {
+    /// Replay into the capture, keeping per kernel node, by its local id,
+    /// the call that added it.
+    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<BTreeMap<u32, u32>> {
         let mut seen = BTreeSet::new();
-        let mut calls = Vec::new();
-        for (c, &(lo, hi)) in prog.call_ranges.iter().enumerate() {
-            for l in &prog.launches[lo..hi] {
-                self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
-            }
-            calls.extend(std::iter::repeat_n(c as u32, self.new_kernel_nodes(&mut seen)?));
-        }
+        let mut calls = BTreeMap::new();
+        self.replay_each(prog, vars, |c, issue| {
+            issue()?;
+            calls.extend(self.new_kernel_nodes(&mut seen)?.into_iter().map(|n| (n, c as u32)));
+            Ok(())
+        })?;
         Ok(calls)
     }
 
-    /// Kernel nodes in the stream's capture graph not in `seen`, which
-    /// takes every node.
-    fn new_kernel_nodes(&self, seen: &mut BTreeSet<usize>) -> Result<usize> {
+    /// The local ids of the kernel nodes in the capture graph not in
+    /// `seen`, which takes every node. Side lanes capture into lane 0's
+    /// graph, so their nodes are there too.
+    fn new_kernel_nodes(&self, seen: &mut BTreeSet<usize>) -> Result<Vec<u32>> {
         let mut status = sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE;
         let mut graph: sys::CUgraph = std::ptr::null_mut();
         cuda_check(
@@ -532,11 +528,13 @@ impl Runtime {
         cuda_check(unsafe { sys::cuGraphGetNodes(graph, std::ptr::null_mut(), &mut n) }, "cuGraphGetNodes")?;
         let mut nodes = vec![std::ptr::null_mut(); n];
         cuda_check(unsafe { sys::cuGraphGetNodes(graph, nodes.as_mut_ptr(), &mut n) }, "cuGraphGetNodes")?;
-        let mut kernels = 0;
+        let mut kernels = Vec::new();
         for node in nodes.into_iter().filter(|node| seen.insert(*node as usize)) {
             let mut t = sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_EMPTY;
             cuda_check(unsafe { sys::cuGraphNodeGetType(node, &mut t) }, "cuGraphNodeGetType")?;
-            kernels += (t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL) as usize;
+            if t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL {
+                kernels.push(trace::node(node)?);
+            }
         }
         Ok(kernels)
     }
@@ -596,7 +594,7 @@ impl Runtime {
         }
         let prog = &self.programs[program];
         let dense = Dense::check(&self.manifest, vars, &prog.vars)?;
-        let kernels = self.traced.get(&(program.to_string(), dense.clone())).cloned().unwrap_or_else(|| Arc::new([]));
+        let kernels = self.traced.get(&(program.to_string(), dense.clone())).cloned().unwrap_or_default();
         let seq = trace::begin(trace::Issue {
             program: program.to_string(),
             vars: dense.named(&self.manifest, &prog.vars),
@@ -610,7 +608,19 @@ impl Runtime {
     /// Issue every launch of a compiled program, each call on its lane
     /// after the lanes it names (no sync).
     pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &Dense) -> Result<()> {
-        for (&(lo, hi), (lane, after)) in prog.call_ranges.iter().zip(&prog.lanes) {
+        self.replay_each(prog, vars, |_, issue| issue())
+    }
+
+    /// [`Runtime::replay`], with each call's launches issued through
+    /// `each(call index, issue)`: the tracer tags them, the capture counts
+    /// the nodes they add.
+    fn replay_each(
+        &self,
+        prog: &CompiledProgram,
+        vars: &Dense,
+        mut each: impl FnMut(usize, &dyn Fn() -> Result<()>) -> Result<()>,
+    ) -> Result<()> {
+        for (c, (&(lo, hi), (lane, after))) in prog.call_ranges.iter().zip(&prog.lanes).enumerate() {
             for &from in after {
                 let ev = self.lanes.events[from];
                 cuda_check(unsafe { sys::cuEventRecord(ev, self.stream_of(from).cu_stream()) }, "cuEventRecord(lane)")?;
@@ -619,10 +629,12 @@ impl Runtime {
                     "cuStreamWaitEvent(lane)",
                 )?;
             }
-            for l in &prog.launches[lo..hi] {
-                self.launch_on(*lane, l, vars)
-                    .map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
-            }
+            each(c, &|| {
+                prog.launches[lo..hi].iter().try_for_each(|l| {
+                    self.launch_on(*lane, l, vars)
+                        .map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })
+                })
+            })?;
         }
         Ok(())
     }
