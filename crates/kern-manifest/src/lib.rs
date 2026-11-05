@@ -15,6 +15,7 @@
 
 mod constants;
 mod host;
+mod lanes;
 pub use constants::json_schema;
 
 pub mod cut;

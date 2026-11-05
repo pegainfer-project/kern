@@ -20,6 +20,8 @@ fn call(letter: usize) -> Call {
         label: None,
         op: OPS[letter / BUFS.len()].to_string(),
         args: vec![Arg::Buf { buf: BUFS[letter % BUFS.len()].to_string(), offset: 0 }],
+        lane: 0,
+        after: Vec::new(),
     }
 }
 

@@ -334,3 +334,36 @@ fn a_sharded_manifest_is_never_cut() {
     let errs = cut(&m, &[1]).expect_err("a sharded manifest is cut").0;
     assert!(errs.iter().any(|e| e.contains("a cut takes a single-rank manifest")), "{errs:#?}");
 }
+
+#[test]
+fn a_cut_falls_where_every_lane_is_joined() {
+    let f = |a: &str, b: &str, lane: u8, after: &[u8]| json!({"op": "f1", "args": [{"buf": a}, {"buf": b}], "lane": lane, "after": after});
+    let m = json!({
+        "schema_version": 7, "model": "lanes",
+        "buffers": {
+            "x": {"dtype": "bf16", "shape": [8], "kind": "input"},
+            "a": {"dtype": "bf16", "shape": [8], "kind": "workspace"},
+            "b": {"dtype": "bf16", "shape": [8], "kind": "workspace"},
+            "c": {"dtype": "bf16", "shape": [8], "kind": "workspace"},
+            "y": {"dtype": "bf16", "shape": [8], "kind": "output"}
+        },
+        "modules": {"toy": {"source": "toy.cubin", "sha256": "ab".repeat(32)}},
+        "ops": {
+            "f1": {"params": ["in buffer<bf16>", "out buffer<bf16>"],
+                   "impl": {"launches": [{"module": "toy", "entry": "k", "block": [32, 1, 1], "grid": [1, 1, 1]}]}},
+            "f2": {"params": ["in buffer<bf16>", "in buffer<bf16>", "out buffer<bf16>"],
+                   "impl": {"launches": [{"module": "toy", "entry": "k", "block": [32, 1, 1], "grid": [1, 1, 1]}]}}
+        },
+        "programs": {"decode": {"batch": {"groups": 1, "rows": 1}, "calls": [
+            f("x", "a", 0, &[]), f("a", "b", 1, &[0]), f("a", "c", 0, &[]),
+            {"op": "f2", "args": [{"buf": "b"}, {"buf": "c"}, {"buf": "y"}], "after": [1]}
+        ]}}
+    });
+    let m = verify(serde_json::from_value(m).unwrap()).unwrap();
+    let stages = cut(&m, &[1]).unwrap();
+    assert_eq!(stages[1].programs["decode"].calls.iter().map(|c| c.lane).collect::<Vec<_>>(), [1, 0, 0]);
+    for (at, why) in [(2, "a program ends on lane 0, after every lane"), (3, "lane 1 is never joined")] {
+        let errs = cut(&m, &[at]).expect_err("a cut inside a fork").0;
+        assert!(errs.iter().any(|e| e.starts_with("stage 0: ") && e.contains(why)), "{at}: {errs:#?}");
+    }
+}

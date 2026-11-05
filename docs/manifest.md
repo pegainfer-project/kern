@@ -123,7 +123,10 @@ cut                          cut      流水线的一段：id、第几段、共�
     给 launch 加 `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`，
     核可以在前一个 launch 收尾时就上 SM，**manifest 承诺**该核在读写前一个
     launch 产出或消费的任何东西之前执行 `griddepcontrol.wait`，wait 之前只许
-    读 weight；verifier 不检查也检查不了，extern 不接受）、`when` 条件
+    读 weight；verifier 不检查也检查不了，extern 不接受。call 有 `after` 时
+    "前一个"是它的全部前驱——同 lane 的上一个 call 和 `after` 里每条 lane 的
+    最近一个 call：stream capture 把这样一个 launch 的每条入边都录成
+    programmatic 边，`griddepcontrol.wait` 等它们全部完成，见「Lanes」）、`when` 条件
     （kernel 与 extern 都可写，`{"var": "tokens", "max": 16}`：var 在闭区间
     `[min, max]` 内才发射，两端可省；区间外该 launch 什么都不做。manifest
     没有控制流，一个 op 按形状选实现就写几个 launch 各管一段区间，例如小
@@ -170,8 +173,8 @@ cut                          cut      流水线的一段：id、第几段、共�
   `op` 名 + 接口实参（buffer/state 实参可带字节 `offset`，默认 0：kernel
   收到 base+offset——provider 用它寻址融合 buffer 里的视图如 qkv 的
   q/k/v 切片、state 里的逐层区域，offset 是 provider 布局算术的字面量，
-  runtime 只做加法；`label` 只给人看）。launch 几何在 impl 里，不在 call
-  里。
+  runtime 只做加法；`label` 只给人看）+ 可选的 `lane` / `after`（并发分支，
+  见「Lanes」）。launch 几何在 impl 里，不在 call 里。
 
 **表达式**是封闭集合：常量、var 名（裸字符串，和 shape 一个写法）、
 `{"ceil_div": [e, c]}`、`{"mul": [e, c]}`、`{"add": [e, c]}`、
@@ -303,6 +306,39 @@ target+draft 权重同处一份 manifest，多一个 7 行的 `round` program，
 verifier 按 call 查都靠展开；weight buffer 的 dtype/shape 与 checkpoint 的
 safetensors header 重复——没有权重文件也要能 verify，load 时再对账。冗余在 manifest 不在 schema，
 "源码"是生成器。
+
+## Lanes：一个 program 里并排跑的分支
+
+call 可选 `"lane": n`（默认 0）和 `"after": [l, …]`（默认空）：
+
+```json
+{"label": "l3.mla_prep", "op": "mla_prep", "args": […]},
+{"label": "l3.q_b", "op": "q_b", "args": […], "lane": 1, "after": [0]},
+{"label": "l3.absorb", "op": "absorb", "args": […], "lane": 1},
+{"label": "l3.idx_qb", "op": "gemm_bf16", "args": […]},
+…
+{"label": "l3.attn", "op": "sparse_mla", "args": […], "after": [1]}
+```
+
+- 同一条 lane 上的 call 按列表顺序跑；不同 lane 上的 call 并排跑，除非
+  `after` 把它们排了序。`after: [l]`：本 call 开始前，lane `l` 上列在它前面的
+  call 全部完成；lane 0 前面没有 call 时就是 program 的开始。fork 是一个
+  `after: [0]` 的 side lane call，join 是一个 `after: [side]` 的 call。
+- 每条边都指向前面，所以列表顺序永远是这个 program 的一个合法串行顺序：
+  `kern test` 按 call 切 span、`kern cut`、harness、profile 照旧按列表顺序
+  串行跑，verifier 保证串行与并发结果相同。
+- Lane 0 是 program 自己的：program 从它开始、在它结束；跨 rank 的事只在
+  lane 0 上做，所以 SPMD 的每个 rank 以同一个顺序（lane 0 的 program 顺序）
+  见面。
+- **manifest 承诺**（与 `pdl` 并列，verifier 看不见 SASS）：side lane 上的核
+  除了自己 launch 的前驱什么都不等——没有要求全部 block 同时驻留的 grid 级
+  barrier，不自旋等 flag。于是会等的核只有两类：lane 0 上的跨 rank 核（等
+  peer 上同一个 call，各 rank 发射顺序相同）和停在 `griddepcontrol.wait` 的
+  PDL 核（硬件只在它每个前驱的全部 block 都已开始后才发射它）。side lane 的
+  核一定跑完、腾出 SM：要求全部 block 驻留的 lane 0 核（DCP select）会被并排
+  的分支拖慢，不会死锁。
+- runtime 怎么落地（每条 side lane 一条 stream + 自己的 cuBLAS handle 与
+  workspace，call 前按 `after` 记 event / 等 event）见 runtime.md「Lanes」。
 
 ## 权重：`bind`
 
@@ -537,6 +573,16 @@ logits 与 token 与整份逐位同（serve.md「流水线」）。
     位置切、同一个组，且没有 `axis: ranks` 的 var、没有 `blocks` fill；
     heads 的段非空、每段行数与宽度非零、宽度被组大小整除、总字节 = 组大小
     × `bytes_per_seq`。每条都单独报出 state 名、期望值与实际值。
+14. lanes（`kern-manifest/src/lanes.rs`，向量时钟算 happens-before）：整份
+    manifest 用到的 lane 从 0 起连续编号（runtime 恰好建这么多条 stream）；
+    `after` 里的 lane 互不重复、不是自己的 lane、在本 call 之前有 call（lane 0
+    除外：program 开始）；side lane 的第一个 call 必须写 `after`；program 的
+    最后一个 call 在 lane 0 上且在每个 call 之后（每条 lane 都 join 了）；
+    **无数据竞争**：两个谁也不在谁之后的 call 不得碰同一个 buffer / state /
+    op scratch（同一个 op 的每次 call 共用一份 scratch），除非两边都只读，
+    粒度是整个 buffer / state，不看 offset；side lane 上的 call 不调
+    collective、不收 peer buffer、不碰任何 peer buffer `of` 的 buffer 或
+    state。错误点名两个 call、资源与写的一方。
 
 反序列化层已拒绝：未知字段（包括实参对象里的未知键）、重复名字、非法
 参数类型串。
@@ -551,6 +597,15 @@ runtime crate 的 phase-2 校验。唯一一条 runtime 替 verifier 查的 kern
 地址会把发起的 GPU 卡死到整机重启（GB300 实测），而 verifier 看不见
 SASS。簇内 barrier 的 `UTCBAR.2CTA.MULTICAST` 不碰全局内存，放行
 （MegaMoE 用它）。没有 cuobjdump 就拒绝装载。
+
+## v7 加 lanes（2026-11-05）
+
+call 加可选的 `lane` / `after`（见「Lanes」），verifier 加第 14 条；只增不改，
+没有 lane 的 manifest 原样可读，序列化也不多出字段，所以 `schema_version`
+不升，golden 原地重生成。老 runtime 读带 lane 的 manifest 会因未知字段拒绝。
+`kern cut` 按原样保留被切 program 的 lane，所以切点只能落在每条 lane 都已
+join 的地方（切在 fork 里的段过不了第 14 条）；once / derive program 被切片后
+在 lane 0 上按列表顺序跑（切片可能丢了 fork 那一个 call）。
 
 ## v7 加采样 fill（2026-10-26）
 
