@@ -3,25 +3,32 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
-## 2026-11-05，`pdl` 是核的承诺，邻居盖不住它
+## 2026-11-05, `pdl` is the kernel's promise, and no neighbour covers for it
 
-K3.1 D 把 q_b + absorb 挪到 lane 1、与 indexer 链并排（lanes 第一次进真模型）。s64 逐字节一致，
-long（8 行 × 20000 步 teacher-forced）从第 2079 步起和 main 分叉，64 行 × 128k 的 bench 偶发整组
-卡死：rank 0 的 GPU 100% 不动，其余 rank 30 s 后在 Lamport 超时里 trap。原因不在 lanes：
-TRT-LLM gen 的 sparse MLA 核在 `griddepcontrol.wait`（SASS `ACQBULK`）**之前**就 `LDG` 了
-`ptrSeqLensKv`（`idx_tlen`），manifest 却给它声明了 `pdl: true`。main 里它前面是 absorb——非 PDL
-核、跑完才放行——这个错的承诺从没被考验过；lanes 把 absorb 挪走，attention 的同 lane 前驱变成
-入口就 `launch_dependents` 的 DCP select，attention 提前上 SM、读到上一层的 `idx_tlen`。上下文
-不过 2048 时每层每 rank 的选中数相同，旧值恰好对；过了 2048 每层不同，于是从 2048 步附近开始错；
-卡死也出在这里（核里怎么卡住的没有拆，修掉之后再没出现）。dump 末层 indexer 与 q 全部逐字节一致、只有 next token 不同，
-是排查时的关键一步：错在 indexer 之后、attention 的读里。
+K3.1 D moved q_b + absorb to lane 1, beside the indexer chain (lanes' first real model). s64 was
+byte-identical, but long (8 rows x 20000 teacher-forced steps) parted from main from step 2079 on, and the
+64-row x 128k bench now and then wedged the whole group: rank 0's GPU at 100% and not moving, the other
+ranks trapping in their Lamport timeout after 30 s. The cause was not lanes: TRT-LLM gen's sparse MLA
+kernel `LDG`s `ptrSeqLensKv` (`idx_tlen`) **before** `griddepcontrol.wait` (SASS `ACQBULK`), yet the
+manifest declared it `pdl: true`. On main its predecessor was absorb, a non-PDL kernel that releases
+nothing until it is done, so the false promise was never tested. With absorb moved away, the attention's
+same-lane predecessor became the DCP select, which calls `launch_dependents` at entry; the attention
+reached the SMs early and read the previous layer's `idx_tlen`. Up to 2048 of context every layer and rank
+selects the same count, so the stale value happened to be right; past 2048 the layers differ, so the
+errors start near step 2048, and so does the hang (how the kernel got stuck was not taken apart; it has not
+recurred since the fix). The key step in the hunt: a dump of the last layer's indexer and q was
+byte-identical everywhere, only the next token differed, so the error sat after the indexer, in the
+attention's reads.
 
-修法：sparse MLA 永远不是 PDL launch（generator 去掉开关）。lanes 的 2100 步 teacher-forced 与
-main 逐字节一致；64 行 × 128k 连跑 2 × 2000 步，修前第一轮就卡，修后跑完，next token 与 main 相同。
+Fix: the sparse MLA is never a PDL launch (the generator drops the switch). Lanes' 2100-step
+teacher-forced run is byte-identical to main; 64 rows x 128k for 2 x 2000 steps wedged in the first round
+before the fix and finishes after it, with the same next tokens as main.
 
-规则：`pdl` 是核自己的性质（wait 之前只读 weight），对着核的 SASS 判断，不能因为"它在现在的位置
-跑对了"就认。改动 call 顺序或加 lane 换掉一个 PDL call 的前驱时，就是在考验这条承诺；要排查
-"换顺序后结果变了"，先看新前驱是不是入口就触发、后继核 wait 之前读了什么。
+Rule: `pdl` is a property of the kernel itself (only weights are read before the wait), judged against
+the kernel's SASS, never accepted because "it ran right where it is now". Reordering calls, or adding a
+lane that replaces a PDL call's predecessor, tests that promise; when "the result changed after a
+reorder", look first at whether the new predecessor triggers at entry and what its successor reads
+before the wait.
 
 ## 2026-10-28，一个请求在哪儿，就由谁来退它；加了新的等待阶段，模拟里也要有它
 
