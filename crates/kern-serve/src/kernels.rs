@@ -29,11 +29,17 @@
 //! written so the last minutes can be read without waiting for the
 //! quarter hour. Both endpoints are served on `--trace-port`, on every
 //! rank alike; without it a rank still traces and records.
+//!
+//! A process ends through [`exit`], or by returning from serving to
+//! [`finish`]: the last collect is written and the files are closed, so
+//! the kernels of a rank's last seconds, the ones a crash is read from,
+//! are on disk. A rank exiting because its group is gone gives that
+//! [`FINISH`] at most, and goes regardless.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use axum::extract::State;
@@ -49,6 +55,8 @@ use tracing::{info, warn};
 use crate::recorder::{Now, Recorder};
 
 const EVERY: Duration = Duration::from_millis(200);
+/// How long [`exit`] waits for the last collect.
+const FINISH: Duration = Duration::from_secs(3);
 /// How far behind CUPTI's clock the device's time is settled.
 const LAG: u64 = 2_000_000_000;
 
@@ -236,16 +244,39 @@ fn labels(l: &[(&str, &str)]) -> String {
     l.iter().map(|(k, v)| format!("{k}=\"{}\"", escape(v))).collect::<Vec<_>>().join(",")
 }
 
-/// The board, and the files it is kept in with `--trace-dir`.
+/// The board, and the files it is kept in with `--trace-dir`. A collect
+/// is written and folded under the recorder's lock, so the last one
+/// cannot interleave with a periodic one.
 pub struct Tracing {
     board: Mutex<Board>,
-    recorder: Option<Mutex<Recorder>>,
+    /// `None` without `--trace-dir`, and once the last collect closed it.
+    recorder: Mutex<Option<Recorder>>,
 }
 
 pub type Shared = Arc<Tracing>;
 
+/// The process's tracing, for [`finish`] to reach from any exit.
+static TRACING: OnceLock<Shared> = OnceLock::new();
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn now() -> kern_runtime::Result<Now> {
+    let cupti = trace::now()?;
+    let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+    Ok(Now { unix, cupti })
+}
+
+/// Writes `c` while the files are open, then folds it into the board.
+fn settle(board: &Mutex<Board>, r: &mut Option<Recorder>, c: Collected, now: Now) -> anyhow::Result<()> {
+    let mut board = lock(board);
+    let written = match r {
+        Some(r) => r.write(&c, &|p: &str, call| board.site(p, call), now),
+        None => Ok(()),
+    };
+    board.fold(c, now.cupti);
+    written
 }
 
 /// Subscribes CUPTI (before any context) and starts the thread that folds
@@ -254,44 +285,69 @@ pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String,
     trace::start()?;
     let t = Arc::new(Tracing {
         board: Mutex::new(Board::new(m, rank)),
-        recorder: dir.map(|d| Mutex::new(Recorder::new(d, rank, meta))),
+        recorder: Mutex::new(dir.map(|d| Recorder::new(d, rank, meta))),
     });
+    TRACING.set(t.clone()).map_err(|_| anyhow::anyhow!("tracing started twice"))?;
     let shared = t.clone();
     std::thread::Builder::new().name("kern-trace".into()).spawn(move || {
         let (mut told, mut failing) = (false, false);
         loop {
             std::thread::sleep(EVERY);
-            let (c, cupti) = match trace::collect().and_then(|c| Ok((c, trace::now()?))) {
+            let mut r = lock(&t.recorder);
+            let (c, now) = match trace::collect().and_then(|c| Ok((c, now()?))) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!(error = %e, "trace collect");
                     continue;
                 }
             };
-            let unix =
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
             if !told && !c.steps.is_empty() {
                 let last = c.steps.iter().flat_map(|s| s.spans.iter().map(|k| k.end)).max().unwrap_or(0);
-                let behind_ms = (cupti as i128 - last as i128) / 1_000_000;
+                let behind_ms = (now.cupti as i128 - last as i128) / 1_000_000;
                 info!(hes = ?trace::hes(), behind_ms, "tracing kernels");
                 told = true;
             }
-            let mut board = lock(&t.board);
-            if let Some(r) = &t.recorder {
-                let site = |p: &str, call: Option<u32>| board.site(p, call);
-                match lock(r).write(&c, &site, Now { unix, cupti }) {
-                    Ok(()) => failing = false,
-                    Err(e) if !failing => {
-                        warn!(error = %format!("{e:#}"), "trace dir");
-                        failing = true;
-                    }
-                    Err(_) => {}
+            match settle(&t.board, &mut r, c, now) {
+                Ok(()) => failing = false,
+                Err(e) if !failing => {
+                    warn!(error = %format!("{e:#}"), "trace dir");
+                    failing = true;
                 }
+                Err(_) => {}
             }
-            board.fold(c, cupti);
         }
     })?;
     Ok(shared)
+}
+
+/// The last collect, written, and the files closed; nothing without
+/// `--trace`.
+pub fn finish() {
+    let Some(t) = TRACING.get() else { return };
+    let mut r = lock(&t.recorder);
+    let settled = trace::finish().map_err(anyhow::Error::from).and_then(|c| settle(&t.board, &mut r, c, now()?));
+    if let Err(e) = settled {
+        warn!(error = %format!("{e:#}"), "trace finish");
+    }
+    match r.take().map_or(Ok(Vec::new()), |mut r| r.rotate()) {
+        Ok(paths) if !paths.is_empty() => info!(?paths, "trace files closed"),
+        Ok(_) => {}
+        Err(e) => warn!(error = %format!("{e:#}"), "trace finish"),
+    }
+}
+
+/// Ends the process after [`finish`], waiting at most [`FINISH`] for it:
+/// a rank whose group is gone may have a device that never answers.
+pub fn exit(code: i32) -> ! {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let finishing = std::thread::Builder::new().name("kern-trace-finish".into()).spawn(move || {
+        finish();
+        let _ = tx.send(());
+    });
+    if finishing.is_ok() {
+        let _ = rx.recv_timeout(FINISH);
+    }
+    std::process::exit(code)
 }
 
 /// `/kern/metrics` and `/kern/trace/rotate` on `port`, from a thread of
@@ -317,8 +373,9 @@ async fn metrics(State(t): State<Shared>) -> impl IntoResponse {
 /// Closes the files being written so they can be read now; answers the
 /// paths closed.
 async fn rotate(State(t): State<Shared>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let r = t.recorder.as_ref().ok_or((StatusCode::NOT_FOUND, "this rank runs without --trace-dir".to_string()))?;
-    let paths = lock(r).rotate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
+    let mut r = lock(&t.recorder);
+    let r = r.as_mut().ok_or((StatusCode::NOT_FOUND, "this rank runs without --trace-dir".to_string()))?;
+    let paths = r.rotate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
     Ok(Json(json!({"closed": paths})))
 }
 

@@ -247,7 +247,15 @@ impl PoolOpts {
     }
 }
 
+/// Serves until serving ends, however it ends, then gives the trace its
+/// last collect.
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
+    let served = run(o, art);
+    kernels::finish();
+    served
+}
+
+fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
     let weights = kern_run::Weights::parse(&art.weights)?;
     info!(
         manifest = %art.manifest.display(),
@@ -472,7 +480,7 @@ where
                 // A scheduler that panicked would leave the port open
                 // and every request hanging: the process goes with it.
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(sched, backend))).is_err() {
-                    std::process::exit(101);
+                    crate::kernels::exit(101);
                 }
             }
             Err(e) => {

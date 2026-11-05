@@ -1130,8 +1130,11 @@ step's cost for the same work, comparable across ranks and days.
 ```
 
 named by the UTC time the pair was opened (its first write in that quarter). A pair is written as
-`*.parquet.part` and renamed when it closes, at the next quarter hour or on `POST /kern/trace/rotate`,
-so a reader that globs `*.parquet` finds only whole files. The `date=` / `rank=` directories are
+`*.parquet.part` and renamed when it closes, at the next quarter hour, on `POST /kern/trace/rotate`,
+or when the process ends: returning from serving, or exiting because its group is gone, it writes the
+last collect (`trace::finish`) and closes the pair, giving that at most 3 s, so a reader that globs
+`*.parquet` finds only whole files and a rank's last seconds are among them. A process killed by a
+signal it does not handle (SIGTERM, SIGKILL) leaves its pair as `.part`. The `date=` / `rank=` directories are
 hive-style partitions.
 
 `kernels`, one row per kernel, sorted by start:
