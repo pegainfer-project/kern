@@ -201,6 +201,8 @@ pub(crate) struct CompiledProgram {
     /// Launch index range `[lo, hi)` of every call, in call order (a
     /// multi-launch impl contributes several launches).
     pub(crate) call_ranges: Vec<(usize, usize)>,
+    /// Per call, its lane and the lanes it runs after (manifest.md, Lanes).
+    pub(crate) lanes: Vec<(usize, Vec<usize>)>,
     /// Per manifest var, whether any launch reads it: a run's vars must
     /// carry exactly these; the others are no part of the program.
     pub(crate) vars: Vec<bool>,
@@ -516,7 +518,8 @@ fn compile_programs(
         }
         let mut used = vec![false; manifest.vars.len()];
         launches.iter().for_each(|l| l.mark(&mut used));
-        programs.insert(pname.clone(), CompiledProgram { graph: p.graph, launches, call_ranges, vars: used });
+        let lanes = calls.iter().map(|c| (c.lane as usize, c.after.iter().map(|&l| l as usize).collect())).collect();
+        programs.insert(pname.clone(), CompiledProgram { graph: p.graph, launches, call_ranges, lanes, vars: used });
     }
     Ok(programs)
 }

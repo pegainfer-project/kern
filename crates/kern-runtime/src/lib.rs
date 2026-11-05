@@ -141,6 +141,8 @@ pub struct Runtime {
     blt: CudaBlasLT,
     /// cuBLAS handle (with its own workspace) for the f32-result GEMM built-in.
     blas: Blas,
+    /// The side lanes the manifest's programs run calls on.
+    lanes: exec::Lanes,
     /// What every `index_into` domain resolves against: the token slots a
     /// paged state holds, the sequence slots a per-sequence one.
     provision: Provision,

@@ -295,6 +295,27 @@ shared_mem、标量实参、pack 字段），其余 var 不属于它，caller �
 捕获（workspace 预分配，算法启发式在捕获时定死，顺带省了每步的 CPU
 开销）；`run_captured` 校验 vars 与捕获时一致（var 值烧死在图里）。
 
+**Lanes（2026-11-05）**：manifest 的 call 带 `lane` / `after`（manifest.md「Lanes」）时，装载为每条 side
+lane 建一条 non-blocking stream，配自己的 cublasLt handle + workspace 和 cuBLAS handle + workspace（大小与
+lane 0 相同，启发式选同一个算法，输出逐字节不变；两个并排的 GEMM 不共用 workspace），每条 lane（含 lane 0）
+一个 event。重放整个 program（eager `enqueue` 与 graph `capture` 同一条路）时，call 之前对 `after` 里的每条
+lane 在它的 stream 上 record event、本 call 的 stream wait 它，然后 call 的 launch 发到自己 lane 的 stream、
+用自己 lane 的 BLAS handle；eager 是并发 stream，capture 下就是图里的并行分支。program 在 lane 0 开始、
+在 lane 0 结束（verifier），所以 fetch / mark / 下一个 program / `enqueue_after` 的 host stream 都不变；
+collective 只在 lane 0（verifier），照旧发在 compute stream。按 call 区间跑（harness、`kern test`、profile）
+仍在 lane 0 上按列表顺序串行：列表顺序是一个合法的串行顺序，verifier 的无竞争规则让它等于任何并发顺序。
+PDL：capture 把带 programmatic stream serialization 的 launch 的**每条**入边都录成 programmatic 边，包括
+跨 stream event 等来的那条（`cuGraphGetEdges_v2` 读出 type 1）；dependent 会不会在跨 lane 的前驱结束前就上
+SM 是驱动的事——GB300 / CUDA 13.0 上两种都见过：side lane 从图的根 fork 时 join 等到两边都完成，从一个中间
+节点 fork 时 join 提前发射、靠 `griddepcontrol.wait` 等齐。eager 下 attribute 只放松同 stream 的边，event
+等待是完整依赖。哪一种都满足 manifest 的 `pdl` 承诺，所以 runtime 原样保留每个 launch 的 `pdl`。
+门禁 `crates/kern-runtime/examples/lanes.rs`（`tools/kernels-src/lanes.cu`）：同一份 program 写成单 lane
+和两条 lane（lane 0 两个 500 µs 的 step、lane 1 两个 1 ms 的 step，各一个 cuBLAS GEMM，PDL join；step 一开始
+就放行 dependent），每次检查都换一份输入并核对 join 的结果，四种跑法（eager / graph × 单 lane / 两 lane）
+输出逐字节一致，两条 lane 的 GEMM 逐字节一致。tray03 GB300 单卡实测：串行 3.02 ms、两 lane 2.02 ms（最长
+lane）。反证：去掉 join 的 `griddepcontrol.wait`，单 lane program（join 与前驱同 stream 的 PDL 边）读到旧值，
+门禁报错。
+
 **greedy 采样已下沉 GPU**：`tools/kernels-src/argmax.cu` 两段式行 argmax（64 block
 分部归约 + 1 block 收尾；单 block 版 nsys 实测 55.7µs/步——单 SM 读 300KB
 只有 5.5GB/s，两段式 5.5µs），平局取最小下标与 CPU 扫描语义一致，折叠成

@@ -125,6 +125,8 @@ impl Runtime {
         let stream = ctx.new_stream()?;
         let blt = CudaBlasLT::new(stream.clone())?;
         let blas = Blas::new(&stream)?;
+        let side = manifest.programs.values().flat_map(|p| &p.calls).map(|c| c.lane as usize).max().unwrap_or(0);
+        let lanes = crate::exec::Lanes::new(&ctx, side)?;
         ctx.bind_to_thread()?;
 
         let remote = cubin::fetch_registry_cubins(&manifest)?;
@@ -294,6 +296,7 @@ impl Runtime {
             stream,
             blt,
             blas,
+            lanes,
             provision,
             budget: Budget { pages: pool.pages(), slots: pool.slots() },
             pool: Arc::new(pool),

@@ -23,6 +23,16 @@
 //! A caller that wants to know when the device got somewhere without
 //! stopping the thread that issues takes a [`Mark`] and waits on it from
 //! another thread.
+//!
+//! A program with lanes (manifest.md, Lanes) runs each side lane on a
+//! stream of its own, with cuBLAS handles and workspaces of lane 0's sizes
+//! so a GEMM picks the algorithm it would pick on lane 0. Before a call,
+//! every lane it runs `after` records its event and the call's stream
+//! waits on it: concurrent streams when issued eagerly, parallel branches
+//! of the graph under capture. The program starts and ends on the compute
+//! stream (verify), so everything around it is unchanged. Running a range
+//! of calls (the harness, the profiler) stays on lane 0 in list order,
+//! which verify made equal to any concurrent run.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
@@ -30,10 +40,11 @@ use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use cudarc::driver::{sys, CudaContext};
+use cudarc::cublaslt::CudaBlasLT;
+use cudarc::driver::{sys, CudaContext, CudaStream};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
-use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn};
+use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn, Blas};
 use crate::device::Pinned;
 use crate::error::{bail, cuda_check};
 use crate::{trace, Error, Result, Runtime};
@@ -183,6 +194,54 @@ impl Signals {
 impl Drop for Signals {
     fn drop(&mut self) {
         unsafe { sys::cuModuleUnload(self.module) };
+    }
+}
+
+/// A side lane's stream and the BLAS handles that launch on it.
+struct Lane {
+    stream: Arc<CudaStream>,
+    blt: CudaBlasLT,
+    blas: Blas,
+}
+
+/// The manifest's side lanes, and one event per lane, lane 0's first,
+/// that a call running after the lane waits on.
+pub(crate) struct Lanes {
+    side: Vec<Lane>,
+    events: Vec<sys::CUevent>,
+}
+
+impl Lanes {
+    /// Streams and handles for lanes `1..=count` and events for `0..=count`;
+    /// nothing for a manifest without side lanes.
+    pub(crate) fn new(ctx: &Arc<CudaContext>, count: usize) -> Result<Lanes> {
+        let side = (0..count)
+            .map(|_| {
+                let stream = ctx.new_stream()?;
+                Ok(Lane { blt: CudaBlasLT::new(stream.clone())?, blas: Blas::new(&stream)?, stream })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let event = |_| {
+            let mut ev = std::ptr::null_mut();
+            cuda_check(
+                unsafe { sys::cuEventCreate(&mut ev, sys::CUevent_flags::CU_EVENT_DISABLE_TIMING as u32) },
+                "cuEventCreate(lane)",
+            )
+            .map(|()| ev)
+        };
+        let events = if count == 0 { Vec::new() } else { (0..=count).map(event).collect::<Result<Vec<_>>>()? };
+        Ok(Lanes { side, events })
+    }
+}
+
+impl Drop for Lanes {
+    fn drop(&mut self) {
+        for lane in &self.side {
+            let _ = lane.stream.synchronize();
+        }
+        for &ev in &self.events {
+            unsafe { sys::cuEventDestroy_v2(ev) };
+        }
     }
 }
 
@@ -548,15 +607,46 @@ impl Runtime {
         trace::tagged(seq, None, launch)
     }
 
-    /// Issue every launch of a compiled program onto the stream (no sync).
+    /// Issue every launch of a compiled program, each call on its lane
+    /// after the lanes it names (no sync).
     pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &Dense) -> Result<()> {
-        for l in &prog.launches {
-            self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
+        for (&(lo, hi), (lane, after)) in prog.call_ranges.iter().zip(&prog.lanes) {
+            for &from in after {
+                let ev = self.lanes.events[from];
+                cuda_check(unsafe { sys::cuEventRecord(ev, self.stream_of(from).cu_stream()) }, "cuEventRecord(lane)")?;
+                cuda_check(
+                    unsafe { sys::cuStreamWaitEvent(self.stream_of(*lane).cu_stream(), ev, 0) },
+                    "cuStreamWaitEvent(lane)",
+                )?;
+            }
+            for l in &prog.launches[lo..hi] {
+                self.launch_on(*lane, l, vars)
+                    .map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
+            }
         }
         Ok(())
     }
 
+    fn stream_of(&self, lane: usize) -> &Arc<CudaStream> {
+        match lane {
+            0 => &self.stream,
+            l => &self.lanes.side[l - 1].stream,
+        }
+    }
+
+    /// One launch on lane 0, the compute stream.
     pub(crate) fn launch(&self, l: &Launch, vars: &Dense) -> Result<()> {
+        self.launch_on(0, l, vars)
+    }
+
+    fn launch_on(&self, lane: usize, l: &Launch, vars: &Dense) -> Result<()> {
+        let (stream, blt, blas) = match lane {
+            0 => (&self.stream, &self.blt, &self.blas),
+            l => {
+                let s = &self.lanes.side[l - 1];
+                (&s.stream, &s.blt, &s.blas)
+            }
+        };
         if let Some((v, lo, hi)) = &l.when {
             if !(*lo..=*hi).contains(&v.eval(vars)?) {
                 return Ok(());
@@ -577,14 +667,11 @@ impl Runtime {
             images.push(m);
         }
         match &l.kind {
-            LaunchKind::Gemm { beta, algo: None } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
-            LaunchKind::Gemm { beta, algo: Some(algo) } => {
-                gemm_bf16_tn_pinned(&self.blt, &self.blas, &self.stream, &vals, *beta, algo)
-            }
-            LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
-            LaunchKind::GemmFp8 { f32_out, scale } => {
-                gemm_fp8_tn(&self.blt, &self.blas, &self.stream, &vals, *f32_out, *scale)
-            }
+            LaunchKind::Gemm { beta, algo: None } => gemm_bf16_tn(blt, stream, &vals, *beta),
+            LaunchKind::Gemm { beta, algo: Some(algo) } => gemm_bf16_tn_pinned(blt, blas, stream, &vals, *beta, algo),
+            LaunchKind::GemmF32 => gemm_bf16_tn_f32(blas, &vals),
+            LaunchKind::GemmFp8 { f32_out, scale } => gemm_fp8_tn(blt, blas, stream, &vals, *f32_out, *scale),
+            // Verify keeps collectives on lane 0, the stream NCCL is issued on.
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];
@@ -637,7 +724,7 @@ impl Runtime {
                     blockDimY: block[1],
                     blockDimZ: block[2],
                     sharedMemBytes: smem,
-                    hStream: self.stream.cu_stream(),
+                    hStream: stream.cu_stream(),
                     attrs: attrs.as_mut_ptr(),
                     numAttrs: num_attrs as u32,
                 };

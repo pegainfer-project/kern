@@ -126,7 +126,7 @@ cut                          cut      流水线的一段：id、第几段、共�
     读 weight；verifier 不检查也检查不了，extern 不接受。call 有 `after` 时
     "前一个"是它的全部前驱——同 lane 的上一个 call 和 `after` 里每条 lane 的
     最近一个 call：stream capture 把这样一个 launch 的每条入边都录成
-    programmatic 边，`griddepcontrol.wait` 等它们全部完成，见「Lanes」）、`when` 条件
+    programmatic 边，`griddepcontrol.wait` 等它们全部完成，见 runtime.md「Lanes」）、`when` 条件
     （kernel 与 extern 都可写，`{"var": "tokens", "max": 16}`：var 在闭区间
     `[min, max]` 内才发射，两端可省；区间外该 launch 什么都不做。manifest
     没有控制流，一个 op 按形状选实现就写几个 launch 各管一段区间，例如小
