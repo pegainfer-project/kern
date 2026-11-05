@@ -3,6 +3,26 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-11-05，`pdl` 是核的承诺，邻居盖不住它
+
+K3.1 D 把 q_b + absorb 挪到 lane 1、与 indexer 链并排（lanes 第一次进真模型）。s64 逐字节一致，
+long（8 行 × 20000 步 teacher-forced）从第 2079 步起和 main 分叉，64 行 × 128k 的 bench 偶发整组
+卡死：rank 0 的 GPU 100% 不动，其余 rank 30 s 后在 Lamport 超时里 trap。原因不在 lanes：
+TRT-LLM gen 的 sparse MLA 核在 `griddepcontrol.wait`（SASS `ACQBULK`）**之前**就 `LDG` 了
+`ptrSeqLensKv`（`idx_tlen`），manifest 却给它声明了 `pdl: true`。main 里它前面是 absorb——非 PDL
+核、跑完才放行——这个错的承诺从没被考验过；lanes 把 absorb 挪走，attention 的同 lane 前驱变成
+入口就 `launch_dependents` 的 DCP select，attention 提前上 SM、读到上一层的 `idx_tlen`。上下文
+不过 2048 时每层每 rank 的选中数相同，旧值恰好对；过了 2048 每层不同，于是从 2048 步附近开始错；
+卡死也出在这里（核里怎么卡住的没有拆，修掉之后再没出现）。dump 末层 indexer 与 q 全部逐字节一致、只有 next token 不同，
+是排查时的关键一步：错在 indexer 之后、attention 的读里。
+
+修法：sparse MLA 永远不是 PDL launch（generator 去掉开关）。lanes 的 2100 步 teacher-forced 与
+main 逐字节一致；64 行 × 128k 连跑 2 × 2000 步，修前第一轮就卡，修后跑完，next token 与 main 相同。
+
+规则：`pdl` 是核自己的性质（wait 之前只读 weight），对着核的 SASS 判断，不能因为"它在现在的位置
+跑对了"就认。改动 call 顺序或加 lane 换掉一个 PDL call 的前驱时，就是在考验这条承诺；要排查
+"换顺序后结果变了"，先看新前驱是不是入口就触发、后继核 wait 之前读了什么。
+
 ## 2026-10-28，一个请求在哪儿，就由谁来退它；加了新的等待阶段，模拟里也要有它
 
 #99 的 Codex review：流水线头在 lease 时就把请求在 decode tier 上标成 admitted，然后才去池里

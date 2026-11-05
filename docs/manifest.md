@@ -123,7 +123,9 @@ cut                          cut      流水线的一段：id、第几段、共�
     给 launch 加 `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`，
     核可以在前一个 launch 收尾时就上 SM，**manifest 承诺**该核在读写前一个
     launch 产出或消费的任何东西之前执行 `griddepcontrol.wait`，wait 之前只许
-    读 weight；verifier 不检查也检查不了，extern 不接受。call 有 `after` 时
+    读 weight；verifier 不检查也检查不了，extern 不接受。这是核自己的性质，与
+    排在它前面的是谁无关：前驱触发得晚（或根本不是 PDL 核）能把一个错的承诺
+    盖住，换个邻居就露出来（lessons.md 2026-11-05）。call 有 `after` 时
     "前一个"是它的全部前驱——同 lane 的上一个 call 和 `after` 里每条 lane 的
     最近一个 call：stream capture 把这样一个 launch 的每条入边都录成
     programmatic 边，`griddepcontrol.wait` 等它们全部完成，见 runtime.md「Lanes」）、`when` 条件

@@ -308,7 +308,10 @@ PDL：capture 把带 programmatic stream serialization 的 launch 的**每条**�
 跨 stream event 等来的那条（`cuGraphGetEdges_v2` 读出 type 1）；dependent 会不会在跨 lane 的前驱结束前就上
 SM 是驱动的事——GB300 / CUDA 13.0 上两种都见过：side lane 从图的根 fork 时 join 等到两边都完成，从一个中间
 节点 fork 时 join 提前发射、靠 `griddepcontrol.wait` 等齐。eager 下 attribute 只放松同 stream 的边，event
-等待是完整依赖。哪一种都满足 manifest 的 `pdl` 承诺，所以 runtime 原样保留每个 launch 的 `pdl`。
+等待是完整依赖。哪一种都满足 manifest 的 `pdl` 承诺，所以 runtime 原样保留每个 launch 的 `pdl`。lane 会换掉
+一个 call 的同 lane 前驱，这就在考验这条承诺：K3.1 D 的 attention 原本跟在非 PDL 的 absorb 后面，absorb 挪到
+lane 1 后它跟在入口就放行 dependent 的 select 后面，暴露了它在 wait 之前读 `lens` 的错误 `pdl`（lessons.md
+2026-11-05）。
 门禁 `crates/kern-runtime/examples/lanes.rs`（`tools/kernels-src/lanes.cu`）：同一份 program 写成单 lane
 和两条 lane（lane 0 两个 500 µs 的 step、lane 1 两个 1 ms 的 step，各一个 cuBLAS GEMM，PDL join；step 一开始
 就放行 dependent），每次检查都换一份输入并核对 join 的结果，四种跑法（eager / graph × 单 lane / 两 lane）
