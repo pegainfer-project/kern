@@ -10,6 +10,7 @@ target/release/kern-serve --manifest examples/qwen3-4b.json --kernels kernels --
 # KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 显式给则照旧。
 # /v1/completions、/v1/chat/completions（流式 + chat template）、/v1/models、/metrics
 # --pool-master host:port --pool-device mlx5_bond_0 加入 Mooncake 池化 KV 层（下文「池化 KV 层」）
+# --trace --trace-port <p>: per-rank kernel counters at :<p>/kern/metrics; --trace-dir <dir>: every kernel on disk ("Tracing" below)
 ```
 
 manifest / kernels / weights 走 `--manifest` `--kernels` `--weights`（与 `kern run`
@@ -1083,6 +1084,93 @@ consistent_hash 稳态 TTFT 是 round_robin 的 0.64×：会话黏在同一 tier
 命中率不变；power_of_all（全体最少）和 round_robin 一样——router 的负载是 in-flight 请求数，prompt 30k–250k 差 8 倍，
 请求数不代表行数。这三者各跑一次，1.4–1.8 s 的差距里噪声占多少未定；consistent_hash 的差距是机制性的。cache_aware 最差：按文本前缀树把同源会话堆到一个 tier（burst 期一个 tier 跑 32 个、其余 0），均衡差而
 命中率没涨。c128 时 4 tier in-flight ≤ 8、没有队列，策略之间看不出差别；c512 稳态每 tier 9–18 个仍无队列。
+
+## Tracing: per-rank health counters and a black box (`--trace`, 2026-11-04)
+
+`--trace` subscribes the process to CUPTI's hardware event system before any CUDA context exists
+(runtime.md "Tracing"): the GPU stamps every kernel's start and end itself, and each kernel is named by
+the manifest call that launched it. A thread collects every 200 ms and folds what arrived into four
+counters; with `--trace-dir` it also appends every kernel to Parquet files. Nothing is inserted between
+kernels.
+
+**Endpoints.** Every rank, the head included, serves them with `--trace-port <p>` on that port of its
+own (the head's HTTP port is infront's); without it the rank still traces and records.
+
+| Endpoint | Answer |
+|---|---|
+| `GET /kern/metrics` | the four series below, Prometheus text format |
+| `POST /kern/trace/rotate` | closes the file pair being written; `{"closed": [paths]}`, 404 without `--trace-dir` |
+
+**Metrics.** Low enough in cardinality to keep for months: no op, call or kernel name is a label, those
+are what the files are for.
+
+| Series | Labels | Meaning |
+|---|---|---|
+| `kern_device_seconds_total` | `rank`, `class` = `compute` / `comm` / `idle` | the device's wall clock, split |
+| `kern_step_compute_seconds_total` | `rank`, `program`, `shape`, `kv` | time a step's compute kernels cover |
+| `kern_steps_total` | `rank`, `program`, `shape`, `kv` | steps run |
+| `kern_trace_dropped_records_total` | `rank` | kernel records the counters miss |
+
+`comm` is a call that reads a peer buffer or runs an `extern:nccl_*` collective, waiting for the peers
+included, so a slow rank shows as compute on itself and comm on the others; where compute and comm
+kernels overlap the time is compute. `idle` is the clock no kernel covers, settled 2 s behind CUPTI's
+clock so the kernels that ran inside it have arrived; a kernel that arrives after its time was settled
+is counted in `kern_trace_dropped_records_total`, beside the records CUPTI itself dropped. `shape` is a
+graph program's var values (its graph key, `seqs=8`) or an eager program's rounded up to a power of
+two (`tokens<=32768`); `kv` is the step's `seq_len` fill summed and rounded up to a power of two
+(`<=64k`, `<=1M`; empty when the caller wrote none), since a step that reads more context costs more
+without anything being wrong. `kern_step_compute_seconds_total / kern_steps_total` per label set is a
+step's cost for the same work, comparable across ranks and days.
+
+**Files.** `--trace-dir <dir>` writes, per rank, a pair per quarter hour of UTC wall clock:
+
+```text
+<dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.kernels.parquet
+<dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.steps.parquet
+```
+
+named by the UTC time the pair was opened (its first write in that quarter). A pair is written as
+`*.parquet.part` and renamed when it closes, at the next quarter hour, on `POST /kern/trace/rotate`,
+or when the process ends: returning from serving, or exiting because its group is gone, it writes the
+last collect (`trace::finish`) and closes the pair, giving that at most 3 s, so a reader that globs
+`*.parquet` finds only whole files and a rank's last seconds are among them. A process killed by a
+signal it does not handle (SIGTERM, SIGKILL) leaves its pair as `.part`. The `date=` / `rank=` directories are
+hive-style partitions.
+
+`kernels`, one row per kernel, sorted by start:
+
+| Column | Type | |
+|---|---|---|
+| `seq` | u64, nullable | the step's `seq`; null for a kernel no program issue claims (the runtime's copies and fills between programs) |
+| `start_ns` | i64 | unix nanoseconds |
+| `dur_ns` | i64 | |
+| `call` | string, nullable | the call's `label`, else `<op>#<index>`; `?` where a graph's records did not match its capture one to one |
+| `op` | string, nullable | the call's op |
+| `kernel` | string | CUPTI's kernel name |
+
+`steps`, one row per program issue:
+
+| Column | Type | |
+|---|---|---|
+| `seq` | u64 | per process, from 1; joins `kernels.seq` within one rank's files |
+| `program` | string | |
+| `shape` | string | as the metric label |
+| `vars` | string | the exact var values the program reads, `name=value,…` |
+| `kv` | u64, nullable | the exact `seq_len` sum |
+| `graph` | bool | issued as a captured graph |
+| `start_ns`, `end_ns` | i64 | first kernel start, last kernel end, unix nanoseconds |
+
+Timestamps are CUPTI's clock moved by the offset to the wall clock sampled when the pair was opened,
+so ranks, files and logs share one time axis. Each file's key-value metadata: `kern.rank`,
+`kern.model`, `kern.manifest_sha256` (of the manifest JSON as read), `kern.version` (the binary's) and
+`kern.clock_offset_ns`. zstd level 3, dictionaries for the strings, delta encoding for the integer
+columns.
+
+**Measured** (2026-11-04, one GB300 tray, 4 GPUs, DeepSeek V4.1 Flash prefill tier, DP4/EP4, AgentX
+256k c32, 900 s): ~1750 kernels/s per rank at 5.7–5.9 bytes a kernel on disk, ~10 MB per quarter-hour
+pair per rank, ~0.9 GB a day per rank. TTFT mean 2497.5 ms recording against 2495.9 ms without. The
+quarter-hour rotations and one forced rotate lost no step: the run's steps files hold
+1134 + 140 + 714 = 1988 rows, every step issued.
 
 ## 没做（按需要加）
 

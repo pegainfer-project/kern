@@ -49,11 +49,11 @@ pub fn serve<E: Run>(
                 }
                 Ok(None) => {
                     info!("the prefill head closed its connection");
-                    std::process::exit(0);
+                    crate::kernels::exit(0);
                 }
                 Err(e) => {
                     error!("prefill head connection: {e:#}");
-                    std::process::exit(1);
+                    crate::kernels::exit(1);
                 }
             }
         }

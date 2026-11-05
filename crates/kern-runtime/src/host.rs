@@ -73,6 +73,7 @@ impl Runtime {
             })
             .collect::<Result<Vec<_>>>()?;
         self.states.extend(bound);
+        self.traced.clear();
         for (_, exec) in std::mem::take(&mut self.graphs) {
             cuda_check(unsafe { sys::cuGraphExecDestroy(exec) }, "cuGraphExecDestroy")?;
         }

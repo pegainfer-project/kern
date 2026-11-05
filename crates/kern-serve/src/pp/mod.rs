@@ -442,7 +442,7 @@ impl Watch {
                     Landing::Start { item, mark } => {
                         if let Err(e) = mark.wait() {
                             tracing::error!(stage, "device: {e:#}");
-                            std::process::exit(1);
+                            crate::kernels::exit(1);
                         }
                         start_us = now_us();
                         prev.as_mut().map_or(Ok(()), |w| tell(w, item)).with_context(|| format!("item {item} taken"))
@@ -450,7 +450,7 @@ impl Watch {
                     Landing::Item(Issued { item, rows, issued_us, mark, answer }) => {
                         if let Err(e) = mark.wait() {
                             tracing::error!(stage, item, "device: {e:#}");
-                            std::process::exit(1);
+                            crate::kernels::exit(1);
                         }
                         tracing::info!(stage, item, rows, issued_us, start_us, done_us = now_us(), "pp item");
                         let tokens = answer.map_or(Vec::new(), |a| {
@@ -466,7 +466,7 @@ impl Watch {
                     Landing::Pushed { req, mark } => {
                         if let Err(e) = mark.wait() {
                             tracing::error!(stage, req, "device: {e:#}");
-                            std::process::exit(1);
+                            crate::kernels::exit(1);
                         }
                         tracing::debug!(stage, req, done_us = now_us(), "pd pushed");
                         report(Report::Pushed(req)).with_context(|| format!("push of request {req}"))
@@ -474,7 +474,7 @@ impl Watch {
                 };
                 if let Err(e) = told {
                     tracing::error!(stage, "{e:#}");
-                    std::process::exit(1);
+                    crate::kernels::exit(1);
                 }
             }
         });

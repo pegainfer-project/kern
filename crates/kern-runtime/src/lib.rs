@@ -23,6 +23,9 @@
 //! thread first, so one thread may drive several runtimes (a test's ranks) and a
 //! runtime may be loaded on one thread and driven from another.
 //!
+//! [`trace`] times every kernel through CUPTI and names it by the program
+//! issue and the call that launched it; off unless a caller starts it.
+//!
 
 mod compare;
 mod compile;
@@ -41,6 +44,7 @@ mod nccl;
 mod peers;
 pub mod profile;
 mod push;
+pub mod trace;
 mod weights;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -177,6 +181,11 @@ pub struct Runtime {
     /// graph per var assignment it was captured at (a batched decode keeps
     /// one per batch bucket).
     graphs: BTreeMap<(String, Dense), sys::CUgraphExec>,
+    /// Per graph captured while tracing: the call each kernel node came from.
+    traced: BTreeMap<(String, Dense), Arc<[u32]>>,
+    /// While tracing, the sum of the `seq_len` fill last written, which
+    /// the next issue takes ([`trace::NO_KV`]: none since the last).
+    kv: std::sync::atomic::AtomicU64,
     /// Debug override: [`Runtime::issue`] launches every program eagerly,
     /// whatever its manifest says.
     eager: bool,
@@ -292,6 +301,10 @@ impl Runtime {
             bail!(Api, "input `{name}`: got {} bytes, buffer is {}", data.len(), self.buffers[name].bytes);
         }
         self.check_domain(name, data, vars)?;
+        if trace::on() && b.fill == Some(kern_manifest::types::Fill::SeqLen) {
+            let rows = kern_manifest::values::to_f64(b.dtype, data).into_iter().sum::<f64>() as u64;
+            self.kv.store(rows, std::sync::atomic::Ordering::Relaxed);
+        }
         let dst = self.buffers.get_mut(name).unwrap();
         let pinned = self.staging.get_mut(name).unwrap();
         // The staging waits on its own event before the overwrite and the

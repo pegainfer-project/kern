@@ -10,20 +10,24 @@
 //! head behind a [`front::Front`], and may hand each prompt to a decode
 //! tier ([`pd`]). What the frontend would admit but no manifest can serve
 //! (logprobs; a draw from a manifest without sampling fills) is declared to
-//! infront, which refuses it at the HTTP layer. The crate's public surface
-//! is [`serve`], its option structs, and the accounting, protocols and
-//! packing policy its tests drive.
+//! infront, which refuses it at the HTTP layer. With `--trace` each
+//! rank also counts what its device did (`kernels`) and, with
+//! `--trace-dir`, keeps every kernel on disk (`recorder`). The crate's
+//! public surface is [`serve`], its option structs, and the accounting,
+//! protocols and packing policy its tests drive.
 
 #![deny(unsafe_code)]
 
 mod dp;
 mod executor;
 pub mod front;
+mod kernels;
 pub mod logline;
 pub mod pd;
 mod pool;
 mod pp;
 pub mod ranks;
+mod recorder;
 pub mod scheduler;
 mod watch;
 
@@ -111,6 +115,21 @@ pub struct ServeOpts {
     /// Debug: launch every program eagerly, ignoring the manifest's `graph`
     #[arg(long)]
     pub eager: bool,
+
+    /// Time every kernel through CUPTI's hardware event system, folded into
+    /// four counters per rank
+    #[arg(long)]
+    pub trace: bool,
+
+    /// With `--trace`: the port this rank serves `/kern/metrics` and
+    /// `/kern/trace/rotate` on
+    #[arg(long, requires = "trace")]
+    pub trace_port: Option<u16>,
+
+    /// With `--trace`: keep every step on disk under this directory, as
+    /// Parquet files per rank and quarter hour
+    #[arg(long, requires = "trace")]
+    pub trace_dir: Option<PathBuf>,
 
     /// Rows per sequence of a step: a shape some program of the manifest
     /// declares (1 for a plain step, its block for a speculative round).
@@ -228,7 +247,15 @@ impl PoolOpts {
     }
 }
 
+/// Serves until serving ends, however it ends, then gives the trace its
+/// last collect.
 pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
+    let served = run(o, art);
+    kernels::finish();
+    served
+}
+
+fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
     let weights = kern_run::Weights::parse(&art.weights)?;
     info!(
         manifest = %art.manifest.display(),
@@ -242,6 +269,19 @@ pub fn serve(o: ServeOpts, art: Artifacts) -> Result<()> {
     let manifest =
         Verified::from_json(&manifest_json).with_context(|| format!("manifest {}", art.manifest.display()))?;
     log_manifest(&manifest);
+    if o.trace {
+        use sha2::Digest;
+        let meta = vec![
+            ("kern.rank".to_string(), o.rank.unwrap_or(0).to_string()),
+            ("kern.model".to_string(), manifest.model.clone()),
+            ("kern.manifest_sha256".to_string(), hex::encode(sha2::Sha256::digest(manifest_json.as_bytes()))),
+            ("kern.version".to_string(), kern_run::VERSION.clone()),
+        ];
+        let board = kernels::start(&manifest, o.rank.unwrap_or(0), o.trace_dir.clone(), meta)?;
+        if let Some(port) = o.trace_port {
+            kernels::serve(board, port)?;
+        }
+    }
     let model_path = weights.dirs().remove(0);
     let served_name = o.served_model_name.clone().unwrap_or_else(|| manifest.model.clone());
     let samples = Protocol::check_unsampled(&manifest)?.samples();
@@ -440,7 +480,7 @@ where
                 // A scheduler that panicked would leave the port open
                 // and every request hanging: the process goes with it.
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(sched, backend))).is_err() {
-                    std::process::exit(101);
+                    crate::kernels::exit(101);
                 }
             }
             Err(e) => {

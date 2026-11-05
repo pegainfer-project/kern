@@ -545,7 +545,7 @@ fn decode_tier(
                 }
             };
             error!("{why}");
-            std::process::exit(1);
+            crate::kernels::exit(1);
         }
     });
     Ok(Pd { d, pools, mirrors })
@@ -568,7 +568,7 @@ fn listen(stage: u64, mut r: TcpStream, tx: mpsc::Sender<Event>, last: bool) {
         }
     };
     error!(stage, "{why}");
-    std::process::exit(1);
+    crate::kernels::exit(1);
 }
 
 impl PpHead {
@@ -1096,7 +1096,7 @@ impl PpHead {
         loop {
             if let Err(e) = self.tick() {
                 error!("pipeline head: {e:#}");
-                std::process::exit(1);
+                crate::kernels::exit(1);
             }
         }
     }

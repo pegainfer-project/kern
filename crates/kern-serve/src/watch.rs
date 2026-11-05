@@ -4,9 +4,10 @@
 //!
 //! Every member watches its connections to the members it talks to (the
 //! head every rank and stage, each of those the head) on a thread of its
-//! own. A connection the other end closed ends the process at once,
-//! without unwinding: the thread that would unwind may be blocked on its
-//! device, and dropping a runtime waits on the device too. A member that
+//! own. A connection the other end closed ends the process without
+//! unwinding, once the trace's last collect is on disk or has had its few
+//! seconds (`kernels::exit`): the thread that would unwind may be blocked
+//! on its device, and dropping a runtime waits on the device too. A member that
 //! exits for any reason closes its connections, so death travels through
 //! the head to the whole group in two hops.
 
@@ -32,7 +33,7 @@ pub fn exit_with(s: &TcpStream, peer: String) -> Result<()> {
             }
         }
         error!(%peer, "the connection closed: the group is gone, exiting");
-        std::process::exit(1);
+        crate::kernels::exit(1);
     })?;
     Ok(())
 }

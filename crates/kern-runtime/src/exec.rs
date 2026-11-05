@@ -24,7 +24,7 @@
 //! stopping the thread that issues takes a [`Mark`] and waits on it from
 //! another thread.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,7 +36,7 @@ use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
 use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn};
 use crate::device::Pinned;
 use crate::error::{bail, cuda_check};
-use crate::{Error, Result, Runtime};
+use crate::{trace, Error, Result, Runtime};
 use kern_manifest::types::BufferKind;
 
 /// A point on the compute stream: everything issued before
@@ -359,7 +359,23 @@ impl Runtime {
         self.require_nccl()?;
         let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
         self.ctx.bind_to_thread()?;
-        self.replay(prog, &vars)
+        if !trace::on() {
+            return self.replay(prog, &vars);
+        }
+        let seq = trace::begin(trace::Issue {
+            program: program.to_string(),
+            vars: vars.named(&self.manifest, &prog.vars),
+            graph: false,
+            kv: self.take_kv(),
+            kernels: Arc::new([]),
+        });
+        prog.call_ranges.iter().enumerate().try_for_each(|(c, &(lo, hi))| {
+            trace::tagged(seq, Some(c), || {
+                prog.launches[lo..hi].iter().try_for_each(|l| {
+                    self.launch(l, &vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })
+                })
+            })
+        })
     }
 
     /// Capture one program into an instantiated CUDA graph. Grid dims and
@@ -385,26 +401,85 @@ impl Runtime {
             },
             "cuStreamBeginCapture",
         )?;
-        let replayed = self.replay(prog, &vars);
+        let replayed = match trace::on() {
+            true => self.replay_counted(prog, &vars).map(Some),
+            false => self.replay(prog, &vars).map(|_| None),
+        };
         // Always end the capture, even on error — a stream stuck in capture
         // mode poisons every later operation on it.
         let mut graph: sys::CUgraph = std::ptr::null_mut();
         let end = unsafe { sys::cuStreamEndCapture(self.stream.cu_stream(), &mut graph) };
-        if let Err(e) = replayed {
-            if !graph.is_null() {
-                unsafe { sys::cuGraphDestroy(graph) };
+        let counted = match replayed {
+            Ok(c) => c,
+            Err(e) => {
+                if !graph.is_null() {
+                    unsafe { sys::cuGraphDestroy(graph) };
+                }
+                return Err(e);
             }
-            return Err(e);
-        }
+        };
         cuda_check(end, "cuStreamEndCapture")?;
         let mut exec: sys::CUgraphExec = std::ptr::null_mut();
         let r = unsafe { sys::cuGraphInstantiateWithFlags(&mut exec, graph, 0) };
         unsafe { sys::cuGraphDestroy(graph) };
         cuda_check(r, "cuGraphInstantiateWithFlags")?;
+        if let Some(kernels) = counted {
+            self.traced.insert((program.to_string(), vars.clone()), kernels.into());
+        }
         if let Some(old) = self.graphs.insert((program.to_string(), vars), exec) {
             unsafe { sys::cuGraphExecDestroy(old) };
         }
         Ok(())
+    }
+
+    fn take_kv(&self) -> Option<u64> {
+        Some(self.kv.swap(trace::NO_KV, Ordering::Relaxed)).filter(|&v| v != trace::NO_KV)
+    }
+
+    /// Replay into the capture, keeping per kernel node the call that
+    /// added it: the graph is a chain, so this is the order they run in.
+    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<Vec<u32>> {
+        let mut seen = BTreeSet::new();
+        let mut calls = Vec::new();
+        for (c, &(lo, hi)) in prog.call_ranges.iter().enumerate() {
+            for l in &prog.launches[lo..hi] {
+                self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
+            }
+            calls.extend(std::iter::repeat_n(c as u32, self.new_kernel_nodes(&mut seen)?));
+        }
+        Ok(calls)
+    }
+
+    /// Kernel nodes in the stream's capture graph not in `seen`, which
+    /// takes every node.
+    fn new_kernel_nodes(&self, seen: &mut BTreeSet<usize>) -> Result<usize> {
+        let mut status = sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE;
+        let mut graph: sys::CUgraph = std::ptr::null_mut();
+        cuda_check(
+            unsafe {
+                sys::cuStreamGetCaptureInfo_v3(
+                    self.stream.cu_stream(),
+                    &mut status,
+                    std::ptr::null_mut(),
+                    &mut graph,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            "cuStreamGetCaptureInfo",
+        )?;
+        let mut n = 0;
+        cuda_check(unsafe { sys::cuGraphGetNodes(graph, std::ptr::null_mut(), &mut n) }, "cuGraphGetNodes")?;
+        let mut nodes = vec![std::ptr::null_mut(); n];
+        cuda_check(unsafe { sys::cuGraphGetNodes(graph, nodes.as_mut_ptr(), &mut n) }, "cuGraphGetNodes")?;
+        let mut kernels = 0;
+        for node in nodes.into_iter().filter(|node| seen.insert(*node as usize)) {
+            let mut t = sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_EMPTY;
+            cuda_check(unsafe { sys::cuGraphNodeGetType(node, &mut t) }, "cuGraphNodeGetType")?;
+            kernels += (t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL) as usize;
+        }
+        Ok(kernels)
     }
 
     /// Whether `capture(program, vars)` has been done for exactly these var
@@ -456,7 +531,21 @@ impl Runtime {
         self.require_ready()?;
         let exec = self.graph(program, vars)?;
         self.ctx.bind_to_thread()?;
-        cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")
+        let launch = || cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch");
+        if !trace::on() {
+            return launch();
+        }
+        let prog = &self.programs[program];
+        let dense = Dense::check(&self.manifest, vars, &prog.vars)?;
+        let kernels = self.traced.get(&(program.to_string(), dense.clone())).cloned().unwrap_or_else(|| Arc::new([]));
+        let seq = trace::begin(trace::Issue {
+            program: program.to_string(),
+            vars: dense.named(&self.manifest, &prog.vars),
+            graph: true,
+            kv: self.take_kv(),
+            kernels,
+        });
+        trace::tagged(seq, None, launch)
     }
 
     /// Issue every launch of a compiled program onto the stream (no sync).
