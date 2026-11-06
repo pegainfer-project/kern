@@ -53,12 +53,12 @@ unsafe impl Send for Loaded {}
 
 fn load(
     m: &Verified,
-    kernels: &Path,
+    kernels: Option<&Path>,
     weights: &[PathBuf],
     gpu: usize,
     topology: Option<&Topology>,
 ) -> kern_runtime::Result<Loaded> {
-    let mut rt = kern_runtime::Runtime::load(m, Some(kernels), gpu, None, topology)?;
+    let mut rt = kern_runtime::Runtime::load(m, kernels, gpu, None, topology)?;
     rt.load_weights(&Safetensors::open(weights)?)?;
     Ok(Loaded(rt))
 }
@@ -66,7 +66,9 @@ fn load(
 #[pymethods]
 impl Runtime {
     /// Verify the manifest, load its kernels onto `gpu` and its weights out
-    /// of `weights` (safetensors files, or directories of shards). A
+    /// of `weights` (safetensors files, or directories of shards). Kernels
+    /// come from `kernels` or, without one, from the registry the manifest
+    /// names (fetched into `$KERN_CACHE_DIR`, by default `~/.cache/kern`). A
     /// manifest with a topology takes this rank's place in every group,
     /// `{group: (index, size)}`.
     #[new]
@@ -74,7 +76,7 @@ impl Runtime {
     fn new(
         py: Python<'_>,
         manifest: PathBuf,
-        kernels: PathBuf,
+        kernels: Option<PathBuf>,
         weights: Vec<PathBuf>,
         gpu: usize,
         topology: Option<BTreeMap<String, (u64, u64)>>,
@@ -86,7 +88,7 @@ impl Runtime {
         let topology = topology.map(|t| Topology {
             groups: t.into_iter().map(|(g, (index, size))| (g, GroupRank { index, size })).collect(),
         });
-        let rt = py.detach(|| load(&m, &kernels, &weights, gpu, topology.as_ref())).map_err(runtime_err)?.0;
+        let rt = py.detach(|| load(&m, kernels.as_deref(), &weights, gpu, topology.as_ref())).map_err(runtime_err)?.0;
         Ok(Runtime { rt })
     }
 
