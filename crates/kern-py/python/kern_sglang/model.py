@@ -135,8 +135,9 @@ class Head(LogitsProcessor):
         super().__init__(config)
         self.head = head
 
-    def _compute_lm_head(self, hidden_states, lm_head, embedding_bias=None):
-        return self.head(hidden_states)
+    def _compute_lm_head(self, hidden_states, lm_head, embedding_bias=None, out=None):
+        logits = self.head(hidden_states)
+        return logits if out is None else out.copy_(logits)
 
 
 class KernForCausalLM(nn.Module):
