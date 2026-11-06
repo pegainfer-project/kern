@@ -9,8 +9,10 @@ adapter binds them, so the contract is:
 
 - host states `<kind>.l<i>` for model layer i, by kind: `k`, `v`
   (`[pages, 64, heads, dim]` over SGLang's token arrays), `mla`
-  (`[pages, 1, 64, dim]` over the latent's rows), `conv` and `ssm`
-  (`[slots, ...]`).
+  (`[pages, 1, 64, dim]` over the latent's rows), `idx` (`[pages, bytes]`,
+  a DSA layer's index-K cache: a page's keys, then their scales), `conv`
+  and `ssm` (`[slots, ...]`). A manifest with `idx` states under DCP has
+  SGLang shard the index-K by token, as it does the latent.
 - inputs, each copied if the manifest declares it: `token_ids`,
   `positions`, `slot_mapping`, `seq_lens`, `cu_seqlens_q`, `block_table`
   (`[seqs, W]` page ids), and the line tables (`[state layers, seqs]` slot
@@ -133,8 +135,9 @@ class Head(LogitsProcessor):
         super().__init__(config)
         self.head = head
 
-    def _compute_lm_head(self, hidden_states, lm_head, embedding_bias=None):
-        return self.head(hidden_states)
+    def _compute_lm_head(self, hidden_states, lm_head, embedding_bias=None, out=None):
+        logits = self.head(hidden_states)
+        return logits if out is None else out.copy_(logits)
 
 
 class KernForCausalLM(nn.Module):
@@ -164,6 +167,9 @@ class KernForCausalLM(nn.Module):
             self.offsets = torch.arange(self.b["cu_seqlens_q"].shape[0], dtype=torch.int32, device="cuda")
         p = get_parallel()
         self.dcp = (p.dcp_size, p.dcp_rank) if p.dcp_enabled else (1, 0)
+        if self.dcp[0] > 1 and any(kind == "idx" for _, kind, _, _ in self.states):
+            from sglang.srt.layers.dcp.layout import set_dsa_shards_index_k
+            set_dsa_shards_index_k()
         self.logits_processor = Head(self.config, self.head)
         self.lm_head = nn.Identity()
         self.start_layer, self.end_layer = 0, self.config.num_hidden_layers
@@ -183,6 +189,7 @@ class KernForCausalLM(nn.Module):
             "k": lambda l, h: full.k_buffer[at[l]].view(-1, *h["shape"][1:]),
             "v": lambda l, h: full.v_buffer[at[l]].view(-1, *h["shape"][1:]),
             "mla": lambda l, h: full.kv_buffer[at[l]].view(-1, h["shape"][2], 1, h["shape"][3]).transpose(1, 2),
+            "idx": lambda l, h: full.index_key_cache.buffer[at[l]],
             "conv": lambda l, h: cache.conv[0][slot[l]],
             "ssm": lambda l, h: cache.temporal[slot[l]],
         }
