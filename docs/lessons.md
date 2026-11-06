@@ -3,6 +3,33 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-11-05, `pdl` is the kernel's promise, and no neighbour covers for it
+
+K3.1 D moved q_b + absorb to lane 1, beside the indexer chain (lanes' first real model). s64 was
+byte-identical, but long (8 rows x 20000 teacher-forced steps) parted from main from step 2079 on, and the
+64-row x 128k bench now and then wedged the whole group: rank 0's GPU at 100% and not moving, the other
+ranks trapping in their Lamport timeout after 30 s. The cause was not lanes: TRT-LLM gen's sparse MLA
+kernel `LDG`s `ptrSeqLensKv` (`idx_tlen`) **before** `griddepcontrol.wait` (SASS `ACQBULK`), yet the
+manifest declared it `pdl: true`. On main its predecessor was absorb, a non-PDL kernel that releases
+nothing until it is done, so the false promise was never tested. With absorb moved away, the attention's
+same-lane predecessor became the DCP select, which calls `launch_dependents` at entry; the attention
+reached the SMs early and read the previous layer's `idx_tlen`. Up to 2048 of context every layer and rank
+selects the same count, so the stale value happened to be right; past 2048 the layers differ, so the
+errors start near step 2048, and so does the hang (how the kernel got stuck was not taken apart; it has not
+recurred since the fix). The key step in the hunt: a dump of the last layer's indexer and q was
+byte-identical everywhere, only the next token differed, so the error sat after the indexer, in the
+attention's reads.
+
+Fix: the sparse MLA is never a PDL launch (the generator drops the switch). Lanes' 2100-step
+teacher-forced run is byte-identical to main; 64 rows x 128k for 2 x 2000 steps wedged in the first round
+before the fix and finishes after it, with the same next tokens as main.
+
+Rule: `pdl` is a property of the kernel itself (only weights are read before the wait), judged against
+the kernel's SASS, never accepted because "it ran right where it is now". Reordering calls, or adding a
+lane that replaces a PDL call's predecessor, tests that promise; when "the result changed after a
+reorder", look first at whether the new predecessor triggers at entry and what its successor reads
+before the wait.
+
 ## 2026-10-28，一个请求在哪儿，就由谁来退它；加了新的等待阶段，模拟里也要有它
 
 #99 的 Codex review：流水线头在 lease 时就把请求在 decode tier 上标成 admitted，然后才去池里

@@ -295,6 +295,46 @@ shared_mem、标量实参、pack 字段），其余 var 不属于它，caller �
 捕获（workspace 预分配，算法启发式在捕获时定死，顺带省了每步的 CPU
 开销）；`run_captured` 校验 vars 与捕获时一致（var 值烧死在图里）。
 
+**Lanes (2026-11-05).** When a manifest's calls carry `lane` / `after` (manifest.md, Lanes), loading
+makes each side lane a non-blocking stream with its own cublasLt handle + workspace and cuBLAS handle +
+workspace (of lane 0's sizes, so the heuristics pick the same algorithm and the output stays
+byte-identical; two GEMMs side by side never share a workspace), and one event per lane, lane 0
+included. Replaying a whole program (eager `enqueue` and graph `capture` take the same path, traced or
+not) records, before a call, an event on the stream of each lane in `after` and makes the call's stream
+wait on it; the call's launches then go to its own lane's stream with its own lane's BLAS handles.
+Eagerly these are concurrent streams; under capture, parallel branches of the graph. A program starts
+and ends on lane 0 (verifier), so fetch / mark / the next program / the host stream of `enqueue_after`
+are unchanged; collectives are on lane 0 only (verifier) and still go to the compute stream. Running a
+range of calls (the harness, `kern test`, the profiler) stays serial on lane 0 in list order: the list
+order is a valid serial order, and the verifier's no-race rule makes it equal to any concurrent one.
+
+Tracing runs the same lanes. Eagerly the tracer tags each call as it is issued. Under capture each
+kernel node is keyed to the call that added it by the node's local id, which a kernel record of the
+graph exec carries (the low half of CUPTI's graph node id; instantiation keeps local ids), so a
+record names its call whatever order the branches ran in.
+
+PDL: capture records **every** incoming edge of a launch with programmatic stream serialization as a
+programmatic edge, the one waited for through a cross-stream event included (`cuGraphGetEdges_v2` reads
+type 1). Whether a dependent reaches an SM before a predecessor on another lane finishes is the
+driver's choice, and GB300 / CUDA 13.0 shows both: when a side lane forks from the graph's root the
+join waits for both sides to finish; when it forks from an inner node the join launches early and
+waits in `griddepcontrol.wait`. Eagerly the attribute only relaxes the same-stream edge, and an event
+wait is a full dependency. Either way the manifest's `pdl` promise holds, so the runtime keeps each
+launch's `pdl` as written. A lane replaces a call's same-lane predecessor, which tests that promise: K3.1
+D's attention followed the non-PDL absorb; with absorb moved to lane 1 it followed the select, which
+releases its dependents at entry, and that exposed its false `pdl` reading `lens` before the wait
+(lessons.md 2026-11-05).
+
+The gate is `crates/kern-runtime/examples/lanes.rs` (`tools/kernels-src/lanes.cu`): one program written
+on one lane and on two (lane 0 two 500 µs steps, lane 1 two 1 ms steps, a cuBLAS GEMM on each, a PDL
+join; a step releases its dependents at once). Every checked run takes a new input and checks the
+join's result; the four runs (eager / graph x one lane / two lanes) give byte-identical outputs, and the
+two lanes' GEMMs are byte-identical. One GB300 (tray03): serial 3.02 ms, two lanes 2.02 ms (the longest
+lane). With `--trace` the same runs go through CUPTI: the laned program stays at 2.02 ms and every one of
+its kernels is named by the call that launched it. Negative control: without the join's
+`griddepcontrol.wait`, the one-lane program (the join's PDL edge to its predecessor on the same stream)
+reads a stale value and the gate fails.
+
 **greedy 采样已下沉 GPU**：`tools/kernels-src/argmax.cu` 两段式行 argmax（64 block
 分部归约 + 1 block 收尾；单 block 版 nsys 实测 55.7µs/步——单 SM 读 300KB
 只有 5.5GB/s，两段式 5.5µs），平局取最小下标与 CPU 扫描语义一致，折叠成

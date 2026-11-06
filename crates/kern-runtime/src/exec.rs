@@ -23,6 +23,18 @@
 //! A caller that wants to know when the device got somewhere without
 //! stopping the thread that issues takes a [`Mark`] and waits on it from
 //! another thread.
+//!
+//! A program with lanes (manifest.md, Lanes) runs each side lane on a
+//! stream of its own, with cuBLAS handles and workspaces of lane 0's sizes
+//! so a GEMM picks the algorithm it would pick on lane 0. Before a call,
+//! every lane it runs `after` records its event and the call's stream
+//! waits on it: concurrent streams when issued eagerly, parallel branches
+//! of the graph under capture. The program starts and ends on the compute
+//! stream (verify), so everything around it is unchanged. Tracing runs
+//! the same lanes: the tracer tags each call as it is issued and the
+//! capture keys each kernel node to its call. Running a range
+//! of calls (the harness, the profiler) stays on lane 0 in list order,
+//! which verify made equal to any concurrent run.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
@@ -30,10 +42,11 @@ use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use cudarc::driver::{sys, CudaContext};
+use cudarc::cublaslt::CudaBlasLT;
+use cudarc::driver::{sys, CudaContext, CudaStream};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
-use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn};
+use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn, Blas};
 use crate::device::Pinned;
 use crate::error::{bail, cuda_check};
 use crate::{trace, Error, Result, Runtime};
@@ -183,6 +196,54 @@ impl Signals {
 impl Drop for Signals {
     fn drop(&mut self) {
         unsafe { sys::cuModuleUnload(self.module) };
+    }
+}
+
+/// A side lane's stream and the BLAS handles that launch on it.
+struct Lane {
+    stream: Arc<CudaStream>,
+    blt: CudaBlasLT,
+    blas: Blas,
+}
+
+/// The manifest's side lanes, and one event per lane, lane 0's first,
+/// that a call running after the lane waits on.
+pub(crate) struct Lanes {
+    side: Vec<Lane>,
+    events: Vec<sys::CUevent>,
+}
+
+impl Lanes {
+    /// Streams and handles for lanes `1..=count` and events for `0..=count`;
+    /// nothing for a manifest without side lanes.
+    pub(crate) fn new(ctx: &Arc<CudaContext>, count: usize) -> Result<Lanes> {
+        let side = (0..count)
+            .map(|_| {
+                let stream = ctx.new_stream()?;
+                Ok(Lane { blt: CudaBlasLT::new(stream.clone())?, blas: Blas::new(&stream)?, stream })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let event = |_| {
+            let mut ev = std::ptr::null_mut();
+            cuda_check(
+                unsafe { sys::cuEventCreate(&mut ev, sys::CUevent_flags::CU_EVENT_DISABLE_TIMING as u32) },
+                "cuEventCreate(lane)",
+            )
+            .map(|()| ev)
+        };
+        let events = if count == 0 { Vec::new() } else { (0..=count).map(event).collect::<Result<Vec<_>>>()? };
+        Ok(Lanes { side, events })
+    }
+}
+
+impl Drop for Lanes {
+    fn drop(&mut self) {
+        for lane in &self.side {
+            let _ = lane.stream.synchronize();
+        }
+        for &ev in &self.events {
+            unsafe { sys::cuEventDestroy_v2(ev) };
+        }
     }
 }
 
@@ -367,15 +428,9 @@ impl Runtime {
             vars: vars.named(&self.manifest, &prog.vars),
             graph: false,
             kv: self.take_kv(),
-            kernels: Arc::new([]),
+            kernels: Arc::default(),
         });
-        prog.call_ranges.iter().enumerate().try_for_each(|(c, &(lo, hi))| {
-            trace::tagged(seq, Some(c), || {
-                prog.launches[lo..hi].iter().try_for_each(|l| {
-                    self.launch(l, &vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })
-                })
-            })
-        })
+        self.replay_each(prog, &vars, |c, issue| trace::tagged(seq, Some(c), issue))
     }
 
     /// Capture one program into an instantiated CUDA graph. Grid dims and
@@ -436,23 +491,23 @@ impl Runtime {
         Some(self.kv.swap(trace::NO_KV, Ordering::Relaxed)).filter(|&v| v != trace::NO_KV)
     }
 
-    /// Replay into the capture, keeping per kernel node the call that
-    /// added it: the graph is a chain, so this is the order they run in.
-    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<Vec<u32>> {
+    /// Replay into the capture, keeping per kernel node, by its local id,
+    /// the call that added it.
+    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<BTreeMap<u32, u32>> {
         let mut seen = BTreeSet::new();
-        let mut calls = Vec::new();
-        for (c, &(lo, hi)) in prog.call_ranges.iter().enumerate() {
-            for l in &prog.launches[lo..hi] {
-                self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
-            }
-            calls.extend(std::iter::repeat_n(c as u32, self.new_kernel_nodes(&mut seen)?));
-        }
+        let mut calls = BTreeMap::new();
+        self.replay_each(prog, vars, |c, issue| {
+            issue()?;
+            calls.extend(self.new_kernel_nodes(&mut seen)?.into_iter().map(|n| (n, c as u32)));
+            Ok(())
+        })?;
         Ok(calls)
     }
 
-    /// Kernel nodes in the stream's capture graph not in `seen`, which
-    /// takes every node.
-    fn new_kernel_nodes(&self, seen: &mut BTreeSet<usize>) -> Result<usize> {
+    /// The local ids of the kernel nodes in the capture graph not in
+    /// `seen`, which takes every node. Side lanes capture into lane 0's
+    /// graph, so their nodes are there too.
+    fn new_kernel_nodes(&self, seen: &mut BTreeSet<usize>) -> Result<Vec<u32>> {
         let mut status = sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE;
         let mut graph: sys::CUgraph = std::ptr::null_mut();
         cuda_check(
@@ -473,11 +528,13 @@ impl Runtime {
         cuda_check(unsafe { sys::cuGraphGetNodes(graph, std::ptr::null_mut(), &mut n) }, "cuGraphGetNodes")?;
         let mut nodes = vec![std::ptr::null_mut(); n];
         cuda_check(unsafe { sys::cuGraphGetNodes(graph, nodes.as_mut_ptr(), &mut n) }, "cuGraphGetNodes")?;
-        let mut kernels = 0;
+        let mut kernels = Vec::new();
         for node in nodes.into_iter().filter(|node| seen.insert(*node as usize)) {
             let mut t = sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_EMPTY;
             cuda_check(unsafe { sys::cuGraphNodeGetType(node, &mut t) }, "cuGraphNodeGetType")?;
-            kernels += (t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL) as usize;
+            if t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL {
+                kernels.push(trace::node(node)?);
+            }
         }
         Ok(kernels)
     }
@@ -537,7 +594,7 @@ impl Runtime {
         }
         let prog = &self.programs[program];
         let dense = Dense::check(&self.manifest, vars, &prog.vars)?;
-        let kernels = self.traced.get(&(program.to_string(), dense.clone())).cloned().unwrap_or_else(|| Arc::new([]));
+        let kernels = self.traced.get(&(program.to_string(), dense.clone())).cloned().unwrap_or_default();
         let seq = trace::begin(trace::Issue {
             program: program.to_string(),
             vars: dense.named(&self.manifest, &prog.vars),
@@ -548,15 +605,60 @@ impl Runtime {
         trace::tagged(seq, None, launch)
     }
 
-    /// Issue every launch of a compiled program onto the stream (no sync).
+    /// Issue every launch of a compiled program, each call on its lane
+    /// after the lanes it names (no sync).
     pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &Dense) -> Result<()> {
-        for l in &prog.launches {
-            self.launch(l, vars).map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })?;
+        self.replay_each(prog, vars, |_, issue| issue())
+    }
+
+    /// [`Runtime::replay`], with each call's launches issued through
+    /// `each(call index, issue)`: the tracer tags them, the capture counts
+    /// the nodes they add.
+    fn replay_each(
+        &self,
+        prog: &CompiledProgram,
+        vars: &Dense,
+        mut each: impl FnMut(usize, &dyn Fn() -> Result<()>) -> Result<()>,
+    ) -> Result<()> {
+        for (c, (&(lo, hi), (lane, after))) in prog.call_ranges.iter().zip(&prog.lanes).enumerate() {
+            for &from in after {
+                let ev = self.lanes.events[from];
+                cuda_check(unsafe { sys::cuEventRecord(ev, self.stream_of(from).cu_stream()) }, "cuEventRecord(lane)")?;
+                cuda_check(
+                    unsafe { sys::cuStreamWaitEvent(self.stream_of(*lane).cu_stream(), ev, 0) },
+                    "cuStreamWaitEvent(lane)",
+                )?;
+            }
+            each(c, &|| {
+                prog.launches[lo..hi].iter().try_for_each(|l| {
+                    self.launch_on(*lane, l, vars)
+                        .map_err(|e| Error::Call { context: l.ctx.clone(), source: Box::new(e) })
+                })
+            })?;
         }
         Ok(())
     }
 
+    fn stream_of(&self, lane: usize) -> &Arc<CudaStream> {
+        match lane {
+            0 => &self.stream,
+            l => &self.lanes.side[l - 1].stream,
+        }
+    }
+
+    /// One launch on lane 0, the compute stream.
     pub(crate) fn launch(&self, l: &Launch, vars: &Dense) -> Result<()> {
+        self.launch_on(0, l, vars)
+    }
+
+    fn launch_on(&self, lane: usize, l: &Launch, vars: &Dense) -> Result<()> {
+        let (stream, blt, blas) = match lane {
+            0 => (&self.stream, &self.blt, &self.blas),
+            l => {
+                let s = &self.lanes.side[l - 1];
+                (&s.stream, &s.blt, &s.blas)
+            }
+        };
         if let Some((v, lo, hi)) = &l.when {
             if !(*lo..=*hi).contains(&v.eval(vars)?) {
                 return Ok(());
@@ -577,14 +679,11 @@ impl Runtime {
             images.push(m);
         }
         match &l.kind {
-            LaunchKind::Gemm { beta, algo: None } => gemm_bf16_tn(&self.blt, &self.stream, &vals, *beta),
-            LaunchKind::Gemm { beta, algo: Some(algo) } => {
-                gemm_bf16_tn_pinned(&self.blt, &self.blas, &self.stream, &vals, *beta, algo)
-            }
-            LaunchKind::GemmF32 => gemm_bf16_tn_f32(&self.blas, &vals),
-            LaunchKind::GemmFp8 { f32_out, scale } => {
-                gemm_fp8_tn(&self.blt, &self.blas, &self.stream, &vals, *f32_out, *scale)
-            }
+            LaunchKind::Gemm { beta, algo: None } => gemm_bf16_tn(blt, stream, &vals, *beta),
+            LaunchKind::Gemm { beta, algo: Some(algo) } => gemm_bf16_tn_pinned(blt, blas, stream, &vals, *beta, algo),
+            LaunchKind::GemmF32 => gemm_bf16_tn_f32(blas, &vals),
+            LaunchKind::GemmFp8 { f32_out, scale } => gemm_fp8_tn(blt, blas, stream, &vals, *f32_out, *scale),
+            // Verify keeps collectives on lane 0, the stream NCCL is issued on.
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {
                 let grid = [grid[0].eval(vars)? as u32, grid[1].eval(vars)? as u32, grid[2].eval(vars)? as u32];
@@ -637,7 +736,7 @@ impl Runtime {
                     blockDimY: block[1],
                     blockDimZ: block[2],
                     sharedMemBytes: smem,
-                    hStream: self.stream.cu_stream(),
+                    hStream: stream.cu_stream(),
                     attrs: attrs.as_mut_ptr(),
                     numAttrs: num_attrs as u32,
                 };

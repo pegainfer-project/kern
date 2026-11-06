@@ -31,7 +31,10 @@
 //! another, under the same page ids. A region two stages touch is refused.
 //! A program run once after load, and one deriving weights while they
 //! load, is sliced per stage to the calls the stage's own calls need, so
-//! every stage derives its own tables and weights.
+//! every stage derives its own tables and weights; the slice runs in list
+//! order on lane 0, which a slice of a laned program may not be joined
+//! without. A driven program keeps its lanes, so a cut falls only where
+//! every lane is joined: a stage that ends inside a fork does not verify.
 //!
 //! The prompt reaches its first token the way it does unsplit, from the
 //! step or from a chunk program that hands one back; either way the last
@@ -206,7 +209,7 @@ fn stage(
         for c in p.calls.iter().rev() {
             if accesses(m, c).iter().any(|(b, _, d)| *d != Dir::In && needed.contains(*b)) {
                 needed.extend(reads(m, c).map(str::to_string));
-                kept.push(c.clone());
+                kept.push(Call { lane: 0, after: Vec::new(), ..c.clone() });
             }
         }
         if !kept.is_empty() {

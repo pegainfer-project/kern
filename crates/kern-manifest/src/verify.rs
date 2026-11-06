@@ -48,6 +48,12 @@
 //!      `axis: ranks` and no buffer fills `blocks`; a heads shard's
 //!      segments are non-empty, each width splits over the members and
 //!      together they span the members' slots
+//!  13. lanes (`crate::lanes`): lanes numbered densely from 0; `after`
+//!      names other lanes, each with an earlier call; a side lane starts
+//!      after something and the program ends on lane 0 after every call;
+//!      no two calls that may run side by side touch a buffer, state or
+//!      op scratch unless both only read it; a side lane holds no
+//!      collective, no peer buffer and nothing a peer buffer maps
 //!
 //! What this deliberately cannot check: kernel *behavior*, and the
 //! *semantics* of interface params (that a replacement implementation
@@ -1057,6 +1063,9 @@ fn diagnostics(m: &Manifest) -> Vec<String> {
             errs.push(format!("{} buffer `{bname}` is never written by any program", b.kind));
         }
     }
+
+    // 13. lanes
+    crate::lanes::check(m, &mut errs);
 
     // 9. unused declarations
     for name in m.buffers.keys() {

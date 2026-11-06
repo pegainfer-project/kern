@@ -37,7 +37,7 @@ _TOP = ["schema_version", "model", "chat", "constants", "vars", "topology", "sta
 _BUFFER = ["dtype", "shape", "kind", "fill", "domain", "bind"]
 _PROGRAM = ["batch", "once", "graph", "calls"]
 _LAUNCH = ["module", "entry", "params", "block", "grid", "shared_mem", "cluster", "pdl", "args"]
-_CALL = ["label", "op", "args"]
+_CALL = ["label", "op", "args", "lane", "after"]
 
 
 def program(calls, groups=None, rows=None, context=None, once=False, graph=False, derive=False):

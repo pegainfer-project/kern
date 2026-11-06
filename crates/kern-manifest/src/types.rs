@@ -1570,6 +1570,16 @@ pub struct Call {
     pub op: String,
     /// One argument per interface param, in order.
     pub args: Vec<Arg>,
+    /// The lane the call runs on (default `0`, the program's own lane): calls on one lane run in list order, calls on different lanes side by side unless `after` orders them, e.g. `1`. Cross-rank work stays on lane 0.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub lane: u8,
+    /// Lanes whose calls listed before this one all finish before it starts, e.g. `[0]` to fork a side lane off the program's lane or `[1]` to join one back; lane 0 with no earlier call is the program's start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<u8>,
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 /// A call argument, e.g. `{"buf": "hidden"}`, `{"state": "kv", "offset": 65536}`, `{"var": "tokens"}`, `{"i32": 2560}`, `{"rank": "ep"}`.

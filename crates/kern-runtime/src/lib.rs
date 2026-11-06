@@ -141,6 +141,8 @@ pub struct Runtime {
     blt: CudaBlasLT,
     /// cuBLAS handle (with its own workspace) for the f32-result GEMM built-in.
     blas: Blas,
+    /// The side lanes the manifest's programs run calls on.
+    lanes: exec::Lanes,
     /// What every `index_into` domain resolves against: the token slots a
     /// paged state holds, the sequence slots a per-sequence one.
     provision: Provision,
@@ -182,7 +184,7 @@ pub struct Runtime {
     /// one per batch bucket).
     graphs: BTreeMap<(String, Dense), sys::CUgraphExec>,
     /// Per graph captured while tracing: the call each kernel node came from.
-    traced: BTreeMap<(String, Dense), Arc<[u32]>>,
+    traced: BTreeMap<(String, Dense), Arc<BTreeMap<u32, u32>>>,
     /// While tracing, the sum of the `seq_len` fill last written, which
     /// the next issue takes ([`trace::NO_KV`]: none since the last).
     kv: std::sync::atomic::AtomicU64,

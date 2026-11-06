@@ -397,6 +397,25 @@
       "additionalProperties": false,
       "description": "One op call, e.g. `{\"label\": \"l0.attn\", \"op\": \"attn\", \"args\": [{\"buf\": \"q\"}, {\"state\": \"kv\"}, ...]}`.",
       "properties": {
+        "after": {
+          "description": "Lanes whose calls listed before this one all finish before it starts, e.g. `[0]` to fork a side lane off the program's lane or `[1]` to join one back; lane 0 with no earlier call is the program's start.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "Name of a numeric constant declared in constants.",
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
         "args": {
           "description": "One argument per interface param, in order.",
           "items": {
@@ -410,6 +429,23 @@
             "string",
             "null"
           ]
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "description": "The lane the call runs on (default `0`, the program's own lane): calls on one lane run in list order, calls on different lanes side by side unless `after` orders them, e.g. `1`. Cross-rank work stays on lane 0.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "description": "Name of a numeric constant declared in constants.",
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "The lane the call runs on (default `0`, the program's own lane): calls on one lane run in list order, calls on different lanes side by side unless `after` orders them, e.g. `1`. Cross-rank work stays on lane 0."
         },
         "op": {
           "description": "Name of the op called, e.g. `\"attn\"`.",

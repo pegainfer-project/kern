@@ -123,7 +123,15 @@ cut                          cut      流水线的一段：id、第几段、共�
     给 launch 加 `CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION`，
     核可以在前一个 launch 收尾时就上 SM，**manifest 承诺**该核在读写前一个
     launch 产出或消费的任何东西之前执行 `griddepcontrol.wait`，wait 之前只许
-    读 weight；verifier 不检查也检查不了，extern 不接受）、`when` 条件
+    读 weight；verifier 不检查也检查不了，extern 不接受。The claim is the
+    kernel's own and does not depend on what runs before it: a predecessor
+    that triggers late (or is not a PDL kernel at all) can hide a false
+    claim, and a new neighbour exposes it (lessons.md 2026-11-05). For a
+    call with `after`, "the launch before" is every predecessor: the
+    previous call on its lane and the latest call on each lane in `after`.
+    Stream capture records each of such a launch's incoming edges as a
+    programmatic edge and `griddepcontrol.wait` waits for all of them; see
+    runtime.md, Lanes)、`when` 条件
     （kernel 与 extern 都可写，`{"var": "tokens", "max": 16}`：var 在闭区间
     `[min, max]` 内才发射，两端可省；区间外该 launch 什么都不做。manifest
     没有控制流，一个 op 按形状选实现就写几个 launch 各管一段区间，例如小
@@ -170,8 +178,8 @@ cut                          cut      流水线的一段：id、第几段、共�
   `op` 名 + 接口实参（buffer/state 实参可带字节 `offset`，默认 0：kernel
   收到 base+offset——provider 用它寻址融合 buffer 里的视图如 qkv 的
   q/k/v 切片、state 里的逐层区域，offset 是 provider 布局算术的字面量，
-  runtime 只做加法；`label` 只给人看）。launch 几何在 impl 里，不在 call
-  里。
+  runtime 只做加法；`label` 只给人看）, plus an optional `lane` / `after`
+  (concurrent branches, see Lanes)。launch 几何在 impl 里，不在 call 里。
 
 **表达式**是封闭集合：常量、var 名（裸字符串，和 shape 一个写法）、
 `{"ceil_div": [e, c]}`、`{"mul": [e, c]}`、`{"add": [e, c]}`、
@@ -303,6 +311,38 @@ target+draft 权重同处一份 manifest，多一个 7 行的 `round` program，
 verifier 按 call 查都靠展开；weight buffer 的 dtype/shape 与 checkpoint 的
 safetensors header 重复——没有权重文件也要能 verify，load 时再对账。冗余在 manifest 不在 schema，
 "源码"是生成器。
+
+## Lanes: branches of one program that run side by side
+
+A call may name a `"lane": n` (default 0) and `"after": [l, …]` (default empty):
+
+```json
+{"label": "l3.mla_prep", "op": "mla_prep", "args": […]},
+{"label": "l3.q_b", "op": "q_b", "args": […], "lane": 1, "after": [0]},
+{"label": "l3.absorb", "op": "absorb", "args": […], "lane": 1},
+{"label": "l3.idx_qb", "op": "gemm_bf16", "args": […]},
+…
+{"label": "l3.attn", "op": "sparse_mla", "args": […], "after": [1]}
+```
+
+- Calls on one lane run in list order; calls on different lanes run side by side unless `after`
+  orders them. `after: [l]`: before this call starts, every call listed before it on lane `l` has
+  finished; when lane 0 has no call before it, that is the program's start. A fork is a side-lane call
+  with `after: [0]`; a join is a call with `after: [side]`.
+- Every edge points backwards, so the list order is always a valid serial order of the program:
+  `kern test`'s per-call spans, `kern cut`, the harness and the profiler still run it serially in list
+  order, and the verifier guarantees the serial and the concurrent runs give the same result.
+- Lane 0 is the program's own: the program starts and ends on it, and cross-rank work happens only on
+  lane 0, so every SPMD rank meets its peers in the same order (lane 0's program order).
+- **A manifest promise** (beside `pdl`; the verifier cannot see SASS): a kernel on a side lane waits for
+  nothing but the predecessors it was launched after — no grid-wide barrier that needs every block
+  resident at once, no spinning on a flag. The only kernels that wait are then cross-rank kernels on
+  lane 0 (waiting for the same call on a peer, which every rank issues in the same order) and PDL kernels
+  parked in `griddepcontrol.wait` (the hardware launches one only after every block of each of its
+  predecessors has started). A side lane's kernels always finish and give their SMs back: a lane 0
+  kernel that needs every block resident (DCP select) is slowed by a branch beside it, never deadlocked.
+- How the runtime carries it out (a stream per side lane with its own cuBLAS handles and workspaces, an
+  event recorded and waited for per `after` before a call) is in runtime.md, Lanes.
 
 ## 权重：`bind`
 
@@ -537,6 +577,15 @@ logits 与 token 与整份逐位同（serve.md「流水线」）。
     位置切、同一个组，且没有 `axis: ranks` 的 var、没有 `blocks` fill；
     heads 的段非空、每段行数与宽度非零、宽度被组大小整除、总字节 = 组大小
     × `bytes_per_seq`。每条都单独报出 state 名、期望值与实际值。
+14. lanes (`kern-manifest/src/lanes.rs`, happens-before by vector clocks): the lanes a manifest uses
+    are numbered densely from 0 (the runtime makes exactly that many streams); the lanes in `after` are
+    distinct, not the call's own, and have a call before this one (lane 0 excepted: the program's
+    start); a side lane's first call names `after`; a program's last call is on lane 0 and after every
+    call (every lane is joined). **No data races**: two calls neither of which is after the other touch
+    no common buffer, state or op scratch (every call of one op shares its scratch) unless both only
+    read it, at the granularity of the whole buffer or state, offsets ignored; a call on a side lane
+    calls no collective, takes no peer buffer, and touches no buffer or state any peer buffer is `of`.
+    The error names both calls, the resource and the side that writes.
 
 反序列化层已拒绝：未知字段（包括实参对象里的未知键）、重复名字、非法
 参数类型串。
@@ -551,6 +600,15 @@ runtime crate 的 phase-2 校验。唯一一条 runtime 替 verifier 查的 kern
 地址会把发起的 GPU 卡死到整机重启（GB300 实测），而 verifier 看不见
 SASS。簇内 barrier 的 `UTCBAR.2CTA.MULTICAST` 不碰全局内存，放行
 （MegaMoE 用它）。没有 cuobjdump 就拒绝装载。
+
+## v7 gains lanes (2026-11-05)
+
+A call gains an optional `lane` / `after` (see Lanes) and the verifier a rule 14. The change only adds:
+a manifest without lanes reads as before and serializes no new fields, so `schema_version` stays and the
+golden is regenerated in place. An older runtime refuses a manifest with lanes for its unknown fields.
+`kern cut` keeps a cut program's lanes as they are, so a cut can only fall where every lane is joined (a
+segment cut inside a fork fails rule 14); a sliced once / derive program runs on lane 0 in list order
+(the slice may have dropped the call that forked).
 
 ## v7 加采样 fill（2026-10-26）
 
