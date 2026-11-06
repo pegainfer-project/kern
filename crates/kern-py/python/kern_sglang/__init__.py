@@ -6,20 +6,22 @@ its forward is one or more programs of a manifest whose states are host
 states, bound to the tensors SGLang allocated for each layer.
 
     pip install kern-llm
-    KERN_MANIFEST=<manifest.json> KERN_KERNELS=<cubin dir> \\
+    KERN_MANIFEST=<manifest.json> [KERN_KERNELS=<cubin dir>] \\
       sglang serve --model-path <checkpoint> --page-size 64 --attention-backend trtllm_mha \\
         --mamba-radix-cache-strategy extra_buffer --disable-prefill-cuda-graph ...
 
-The plugin takes the checkpoint's own architecture name (`KERN_ARCHITECTURE`,
-e.g. `KimiK3ForConditionalGeneration`), so SGLang still recognizes the model
-as what it is (pools, cache policy, defaults) and only the class that runs it
-changes. It does nothing unless `KERN_MANIFEST` is set. The manifest
+With `KERN_MANIFEST` set, kern's class stands under every architecture name
+SGLang knows, so whatever checkpoint SGLang loads runs as the manifest while
+SGLang still treats the model as what its config names (pools, cache policy,
+defaults). Without it the plugin does nothing. Kernels come from
+`KERN_KERNELS` or, unset, from the registry the manifest's modules name. A
+flag that gives SGLang pools of another layout than the manifest's (page
+size, KV backend, state dtype) fails when kern binds them, naming the state.
+The manifest
 (`tools/qwen38_sglang.py` writes one; K3's comes from kern-k3-pp-prefill's
 `k3_sglang.py`) follows a small contract, see `model.py`.
 """
 import os
-
-ARCHITECTURE = os.environ.get("KERN_ARCHITECTURE", "Qwen3_5ForConditionalGeneration")
 
 
 def register() -> None:
@@ -29,4 +31,4 @@ def register() -> None:
 
     from kern_sglang.model import KernForCausalLM
 
-    ModelRegistry.models[ARCHITECTURE] = KernForCausalLM
+    ModelRegistry.models.update(dict.fromkeys(ModelRegistry.get_supported_archs(), KernForCausalLM))

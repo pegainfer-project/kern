@@ -292,8 +292,8 @@ changes is `kda_core`, built to read the window in SGLang's
 to the D build on the same inputs. SGLang runs `--tp-size 8 --dcp-size 8
 --nnodes 2`, page 64, bf16 KV, f32 KDA state, radix cache off,
 `--max-running-requests 64`, decode graphs up to 64 rows;
-`KERN_ARCHITECTURE=KimiK3ForConditionalGeneration` and `--load-format dummy`
-(kern reads its slices from files in under 2 minutes).
+and `--load-format dummy` (kern reads its slices from files in under 2
+minutes).
 
 - **Bind.** Every rank binds 162 host states (24 MLA, 69 × ssm and conv)
   against SGLang's pools. Eager steps with `KERN_CHECK_ERRORS=1` end with
