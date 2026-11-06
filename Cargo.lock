@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "kern-manifest"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "half",
  "schemars 1.2.2",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "kern-pool"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "hex",
  "kern-manifest",
@@ -2173,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "kern-py"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "kern-manifest",
  "kern-runtime",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "kern-run"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "kern-runtime"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "cudarc",
  "half",
@@ -2225,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "kern-serve"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "kern-test"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arrow-array",
