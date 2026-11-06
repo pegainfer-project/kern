@@ -17,9 +17,10 @@ use kern_serve::pd::{
     Shape, Standing, Tell,
 };
 use kern_serve::ranks::{Act, Answer, Order};
+use kern_serve::Stop;
 
 mod common;
-use common::{dealt, replicated, replicated_with, Rand};
+use common::{chain, dealt, replicated, replicated_with, Rand};
 
 /// The fake model: a row fed `t` hands back `next(t)`, whatever its position.
 fn next(t: i64) -> i64 {
@@ -272,10 +273,10 @@ fn a_tier_takes_one_reserve_at_a_time_none_while_busy_and_names_itself_in_its_pu
     let mut h = Handoffs::new(STAGES, 1);
     let mut hear =
         |h: &mut Handoffs, a: Ask| d.ask(a).unwrap().into_iter().for_each(|t| assert_eq!(h.hear(t).unwrap(), vec![]));
-    let a = h.reserve(1, 20, Relay::new(5, stop())).unwrap();
-    assert_eq!((h.ready(), h.reserve(2, 20, Relay::new(5, stop()))), (false, None));
+    let a = h.reserve(1, 20, Relay::new(5, Stop::new(stop(), 0))).unwrap();
+    assert_eq!((h.ready(), h.reserve(2, 20, Relay::new(5, Stop::new(stop(), 0)))), (false, None));
     hear(&mut h, a);
-    let a = h.reserve(2, 20, Relay::new(5, stop())).unwrap();
+    let a = h.reserve(2, 20, Relay::new(5, Stop::new(stop(), 0))).unwrap();
     hear(&mut h, a);
     assert_eq!((h.ready(), h.standing(1), h.standing(2)), (false, Standing::Granted, Standing::Unasked));
     assert_eq!(h.hear(Tell::Room).unwrap(), vec![]);
@@ -333,6 +334,36 @@ fn stop() -> StopPolicy {
     StopPolicy::new(EosPolicy::Ignore, vec![STOP])
 }
 
+/// D's tokens judged against the request: a stop token before `min_tokens`
+/// is relayed as an ordinary one and D decodes on, one at or past it ends
+/// the request and frees its seats, and D's last token at `min_tokens =
+/// max_tokens` is a length end even when it is a stop token.
+#[test]
+fn a_stop_token_before_min_tokens_is_an_ordinary_token() {
+    let mut r = Relays::new();
+    let stopped = Out::Finish { req: 1, why: FinishReason::Stop(StopCause::Token(STOP)) };
+    r.start(1, Relay::new(5, Stop::new(stop(), 3)));
+    let heard: Vec<Vec<Out>> =
+        [STOP, 4, STOP, STOP].iter().map(|&tok| r.hear(vec![(1, tok, false)]).unwrap()).collect();
+    let emit = |tok| Out::Emit { req: 1, tok };
+    assert_eq!(
+        heard,
+        vec![
+            vec![emit(STOP)],
+            vec![emit(4)],
+            vec![emit(STOP)],
+            vec![emit(STOP), stopped, Out::Ask(Ask::Abort { req: 1 })]
+        ]
+    );
+    r.start(2, Relay::new(2, Stop::new(stop(), 2)));
+    assert_eq!(r.hear(vec![(2, STOP, false)]).unwrap(), vec![Out::Emit { req: 2, tok: STOP }]);
+    assert_eq!(
+        r.hear(vec![(2, STOP, true)]).unwrap(),
+        vec![Out::Emit { req: 2, tok: STOP }, Out::Finish { req: 2, why: FinishReason::Length }]
+    );
+    assert_eq!(r.live(), 0);
+}
+
 /// What a client finally got.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum End {
@@ -344,6 +375,7 @@ enum End {
 struct Client {
     prompt: usize,
     max_tokens: usize,
+    min_tokens: usize,
     tokens: Vec<u32>,
     end: Option<End>,
     gone: bool,
@@ -384,7 +416,8 @@ impl World {
                 _ => 1 + rand.next(60),
             };
             let max_tokens = [1, 2, 3, 5, 9, 30][rand.next(6)];
-            clients.insert(req, Client { prompt, max_tokens, tokens: Vec::new(), end: None, gone: false });
+            let min_tokens = [0, rand.next(max_tokens + 1)][rand.next(2)];
+            clients.insert(req, Client { prompt, max_tokens, min_tokens, tokens: Vec::new(), end: None, gone: false });
         }
         World {
             h: Handoffs::new(STAGES, 0),
@@ -482,19 +515,20 @@ impl World {
             // One token: the prefill's own, and D never hears of it.
             self.waiting.pop_front();
             let c = self.clients.get_mut(&req).unwrap();
-            c.tokens = vec![first_token(req)];
-            let why = if first_token(req) == STOP {
-                FinishReason::Stop(StopCause::Token(STOP))
-            } else {
-                FinishReason::Length
-            };
+            let tok = first_token(req);
+            let why = Stop::new(stop(), c.min_tokens).cause(0, tok).map_or(FinishReason::Length, FinishReason::Stop);
+            c.tokens = vec![tok];
             c.end = Some(End::Finished(c.tokens.clone(), why));
             self.moved += 1;
             return;
         }
         match self.h.standing(req) {
             Standing::Unasked => {
-                if let Some(a) = self.h.reserve(req, c.prompt + c.max_tokens, Relay::new(c.max_tokens, stop())) {
+                if let Some(a) = self.h.reserve(
+                    req,
+                    c.prompt + c.max_tokens,
+                    Relay::new(c.max_tokens, Stop::new(stop(), c.min_tokens)),
+                ) {
                     self.apply(vec![Out::Ask(a)]);
                 }
             }
@@ -593,7 +627,8 @@ impl World {
 /// tokens are the front's alone, a busy tier is asked again
 /// once it has room, a one-token request never reaches D, and every
 /// client ends exactly once, a finished one with the greedy chain up to
-/// its stop or `max_tokens` whatever the order things arrived in.
+/// its stop or `max_tokens` whatever the order things arrived in, a stop
+/// token before `min_tokens` an ordinary one.
 #[test]
 fn every_schedule_hands_off_in_order_and_ends_every_request_once() {
     let mut rand = Rand(0x2545_F491_4F6C_DD1D);
@@ -615,15 +650,7 @@ fn every_schedule_hands_off_in_order_and_ends_every_request_once() {
             }
         }
         for (req, c) in &w.clients {
-            let mut chain = vec![first_token(*req)];
-            while chain.len() < c.max_tokens && *chain.last().unwrap() != STOP {
-                chain.push(next(*chain.last().unwrap() as i64) as u32);
-            }
-            let why = if *chain.last().unwrap() == STOP {
-                FinishReason::Stop(StopCause::Token(STOP))
-            } else {
-                FinishReason::Length
-            };
+            let (chain, why) = chain(first_token(*req), |t| next(t as i64) as u32, STOP, c.min_tokens, c.max_tokens);
             match &c.end {
                 Some(End::Finished(t, r)) => assert_eq!((t, *r), (&chain, why), "case {case}: request {req}"),
                 Some(End::Rejected) => assert!(c.prompt > P_LIMIT, "case {case}: request {req} rejected"),

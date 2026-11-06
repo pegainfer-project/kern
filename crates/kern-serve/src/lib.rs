@@ -29,9 +29,11 @@ mod pp;
 pub mod ranks;
 mod recorder;
 pub mod scheduler;
+mod stop;
 mod watch;
 
 pub use pp::pack;
+pub use stop::Stop;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;

@@ -80,7 +80,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use infront_engine::{FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, StopPolicy};
+use infront_engine::{FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId};
 use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::{landed, objects, snapshots, Chain, Checkpoint, Denied, Keys, Landing, Lease, Object, Probe};
@@ -97,6 +97,7 @@ use crate::pd::{cover, shapes, Gate, Load, Out, Pools, Push, Refusal, Req, Tell,
 use crate::pool;
 use crate::ranks::{Act, Landed};
 use crate::scheduler::Facts;
+use crate::Stop;
 
 /// How long the head keeps trying to reach a decode tier still loading.
 const CONNECT: Duration = Duration::from_secs(600);
@@ -133,7 +134,7 @@ struct Active {
     lease: Lease,
     ids: Vec<i64>,
     pos: usize,
-    stop: StopPolicy,
+    stop: Stop,
     sampling: Sampling,
     /// Where its rows stop for a checkpoint, ascending, each gone once
     /// attempted.
@@ -229,14 +230,14 @@ impl Pooled {
 struct Finish {
     at: usize,
     id: RequestId,
-    stop: StopPolicy,
+    stop: Stop,
     handoff: bool,
 }
 
 impl Finish {
     /// Complete a request on P, preserving why its first token stopped it.
     fn notes(&self, tok: u32) -> [Note; 2] {
-        let why = self.stop.classify(tok, |_| false).map_or(FinishReason::Length, FinishReason::Stop);
+        let why = self.stop.cause(0, tok).map_or(FinishReason::Length, FinishReason::Stop);
         [Note::Emit { id: self.id, tok }, Note::Finish { id: self.id, why }]
     }
 }
@@ -621,7 +622,7 @@ impl PpHead {
                 break;
             }
             let (prompt, max_tokens) = (q.request.prompt_tokens.len(), q.request.max_tokens);
-            let (gate, outs) = self.tiers.gate(id.raw(), prompt + max_tokens, max_tokens, &q.request.stop_policy)?;
+            let (gate, outs) = self.tiers.gate(id.raw(), prompt + max_tokens, max_tokens, &Stop::of(&q.request))?;
             self.apply(outs)?;
             let Gate::Lease(tier) = gate else { break };
             let Some(q) = self.waiting.front() else { unreachable!("the request gated is still at the front") };
@@ -692,7 +693,7 @@ impl PpHead {
             None => keep.into_iter().collect(),
         };
         let parts = parted.is_some();
-        let stop = q.request.stop_policy.clone();
+        let stop = Stop::of(&q.request);
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
         let a = Active { id, lease, ids, pos: start, stop, sampling, stops, keep, parts, handoff, passed: 0 };
@@ -1269,18 +1270,18 @@ impl PpHead {
 mod tests {
     use super::*;
     use infront_engine::SamplingParams;
-    use infront_engine::{spawn_scheduler, EosPolicy, Request, StopCause, Terminal};
+    use infront_engine::{spawn_scheduler, EosPolicy, Request, StopCause, StopPolicy, Terminal};
 
     /// Exercise the actual head completion notes through Front and the ledger,
     /// without loading a model. The bridge appends a compatibility EOS for a
     /// Stop terminal without a typed cause; losing that cause is observable on
     /// this stream even though its token/count fields still say one token.
-    fn first_token(stop: StopPolicy, tok: u32) -> (Vec<u32>, Terminal) {
+    fn first_token(stop: StopPolicy, min_tokens: usize, tok: u32) -> (Vec<u32>, Terminal) {
         let (notes, incoming) = mpsc::channel();
         let head = move |call| {
             let Call::Submit(q) = call else { return Ok(()) };
             notes.send(Note::Admit { id: q.id, cached: 0 })?;
-            let done = Finish { at: 0, id: q.id, stop: q.request.stop_policy, handoff: false };
+            let done = Finish { at: 0, id: q.id, stop: Stop::of(&q.request), handoff: false };
             for note in done.notes(tok) {
                 notes.send(note)?;
             }
@@ -1295,6 +1296,7 @@ mod tests {
             history_marks: Vec::new(),
             stop_policy: stop,
             max_tokens: 1,
+            min_tokens,
             logprobs: None,
             prompt_logprobs: None,
         });
@@ -1333,7 +1335,7 @@ mod tests {
             (EosPolicy::Ignore, vec![43], 43, StopCause::Token(43)),
         ];
         for (eos, stops, tok, cause) in cases {
-            let (tokens, terminal) = first_token(StopPolicy::new(eos, stops), tok);
+            let (tokens, terminal) = first_token(StopPolicy::new(eos, stops), 0, tok);
             assert_eq!(tokens, vec![tok]);
             assert!(
                 matches!(terminal, Terminal::Finished {
@@ -1346,8 +1348,16 @@ mod tests {
 
     #[test]
     fn first_token_non_stop_still_finishes_by_length() {
-        for (eos, tok) in [(EosPolicy::Token(2), 7), (EosPolicy::Ignore, 2)] {
-            let (tokens, terminal) = first_token(StopPolicy::new(eos, vec![43]), tok);
+        // A stop token as the only token of `min_tokens = max_tokens = 1` is
+        // an ordinary one.
+        let cases = [
+            (EosPolicy::Token(2), 0, 7),
+            (EosPolicy::Ignore, 0, 2),
+            (EosPolicy::Token(2), 1, 2),
+            (EosPolicy::Token(2), 1, 43),
+        ];
+        for (eos, min_tokens, tok) in cases {
+            let (tokens, terminal) = first_token(StopPolicy::new(eos, vec![43]), min_tokens, tok);
             assert_eq!(tokens, vec![tok]);
             assert!(matches!(
                 terminal,

@@ -9,11 +9,11 @@
 //! the head to carry out without deciding anything.
 
 use anyhow::{bail, Result};
-use infront_engine::StopPolicy;
 use kern_manifest::protocol::Sampling;
 use kern_pool::Lease;
 
 use super::{pick, Ask, Handoffs, Load, Out, Relay, Req, Standing, Tell};
+use crate::Stop;
 
 /// What admission does with the request at the front of its queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +64,7 @@ impl Tiers {
         req: Req,
         tokens: usize,
         max_tokens: usize,
-        stop: &StopPolicy,
+        stop: &Stop,
     ) -> Result<(Gate, Vec<(usize, Out)>)> {
         let handoff = !self.tiers.is_empty() && Relay::hands_off(max_tokens);
         Ok(match self.of(req).filter(|_| handoff) {
