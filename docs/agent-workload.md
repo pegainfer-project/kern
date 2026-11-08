@@ -52,7 +52,7 @@ KV 读 13.8 KB/token。dense+MoE 按 ~64 GFLOP/token（K2 量级，K3 待定）�
 | 合计 275 EFLOP ÷ (72 GPU × 1.5 PF) | 2548 s → **≤ 42k 输出 tok/s 整机上限**，同时对应 **~143k extend（prefill）tok/s**（3.4:1）；按峰值算，实际打 6 折 |
 
 **这张表是 FLOP 口径，decode 侧两个分母都已被实测推翻（2026-09-03 重算）**：decode
-attention 是带宽绑定（`dcp-bench.md` B1：0.27 µs/ktok/层，219k ctx 每 session 每步
+attention 是带宽绑定（[`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) B1：0.27 µs/ktok/层，219k ctx 每 session 每步
 1.4 ms），dense + MoE 在 decode 时是**权重带宽**绑定、与 token 数无关——EP32 下每 rank
 每步读 dense 105 GiB + 28 个 expert 42 GiB = 147 GiB ≈ 24 ms，再加 EP dispatch/combine
 5–7 ms，是每步 ~30 ms 的固定地板（E2b 实测 EP4 pruned B=1 步时 29.3 ms：dense 105 +
@@ -86,7 +86,7 @@ B ≈ 100，那时步时 170 ms，TPOT 早破了。（dense 105 GiB 是导出文
    attention 仍留 DP：TP2 切头后一对卡各读整条 latent，attention 项 22 → 44 ms，换回
    dense 省的 8.5 ms，净亏（吸收式 MLA 每个头组都要读全部 latent）。模型侧的稀疏 /
    压缩 attention 仍然值钱，但只砍一半，不是九成。
-2. ~~MLA 吸收式 decode 在 GB300 上是算力绑定~~ **已证伪**（`dcp-bench.md` B1）：
+2. ~~MLA 吸收式 decode 在 GB300 上是算力绑定~~ **已证伪**（[`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) B1）：
    b=1 时 786 TF/s、4 TB/s，是带宽/占用绑定，每层 0.27 µs/ktok。纸面 362 FLOP/B
    没兑现，因为一条 session 只有 96 行 query，GEMM 打不满。所以 decode attention
    按字节算：219k ctx 每 token 1.4 ms；共享 KV 的行批起来便宜 4×。"decode 吃带宽、
@@ -125,7 +125,7 @@ B ≈ 100，那时步时 170 ms，TPOT 早破了。（dense 105 GiB 是导出文
 ## 4. 待验证
 
 - K3 的 MLA 层是否有稀疏 attention（决定 attention 那一半能不能砍）。
-- ~~decode attention 的实测 FLOP/B~~ 已测（`dcp-bench.md` B1，带宽绑定）；待测的是
+- ~~decode attention 的实测 FLOP/B~~ 已测（[`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) B1，带宽绑定）；待测的是
   dense TP4 的实际地板（allreduce 93 层 × 2 次、KDA 分片后的 state 布局）。
 - 真实 arrival：trace 是每会话相对时间，整机并发要靠回放器给到达率；AgentX 的回放
   脚本（aiperf `--public-dataset semianalysis_cc_traces_weka_with_subagents`）可直接用。

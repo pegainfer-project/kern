@@ -24,7 +24,7 @@ output ([padded, m/2] u8 with a gated activation, [padded, m] otherwise) |
 `sf_c` u8 when the variant writes scales | `route_map` i32 [padded] permuted
 row -> token when it routes | `alpha`, `beta` f32 [batches] when gated |
 `num_non_exiting`, `total_padded` i32 [1] | `cta_batch`, `cta_limit` i32
-[ctas]: the routing tables (docs/k3-kernel-abi.md, routing).
+[ctas]: the routing tables (kern-k3-pp-prefill's docs/k3-kernel-abi.md, routing).
 """
 SIZE = 17472
 TMA_DIM_MAX, XLARGE_N = 1 << 31, 1 << 35

@@ -61,7 +61,7 @@ build.sh    builds libkernelcapture.so (needs CUPTI from a CUDA toolkit)
    the rest of the struct is host stack garbage that upstream never
    initialises and the pack leaves at zero.
 5. **Declare** the op in the generator and record the ABI beside it
-   (`tools/trtllm_fmha_abi.py`; `docs/k3-kernel-abi.md` is the K3 record).
+   (`tools/trtllm_fmha_abi.py`; kern-k3-pp-prefill's `docs/k3-kernel-abi.md` is the K3 record).
    The runtime compares the declared params against `cuFuncGetParamInfo` at
    load, so a wrong width fails before a launch.
 6. **Gate**: run the op through kern on the reference launcher's inputs and
@@ -84,7 +84,7 @@ build.sh    builds libkernelcapture.so (needs CUPTI from a CUDA toolkit)
 - The library is process-wide and provider-agnostic: vLLM/sglang/pegainfer
   engines work the same way (`pid<N>/` per rank). Loading cubins out of a
   running engine (`module_<id>.cubin`) is how the K3 kernels were originally
-  extracted; `docs/k3-kernel-abi.md` ("ABI 是怎么拿到的") has that history.
+  extracted; kern-k3-pp-prefill's `docs/k3-kernel-abi.md` ("ABI 是怎么拿到的") has that history.
 - `cuTensorMapEncodeTiled` is intercepted through CUPTI's driver-API
   callback, which also catches callers that fetch the entry point with
   `cudaGetDriverEntryPoint` (cute does). Im2col descriptors are not

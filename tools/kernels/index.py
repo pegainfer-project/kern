@@ -100,7 +100,7 @@ def _variant(family, v):
 
 
 def variant(family, **defines):
-    """The family's build named by `defines` (`variant("k3_residual", LAND_BF16=1)` is `k3_residual+LAND_BF16=1`), the plain one without."""
+    """The family's build named by `defines` (`variant("peer_allreduce", NRANKS=4)` is `peer_allreduce+NRANKS=4`), the plain one without."""
     name = variant_name(family, defines)
     for v in load(family).get("variant", []):
         if v["name"] == name:

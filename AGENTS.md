@@ -67,9 +67,10 @@ the schema golden, lints) belongs in CI, not here.
   (`kernel-capture/`, `capture_*`), the registry's tooling (`kernels/`),
   hand-written kernel sources (`kernels-src/`), manifest generators
   (`gen_*.py`), and gates that are not models (`toy/`, manifests
-  with an exact oracle; `e2e/`, the whole serving path per tray). A new
-  model's manifest work lives in a repo of its own, as K3 does in
-  `kern-k3-pp-prefill` and DeepSeek V4.1 Flash in `kern-dsv41-flash`.
+  with an exact oracle; `e2e/`, the whole serving path per tray). A
+  model's manifest work, its kernels and its records live in a repo of its
+  own, listed in the README's Supported models (K3 in `kern-k3-pp-prefill`,
+  DeepSeek V4.1 Flash in `kern-dsv41-flash`).
 - `kernel_index/` — the kernel registry's facts, one TOML per family
   (`docs/registry.md`); the bytes live in the HF blob store.
 - `examples/` and `kern.toml` — the fixture manifests and the targets that

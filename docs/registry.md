@@ -144,7 +144,7 @@ launch = abi.trtllm_bmm.op(v, n=6144, k=3584, ...)   # v.module 给 {"cubin": "h
   探针 → capture → lift → op 数据。变的是最后一步的去处——lift 出的 ABI 进
   `tools/kernels/abi/`，capture 的 `launches.jsonl` 作为 blob 被 family 引用，
   cubin 进 blob store 而不是 `tools/kernels-bin/`。
-- `k3-kernel-abi.md` 仍是 K3 那些核的契约文档；index 记的是"哪个字节、哪个
+- [`k3-kernel-abi.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/k3-kernel-abi.md) 仍是 K3 那些核的契约文档；index 记的是"哪个字节、哪个
   几何、谁测过"，不重复 ABI 的散文。
 - 模型仓库（`Pegainfer/kern-qwen38-sm103` 一类）以后只放 manifest 与模型自己的
   东西，cubin 一律指向 `kern-kernels`；现有仓库不动，新 manifest 按新写法生成。

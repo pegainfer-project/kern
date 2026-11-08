@@ -34,7 +34,6 @@ The stable, flat paths below are grouped here by purpose.
 - [`kern test`](test.md)
 - [`kern bench`](bench.md)
 - [Speculative decode](spec-decode.md)
-- [K3 kernel ABI](k3-kernel-abi.md)
 - [Kernel mining](kernel-mining.md)
 - [Kernel registry: blob store and index](registry.md)
 - [Single-GPU Performance Atlas](performance-atlas.md)
@@ -46,10 +45,11 @@ The stable, flat paths below are grouped here by purpose.
 - [State pool design (kern-pool)](pool.md)
 - [Multi-GPU runtime](multi-gpu.md)
 - [Agent workload study](agent-workload.md)
-- [DCP microbench](dcp-bench.md)
-- [MoE communication survey](moe-comm-survey.md)
 
 ### Project records
+
+A model's own records (its kernel contracts, bring-up and benchmarks) live in
+its repository; [Supported models](../README.md#supported-models) lists them.
 
 - [Roadmap](roadmap.md)
 - [Lessons](lessons.md)

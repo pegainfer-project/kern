@@ -8,7 +8,7 @@ license = "Apache-2.0"
 license_blob = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 toolchain = "trtllm-gen (NVIDIA), prebuilt"
 rebuild = "none: a different FlashInfer release is a different bundle"
-abi_source = "flashinfer/trtllm/fmha/kernelParams.h (KernelParams, 1344 B) lifted with tools/kernel-capture from tools/trtllm-fmha/probe.py; docs/k3-kernel-abi.md K13"
+abi_source = "flashinfer/trtllm/fmha/kernelParams.h (KernelParams, 1344 B) lifted with tools/kernel-capture from tools/trtllm-fmha/probe.py; kern-k3-pp-prefill's docs/k3-kernel-abi.md K13"
 imported = "2026-09-19"
 
 [[variant]]

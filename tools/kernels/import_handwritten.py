@@ -3,7 +3,7 @@
 registry: nvcc once, the cubin into the cache, the sha into the index. A
 generator then pins the index's sha and never runs nvcc.
 
-    tools/kernels/import_handwritten.py k3_residual k3_residual+LAND_BF16=1 [--upload]
+    tools/kernels/import_handwritten.py argmax peer_allreduce+NRANKS=4 [--upload]
     tools/kernels/import_handwritten.py --all [--upload]        # every variant the index lists, plus every .cu it does not
 
 Run it where the toolchain is the project's (the kernel-lab container's
