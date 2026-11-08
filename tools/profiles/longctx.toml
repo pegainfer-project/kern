@@ -1,4 +1,4 @@
-# The same runner out to 32k of cached context, where the mix stops being
+# Out to 32k of cached context, where the mix stops being
 # about matrix multiply. Fewer samples: each scenario builds its prefix by
 # running the chunk program over the whole context first.
 samples = 12

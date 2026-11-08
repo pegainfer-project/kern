@@ -25,7 +25,6 @@ export default defineConfig({
       { text: "Guide", link: "/getting-started/" },
       { text: "Concepts", link: "/concepts/artifact" },
       { text: "Reference", link: "/reference/cli" },
-      { text: "Performance", link: "https://kern-baa.pages.dev/perf/" },
     ],
     sidebar: [
       {

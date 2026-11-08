@@ -607,7 +607,7 @@ impl DevicePtrMut<u8> for BufView {
     }
 }
 
-/// A pool of timing events, for `kern test` and profiling.
+/// A pool of timing events, for `kern test`.
 pub(crate) struct Events(pub(crate) Vec<sys::CUevent>);
 
 impl Events {

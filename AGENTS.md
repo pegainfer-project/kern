@@ -160,8 +160,8 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
   PASS: record A, replay B span by span, noise floor, perf, verdict in one
   report, so a kernel swap is never discussed without its report. `kern bench
   <target> --workload <sweep.toml> --out <json>` says where a program's time
-  goes per shape, and the mix moves with the shape (Qwen3-4B: attention 47%
-  of a 2k chunk over an empty cache, 95% of 512 rows over 32k of hit), so a
+  goes per shape, and the mix moves with the shape (Qwen3-4B: attention 51%
+  of a 2k chunk over an empty cache, 97% of 512 rows over 32k of hit), so a
   workload names the shapes the service actually sees, never one
   representative one.
 - kern-serve: conc1 output is identical to `kern run`; on a manifest whose
