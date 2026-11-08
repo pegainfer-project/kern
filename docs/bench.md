@@ -1,5 +1,11 @@
 # kern bench: where a program's time goes
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 `kern bench` measures a sweep of call shapes on one device and writes the
 raw samples out. Every sample is one replay of the program's real CUDA
 graph, from its pre-image behind an L2 flush, and CUPTI's kernel records

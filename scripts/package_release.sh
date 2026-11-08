@@ -38,7 +38,7 @@ check "$bin"
 check "$serve"
 
 # A GPU-free command runs end to end: the loader is satisfied here.
-"$bin" verify "$root/examples/qwen3-4b.json" >/dev/null
+"$bin" verify "$root/crates/kern-manifest/tests/fixtures/paged.json" >/dev/null
 "$serve" --help >/dev/null
 
 stage=$(mktemp -d)

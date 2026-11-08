@@ -1,5 +1,11 @@
 # Kernel 来源：从 vLLM 挖（kernel mining）
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 MVP 的 cubin 不自己写，从 vLLM 生产路径里挖——挖出来的是 GB300 上真正在
 跑的一流核。工具 `tools/kernel-capture/`（vendored from pegainfer PR #982，
 Apache-2.0）是一个 CUPTI 注入库：`CUDA_INJECTION64_PATH` 挂进任意 CUDA 进程，

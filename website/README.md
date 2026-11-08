@@ -63,7 +63,9 @@ deployments.
 
 ## Content boundaries
 
-- Product structure and counts come from the checked-in Qwen3-4B manifests.
+- Product structure, counts, and Qwen3-4B measurements are historical snapshots
+  from [the core fixtures before extraction](https://github.com/pegainfer-project/kern/tree/8b25c07).
+  Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3).
 - Performance figures reproduce repository measurements and keep their test
   conditions visible.
 - The TileFoundry section describes conceptual alignment. There is no direct

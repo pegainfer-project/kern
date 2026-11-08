@@ -8,8 +8,8 @@ programs sized by the `tokens` symbol:
 
 - `prefill` (tokens ∈ [1, CHUNK_MAX]): the vLLM chunked-prefill forward —
   KV writes for the attention layers, conv/SSM state carry for the GDN
-  layers — *plus* the final norm / lm_head / argmax on the last row.  Unlike
-  the qwen3-4b manifests, prefill emits `next_token`: the GDN prefill path
+  layers — *plus* the final norm / lm_head / argmax on the last row.
+  Prefill emits `next_token`: the GDN prefill path
   (FLA chunk kernels) and the decode path (recurrent kernel) are different
   arithmetic, and vLLM runs the last prompt token through the chunk path.
   Putting it through `decode` instead would change bits.  The driver
@@ -70,7 +70,7 @@ import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from qwen_weights import qwen38  # noqa: E402
-from kern_manifest import normalize, program, resolve_constants, SCHEMA_VERSION  # noqa: E402
+from kern_manifest import normalize, program, SCHEMA_VERSION  # noqa: E402
 from handwritten import hw  # tools/handwritten.py: build + pin handwritten cubins
 
 # --- model geometry (config.json; asserted against the capture below)
@@ -578,7 +578,7 @@ I2 = ["i64", "i64"]   # Triton's trailing global/profile scratch pointers (alway
 
 def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     """`spec` (from --spec): {"src": bs=1 launch records of the speculative
-    path, "pins": {tag: (cubin, sha)}, "attn_draft": DSpark's pinned
+    path, "pins": {tag: (cubin, sha)}, "attn_draft": the pinned
     non-causal unified-attention step} — adds the DFlash2 programs."""
     T = var("tokens")
     S = var("seqs")
@@ -975,7 +975,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
         RMS_PARAMS = ["out buffer<bf16>", "in buffer<bf16>", "i64", "i64", "i64", "i64", "i64",
                       "in buffer<bf16>", "i64", "f32", "i32", "i32"]
         ad = spec["attn_draft"]
-        D_BLOCK_Q = ad["grid"][0]["ceil_div"][1]   # the borrowed instance's query rows per block
+        D_BLOCK_Q = ad["query_rows"]   # the borrowed instance's query rows per block
         kernels.update({
             "gemm_acc": single("extern:cublaslt_bf16_tn_acc",
                                ["in buffer<bf16>", "in buffer<bf16>", "inout buffer<bf16>", "i32", "i32", "i32"],
@@ -1595,11 +1595,11 @@ def main():
         assert pf(src["recurrent_spec"], 5) == 20.0, "softplus threshold"
         assert pv(src["conv_update_spec"], 9) == pv(src["conv_update_spec"], 10), "conv update not in place"
         assert pf(src["d_rms_norm"], 9) == eps and pf(src["d_fused_norm"], 4) == eps
-        dspark = resolve_constants(json.loads((repo / "examples" / "qwen3-4b-dspark.json").read_text()))
-        ad = dict(dspark["ops"]["attn_draft"]["impl"]["launches"][0])
-        ad_mod = dspark["modules"][ad["module"]]
-        ad["cubin"], ad["sha256"] = ad_mod["source"], ad_mod["sha256"]
-        assert ad["entry"] == TRITON["unified"] and ad["cubin"] == "unified_noncausal.cubin"
+        # The captured non-causal instance is shared by the draft attention
+        # path. Keep its launch contract here, independent of other models.
+        ad = {"query_rows": 4, "block": [128, 1, 1], "shared_mem": 21760,
+              "cubin": "unified_noncausal.cubin",
+              "sha256": "7284b317223a98d636bbf9a06b0c8cbcfdabbacec40721c819efb52c6dcada9f"}
         for tag, (mod, sha) in sorted(spins.items()):
             print(f"  spec pin {SPEC_SYMS[tag][:52]:<52} -> {mod} {sha[:12]}", file=sys.stderr)
         print(f"  spec pin conv_fwd (page stride rebaked) -> {pins[('conv_fwd', True)][0]}", file=sys.stderr)

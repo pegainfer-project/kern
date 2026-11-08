@@ -50,7 +50,7 @@ pip install kern-llm    # import kern; vllm / sglang serve 时插件自动加载
    `cuda-13030` feature 钉死，构建机不装 toolkit；`KERN_COMMIT` 传 tag 的 commit。
    tag 名必须等于 workspace version（`v` + `cargo pkgid`），不等就停。
 3. **自检**（`package_release.sh`，在 runner 上跑）：两个 binary `--version` 报的版本 =
-   tag；`NEEDED` 里没有任何 CUDA 库；`kern verify examples/qwen3-4b.json` 与
+   tag；`NEEDED` 里没有任何 CUDA 库；`kern verify crates/kern-manifest/tests/fixtures/paged.json` 与
    `kern-serve --help` 跑通（无 GPU，证明 loader 满足）。
    任一条不过，release 不出。
 4. **wheel**：两个 arch 各在原生 runner 上用 maturin-action 的 manylinux 2.28 容器编

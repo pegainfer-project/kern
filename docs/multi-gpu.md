@@ -1,5 +1,11 @@
 # 多卡 runtime：TP / EP / 二者组合（设计 + 实测 + 待决）
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 状态：设计稿，2026-09-01；09-02 按 [`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) 的实测与拍板修订（见文末“已决”）。实测全部在 GB300 NVL72（pod4-gb300-3，driver
 13030，CUDA 13.1）上做，bench 源码在
 本地存档 `bench-results/2026-09-01-graph-launch/`（不在仓库）（`bench.cu` 图提交、`fabric.cu`

@@ -10,7 +10,7 @@ use kern_manifest::types::{Arg, BufferKind, Dir, Manifest, ParamType};
 use kern_manifest::{verify, Protocol, Verified};
 use serde_json::{json, Value};
 
-const QWEN3: &str = include_str!("../../../examples/qwen3-4b.json");
+const PAGED: &str = include_str!("fixtures/paged.json");
 
 struct Rand(u64);
 
@@ -218,8 +218,8 @@ fn every_cut_that_verifies_computes_the_whole() {
     assert!(cuts > 200 && refused > 0, "{cuts} cuts, {refused} refused");
 }
 
-fn qwen3() -> Verified {
-    verify(Manifest::from_json(QWEN3).unwrap()).unwrap()
+fn paged() -> Verified {
+    verify(Manifest::from_json(PAGED).unwrap()).unwrap()
 }
 
 /// The buffers of `st` of one kind.
@@ -228,11 +228,11 @@ fn of_kind(st: &Manifest, kind: BufferKind) -> Vec<&str> {
 }
 
 #[test]
-fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
-    // l18.qkv_proj: embed, l0 norm, 18 layers of 12 calls.
-    let at = 2 + 18 * 12;
-    assert_eq!(qwen3().programs["prefill"].calls[at].label.as_deref(), Some("l18.qkv_proj"));
-    let stages = cut(&qwen3(), &[at]).unwrap_or_else(|e| panic!("{e}"));
+fn a_paged_manifest_cuts_at_a_layer_into_stages_that_each_serve() {
+    // The embedding and two layers belong to the head.
+    let at = 3;
+    assert_eq!(paged().programs["prefill"].calls[at].label.as_deref(), Some("layer.2"));
+    let stages = cut(&paged(), &[at]).unwrap_or_else(|e| panic!("{e}"));
     let (head, tail) = (&stages[0], &stages[1]);
     // The residual stream and the normed input are all that crosses: the
     // head's outputs, rewritten in place on the tail, which exports them
@@ -242,17 +242,13 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
     assert_eq!((of_kind(tail, BufferKind::Inout), exported), (vec!["residual", "x"], vec!["residual", "x"]));
     assert!(!head.buffers["x"].export);
     // Each stage holds its own weights and its own calls of the KV.
-    assert!(
-        head.buffers.contains_key("model.embed_tokens.weight")
-            && !tail.buffers.contains_key("model.embed_tokens.weight")
-    );
-    assert!(tail.buffers.contains_key("lm_head.weight") && !head.buffers.contains_key("lm_head.weight"));
-    assert!(!head.buffers.contains_key("model.layers.18.self_attn.qkv_proj.weight"));
-    // A KV state per layer: each stage keeps its 18 and uses them whole,
+    assert!(head.buffers.contains_key("embedding") && !tail.buffers.contains_key("embedding"));
+    assert!(tail.buffers.contains_key("projection") && !head.buffers.contains_key("projection"));
+    // A KV state per layer: each stage keeps its two and uses them whole,
     // and its tables index one it kept.
-    for (st, first) in [(head, "kv.0"), (tail, "kv.18")] {
-        let used = state_use(&qwen3(), st);
-        assert_eq!((used.len(), used.iter().all(|(_, a, b)| a == b)), (18, true));
+    for (st, first) in [(head, "kv.0"), (tail, "kv.2")] {
+        let used = state_use(&paged(), st);
+        assert_eq!((used.len(), used.iter().all(|(_, a, b)| a == b)), (2, true));
         let table = |b: &str| st.buffers[b].domain.as_ref().and_then(|d| d.index_into.clone());
         assert_eq!((table("block_table"), table("slot_mapping")), (Some(first.into()), Some(first.into())));
     }
@@ -264,10 +260,10 @@ fn qwen3_cuts_at_a_layer_into_stages_that_each_serve() {
     assert_eq!(pt.forward(1, kern_manifest::protocol::Rows::Const(1)).map(|f| f.emits.is_some()), Some(true));
     assert_eq!(head.cut.as_ref().map(|c| &c.id), tail.cut.as_ref().map(|c| &c.id));
     // The same cut is the same bytes.
-    let again = cut(&qwen3(), &[at]).unwrap();
+    let again = cut(&paged(), &[at]).unwrap();
     assert_eq!(again[1].to_json(), tail.to_json());
 
-    let three = cut(&qwen3(), &[2 + 12 * 12, 2 + 24 * 12]).unwrap_or_else(|e| panic!("{e}"));
+    let three = cut(&paged(), &[2, 4]).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(three.len(), 3);
     Protocol::check_unsampled(&three[1]).unwrap_or_else(|e| panic!("{e}"));
     assert_ne!(three[0].cut.as_ref().map(|c| &c.id), head.cut.as_ref().map(|c| &c.id));
@@ -319,9 +315,9 @@ fn a_table_whose_state_a_stage_dropped_indexes_a_kept_state_of_its_layout() {
 
 #[test]
 fn a_cut_says_why_it_cannot_be_made() {
-    let n = qwen3().programs["prefill"].calls.len();
+    let n = paged().programs["prefill"].calls.len();
     for at in [vec![], vec![0], vec![5, 5], vec![n]] {
-        assert!(cut(&qwen3(), &at).is_err(), "{at:?}");
+        assert!(cut(&paged(), &at).is_err(), "{at:?}");
     }
 }
 

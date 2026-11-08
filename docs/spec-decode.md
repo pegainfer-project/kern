@@ -1,5 +1,11 @@
 # DSpark 投机解码（`kern run qwen3-4b-dspark`，7 行的 `round`）
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 draft 也是个 model，但**不是新的 schema 概念**：`examples/qwen3-4b-dspark.json`
 是一份 manifest，target+draft 权重（`draft.` 前缀）、第二个 KV state、
 四个 program：prefill / decode / decode_batch（plain 的形状，也是无损

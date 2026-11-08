@@ -1,4 +1,4 @@
-"""Give Qwen manifest dimensions semantic names after ABI normalization.
+"""Give Qwen3.8 manifest dimensions semantic names after ABI normalization.
 
 This is deliberately context-aware: equal numbers are not necessarily the same
 constant (HIDDEN_SIZE vs block-table capacity, or Q width vs GDN V width).
@@ -12,7 +12,6 @@ def name_constants(manifest):
     m = copy.deepcopy(manifest)
     if "constants" in m:
         return m
-    hybrid = m["model"].startswith("qwen3.8")
     constants = {}
 
     def ref(name, value):
@@ -23,11 +22,10 @@ def name_constants(manifest):
         constants[name] = value
         return name
 
-    hidden, vocab, ffn = (5120, 248320, 17408) if hybrid else (2560, 151936, 9728)
+    hidden, vocab, ffn = (5120, 248320, 17408)
     common = {hidden: "hidden_size", vocab: "vocab_size", ffn: "intermediate_size", 2 * ffn: "gate_up_dim"}
-    attention = {14336: "qkv_dim", 6144: "q_dim", 1024: "kv_dim", 256: "head_dim"} if hybrid else {
-        6144: "qkv_dim", 4096: "q_dim", 1024: "kv_dim", 128: "head_dim"}
-    draft = {6144: "draft_qkv_dim", 4096: "draft_q_dim", 1024: "draft_kv_dim", 128: "draft_head_dim"} if hybrid else attention
+    attention = {14336: "qkv_dim", 6144: "q_dim", 1024: "kv_dim", 256: "head_dim"}
+    draft = {6144: "draft_qkv_dim", 4096: "draft_q_dim", 1024: "draft_kv_dim", 128: "draft_head_dim"}
     gdn = {16384: "gdn_qkvz_dim", 10240: "gdn_conv_dim", 2048: "gdn_qk_dim", 6144: "gdn_v_dim",
            96: "gdn_ba_dim", 48: "gdn_num_v_heads", 128: "gdn_head_dim", 64: "fla_chunk_size"}
     gdn_buffers = {"qkvz", "ba", "conv_out", "gdn_q", "gdn_k", "gdn_v", "Ai", "w", "u", "v_new",
@@ -35,12 +33,10 @@ def name_constants(manifest):
     for name, b in m["buffers"].items():
         is_draft = name.startswith(("draft.", "d.", "d_"))
         dims = common | (draft if is_draft else attention)
-        if hybrid and (name in gdn_buffers or ".linear_attn." in name):
+        if (name in gdn_buffers or ".linear_attn." in name):
             dims = common | gdn
         if name.startswith("draft.selector."):
             dims = common | {256: "selector_rank"}
-        elif "markov" in name:
-            dims = common | {256: "markov_rank"}
         elif name == "draft.fused_kv.weight":
             dims = common | {10240: "draft_fused_kv_dim"}
         elif "kernel_projection" in name:
@@ -53,7 +49,7 @@ def name_constants(manifest):
         elif "rope." in name:
             dims = {b["shape"][0]: "max_position_embeddings", b["shape"][1]:
                     "rotary_half_dim" if name in ("rope.cos", "rope.sin") else
-                    "draft_head_dim" if hybrid and is_draft else "head_dim"}
+                    "draft_head_dim" if is_draft else "head_dim"}
         elif name in ("cos_g", "sin_g"):
             dims = {32: "rotary_half_dim"}
         elif name in ("draft_tokens", "verify_tokens"):
@@ -66,24 +62,24 @@ def name_constants(manifest):
             dims = {manifest["buffers"]["h"]["shape"][0]: "max_fla_chunks"}
         elif name in ("conv.batch_ptr", "conv.token_chunk_offset", "gdn.has_initial"):
             dims = {}  # capture/kernel metadata capacity, not a head dimension
-        if hybrid and name in ("cand_ids", "cand_vals", "hidden_r", "succ_g", "pred_g", "pred_anchor"):
+        if name in ("cand_ids", "cand_vals", "hidden_r", "succ_g", "pred_g", "pred_anchor"):
             dims = {1024: "max_verify_tokens", 16: "selector_candidates", 256: "selector_rank", 16384: "max_candidate_rows"}
-        elif hybrid and name in ("k_save", "v_save", "a_save", "b_save"):
+        elif name in ("k_save", "v_save", "a_save", "b_save"):
             dims = {1024: "max_verify_tokens", 2048: "gdn_qk_dim", 6144: "gdn_v_dim"}
-        elif hybrid and name in ("a_c", "b_c"):
+        elif name in ("a_c", "b_c"):
             dims = {48: "gdn_num_v_heads"}
-        elif hybrid and name == "kv_flat":
+        elif name == "kv_flat":
             dims = {10240: "draft_fused_kv_dim"}
-        elif hybrid and name == "d_coef":
+        elif name == "d_coef":
             dims = {1280: "draft_conv_proj_dim"}
         b["shape"] = [ref(dims[d], d) if isinstance(d, int) and d in dims else d for d in b["shape"]]
-        if hybrid and name in ("k_save", "v_save", "a_save", "b_save"):
+        if name in ("k_save", "v_save", "a_save", "b_save"):
             b["shape"][0] = ref("gdn_num_layers", 48)
             if name in ("a_save", "b_save"):
                 b["shape"][2] = ref("gdn_num_v_heads", 48)
-        if hybrid and name == "h":
+        if name == "h":
             b["shape"][0] = ref("max_fla_chunks", manifest["buffers"][name]["shape"][0])
-        if hybrid and name == "logits_blk":
+        if name == "logits_blk":
             b["shape"][0] = ref("max_verify_tokens", manifest["buffers"][name]["shape"][0])
         if "stride" in b.get("domain", {}) and name in ("block_table", "draft_block_table"):
             b["domain"]["stride"] = ref("draft_kv_block_size" if name.startswith("draft") else "kv_block_size", b["domain"]["stride"])
@@ -125,11 +121,11 @@ def name_constants(manifest):
             dims = common.copy()
         if "qhead" in name or "khead" in name or name in ("rotary_embedding", "mrope", "reshape_and_cache") or name.startswith("attn"):
             dims |= attention
-            dims |= {24 if hybrid else 32: "num_heads", 4 if hybrid else 8: "num_kv_heads"}
+            dims |= {24: "num_heads", 4: "num_kv_heads"}
         if name.startswith("attn"):
             table = manifest["buffers"]["block_table"]["shape"][-1]
             dims[table] = "max_blocks_per_seq"
-        if hybrid and (name.startswith("d_") or name == "attn_draft"):
+        if name.startswith("d_") or name == "attn_draft":
             dims = common | draft | {32: "draft_num_heads", 8: "draft_num_kv_heads"}
             if name == "attn_draft":
                 dims[16384] = "draft_max_blocks_per_seq"
@@ -154,11 +150,6 @@ def name_constants(manifest):
                     if isinstance(dim, str) and "i32" in a:
                         assert constants[dim] == a["i32"]
                         a["i32"] = dim
-            if not hybrid:
-                for arg in args:
-                    if arg.get("buf") == "qkv" and arg.get("offset") in (8192, 10240):
-                        offset = arg["offset"]
-                        arg["offset"] = ref("qkv_k_offset_bytes" if offset == 8192 else "qkv_v_offset_bytes", offset)
             if call["op"] in ("rms_norm_qhead", "rms_norm_khead"):
                 scalars(args, {32: "num_heads", 8: "num_kv_heads"}, call["op"])
     return {"schema_version": m.pop("schema_version"), "model": m.pop("model"), "constants": constants, **m}

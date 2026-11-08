@@ -1,5 +1,11 @@
 # kern test：一次 kernel 替换的证据
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 kern test v2 由一个个套件组成，现在只有一个：**e2e_logits**——候选沿基线录下的 token
 逐位置重新打分，平均 KL 不超过阈值就 PASS。原来基于 span 的 A/B（本文后半，从
 "基于 span 的 A/B"起）暂存不动，`kern test <target>` 照旧是它；它原来的"录好的参考"
