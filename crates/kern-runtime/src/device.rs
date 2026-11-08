@@ -538,18 +538,6 @@ impl Mapped {
     }
 }
 
-/// The device's UUID the way the driver's tools print it
-/// (`GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), which a weight cache
-/// daemon keys its per-GPU endpoint by.
-pub fn device_uuid(gpu: usize) -> Result<String> {
-    use cudarc::driver::result;
-    result::init()?;
-    let uuid = result::device::get_uuid(result::device::get(gpu as i32)?)?;
-    let hex: Vec<String> = uuid.bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let (a, b, c, d, e) = (&hex[..4], &hex[4..6], &hex[6..8], &hex[8..10], &hex[10..]);
-    Ok(format!("GPU-{}-{}-{}-{}-{}", a.concat(), b.concat(), c.concat(), d.concat(), e.concat()))
-}
-
 /// Synchronization is trivially correct for these raw views: the whole
 /// runtime is single-stream.
 impl DeviceSlice<u8> for DeviceBuf {

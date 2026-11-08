@@ -108,14 +108,6 @@ impl BufCmp {
     pub fn value_identical(&self) -> bool {
         self.cmp.value_identical() && self.outside == 0
     }
-    /// Worst first: a write outside the reference set outranks any ulp.
-    pub fn severity(&self) -> (usize, u64) {
-        if self.outside > 0 {
-            (usize::MAX, u64::MAX)
-        } else {
-            self.cmp.severity()
-        }
-    }
 }
 
 /// Bytes of `b` that no range of `a` covers; both sorted and disjoint.
