@@ -6,16 +6,15 @@ constant index tables the captured Triton kernels take as pointers) is a
 (tools/once.py, tools/kernels-src/weight_prep.cu). No exported artifact, no torch: `kern run
 --weights <HF snapshot dir>`.
 
-Two families, both with their draft:
+Qwen3.8 and its draft:
 
 - `qwen38`: Qwen3.8-27B (`model.language_model.*` in the checkpoint) and
   its DFlash2 draft (`layers.*`, `fc.weight`, `candidate_selector.*`).
-- `qwen3`: Qwen3-4B (`model.*`, tied lm_head) and its DSpark draft.
 
 A pass is a pure function of the resolved manifest; the generators call it
 last, and the CLI reapplies it to a checked-in example:
 
-    python tools/qwen_weights.py qwen38 --input examples/qwen3.8-27b.json
+    uv run python tools/qwen_weights.py --input examples/qwen3.8-27b.json
 """
 import argparse
 import json
@@ -118,67 +117,12 @@ def qwen38(m):
     return name_constants(normalize(once.finish()))
 
 
-def qwen3(m):
-    """Qwen3-4B: rope theta 1e6 over the whole 128-dim head (one 128-wide
-    cos | sin cache), plain norms, tied lm_head; the DSpark draft has its
-    own embedding and lm_head, a 5-tap `fc.weight` and a Markov head."""
-    m = resolve_constants(m)
-    once = Once(m)
-    for name in weights(m):
-        b = m["buffers"][name]
-        if name == "lm_head.weight":
-            b["bind"] = bind("model.embed_tokens.weight")
-        elif name == "rope.cos_sin_cache":
-            rows, width = b["shape"]
-            once.rope((name, 0), (name, width), rows, width // 2, width, 1e6)
-        elif name in ("kv_scales", "draft.kv_scales"):
-            once.fill(name, 1.0)
-        elif name.startswith("model."):
-            lm = re.fullmatch(r"model\.layers\.(\d+)\.(.+)", name)
-            rest = lm.group(2) if lm else None
-            q = f"model.layers.{lm.group(1)}." if lm else ""
-            if rest == "mlp.gate_up_proj.weight":
-                b["bind"] = bind(q + "mlp.gate_proj.weight", q + "mlp.up_proj.weight")
-            elif rest == "self_attn.qkv_proj.weight":
-                b["bind"] = bind(*(q + f"self_attn.{x}_proj.weight" for x in "qkv"))
-            else:
-                b["bind"] = bind(name)
-        elif (dm := re.fullmatch(r"draft\.fc\.(\d)\.weight", name)):
-            j = int(dm.group(1))
-            h = b["shape"][1]
-            b["bind"] = [seg("fc.weight", cols=(j * h, (j + 1) * h))]
-        elif name == "draft.fused_kv.weight":
-            b["bind"] = bind(*(f"layers.{l}.self_attn.{x}_proj.weight" for l in range(draft_layers(m)) for x in "kv"))
-        elif name == "draft.markov_w1":
-            b["bind"] = bind("markov_head.markov_w1.weight")
-        elif name == "draft.markov_w2.weight":
-            b["bind"] = bind("markov_head.markov_w2.weight")
-        elif (dl := re.fullmatch(r"draft\.layers\.(\d+)\.(.+)", name)):
-            l, rest = dl.groups()
-            q = f"layers.{l}."
-            if rest == "mlp.gate_up_proj.weight":
-                b["bind"] = bind(q + "mlp.gate_proj.weight", q + "mlp.up_proj.weight")
-            elif rest == "self_attn.qkv_proj.weight":
-                b["bind"] = bind(*(q + f"self_attn.{x}_proj.weight" for x in "qkv"))
-            else:
-                b["bind"] = bind(q + rest)
-        elif name.startswith("draft."):
-            b["bind"] = bind(name[len("draft."):])
-        else:
-            raise ValueError(f"no binding for weight buffer `{name}`")
-    return name_constants(normalize(once.finish()))
-
-
-FAMILIES = {"qwen38": qwen38, "qwen3": qwen3}
-
-
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("family", choices=FAMILIES)
     p.add_argument("--input", type=pathlib.Path, required=True)
     p.add_argument("--output", type=pathlib.Path, help="default: rewrite --input")
     args = p.parse_args()
-    m = FAMILIES[args.family](json.loads(args.input.read_text()))
+    m = qwen38(json.loads(args.input.read_text()))
     (args.output or args.input).write_text(json.dumps(m, indent=1) + "\n")
 
 

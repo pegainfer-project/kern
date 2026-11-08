@@ -73,8 +73,10 @@ the schema golden, lints) belongs in CI, not here.
   DeepSeek V4.1 Flash in `kern-dsv41-flash`).
 - `kernel_index/` — the kernel registry's facts, one TOML per family
   (`docs/registry.md`); the bytes live in the HF blob store.
+- Dense Qwen3 manifests and kernels live in
+  [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3).
 - `examples/` and `kern.toml` — the fixture manifests and the targets that
-  name them with their kernels and weights; `kern test qwen3-4b` runs from
+  name them with their kernels and weights; `kern test qwen3.8-27b` runs from
   here. `schema/` holds the manifest schema golden.
 - GPU tests need a free GPU on a shared tray: `nvidia-smi` before `kern test`.
 
@@ -156,12 +158,10 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
   split, the candidate is teacher-forced along those tokens in batches
   through its own decode path, and it passes when mean KL(baseline ‖
   candidate) ≤ `--kl` (design, commands and calibration in `docs/test.md`).
-- `kern test <target>` is one command and, on the qwen3-4b fixture, a 7 s
-  PASS: record A, replay B span by span, noise floor, perf, verdict in one
-  report, so a kernel swap is never discussed without its report. `kern bench
+- `kern test <target>` records A, replays B span by span, and returns the
+  noise floor, performance and verdict in one report, so a kernel swap is never discussed without its report. `kern bench
   <target> --workload <sweep.toml> --out <json>` says where a program's time
-  goes per shape, and the mix moves with the shape (Qwen3-4B: attention 47%
-  of a 2k chunk over an empty cache, 95% of 512 rows over 32k of hit), so a
+  goes per shape, and the mix moves with the shape, so a
   workload names the shapes the service actually sees, never one
   representative one.
 - kern-serve: conc1 output is identical to `kern run`; on a manifest whose

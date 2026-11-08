@@ -248,14 +248,19 @@ library; it needs an NVIDIA driver for CUDA 13 (r580+) and cuBLAS 13 on the
 loader path. `KERN_VERSION` pins a release, `KERN_INSTALL_DIR` picks the
 directory (default `~/.local/bin`).
 
-From source, with the fixture targets in `kern.toml`:
+Dense Qwen3 (including Qwen3-4B) lives in
+[**kern-qwen3**](https://github.com/pegainfer-project/kern-qwen3), with its own
+kernel builds, manifest generator, and sampling checks.
+
+From source, with the Qwen3.8 fixture targets in `kern.toml` and their
+kernels and checkpoints installed:
 
 ```bash
 cargo build --release
-./target/release/kern run qwen3-4b --steps 320                  # generate
-./target/release/kern test qwen3-4b                             # verdict for a change: exit 0 PASS / 1 FAIL / 2 INCONCLUSIVE
-./target/release/kern bench qwen3-4b --workload tools/profiles/quick.toml --out quick.json
-./target/release/kern server qwen3-4b --port 8000               # OpenAI-compatible server
+./target/release/kern run qwen3.8-27b --steps 320                  # generate
+./target/release/kern test qwen3.8-27b                             # verdict for a change: exit 0 PASS / 1 FAIL / 2 INCONCLUSIVE
+./target/release/kern bench qwen3.8-27b --workload tools/profiles/quick.toml --out quick.json
+./target/release/kern server qwen3.8-27b --port 8000               # OpenAI-compatible server
 ```
 
 Inside vLLM, the manifest is the model and vLLM keeps everything else:

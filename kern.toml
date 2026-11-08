@@ -7,13 +7,6 @@
 
 gpu = 0
 
-# The repo's fixture: the mined silu impl against the hub one.
-[targets.qwen3-4b]
-manifest  = "examples/qwen3-4b-silu-mined.json"
-reference = "examples/qwen3-4b.json"
-kernels   = "kernels"
-weights   = ["weights/Qwen3-4B"]
-
 [kernels]
 dumps   = ["dumped-kernels"]
 
@@ -25,13 +18,6 @@ logit_kl = 0.01
 [run]
 prompt = "The capital of France is"
 steps = 32
-
-# The same target with its DSpark draft: `kern run qwen3-4b-dspark` takes the
-# manifest's widest step (7 rows, a speculative round); `--rows 1` is plain decode.
-[targets.qwen3-4b-dspark]
-manifest  = "examples/qwen3-4b-dspark.json"
-kernels   = "kernels"
-weights   = ["weights/Qwen3-4B", "weights/dspark-qwen3-4b-b7"]
 
 # Qwen3.8-27B (hybrid GDN + attention): `kern run qwen3.8-27b`.
 [targets."qwen3.8-27b"]

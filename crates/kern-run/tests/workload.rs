@@ -1,6 +1,6 @@
 //! What a sweep expands to, and what a manifest makes of it.
 //!
-//! The fixture is `examples/qwen3-4b.json`: a `decode` for one sequence of
+//! The fixture is a synthetic paged manifest: a `decode` for one sequence of
 //! one row, a `decode_batch` for up to 256 of one row, and a `prefill` for
 //! one sequence of rows as fed, up to 2,048 rows in all.
 
@@ -8,7 +8,7 @@ use kern_manifest::{Protocol, Verified};
 use kern_run::bench::workload::{Plan, Workload};
 
 fn manifest() -> Verified {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/qwen3-4b.json");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../kern-manifest/tests/fixtures/paged.json");
     Verified::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 

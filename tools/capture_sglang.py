@@ -8,7 +8,9 @@ import sys
 
 import sglang as sgl
 
-model = sys.argv[1] if len(sys.argv) > 1 else "/mnt/shared/weights/Qwen3-4B"
+if len(sys.argv) != 2:
+    raise SystemExit("usage: capture_sglang.py CHECKPOINT")
+model = sys.argv[1]
 
 PROMPTS = [
     "hi",

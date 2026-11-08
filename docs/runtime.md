@@ -1,5 +1,11 @@
 # Runtime：`kern-runtime` + `kern run`
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 ## MVP 范围（已定）
 
 - **只做 `decode` 一个 program**：prefill 视为特殊的 decode——prompt 逐 token

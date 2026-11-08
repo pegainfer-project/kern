@@ -1,5 +1,11 @@
 # Manifest 格式（schema_version 8）与 Verifier
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 Model provider 交付 `manifest.json + kernels/ + weights`，runtime 负责：
 加载时像 rustc 一样苛刻地校验 manifest，运行时按声明闭眼执行。runtime
 不感知任何模型语义——它只会调度不透明的 op 调用、按字节数供应不透明

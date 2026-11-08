@@ -45,7 +45,11 @@ cargo build --release
 Needs Rust and a C++ compiler. The CUDA API the runtime binds is fixed by
 the pinned `cudarc` feature, so no CUDA toolkit is involved in the build.
 The repository's `kern.toml` names fixture targets; with their kernels and
-checkpoints in place, `./target/release/kern run qwen3-4b` works as-is.
+checkpoints in place, `./target/release/kern run qwen3.8-27b` works as-is.
+
+Dense Qwen3 models are maintained in
+[kern-qwen3](https://github.com/pegainfer-project/kern-qwen3). Follow that
+repository for kernel builds and manifest generation.
 
 ## kern-serve
 
@@ -65,8 +69,7 @@ The manifest verifier is a pure Rust crate. It is what CI and editors can
 run on a machine with no CUDA at all:
 
 ```sh
-cargo run -p kern-manifest --example verify -- examples/qwen3-4b.json
-# examples/qwen3-4b.json: ok, 3 forwards, 6 fills
+cargo run -p kern-manifest --example verify -- examples/minimal.json
 
 ./target/release/kern verify path/to/manifest.json   # the CLI's version: also prints the serving protocol
 ```

@@ -1,5 +1,11 @@
 # Single-GPU Performance Atlas
 
+> Qwen3-4B commands and measurements below are historical. The old fixtures
+> and capture scripts are available at [the last core revision](https://github.com/pegainfer-project/kern/tree/8b25c07).
+> Current dense Qwen3 development lives in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3);
+> the legacy DSpark path is not part of that repository.
+
+
 The `/perf/` page connects a manifest's programs, calls and implementations to
 measured latency. The runner is opt-in (`kern bench`); serving behavior and the
 manifest schema are unchanged. It uses `Protocol` to discover programs and
