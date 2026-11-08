@@ -59,7 +59,7 @@ pub use compare::{At, Cmp, Logit, TOP_MAX};
 use compile::{CompiledProgram, Dense};
 use cublas::Blas;
 use device::{alloc, DeviceBuf};
-pub use device::{device_uuid, Mapped, PeerHandle};
+pub use device::{Mapped, PeerHandle};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use exec::{Fetch, Gate, Mark};
@@ -230,11 +230,6 @@ impl Drop for Runtime {
 }
 
 impl Runtime {
-    /// The CUDA device ordinal this runtime is on.
-    pub fn gpu(&self) -> usize {
-        self.gpu
-    }
-
     pub fn module_count(&self) -> usize {
         self.n_modules
     }
@@ -345,13 +340,6 @@ impl Runtime {
         self.pool.slots_used()
     }
 
-    /// The line-table inputs (`index_into` a per-sequence state, shaped
-    /// `[lines, seqs]` or `[lines, seqs, w]`), e.g. a hybrid model's
-    /// `gdn.line_index`.
-    pub fn seq_tables(&self) -> impl Iterator<Item = &str> {
-        self.pool.seq_tables()
-    }
-
     /// Pages the states hold in total.
     pub fn pages_total(&self) -> usize {
         self.pool.pages()
@@ -365,12 +353,6 @@ impl Runtime {
     /// Longest sequence one page-table row can address (whole pages).
     pub fn max_seq_tokens(&self) -> usize {
         self.pool.max_seq_tokens()
-    }
-
-    /// The page-table inputs (`index_into` a state, constant row width),
-    /// e.g. `block_table` and a speculative manifest's `draft_block_table`.
-    pub fn page_tables(&self) -> impl Iterator<Item = &str> {
-        self.pool.tables()
     }
 
     /// The states' budget, for a pool another process holds for this runtime.

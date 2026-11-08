@@ -449,10 +449,6 @@ pub struct Resident {
 }
 
 impl Resident {
-    pub fn bytes(&self) -> u64 {
-        self.buffers.values().map(|(_, b)| b.bytes).sum()
-    }
-
     fn take(&mut self, name: &str, b: &Buffer, bytes: u64) -> Option<DeviceBuf> {
         let same = self.buffers.get(name).is_some_and(|(id, buf)| *id == Identity::of(b) && buf.bytes == bytes);
         same.then(|| self.buffers.remove(name)).flatten().map(|(_, buf)| buf)

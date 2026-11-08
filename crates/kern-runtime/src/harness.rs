@@ -18,12 +18,6 @@ use crate::{Error, Result, Runtime};
 /// `Vec<u8>` so a snapshot or a state sync never crosses the bus.
 pub struct Scratch(pub(crate) DeviceBuf);
 
-impl Scratch {
-    pub fn bytes(&self) -> usize {
-        self.0.bytes as usize
-    }
-}
-
 impl Runtime {
     pub fn call_count(&self, program: &str) -> Result<usize> {
         match self.programs.get(program) {
@@ -186,15 +180,6 @@ impl Runtime {
         )?;
         self.stream.synchronize()?;
         Ok(())
-    }
-
-    /// Whole allocation of a state.
-    pub fn read_state(&self, name: &str) -> Result<Vec<u8>> {
-        self.ctx.bind_to_thread()?;
-        let Some(s) = self.states.get(name) else {
-            bail!(Api, "no state `{name}`");
-        };
-        Ok(self.stream.clone_dtoh(&s.view(0..s.bytes as usize)?)?)
     }
 
     /// Execute calls `[lo, hi)` of a program eagerly, then synchronize.

@@ -47,7 +47,7 @@ runtime 再加 slot 0（kern-serve：每 rank `(max_seqs + 1) × t`，pad 也算
 拆块 remap（后台线程、`Remapping` 拒绝、`Placement` epoch 随 P/D 协议传播）；删掉它是因为 prefill
 将池化、GPU 上的 per-seq state 只是在跑的请求的运行时资源，而 remap 让每个 state 的地址随时间变、
 镜像要跟 epoch、`kern test` 的整块读写只在第一次 remap 之前有效——一套机制换回的只是 slot 数不用
-事先给。整块读写 state（`read_state` / `write_state_at` / `zero_states`，kern test 用）现在总是有效。
+事先给。整块读写 state（`read_state_at` / `write_state_at` / `zero_states`，kern test 用）现在总是有效。
 `Runtime::lease(tokens)` 一次租下 KV 页和每个 per-seq state 的一个 slot
 （租时在 stream 上清零），`Lease::seq_line(table, r)` 给出 line 表的项（宽表
 `[lines, seqs, w]` 的格宽由 `seq_width` 给出，caller 决定 line 落在哪一项）；
