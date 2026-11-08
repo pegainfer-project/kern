@@ -22,7 +22,7 @@
 - [**One night, 17% more requests than vLLM.**](docs/vllm-rsi-example.md) Agents optimized Qwen3.8-27B on live Claude Code traffic, three rounds, no human in between.
 - [**The same engine in SGLang, 10.5% more requests.**](docs/sglang.md) The overnight manifest, rewritten for SGLang's memory layout.
 - [**A new model family in one session.**](docs/qwen38-bringup.md) Qwen3.8-27B plus its speculative draft in under 2.5 hours, one human intervention.
-- [**A kernel set from six agents in parallel.**](docs/k3-kernel-abi.md) K3 decode kernels against a written ABI, step time 37.2 → 29.3 ms.
+- [**A kernel set from six agents in parallel.**](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/k3-kernel-abi.md) K3 decode kernels against a written ABI, step time 37.2 → 29.3 ms.
 - [**An engine per GPU.**](docs/registry.md) DeepSeek-V4.1-Flash ships separate manifests for GB300 and HGX B300.
 - [**Full-size models across GPUs and trays.**](docs/serve.md) DeepSeek-V4.1-Flash at EP4, full-size K3 prefill across eight pipeline stages.
 
@@ -271,15 +271,21 @@ SGLang works the same way through `kern_sglang`, in the same package: [docs/sgla
 `kern <cmd> --help` lists the flags; `crates/kern-run/src/config.rs`
 documents `kern.toml`.
 
-## Deployments
+## Supported models
 
-A model's deployment lives in a repository of its own: the generator, the
-kernel sources and builds it pins, and the manifests. kern stays model-agnostic.
+Every model kern serves lives in a repository of its own under
+[pegainfer-project](https://github.com/pegainfer-project): the generator that
+writes its manifests, the kernel sources and builds it pins, and the records
+of how it was brought up, each pinned to the kern commit it generates
+against. kern stays model-agnostic.
 
-| Repository | Model | How it is served |
+| Model | Repository | How it is served |
 | --- | --- | --- |
-| [pegainfer-project/kern-k3-pp-prefill](https://github.com/pegainfer-project/kern-k3-pp-prefill) | Kimi-K3, full size (896 experts) | P/D on `kern-serve`: prefill as eight pipeline stages, decode as TP8 / EP8 / DCP8 groups. One prefill pipeline with two decode groups on 24 GB300s served the AgentX 256k workload at 64 concurrent sessions: ITL p50 23.4 ms, 103.5 output tok/s per GPU (2026-10-11) |
-| [pegainfer-project/kern-dsv41-flash](https://github.com/pegainfer-project/kern-dsv41-flash) | DeepSeek V4.1 Flash | One GB300 tray as DP4 attention + EP4 MoE on `kern-serve`: `prefill`, `decode_batch` and a five-draft/six-verify `round`; every kernel builds from a clone to its pinned hash |
+| Kimi-K3, full size (896 experts) | [kern-k3-pp-prefill](https://github.com/pegainfer-project/kern-k3-pp-prefill) | P/D on `kern-serve`: prefill as eight pipeline stages, decode as TP8 / EP8 / DCP8 groups. One prefill pipeline with two decode groups on 24 GB300s served the AgentX 256k workload at 64 concurrent sessions: ITL p50 23.4 ms, 103.5 output tok/s per GPU (2026-10-11) |
+| Kimi-K3.1 Pro | [kern-k31](https://github.com/pegainfer-project/kern-k31) | P/D on `kern-serve` as K3, with DeepSeek-V3.2-style sparse attention on its 24 MLA layers; decode at TP8 / DCP8, experts EP2 x TP4. Its decode also runs as the model inside an unmodified SGLang |
+| GLM-5.3 | [kern-glm53](https://github.com/pegainfer-project/kern-glm53) | Packed prefill (up to 16 sequences and 16k rows a call, 1M context) as four pipeline stages, one GPU each |
+| DeepSeek V4.1 Flash | [kern-dsv41-flash](https://github.com/pegainfer-project/kern-dsv41-flash) | One GB300 tray as DP4 attention + EP4 MoE on `kern-serve`: `prefill`, `decode_batch` and a five-draft/six-verify `round`; every kernel builds from a clone to its pinned hash |
+| Qwen3.8-27B, with its DFlash2 draft | this repository (`tools/gen_qwen35.py`), published as [Pegainfer/kern-qwen38-sm103](https://huggingface.co/Pegainfer/kern-qwen38-sm103) | One GPU on `kern-serve`, or as the model inside vLLM or SGLang |
 
 ## Inside
 
@@ -297,7 +303,7 @@ golden-checked in CI:
 | `crates/kern-run` | The `kern` binary: `run`, `test`, `bench`, `server`, `verify`, `cut`, `kernels` |
 | `crates/kern-serve` | Continuous batching and the OpenAI-compatible endpoint |
 | `crates/kern-py` | `pip install kern-llm`: `import kern`, and the vLLM and SGLang plugins |
-| `tools/` | Capture, kernel mining, manifest generators: all model knowledge lives here |
+| `tools/` | Capture, kernel mining, the kernel registry's tooling, the Qwen generators, the toy and e2e gates |
 | `examples/` | Generated manifests, the artifact a provider ships |
 
 Design and records: [design](docs/design.md) · [manifest](docs/manifest.md)
