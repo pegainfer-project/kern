@@ -2178,7 +2178,6 @@ dependencies = [
  "kern-manifest",
  "kern-runtime",
  "pyo3",
- "serde_json",
 ]
 
 [[package]]
@@ -2245,7 +2244,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tokio",
- "tower",
  "tracing",
  "tracing-subscriber",
  "vllm-chat",

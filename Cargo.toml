@@ -43,7 +43,6 @@ vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da9
 anyhow = "1"
 # The frontend's own HTTP stack; kern-serve puts its refusals in front of it.
 axum = "0.8"
-tower = { version = "0.5", features = ["util"] }
 # Recordings are ragged tables (a row per conversation, list columns for its
 # tokens and per-position top-k), which parquet holds and pandas / duckdb read
 # as is.
