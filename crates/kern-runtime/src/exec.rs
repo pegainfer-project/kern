@@ -645,7 +645,7 @@ impl Runtime {
 
     /// Issue every launch of a compiled program, each call on its lane
     /// after the lanes it names (no sync).
-    pub(crate) fn replay(&self, prog: &CompiledProgram, vars: &Dense) -> Result<()> {
+    fn replay(&self, prog: &CompiledProgram, vars: &Dense) -> Result<()> {
         self.replay_each(prog, vars, |_, issue| issue())
     }
 
