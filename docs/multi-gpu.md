@@ -1,6 +1,6 @@
 # 多卡 runtime：TP / EP / 二者组合（设计 + 实测 + 待决）
 
-状态：设计稿，2026-09-01；09-02 按 `dcp-bench.md` 的实测与拍板修订（见文末“已决”）。实测全部在 GB300 NVL72（pod4-gb300-3，driver
+状态：设计稿，2026-09-01；09-02 按 [`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) 的实测与拍板修订（见文末“已决”）。实测全部在 GB300 NVL72（pod4-gb300-3，driver
 13030，CUDA 13.1）上做，bench 源码在
 本地存档 `bench-results/2026-09-01-graph-launch/`（不在仓库）（`bench.cu` 图提交、`fabric.cu`
 跨 tray P2P、`a2a.cu` dispatch 模拟、`hostmem.cu`/`hostnuma.cu`/
@@ -20,7 +20,7 @@
 4. **step 边界的 host 串行路径**（sync → 8 B 回读 → 4×H2D → launch ≈ 174 µs）
    对小模型是每步的 15–20%，对 K3 decode（一步 13–30 ms）不到 1%。它不是多卡的
    第一刀；多卡的实际税是 collective 本身（跨卡 barrier 3.8–4.8 µs 一个，EP36
-   dispatch+combine 外推每步 5–7 ms，DCP4 每步 5–8%，见 `dcp-bench.md`）。
+   dispatch+combine 外推每步 5–7 ms，DCP4 每步 5–8%，见 [`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md)）。
 5. **GPU 能自提交**（device graph tail-launch 在 CUDA 13 / GB300 上验证可
    跑），它省的是"host 不在环上"——这在多卡下的价值是**时钟**（launch count 由
    GPU 推进，见"修正"末段），不是 launch 开销。
@@ -203,7 +203,7 @@ LM head 2.35 GB、lat_down / lat_up 1.35 GB。
 这是下一个该动的核，记进 roadmap。
 
 **M1（2026-09-03）把这项打掉了**：MLA decode 换成 FlashInfer 的 CuTe-DSL Blackwell 核（roadmap M1、
-`k3-kernel-abi.md` K5），同一 12.9k oracle、同一 tray07：B=1 23.1 → 21.1 ms，B=8 mixed 35.6 → 25.7，
+[`k3-kernel-abi.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/k3-kernel-abi.md) K5），同一 12.9k oracle、同一 tray07：B=1 23.1 → 21.1 ms，B=8 mixed 35.6 → 25.7，
 B=16 47.9 → 30.2；短 ctx B=16 29.2，长短差只剩 1 ms。一致性 114 / 111 / 112 of 128（之前 108 / 113 / 107）。
 剩下的 B=16 30 ms 里，collective ≈ 4.7 ms、复制的 MLA 投影 ≈ 1.35 ms，是 E5 的下一块。
 
@@ -579,10 +579,10 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
 写进一个 `carry` buffer 后正常返回，图跑完，host 读到错误码就拆组重建；自转的图在
 超时后不再 tail-launch。外部看门狗杀进程只作兜底。
 
-### 硬约束（`dcp-bench.md` B3p / B2）
+### 硬约束（[`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) B3p / B2）
 
 - **peer/fabric 映射的显存禁止 multicast TMA**（09-02 tray18 隔离实验，
-  `moe-comm-survey.md` §5）：cluster `.multicast::cluster` 的 tensor TMA 第一次发出就把
+  [`moe-comm-survey.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/moe-comm-survey.md) §5）：cluster `.multicast::cluster` 的 tensor TMA 第一次发出就把
   **发起方**的卡打进 "GPU requires reset"（被访问方无事）；cuBLAS/cuBLASLt/CUTLASS 的
   sm100 GEMM 都用它，昨天 tray13 的事故即此。其余全部可用且跨 tray bit-exact、
   690–750 GB/s：普通 ld/st、1-D `cp.async.bulk` 拉/推、`cp.reduce.async.bulk`、sys 原子、
@@ -610,10 +610,10 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
   现在只有 barrier（4.8 µs）和裸拷贝（710 GB/s）两个端点。
 - [x] **EP dispatch 模拟（`a2a.cu`）**：8 rank 跨 tray（tray14+17）一步 8.6 µs（0 B）
   … 22 µs（256 KB/peer）… 204 µs（4 MB/peer，egress 144 GB/s）。外推 EP36 每步
-  dispatch+combine ≈ 5–7 ms，见 `dcp-bench.md` B4；W=36 真跑待做。
+  dispatch+combine ≈ 5–7 ms，见 [`dcp-bench.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/dcp-bench.md) B4；W=36 真跑待做。
 - [ ] **verifier 的 SASS 扫描**（peer 参数的 module 禁 multicast TMA）：`.MULTICAST` 的
   拼写要在 sm_103 上实际 cuobjdump 核对，见"硬约束"。
-- [x] 跨 tray fabric VA 上的 1-D `cp.async.bulk`：通过（09-02，`moe-comm-survey.md` §5）。
+- [x] 跨 tray fabric VA 上的 1-D `cp.async.bulk`：通过（09-02，[`moe-comm-survey.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/moe-comm-survey.md) §5）。
 - [ ] **多 writer 打一张卡的 ingress 聚合**（P/D push 8→1 的上限；估
   ~900 GB/s）。
 - [ ] W=36 真实 EP fan-out（9 tray `a2a`），替换 B4 的外推。
@@ -636,7 +636,7 @@ rank 死 → 组内所有图在 flag 上永久 spin。**所有跨 rank 等待都
 7. **不为跨 NVL72 域留接口。**
 
 8. **MoE 通信 = DeepGEMM MegaMoE**（pegainfer 的 AOT fork，一层一个 launch），源码级
-   对比见 `moe-comm-survey.md`。TRT one-sided 作为 fallback 的事以后再说；不自写，NCCL
+   对比见 [`moe-comm-survey.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/moe-comm-survey.md)。TRT one-sided 作为 fallback 的事以后再说；不自写，NCCL
    不作为 extern 保留。
 10. **decode 分片形态 = tp 组一个 batch，dense / KDA 权重按头 TP4，MLA KV 按行归各卡，
    expert EP32**（2026-09-03，见"最终形态"）。attention-TP 不做；P 池不做。

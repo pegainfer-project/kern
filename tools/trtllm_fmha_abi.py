@@ -1,5 +1,5 @@
 """TRT-LLM gen's ragged context FMHA (kernel index family `trtllm_fmha_ctx_h192_v128`,
-docs/k3-kernel-abi.md K13) as one manifest op: this rank's rows of a chunk against
+kern-k3-pp-prefill's docs/k3-kernel-abi.md K13) as one manifest op: this rank's rows of a chunk against
 the expanded K/V of their sequence, causal aligned to the end of the sequence.
 
 The ABI below is data, not derivation: it is what tools/kernel-capture lifted

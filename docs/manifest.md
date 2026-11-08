@@ -165,10 +165,10 @@ cut                          cut      流水线的一段：id、第几段、共�
     技巧：2^31 的维配溢出的 stride，越过 tile 行界的坐标读零、写丢），
     这种描述符没有上界、不查，核像拿裸指针一样被信任。核收裸描述符（CuTe DSL）就是 `bytes<128>` 里一个 at 0 的字段；
     核收 cute `TiledCopy`（CUTLASS）就是 `bytes<256>`：描述符在 0，动态
-    stride 的 int 在 128（`k3-kernel-abi.md` K8）。DeepGEMM 这类 TMA kernel
+    stride 的 int 在 128（[`k3-kernel-abi.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/k3-kernel-abi.md) K8）。DeepGEMM 这类 TMA kernel
     的 18 个描述符就这样从 manifest 里长出来，host 侧不再有 launch 代码。
     FlashInfer 的 MLA decode 核 28 个参数（5 个描述符 + 张量 struct +
-    FastDivmod）也是这么铺平的（`k3-kernel-abi.md` K5）。所以一个"ABI 即接口"的单 launch op 只
+    FastDivmod）也是这么铺平的（[`k3-kernel-abi.md`](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/k3-kernel-abi.md) K5）。所以一个"ABI 即接口"的单 launch op 只
     需要 `module`、`entry`、`block`、`grid` 四个字段；两段式 argmax、
     vLLM attention（unified + reduce_segments）这类"一个逻辑算子 = 多次
     launch + 私有中间缓冲"整体折叠成一个 impl，不向调用方泄漏。
