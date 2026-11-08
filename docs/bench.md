@@ -1,23 +1,17 @@
 # kern bench: where a program's time goes
 
 `kern bench` measures a sweep of call shapes on one device and writes the
-raw samples out. It answers two questions, and they cost very different
-amounts:
-
-- **Where does this program's time go?** Every call is bracketed in a
-  second copy of the graph and attributed. Always done, seconds per
-  scenario.
-- **What would this call cost on its own, cold and warm?** Every distinct
-  call is lifted out of the program and measured against its own
-  pre-image. Only for `--isolate`, and it is most of the wall clock.
-
-The first tells you what to work on. The second tells you what the work
-would be worth. Neither starts a server, constructs traffic, or needs an
-external profiler.
+raw samples out. Every sample is one replay of the program's real CUDA
+graph, from its pre-image behind an L2 flush, and CUPTI's kernel records
+(`kern_runtime::trace`) say when each kernel ran and which call launched
+it. The graph's time and every call's come from the same replay, with
+nothing inserted between kernels. It starts no server, constructs no
+traffic and needs no external profiler; it cannot run under nsys, whose
+CUPTI subscription excludes kern's.
 
 ```bash
 kern bench qwen3-4b --workload tools/profiles/quick.toml --out results/quick.json
-kern bench qwen3-4b --workload tools/profiles/atlas.toml --out results/atlas.json --isolate
+kern bench qwen3-4b --workload tools/profiles/quick.toml --out results/quick.json --ablate
 kern bench dsv41 --gpu 0 --workload decode.toml --out results/decode.json   # EP4: gpus 0–3
 ```
 
@@ -75,10 +69,10 @@ It is the GPU time the modeled traffic costs on this manifest, the number
 an optimization is judged by. Shapes the manifest drops are counted
 beside it, not priced.
 
-A cross product is the point. On Qwen3-4B the same 2,048-row chunk is
-31% matrix multiply and 47% attention over an empty cache, and 2% matrix
-multiply and 96% attention over 32k of it (the `mix` line, GB300,
-2026-09-16). A profile taken at one shape does not transfer to another,
+A cross product is the point. On Qwen3-4B a 2,048-row chunk over an
+empty cache is 31% matrix multiply and 51% attention, and 512 rows over
+32k of it 2% matrix multiply and 97% attention (the `mix` line, GB300,
+2026-11-08). A profile taken at one shape does not transfer to another,
 so the tool takes them all.
 
 **Shapes with no program are dropped, not fatal.** Which shapes a
@@ -104,42 +98,44 @@ One line per fact, in the house style: the section name first, ` · `
 between facts, the section's time last.
 
 ```
-calibrate NVIDIA GB300 · 152 SMs · L2 129 MiB   170.6ms
-plan      6 scenarios · 0 dropped · 2128 tokens of state · 4 seqs
+source    512 tokens of real prefix per rank   55.5ms
+device    NVIDIA GB300 · 152 SMs · L2 129 MiB · HES
+plan      6 scenarios · 0 dropped · 2640 tokens of state · 5 seqs
 scenario  decode-g1-r1-kv128
-program   2.577 ms · p10–p90 2.575–2.580 · cv 0.1% · 436 calls   150.3ms
-mix       gemm 49.9% · fused_add_rms_norm 11.3% · attn 8.9% · rotary_embedding 6.7% · silu_mul 6.0% · rms_norm_qhead 5.7% · +5 more
-isolate   85 cases · outputs match   868.7ms
+program   2.657 ms · p10–p90 2.656–2.659 · cv 0.1% · 436 calls   905.5ms
+mix       gemm 65.6% · attn 8.7% · fused_add_rms_norm 6.5% · silu_mul 4.1% · rotary_embedding 3.9% · sample 3.8% · +5 more
+free      gemm 67.5% · attn 8.6% · fused_add_rms_norm 6.3% · rotary_embedding 4.0% · sample 3.8% · silu_mul 3.4% · +5 more
 …
-scenario  decode_batch-g4-r1-kv512
-program   3.324 ms · p10–p90 3.318–3.327 · cv 0.1% · 436 calls   152.7ms
-mix       gemm 44.2% · attn_batch 19.6% · fused_add_rms_norm 9.9% · rotary_embedding 5.8% · silu_mul 5.5% · rms_norm_qhead 5.0% · +5 more
-isolate   85 cases · outputs match   891.3ms
-out       results/quick.json   6.9s
+cost      0.011 s · 4 calls · gemm 60.2% · attn_batch 10.9% · fused_add_rms_norm 5.9% · rotary_embedding 3.9% · silu_mul 3.7% · attn 2.9% · +7 more
+out       results/quick.json   5.6s
 ```
 
-`mix` is the answer to "where does the time go", and it is on the
-terminal because that is where the question is asked. The shares are of
-the traced total, not of the graph: bracketing every call costs time that
-belongs to no call, and dividing by the graph would quietly hand that
-time to whichever op happened to be measured. A `program` line's time
-covers the scenario so far, context copies included; the `out` line's is the
-whole run. A `source` line before `calibrate` says how long the ranks'
-source prefix took to build.
+`device` says whether the kernel timestamps are the GPU's own (HES, on
+Blackwell) or CUPTI's software ones. A `program` line's time is the p50
+from the first kernel's start to the last kernel's end; it covers the
+scenario so far, context copies included, and the `out` line's is the
+whole run. `mix` is the answer to "where does the time go": each call's
+kernel time, summed by op, as a share of all kernel time. Time between
+kernels belongs to no call, and kernels that overlap (programmatic
+dependent launch, lanes) are each charged in full.
 
 ## What an op is worth
 
-`mix` attributes the step by bracketing every call with events, and a
-bracket costs a few microseconds and breaks the overlap programmatic
-dependent launch buys, so ops with many tiny calls look bigger than they
-are. `--ablate` answers the question directly: for each op, the program is
-captured again with all of that op's calls left out and timed as a whole
-graph, and the `free` line says what share of the step (and, after
-`cost`, of the workload) would go if the op were free. On a Qwen3.8-27B
-decode at 8 sequences over 131k context `mix` gives the fused add-norm
-4.5% and `free` 2.3%; attention goes the other way, 43.5% → 50.8%. A left
-out call's outputs keep what the last full run wrote, so the rest of the
-program reads well-formed inputs. Single-device only, like `--isolate`.
+`mix` says where the time is; `--ablate` says what removing it would buy.
+For each op the program is captured again with all of that op's calls
+left out and timed as a whole graph, and the `free` line says what share
+of the step (and, after `cost`, of the workload) would go if the op were
+free, overlap and launch gaps included. A left out call's outputs keep
+what the last full run wrote, so the rest of the program reads
+well-formed inputs. Single-device only: leaving a call out on every rank
+can strand a peer's barrier.
+
+Before kern bench read kernel records, `mix` bracketed every call with
+CUDA events, which cost a few microseconds each and broke programmatic
+dependent launch: on the Qwen3-4B decode above it gave gemm 49.7% and
+the fused add-norm 11.6%, against `free`'s 67.5% and 6.6% (tray03,
+2026-11-08). Read off the kernels, `mix` and `free` agree to a point or
+two.
 
 ## What is actually measured
 
@@ -151,26 +147,20 @@ program reads well-formed inputs. Single-device only, like `--isolate`.
   would, and a 185k context costs a copy, not its prefill. The page table,
   slot mapping, sequence lengths and KV pages are what a server would hand
   the kernel. A context length is never simulated by raising a scalar over
-  uninitialised cache. `span_at` is
-  the one fill written at a constant.
-- **An isolated call is measured where it occurs.** The walk executes
-  each call for real after measuring it, so the next call sees the inputs
-  the program would give it. Calls are grouped by op, resolved arguments,
-  buffer shape, aliasing, offsets and vars; weight names are ignored,
-  state offsets are not. Qwen3-4B's decode is 436 calls in 85 groups.
-- **Cold and warm.** Cold streams over a seeded buffer at least eight
-  times the reported L2 first; warm primes the op and restores its
-  declared writes again. The order alternates between samples. This is an
-  empirical cache-sensitivity check, not a claim to flush every cache.
-- **Every sample starts from the program's pre-image**: the carries and
-  states its calls declare they write are restored before each replay.
-  Workspace is written before it is read within a run, so it is left
-  alone, and an exported carry (one that peers write into) is never
-  restored: its barrier epochs must only advance.
+  uninitialised cache. `span_at` is the one fill written at a constant.
+- **Every sample starts cold, from the program's pre-image.** A
+  copy-engine copy of eight times the L2 flushes it (as fully as an SM
+  copy: a 32 MiB read after either takes 19.1 µs against 16.3 µs warm,
+  GB300, `bench_results/2026-11-08-l2-evict`), and the carries and states
+  the program declares it writes are restored. Workspace is written
+  before it is read within a run, so it is left alone; an exported carry
+  (one that peers write into) is never restored, since its barrier epochs
+  must only advance; a paged state is only appended to, so a replay
+  rewrites its rows with the same bytes.
 - **Nothing is filtered.** Every sample is in the report, slow tails
-  included, with p10/p50/p90, cv, tail ratio and per-quarter medians.
-  Hardware anchors run before and after the sweep so a machine that
-  drifted mid-run says so.
+  included, with p10/p50/p90, cv, tail ratio and per-quarter medians,
+  beside `nvidia-smi`'s clocks, power and temperature before and after
+  each scenario, so a machine that throttled mid-run says so.
 
 ## Ranks
 
@@ -182,35 +172,27 @@ record per scenario per rank, with a `rank` field, and the terminal shows
 the rank a step waits for.
 
 ```
-calibrate NVIDIA GB300 · 152 SMs · L2 129 MiB · rank 0 of 4   171.2ms
+device    NVIDIA GB300 · 152 SMs · L2 129 MiB · HES · rank 0 of 4
 plan      9 scenarios · 0 dropped · 33920 tokens of state · 8 seqs
 scenario  decode_batch-g8-r1-kv4096
 program   9.070 ms · p10–p90 9.062–9.095 · cv 0.2% · 672 calls · rank 2 slowest of 4   3.1s
-mix       dsv41_mega_moe_e384.0799aa8f 33.6% · dsv41_dense.d9228a3b 5.7% · …
 ```
 
-`hardware` and the calibration anchors are rank 0's. `--isolate` is
-refused for a topology: a call that reads its peers cannot be lifted out
-of one rank's program and replayed alone.
+`hardware` is rank 0's.
 
 ## The gate
 
-With `--isolate`, the tokens the call-by-call walk emits must equal the
-tokens the whole program emits, or the scenario fails. That is what
-`outputs match` on the `isolate` line means, and it is the check that
-snapshot and restore actually put the state back.
-
-Without `--isolate` there is no walk and no such check, which is the
-honest cost of the cheap mode.
+After the samples, one more replay from the restored pre-image must emit
+the tokens the last sample did, or the scenario fails: it is the check
+that restoring actually puts the state back. The tracer must return every
+kernel node of every sampled graph, each named by its call, or the run
+fails naming the program and how many records CUPTI dropped.
 
 ## Limits
 
-- Attribution only across ranks. Exposed communication, a rank waiting
-  on a peer inside a kernel, is inside that call's bracket and only a
-  trace tells it from compute.
+- Exposed communication, a rank waiting on a peer inside a kernel, is
+  inside that kernel's time; only the peers' records tell it from
+  compute.
 - One plan, one allocation. Capacity is sized for the largest scenario in
   the workload, so a sweep's cheap scenarios carry its expensive one's
   state. Split a sweep in two if that matters.
-- `--isolate` reports are the only input the operator explorer
-  (`tools/profile_export.py`) accepts: an attribution-only report has no
-  operator evidence in it.

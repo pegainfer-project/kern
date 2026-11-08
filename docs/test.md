@@ -293,8 +293,8 @@ primary context，指针互相可见。**比较也在设备上做**：`Side` 有
 （两段字节按 64 B 块出差异 bitmap，回区间；state 的 write-set 就这么找，
 不再整块读回 host 逐字节 diff）、`logits`（每行 argmax / margin / KL /
 top-20 重合 / A 的 token 在 B 里的名次，一 block 一行）——kern-runtime 里
-是三个 kernel（`compare.cu`，PTX 随源码入库、driver JIT，和 `profile.ptx`
-一个做法）。A 的参考输出、logits 行全留在设备侧 scratch，
+是三个 kernel（`compare.cu`，PTX 随源码入库、driver JIT）。
+A 的参考输出、logits 行全留在设备侧 scratch，
 CPU 只拿事实：计数、ulp、区间、KL。host 的 `compare` / `changed_blocks` /
 `logit_stats` 仍是定义，假 Side 用它们，kernel 对它们做性质测试
 （`cargo test -p kern-run --test device_compare -- --ignored`，要一张 GPU；

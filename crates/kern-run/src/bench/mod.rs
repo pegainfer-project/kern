@@ -1,12 +1,12 @@
 //! Single-device performance evidence, driven by the manifest's protocol.
 //!
-//! Two questions, two costs. Where does a program's time go: every call is
-//! bracketed in a second copy of the graph and attributed, which is cheap
-//! and always done. What would a call cost on its own, cold and warm:
-//! every distinct call is lifted out of the program and measured against
-//! its own pre-image, which is most of the wall clock and only done for
-//! `--isolate`. The first answers what to work on, the second what the
-//! work would be worth.
+//! Where does a program's time go: every sample is one traced replay of
+//! the real graph, from the program's pre-image behind an L2 flush, and
+//! the tracer names each kernel by the call that launched it, so the
+//! graph's time and every call's come from the same replay with nothing
+//! inserted between kernels. What would an op be worth: with `--ablate`
+//! the program is captured again without that op's calls and timed whole,
+//! overlap and launch gaps included.
 //!
 //! Nothing here names a program, a buffer or a model. A workload gives
 //! shapes ([`workload`]), `Protocol` turns a shape into a program, and the
@@ -15,20 +15,21 @@
 //!
 //! A manifest with a topology runs as its ranks, every rank fed the same
 //! shape with its own sequences, in lockstep: a call that reads its peers
-//! finds them issuing. Attribution is per rank; a call cannot be lifted
-//! out of one rank's program alone, so `--isolate` is single-device.
+//! finds them issuing. Attribution is per rank; leaving a call out on
+//! every rank can strand a peer's barrier, so `--ablate` is single-device.
 
 pub mod workload;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
-use kern_manifest::types::{Arg, BufferKind, Dim, Manifest};
+use kern_manifest::types::{BufferKind, Manifest};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
-use kern_runtime::profile::{Anchor, Probe, ProgramSamples};
+use kern_runtime::profile::{Graph, PreImage, Probe};
+use kern_runtime::trace::{self, Step};
 use kern_runtime::{Capacity, HostWeights, Runtime};
 use kern_test::report::row;
 use serde::Serialize;
@@ -40,7 +41,10 @@ use crate::Vars;
 use workload::{Plan, Scenario, Shape, Workload};
 
 /// The report schema. Readers check it before they read anything else.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
+
+/// Untimed replays before a graph's samples.
+const WARMUP: usize = 4;
 
 /// Ops named on the mix line before it says how many are left.
 const SHOW: usize = 6;
@@ -53,9 +57,6 @@ pub struct BenchOpts {
     /// Portable JSON with raw samples and all call locations; no machine paths
     #[arg(long)]
     out: PathBuf,
-    /// Also measure every distinct call on its own, L2 cold and warm
-    #[arg(long)]
-    isolate: bool,
     /// Also time each program with every call of one op left out: what the
     /// step would save if that op were free
     #[arg(long)]
@@ -129,9 +130,8 @@ fn stats(samples: &[f64]) -> Stats {
 }
 
 /// Share of a program's attributed time by op, largest first. The shares
-/// are of the traced total, not of the graph: bracketing every call costs
-/// time that belongs to no call, and dividing by the graph would quietly
-/// hand that time to whichever op happened to be measured.
+/// are of the kernels' total, not of the graph: time between kernels
+/// belongs to no call.
 fn mix(calls: &[(String, f64)]) -> Vec<(String, f64)> {
     let mut by: BTreeMap<&str, f64> = BTreeMap::new();
     for (op, us) in calls {
@@ -200,17 +200,6 @@ fn digest(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
 
-fn anchors(v: Vec<Anchor>) -> Value {
-    Value::Array(
-        v.into_iter()
-            .map(|a| {
-                json!({"name":a.name,"payload_bytes":a.bytes,
-        "traffic_bytes":a.traffic_bytes,"flops":a.flops,"timing":series(a.samples_us)})
-            })
-            .collect(),
-    )
-}
-
 fn telemetry(gpu: usize) -> Value {
     let fields = "clocks.sm,clocks.mem,temperature.gpu,power.draw,power.limit,utilization.gpu,memory.used";
     let output = std::process::Command::new("nvidia-smi")
@@ -225,40 +214,6 @@ fn telemetry(gpu: usize) -> Value {
         }
         _ => Value::Null,
     }
-}
-
-/// Conservative grouping: retain state offsets, scalar args, ABI and all
-/// buffer shapes/offsets and alias relationships. Weight names can vary.
-fn signature(m: &Manifest, program: &str, index: usize, vars: &Vars) -> Value {
-    let c = &m.programs[program].calls[index];
-    let mut aliases: BTreeMap<&str, usize> = BTreeMap::new();
-    let args: Vec<Value> = c
-        .args
-        .iter()
-        .map(|a| match a {
-            Arg::Buf { buf, offset } => {
-                let next = aliases.len();
-                let alias = *aliases.entry(buf).or_insert(next);
-                let b = &m.buffers[buf];
-                let shape: Vec<u64> = b
-                    .shape
-                    .iter()
-                    .map(|d| match d {
-                        Dim::Const(n) => *n,
-                        Dim::Var(v) => vars[v],
-                    })
-                    .collect();
-                json!({"alias":alias,"dtype":b.dtype,"shape":shape,"kind":b.kind,"offset":offset})
-            }
-            Arg::State { state, offset } => json!({"state":state,"offset":offset}),
-            Arg::Var { var } => json!({"scalar":vars[var]}),
-            Arg::Expr { expr } => json!({"scalar":expr.eval(vars).expect("verified expression")}),
-            _ => serde_json::to_value(a).unwrap(),
-        })
-        .collect();
-    // Vars remains in the key because impl-private geometry may read vars
-    // not forwarded by the call's public interface.
-    json!({"op":c.op,"args":args,"vars":vars})
 }
 
 fn corpus(tokenizer: &std::path::Path, seed: u64) -> Result<Vec<i64>> {
@@ -326,39 +281,39 @@ fn source(rt: &mut Runtime, p: &Protocol, length: usize, corpus: &[i64], seq: us
     Ok(Some(lease))
 }
 
-/// Lift each distinct call out of the program, measure it cold and warm,
-/// and step the trajectory so the next call sees the inputs it would see.
-/// The caller has already re-staged: `Probe::program` leaves persistent
-/// state at its pre-image, not where the walk needs it. Returns the cases
-/// and, for every call, the case it belongs to.
-fn isolate_calls(
-    rt: &Runtime,
-    probe: &Probe,
-    program: &str,
-    vars: &Vars,
-    samples: usize,
-) -> Result<(Vec<Value>, Vec<usize>)> {
-    let m = &rt.manifest;
-    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    let mut cases = Vec::new();
-    let mut of_call = Vec::new();
-    for (i, c) in m.programs[program].calls.iter().enumerate() {
-        let sig = signature(m, program, i, vars);
-        let key = digest(&serde_json::to_vec(&sig)?);
-        let case = match seen.get(&key) {
-            Some(&case) => case,
-            None => {
-                let s = probe.call(rt, program, vars, i, samples).with_context(|| format!("call {i} ({})", c.op))?;
-                seen.insert(key.clone(), cases.len());
-                cases.push(json!({"id":key,"signature":sig,"representative_call":i,
-                    "cold":series(s.cold_us),"warm":series(s.warm_us)}));
-                cases.len() - 1
-            }
-        };
-        of_call.push(case);
-        rt.run_range(program, vars, i, i + 1)?;
+/// One sample's whole-graph time, first kernel start to last kernel end,
+/// and each of the program's `calls` calls' kernel time, in µs.
+fn timing(step: &Step, calls: usize) -> Result<(f64, Vec<f64>)> {
+    let (got, want) = (step.spans.len(), step.issue.kernels.len());
+    ensure!(
+        got == want && got > 0,
+        "`{}`: the tracer returned {got} of the graph's {want} kernels ({} records dropped so far)",
+        step.issue.program,
+        trace::dropped()
+    );
+    let mut per = vec![0.; calls];
+    for s in &step.spans {
+        let c = s.call.filter(|&c| (c as usize) < calls).with_context(|| {
+            format!("`{}`: kernel `{}` is not one of the program's calls", step.issue.program, s.name)
+        })?;
+        per[c as usize] += (s.end - s.start) as f64 / 1e3;
     }
-    Ok((cases, of_call))
+    let start = step.spans.iter().map(|s| s.start).min().unwrap();
+    let end = step.spans.iter().map(|s| s.end).max().unwrap();
+    Ok(((end - start) as f64 / 1e3, per))
+}
+
+/// The tracer's steps for `seqs`, taken out of `steps`.
+fn take(steps: &mut BTreeMap<u64, Step>, seqs: &[u64]) -> Result<Vec<Step>> {
+    seqs.iter()
+        .map(|q| steps.remove(q).with_context(|| format!("the tracer returned no kernels for issue {q}")))
+        .collect()
+}
+
+/// `samples` traced replays of `g` after the warmup; their sequence numbers.
+fn replays(r: &Rank, pre: &PreImage, g: &Graph, samples: usize) -> Result<Vec<u64>> {
+    let all = (0..WARMUP + samples).map(|_| r.probe.sample(&r.rt, pre, g)).collect::<kern_runtime::Result<Vec<_>>>()?;
+    Ok(all[WARMUP..].to_vec())
 }
 
 /// One line, one fact, in the shape `kern test` reports in.
@@ -366,7 +321,7 @@ fn say(key: &str, body: String) {
     println!("{}", row(key, body, None));
 }
 
-fn timed(key: &str, body: String, since: Instant) {
+fn say_timed(key: &str, body: String, since: Instant) {
     println!("{}", row(key, body, Some(since.elapsed().as_secs_f32())));
 }
 
@@ -391,70 +346,78 @@ fn mix_line(shares: &[(String, f64)]) -> String {
 
 /// Everything about the report that is settled before the first sample:
 /// what was measured, on what, and under which protocol.
-fn preamble(
-    m: &Verified,
-    json_bytes: &[u8],
-    w: &Workload,
-    plan: &Plan,
-    probe: &Probe,
-    isolated: bool,
-    plan_ranks: usize,
-) -> Result<Value> {
+fn preamble(m: &Verified, json_bytes: &[u8], w: &Workload, plan: &Plan, probe: &Probe, ranks: usize) -> Result<Value> {
+    let timer = match probe.hes {
+        true => "CUPTI kernel records, GPU timestamps (HES)",
+        false => "CUPTI kernel records, software timestamps",
+    };
     Ok(json!({"version":VERSION,"model":m.model,"manifest_sha256":digest(json_bytes),
         "runner_sha256":digest(&std::fs::read(std::env::current_exe()?)?),
         "created_unix":SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-        "isolated":isolated,"ranks":plan_ranks,
+        "ranks":ranks,
         "hardware":{"device":probe.device,"sm_count":probe.sm_count,"l2_bytes":probe.l2_bytes,
-            "eviction_bytes":probe.eviction_bytes,"driver_version":probe.driver_version},
-        "protocol":{"timer":"CUDA graph events","op_cache_modes":["cold_l2","warm_replay"],
-            "program_entry_cache":"cold_l2; natural reuse between calls","restore":"declared writes before each sample",
-            "samples_per_mode":w.samples,"tail_policy":"all measured samples retained; no outlier filtering",
-            "warmup":"3 call executions; 4 whole-program executions",
-            "grouping":"same op, resolved arguments, buffer shape, aliasing, offsets and vars; weight names omitted",
+            "driver_version":probe.driver_version},
+        "protocol":{"timer":timer,"graph":"first kernel start to last kernel end",
+            "call":"sum of the call's kernel durations in the same replay",
+            "entry":"L2 flushed; declared carry and state writes restored","samples":w.samples,"warmup":WARMUP,
             "context_data":"deterministic diverse prose; one real prefix per rank, copied onto each sequence's own pages",
-            "units":"microseconds; bandwidth GB/s uses read+write traffic"},
+            "units":"microseconds"},
         "modules":m.modules.iter().map(|(n,x)|json!({"name":n,"sha256":x.sha256})).collect::<Vec<_>>(),
         "workload":{"samples":w.samples,"seed":w.seed,"scenarios":&plan.scenarios,"dropped":&plan.dropped},
         "scenarios":[]}))
 }
 
-/// One rank's evidence of one scenario before it is written down.
-/// `cases` and `of_call` are empty unless the calls were isolated, and
-/// then `outputs` are the walk's, checked equal to the whole program's.
+/// One rank's issues of one scenario, before the tracer has their kernels.
 struct Measured {
     vars: Vars,
-    program: ProgramSamples,
-    cases: Vec<Value>,
-    of_call: Vec<usize>,
-    outputs: Vec<Value>,
+    program: Vec<u64>,
+    free: Vec<(String, Vec<u64>)>,
+    telemetry: (Value, Value),
+}
+
+/// One rank's evidence of one scenario: per sample the graph's time and
+/// every call's, and per ablated op the graph's time without it.
+struct Timed {
+    vars: Vars,
+    graph_us: Vec<f64>,
+    calls_us: Vec<Vec<f64>>,
     free: Vec<(String, Vec<f64>)>,
     telemetry: (Value, Value),
-    isolate_s: Option<f64>,
+}
+
+impl Measured {
+    fn time(self, steps: &mut BTreeMap<u64, Step>, calls: usize) -> Result<Timed> {
+        let timed = take(steps, &self.program)?.iter().map(|s| timing(s, calls)).collect::<Result<Vec<_>>>()?;
+        let mut calls_us = vec![Vec::with_capacity(timed.len()); calls];
+        for (_, per) in &timed {
+            calls_us.iter_mut().zip(per).for_each(|(v, us)| v.push(*us));
+        }
+        let free = self
+            .free
+            .into_iter()
+            .map(|(op, seqs)| {
+                let us = take(steps, &seqs)?.iter().map(|s| timing(s, calls).map(|t| t.0)).collect::<Result<_>>()?;
+                Ok((op, us))
+            })
+            .collect::<Result<_>>()?;
+        let graph_us = timed.into_iter().map(|t| t.0).collect();
+        Ok(Timed { vars: self.vars, graph_us, calls_us, free, telemetry: self.telemetry })
+    }
 }
 
 /// The report's record of one scenario on one rank: the manifest's calls
 /// annotated with what was measured of each.
-fn record(m: &Manifest, s: &Scenario, rank: usize, x: Measured, elapsed_s: f64) -> Value {
+fn record(m: &Manifest, s: &Scenario, rank: usize, x: Timed, elapsed_s: f64) -> Value {
     let calls: Vec<Value> = m.programs[&s.program]
         .calls
         .iter()
-        .zip(x.program.attributed_us)
+        .zip(x.calls_us)
         .enumerate()
-        .map(|(i, (c, us))| {
-            let mut v = json!({"index":i,"label":c.label,"op":c.op,"args":c.args,
-                "launches":m.ops[&c.op].imp.launches.iter().map(|l|json!({"entry":l.entry(),"module":l.module()})).collect::<Vec<_>>(),
-                "in_program":series(us)});
-            if let Some(&case) = x.of_call.get(i) {
-                v["case"] = json!(case);
-            }
-            v
-        })
+        .map(|(i, (c, us))| json!({"index":i,"label":c.label,"op":c.op,"in_program":series(us)}))
         .collect();
-    let check = if x.of_call.is_empty() { Value::Null } else { json!("matches whole-program token outputs") };
     let free: Vec<Value> = x.free.into_iter().map(|(op, us)| json!({"op":op,"graph":series(us)})).collect();
-    json!({"scenario":s,"program":s.program,"rank":rank,"vars":x.vars,
-        "graph":series(x.program.graph_us),"instrumented":series(x.program.instrumented_us),
-        "cases":x.cases,"calls":calls,"outputs":x.outputs,"without_op":free,"output_check":check,
+    json!({"scenario":s,"program":s.program,"rank":rank,"vars":x.vars,"graph":series(x.graph_us),
+        "calls":calls,"without_op":free,
         "telemetry_before":x.telemetry.0,"telemetry_after":x.telemetry.1,"elapsed_s":elapsed_s})
 }
 
@@ -468,16 +431,17 @@ struct Rank {
     source: Option<Lease>,
 }
 
-/// One rank's part of a scenario: lease, prefix, stage, measure. Every
+/// One rank's part of a scenario: lease, prefix, stage, sample. Every
 /// rank runs this at once for the same shape, so the graphs replay in
-/// lockstep and a peer read finds its peer issuing.
+/// lockstep and a peer read finds its peer issuing. One more replay must
+/// emit the tokens the last sample did, or restoring the pre-image does
+/// not put the state back.
 fn measure(
     r: &mut Rank,
     p: &Protocol,
     s: &Scenario,
     corpus: &[i64],
     samples: usize,
-    isolate: bool,
     ablating: bool,
 ) -> Result<Measured> {
     let shape = &s.shape;
@@ -492,28 +456,26 @@ fn measure(
     let input: Vec<i64> =
         shape.context.iter().enumerate().flat_map(|(i, &pos)| tokens(corpus, seq(i), pos, shape.rows)).collect();
     let vars = crate::stage_batch(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
-    let program = r.probe.program(&r.rt, &s.program, &vars, samples)?;
-    let whole = output_fingerprints(&r.rt, p, shape.groups)?;
-    let free = if ablating { ablate(r, &s.program, &vars, samples)? } else { Vec::new() };
-    let (cases, of_call, outputs, isolate_s) = match isolate {
-        false => (Vec::new(), Vec::new(), whole, None),
-        true => {
-            let at = Instant::now();
-            // `Probe::program` left the persistent state at its pre-image.
-            crate::stage_batch(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
-            let (cases, of_call) = isolate_calls(&r.rt, &r.probe, &s.program, &vars, samples)
-                .with_context(|| format!("{}: isolating calls", s.id))?;
-            let walked = output_fingerprints(&r.rt, p, shape.groups)?;
-            ensure!(walked == whole, "{}: profiled trajectory differs from whole program output", s.id);
-            (cases, of_call, walked, Some(at.elapsed().as_secs_f64()))
-        }
+    let pre = PreImage::new(&r.rt, &s.program)?;
+    let whole = Graph::new(&r.rt, &s.program, &vars, &BTreeSet::new())?;
+    let program = replays(r, &pre, &whole, samples)?;
+    let last = output_fingerprints(&r.rt, p, shape.groups)?;
+    r.probe.sample(&r.rt, &pre, &whole)?;
+    ensure!(
+        output_fingerprints(&r.rt, p, shape.groups)? == last,
+        "{}: a replay from the restored pre-image emitted different tokens",
+        s.id
+    );
+    let free = match ablating {
+        true => ablate(r, &pre, &s.program, &vars, samples)?,
+        false => Vec::new(),
     };
-    Ok(Measured { vars, program, cases, of_call, outputs, free, telemetry: (before, telemetry(r.gpu)), isolate_s })
+    Ok(Measured { vars, program, free, telemetry: (before, telemetry(r.gpu)) })
 }
 
-/// For each op of `program`, in first-call order, the step's graph time
-/// with all of its calls left out.
-fn ablate(r: &Rank, program: &str, vars: &Vars, samples: usize) -> Result<Vec<(String, Vec<f64>)>> {
+/// For each op of `program`, in first-call order, the issues of the
+/// step's graph with all of its calls left out.
+fn ablate(r: &Rank, pre: &PreImage, program: &str, vars: &Vars, samples: usize) -> Result<Vec<(String, Vec<u64>)>> {
     let calls = &r.rt.manifest.programs[program].calls;
     let mut ops: Vec<&str> = Vec::new();
     for c in calls {
@@ -524,7 +486,8 @@ fn ablate(r: &Rank, program: &str, vars: &Vars, samples: usize) -> Result<Vec<(S
     ops.into_iter()
         .map(|op| {
             let skip = calls.iter().enumerate().filter(|(_, c)| c.op == op).map(|(i, _)| i).collect();
-            Ok((op.to_string(), r.probe.without(&r.rt, program, vars, &skip, samples)?))
+            let g = Graph::new(&r.rt, program, vars, &skip)?;
+            Ok((op.to_string(), replays(r, pre, &g, samples)?))
         })
         .collect()
 }
@@ -545,26 +508,14 @@ struct Bench {
     protocol: Protocol,
     corpus: Vec<i64>,
     samples: usize,
-    isolate: bool,
     ablate: bool,
 }
 
 impl Bench {
     /// Every rank on its GPU, peers connected, what the manifest runs once
     /// run, a probe over each.
-    fn load(
-        m: &Verified,
-        inputs: &crate::Inputs,
-        protocol: Protocol,
-        plan: &Plan,
-        isolate: bool,
-        ablate: bool,
-    ) -> Result<Bench> {
+    fn load(m: &Verified, inputs: &crate::Inputs, protocol: Protocol, plan: &Plan, ablate: bool) -> Result<Bench> {
         let n = crate::ranks_of(m)?;
-        ensure!(
-            n == 1 || !isolate,
-            "--isolate needs a single-device manifest: a call that reads its peers cannot be replayed on one rank"
-        );
         ensure!(
             n == 1 || !ablate,
             "--ablate needs a single-device manifest: leaving a call out on every rank can strand a peer's barrier"
@@ -609,7 +560,7 @@ impl Bench {
             .enumerate()
             .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank, source: None })
             .collect();
-        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, isolate, ablate })
+        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, ablate })
     }
 
     /// Build every rank's source prefix, the longest context any scenario
@@ -629,32 +580,30 @@ impl Bench {
     fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, Priced)> {
         let started = Instant::now();
         say("scenario", s.id.clone());
-        let (p, corpus, samples, isolate, ablating) =
-            (&self.protocol, &self.corpus, self.samples, self.isolate, self.ablate);
-        let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples, isolate, ablating))?;
-        let p50 = |x: &Measured| stats(&x.program.graph_us).p50;
-        let (q, slow) = measured.iter().enumerate().max_by(|a, b| p50(a.1).total_cmp(&p50(b.1))).unwrap();
+        let (p, corpus, samples, ablating) = (&self.protocol, &self.corpus, self.samples, self.ablate);
+        let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples, ablating))?;
         let m = &self.ranks[0].rt.manifest;
         let calls = &m.programs[&s.program].calls;
-        let ranks = match measured.len() {
+        let mut steps: BTreeMap<u64, Step> = trace::finish()?.steps.into_iter().map(|t| (t.seq, t)).collect();
+        let timed = measured.into_iter().map(|x| x.time(&mut steps, calls.len())).collect::<Result<Vec<_>>>()?;
+        let p50 = |x: &Timed| stats(&x.graph_us).p50;
+        let (q, slow) = timed.iter().enumerate().max_by(|a, b| p50(a.1).total_cmp(&p50(b.1))).unwrap();
+        let ranks = match timed.len() {
             1 => String::new(),
             n => format!(" · rank {q} slowest of {n}"),
         };
-        timed("program", program_line(&stats(&slow.program.graph_us), calls.len()) + ranks.as_str(), started);
+        say_timed("program", program_line(&stats(&slow.graph_us), calls.len()) + ranks.as_str(), started);
         let attributed: Vec<(String, f64)> =
-            calls.iter().zip(&slow.program.attributed_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
+            calls.iter().zip(&slow.calls_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
         let shares = mix(&attributed);
         say("mix", mix_line(&shares));
         let free: Vec<(String, f64)> = slow.free.iter().map(|(op, us)| (op.clone(), stats(us).p50)).collect();
         if !free.is_empty() {
             say("free", mix_line(&freed(p50(slow), &free)));
         }
-        if let Some(t) = slow.isolate_s {
-            println!("{}", row("isolate", format!("{} cases · outputs match", slow.cases.len()), Some(t as f32)));
-        }
         let elapsed_s = started.elapsed().as_secs_f64();
         let priced = Priced { shape: s.shape.clone(), us: p50(slow), shares, free };
-        Ok((measured.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), priced))
+        Ok((timed.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), priced))
     }
 }
 
@@ -669,6 +618,8 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     };
     let inputs = crate::Inputs::resolve(given, cfg, target)?;
     let w = Workload::read(&o.workload)?;
+    // Before any runtime loads: CUPTI picks its timestamps once per process.
+    trace::start()?;
     let json_bytes = std::fs::read(&inputs.manifest)?;
     // A vLLM manifest runs as vLLM runs it: bench is its host, and hands
     // the host states to the runtime in their declared layouts.
@@ -676,24 +627,23 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     let protocol = Protocol::check_unsampled(&m)?;
     let unit = kern_pool::page_unit(&m);
     let plan = Plan::check(&w, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
-    let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.isolate, o.ablate)?;
+    let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.ablate)?;
     bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
     bench.samples = w.samples;
     let at = Instant::now();
     bench.prime(plan.source)?;
-    timed("source", format!("{} tokens of real prefix per rank", plan.source), at);
+    say_timed("source", format!("{} tokens of real prefix per rank", plan.source), at);
 
     let started = Instant::now();
-    let (rt, probe) = (&bench.ranks[0].rt, &bench.ranks[0].probe);
-    let before = anchors(probe.calibrate(rt, w.samples)?);
+    let probe = &bench.ranks[0].probe;
     let ranks = match bench.ranks.len() {
         1 => String::new(),
         n => format!(" · rank 0 of {n}"),
     };
-    timed(
-        "calibrate",
-        format!("{} · {} SMs · L2 {} MiB{ranks}", probe.device, probe.sm_count, probe.l2_bytes >> 20),
-        started,
+    let hes = if probe.hes { "HES" } else { "software timestamps" };
+    say(
+        "device",
+        format!("{} · {} SMs · L2 {} MiB · {hes}{ranks}", probe.device, probe.sm_count, probe.l2_bytes >> 20),
     );
     say(
         "plan",
@@ -709,8 +659,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         say("drop", format!("{} · {}", d.shape, d.why));
     }
 
-    let mut report = preamble(&m, &json_bytes, &w, &plan, probe, o.isolate, bench.ranks.len())?;
-    report["calibration_before"] = before;
+    let mut report = preamble(&m, &json_bytes, &w, &plan, probe, bench.ranks.len())?;
     write(&o.out, &report)?;
 
     let mut runs = Vec::new();
@@ -735,9 +684,8 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
         say("free", mix_line(&saved));
         report["cost"]["free"] = json!(saved.iter().map(|(op, f)| json!({"op":op,"share":f})).collect::<Vec<_>>());
     }
-    report["calibration_after"] = anchors(bench.ranks[0].probe.calibrate(&bench.ranks[0].rt, w.samples)?);
     write(&o.out, &report)?;
-    timed("out", o.out.display().to_string(), started);
+    say_timed("out", o.out.display().to_string(), started);
     Ok(())
 }
 
@@ -792,6 +740,33 @@ mod tests {
         assert!(mix_line(&shares).ends_with("op5 10.0% · +2 more"));
         assert_eq!(mix_line(&shares[..2]), "op0 10.0% · op1 10.0%");
         assert_eq!(mix_line(&[]), "");
+    }
+
+    fn step(nodes: u32, spans: &[(Option<u32>, u64, u64)]) -> Step {
+        let issue = trace::Issue {
+            program: "decode".into(),
+            vars: Vec::new(),
+            graph: true,
+            kv: None,
+            kernels: std::sync::Arc::new((0..nodes).map(|n| (n, n)).collect()),
+        };
+        let spans =
+            spans.iter().map(|&(call, start, end)| trace::Span { call, name: "k".into(), start, end }).collect();
+        Step { seq: 1, issue, spans }
+    }
+
+    #[test]
+    fn a_sample_spans_its_kernels_and_charges_each_to_its_call() {
+        let s = step(3, &[(Some(0), 1_000, 3_000), (Some(1), 2_500, 4_000), (Some(0), 9_000, 10_000)]);
+        assert_eq!(timing(&s, 3).unwrap(), (9., vec![3., 1.5, 0.]));
+    }
+
+    #[test]
+    fn a_sample_missing_kernels_or_naming_no_call_is_refused() {
+        assert!(timing(&step(3, &[(Some(0), 0, 1), (Some(1), 1, 2)]), 2).is_err());
+        assert!(timing(&step(1, &[(None, 0, 1)]), 1).is_err());
+        assert!(timing(&step(1, &[(Some(4), 0, 1)]), 1).is_err());
+        assert!(timing(&step(0, &[]), 1).is_err());
     }
 
     #[test]
