@@ -51,9 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Performance evidence regression tests
-        run: python3 -m unittest discover -s tools -p test_profile.py
-
       - name: Qwen constant migration regression tests
         run: python3 -m unittest discover -s tools -p test_qwen_constants.py
 

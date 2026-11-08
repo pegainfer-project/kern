@@ -4,6 +4,7 @@ Dense Qwen3 models live in [kern-qwen3](https://github.com/pegainfer-project/ker
 The old Qwen3-4B and DSpark capture scripts and fixtures remain in Git history;
 the standalone repository implements dense Qwen3, without the legacy DSpark path.
 Qwen3.8 and its DFlash2 draft remain here.
+Use [`kern bench`](../docs/bench.md) for per-kernel measurements.
 
 | Tool | Contract |
 |---|---|
@@ -16,7 +17,6 @@ Qwen3.8 and its DFlash2 draft remain here.
 | `sampling.py`, `flashinfer-sampling/`, `kernels-src/sample_glue.cu` | Shared sampling chain and kernel sources: temperature, top-k, top-p, min-p, and seeded sampling. See `flashinfer-sampling/PROVENANCE.md` for the captured launch geometry and seed contract. |
 | `kernels/`, `../kernel_index/` | Import, check, and select content-addressed kernel variants; see [registry.md](../docs/registry.md). |
 | `extract_kernels.sh` | Resolve pinned modules from capture dumps and local builds. |
-| `profile_trace.py`, `profile_export.py`, `profile_standalone.mjs` | Export `kern bench` measurements to the [Performance Atlas](../docs/performance-atlas.md). |
 | `trtllm_fmha_abi.py`, `gen_trtllm_fmha_probe.py` | Pack the TensorRT-LLM ragged attention ABI and generate its probe manifest. |
 | `capture_abi_probe.sh`, `capture_sglang.sh`, `capture_sglang.py` | Inspect kernel ABIs across attention backends and engines. |
 | `toy/`, `e2e/` | Model-independent runtime and serving gates. |

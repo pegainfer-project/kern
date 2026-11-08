@@ -5,7 +5,7 @@
 //! as data. The definitions are the host functions in kern-test
 //! (`compare`, `changed_blocks`, `logit_row`); the kernels reproduce every
 //! count and maximum exactly and the floating-point sums to rounding. The
-//! PTX is bundled like `profile.ptx`: generated from `compare.cu` with
+//! PTX is bundled: generated from `compare.cu` with
 //! CUDA 13.0 (`nvcc --ptx -arch=compute_80 -O3 compare.cu -o compare.ptx`)
 //! so the comparison never depends on the host's toolchain.
 

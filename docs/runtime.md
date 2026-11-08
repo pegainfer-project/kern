@@ -264,8 +264,9 @@ near one collect in all three, well inside the 2 s the counters settle behind. `
 last collect: a forced flush on top, kernel records with no end yet dropped, and every issue still
 waiting returned with the kernels it has. `trace::dropped()` counts records CUPTI dropped or handed
 over unfinished, `trace::hes()` says whether HES is what CUPTI ended
-up using (it falls back to software timestamps silently). No kernel is inserted; the consumer is
-kern-serve's `--trace` (serve.md "Tracing").
+up using (it falls back to software timestamps silently). No kernel is inserted; the consumers are
+kern-serve's `--trace` (serve.md "Tracing") and `kern bench`, whose samples are traced replays of a
+program's graph, any of its calls left out (`profile::Graph`, bench.md).
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、
@@ -311,7 +312,7 @@ wait on it; the call's launches then go to its own lane's stream with its own la
 Eagerly these are concurrent streams; under capture, parallel branches of the graph. A program starts
 and ends on lane 0 (verifier), so fetch / mark / the next program / the host stream of `enqueue_after`
 are unchanged; collectives are on lane 0 only (verifier) and still go to the compute stream. Running a
-range of calls (the harness, `kern test`, the profiler) stays serial on lane 0 in list order: the list
+range of calls (the harness, `kern test`) stays serial on lane 0 in list order: the list
 order is a valid serial order, and the verifier's no-race rule makes it equal to any concurrent one.
 
 Tracing runs the same lanes. Eagerly the tracer tags each call as it is issued. Under capture each

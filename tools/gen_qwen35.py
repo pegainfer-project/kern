@@ -767,8 +767,7 @@ def build(pre, dec, pins, eps, attn_scale, gdn_scale, silu_sym, spec=None):
     UNIFIED_PARAMS = [
         # `kernel_unified_attention` only loads the KV pages: its two stores go
         # to the output and the segment scratch. `reshape_and_cache` is the
-        # writer. Declaring the state `in` keeps a profiler from snapshotting
-        # the whole cache around every isolated call.
+        # writer, so the state is `in` here.
         "out buffer<bf16>", "in buffer<bf16>", "in state", "in state",
         "in buffer<i32>", "in buffer<i32>", "f32",
         "in buffer<f32>", "in buffer<f32>", "f32", "f32",
