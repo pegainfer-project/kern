@@ -59,7 +59,7 @@ pub use compare::{At, Cmp, Logit, TOP_MAX};
 use compile::{CompiledProgram, Dense};
 use cublas::Blas;
 use device::{alloc, DeviceBuf};
-pub use device::{Mapped, PeerHandle};
+pub use device::{Mapped, PeerHandle, Pinned};
 use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use exec::{Fetch, Gate, Mark};

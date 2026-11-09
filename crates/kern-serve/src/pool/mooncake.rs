@@ -1,4 +1,4 @@
-//! The pooled tier's client: one Mooncake Store client per rank process,
+//! The pooled tier over Mooncake Store: one client per rank process,
 //! moving bytes between this rank's pooled states and the pool on threads
 //! of its own.
 //!
@@ -39,6 +39,7 @@ use tracing::{debug, info, warn};
 
 use kern_pool::Object;
 
+use super::{buffers, Buffers};
 use crate::ranks::Landed;
 
 /// How pool bytes move: RDMA through one NIC, or multi-node NVLink to
@@ -85,9 +86,6 @@ pub struct Config {
 
 /// The local buffer Mooncake keeps for its own small transfers.
 const LOCAL_BUFFER: u64 = 64 << 20;
-
-/// Where a pooled object's bytes live on this rank: one range per state.
-pub type Buffers = Vec<(u64, usize)>;
 
 enum Job {
     Probe { id: u64, keys: Vec<String> },
@@ -348,22 +346,8 @@ impl Client {
         Ok(Client { probes, gets, puts, done, spans })
     }
 
-    /// Where `o`'s bytes live on this rank, state by state.
-    fn buffers(&self, o: &Object) -> Buffers {
-        self.spans
-            .values()
-            .flat_map(|s| {
-                let at = |i: i32| (s.ptr + i as u64 * s.object, s.object as usize);
-                match s.kind {
-                    kern_pool::Kind::Page => o.pages.iter().map(|&p| at(p)).collect::<Vec<_>>(),
-                    kern_pool::Kind::Slot => o.slot.map(at).into_iter().collect(),
-                }
-            })
-            .collect()
-    }
-
     fn objects(&self, objects: &[Object]) -> Vec<(String, Buffers)> {
-        objects.iter().map(|o| (o.key.clone(), self.buffers(o))).collect()
+        objects.iter().map(|o| (o.key.clone(), buffers(&self.spans, o))).collect()
     }
 
     pub fn probe(&self, id: u64, keys: Vec<String>) {

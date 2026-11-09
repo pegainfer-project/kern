@@ -172,14 +172,29 @@ pub struct ServeOpts {
     pub pool: PoolOpts,
 }
 
-/// The pooled KV tier (Mooncake Store): every rank joins it when
-/// `--pool-master` is given, and every snapshot the prefix tree keeps is
-/// shared with every other instance of the same manifest and weights.
+/// The pooled KV tier: every snapshot the prefix tree keeps is also put
+/// to it. Over Mooncake Store (`--pool-master`) every instance of the same
+/// manifest and weights shares it; on a local disk (`--pool-ssd`) it is
+/// this rank's own.
 #[derive(Args, Debug, Clone)]
 pub struct PoolOpts {
     /// Join the pooled KV tier whose Mooncake master is at host:port
     #[arg(long)]
     pub pool_master: Option<String>,
+
+    /// Keep the pooled KV tier on a local disk instead: one file per GPU in
+    /// this directory, written through on every snapshot, empty at start
+    #[arg(long, conflicts_with = "pool_master")]
+    pub pool_ssd: Option<PathBuf>,
+
+    /// GiB of the disk tier's file per GPU, reserved at start
+    #[arg(long, default_value_t = 1024, requires = "pool_ssd")]
+    pub pool_ssd_gib: u64,
+
+    /// GiB of pinned host memory per GPU the disk tier's transfers pass
+    /// through: the most a put or a fetch has in flight
+    #[arg(long, default_value_t = 16, requires = "pool_ssd")]
+    pub pool_ssd_staging_gib: u64,
 
     /// The pool's transfer-engine metadata server
     /// (`http://host:port/metadata`, or `P2PHANDSHAKE`)
@@ -221,6 +236,14 @@ pub enum PoolProtocol {
 
 impl PoolOpts {
     fn config(&self, gpu: usize) -> Result<Option<pool::Config>> {
+        if let Some(dir) = &self.pool_ssd {
+            return Ok(Some(pool::Config::Ssd(pool::SsdConfig {
+                dir: dir.clone(),
+                gpu,
+                capacity: self.pool_ssd_gib << 30,
+                staging: self.pool_ssd_staging_gib << 30,
+            })));
+        }
         let Some(master) = &self.pool_master else { return Ok(None) };
         let transport = match (self.pool_protocol, &self.pool_device) {
             (PoolProtocol::Rdma, Some(d)) => pool::Transport::Rdma { device: d.clone() },
@@ -235,7 +258,7 @@ impl PoolOpts {
                 format!("{}:{}", host.trim(), 17100 + gpu)
             }
         };
-        Ok(Some(pool::Config {
+        Ok(Some(pool::Config::Mooncake(pool::MooncakeConfig {
             master: master.clone(),
             metadata: self.pool_metadata.clone(),
             transport,
@@ -243,7 +266,7 @@ impl PoolOpts {
             segment: self.pool_segment.clone(),
             library: self.pool_library.clone(),
             cooldown: std::time::Duration::from_secs(self.pool_cooldown),
-        }))
+        })))
     }
 }
 

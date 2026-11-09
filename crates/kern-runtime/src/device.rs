@@ -361,13 +361,15 @@ impl DeviceBuf {
     }
 }
 
-/// Page-locked host memory, allocated once.
-pub(crate) struct Pinned {
+/// Page-locked host memory, allocated once: page-aligned, so a disk read
+/// with `O_DIRECT` lands in it as well as a copy engine does.
+pub struct Pinned {
     ptr: *mut c_void,
     bytes: u64,
 }
 
-// Only ever touched through copies enqueued from the runtime's thread.
+// Freed only by its owner; the bytes are touched by copies the runtime's
+// thread enqueues and by whoever the owner hands the address to.
 unsafe impl Send for Pinned {}
 unsafe impl Sync for Pinned {}
 
@@ -410,7 +412,7 @@ impl Pinned {
         Ok(Pinned { ptr, bytes })
     }
 
-    pub(crate) fn ptr(&self) -> u64 {
+    pub fn ptr(&self) -> u64 {
         self.ptr as u64
     }
 
@@ -424,7 +426,7 @@ impl Pinned {
         Ok(device)
     }
 
-    pub(crate) fn bytes(&self) -> u64 {
+    pub fn bytes(&self) -> u64 {
         self.bytes
     }
 }
@@ -512,6 +514,33 @@ pub(crate) fn copy_2d(
         Height: rows as usize,
     };
     cuda_check(unsafe { sys::cuMemcpy2DAsync_v2(&c, stream) }, "cuMemcpy2DAsync")
+}
+
+/// Every `(dst, src, bytes)` run in one batch on the stream, in stream
+/// order: device or page-locked host addresses on either side.
+pub(crate) fn copy_batch(stream: sys::CUstream, runs: &[(u64, u64, u64)]) -> Result<()> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    let mut dsts: Vec<sys::CUdeviceptr> = runs.iter().map(|r| r.0).collect();
+    let mut srcs: Vec<sys::CUdeviceptr> = runs.iter().map(|r| r.1).collect();
+    let mut sizes: Vec<usize> = runs.iter().map(|r| r.2 as usize).collect();
+    let mut attrs: sys::CUmemcpyAttributes = unsafe { std::mem::zeroed() };
+    attrs.srcAccessOrder = sys::CUmemcpySrcAccessOrder::CU_MEMCPY_SRC_ACCESS_ORDER_STREAM;
+    let mut first = 0usize;
+    let r = unsafe {
+        sys::cuMemcpyBatchAsync_v2(
+            dsts.as_mut_ptr(),
+            srcs.as_mut_ptr(),
+            sizes.as_mut_ptr(),
+            runs.len(),
+            &mut attrs,
+            &mut first,
+            1,
+            stream,
+        )
+    };
+    cuda_check(r, "cuMemcpyBatchAsync")
 }
 
 /// One contiguous device-to-device copy on the stream.

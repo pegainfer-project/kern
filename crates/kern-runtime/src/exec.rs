@@ -47,7 +47,7 @@ use cudarc::driver::{sys, CudaContext, CudaStream};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
 use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn, Blas};
-use crate::device::Pinned;
+use crate::device::{copy_batch, Pinned};
 use crate::error::{bail, cuda_check};
 use crate::{trace, Error, Result, Runtime};
 use kern_manifest::types::BufferKind;
@@ -329,6 +329,21 @@ impl Runtime {
         let seq = self.signals.seq.fetch_add(1, Ordering::Relaxed) + 1;
         self.signal(self.signals.flag, self.signals.passed_device, seq, "cuLaunchKernel(flag)")?;
         Ok(Mark { seq, passed: self.signals.passed.clone() })
+    }
+
+    /// `bytes` of page-locked host memory on the NUMA node this runtime's
+    /// device hangs off, for [`Runtime::copy_bytes`] to move through.
+    pub fn pinned(&self, bytes: u64) -> Result<Pinned> {
+        self.ctx.bind_to_thread()?;
+        Pinned::alloc(bytes, self.gpu as i32)
+    }
+
+    /// Queue every `(dst, src, bytes)` run on the compute stream, behind
+    /// everything issued so far: device addresses of this runtime's states
+    /// or a [`Runtime::pinned`] block on either side, one driver call.
+    pub fn copy_bytes(&self, runs: &[(u64, u64, u64)]) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        copy_batch(self.stream.cu_stream(), runs)
     }
 
     /// The fault of any launch so far, without waiting for the rest: the
