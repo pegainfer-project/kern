@@ -182,8 +182,8 @@ pub struct PoolOpts {
     #[arg(long)]
     pub pool_master: Option<String>,
 
-    /// Keep the pooled KV tier on a local disk instead: one file per GPU in
-    /// this directory, written through on every snapshot, empty at start
+    /// Keep the pooled KV tier on a local disk instead: a nameless file per
+    /// GPU in this directory, written through on every snapshot, empty at start
     #[arg(long, conflicts_with = "pool_master")]
     pub pool_ssd: Option<PathBuf>,
 
@@ -237,18 +237,17 @@ pub enum PoolProtocol {
 impl PoolOpts {
     fn config(&self, gpu: usize) -> Result<Option<pool::Config>> {
         if let Some(dir) = &self.pool_ssd {
-            return Ok(Some(pool::Config::Ssd(pool::SsdConfig {
+            return Ok(Some(pool::Config::Ssd(pool::ssd::Config {
                 dir: dir.clone(),
-                gpu,
                 capacity: self.pool_ssd_gib << 30,
                 staging: self.pool_ssd_staging_gib << 30,
             })));
         }
         let Some(master) = &self.pool_master else { return Ok(None) };
         let transport = match (self.pool_protocol, &self.pool_device) {
-            (PoolProtocol::Rdma, Some(d)) => pool::Transport::Rdma { device: d.clone() },
+            (PoolProtocol::Rdma, Some(d)) => pool::mooncake::Transport::Rdma { device: d.clone() },
             (PoolProtocol::Rdma, None) => bail!("`--pool-protocol rdma` takes `--pool-device <rdma device>`"),
-            (PoolProtocol::Nvlink, None) => pool::Transport::Nvlink,
+            (PoolProtocol::Nvlink, None) => pool::mooncake::Transport::Nvlink,
             (PoolProtocol::Nvlink, Some(_)) => bail!("`--pool-device` is RDMA's; `--pool-protocol nvlink` takes none"),
         };
         let hostname = match &self.pool_hostname {
@@ -258,7 +257,7 @@ impl PoolOpts {
                 format!("{}:{}", host.trim(), 17100 + gpu)
             }
         };
-        Ok(Some(pool::Config::Mooncake(pool::MooncakeConfig {
+        Ok(Some(pool::Config::Mooncake(pool::mooncake::Config {
             master: master.clone(),
             metadata: self.pool_metadata.clone(),
             transport,

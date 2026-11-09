@@ -432,6 +432,7 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let event_tx = tx.clone();
     let pool = match &h.pool {
         Some(cfg) => {
+            cfg.admits(1, true)?;
             let mut client = pool::Client::open(cfg, &rt)?;
             let tx = tx.clone();
             client.forward(move |l| tx.send(Event::Landed { stage: 0, l }).is_ok())?;

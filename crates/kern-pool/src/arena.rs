@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-/// `len` bytes at `offset` in the block, until given back.
+/// `len` bytes at `offset` of the block, until given back.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Room {
     offset: u64,
@@ -28,7 +28,7 @@ impl Room {
     }
 }
 
-/// A block's free ranges, by offset; neighbours are always merged.
+/// A range's free ranges, by offset; neighbours are always merged.
 #[derive(Debug)]
 pub struct Arena {
     size: u64,
@@ -37,11 +37,12 @@ pub struct Arena {
 }
 
 impl Arena {
-    /// `size` bytes, rounded down to `align`.
-    pub fn new(size: u64, align: u64) -> Arena {
-        assert!(align > 0, "an alignment of at least one byte");
+    /// The `size` bytes of a block from `begin`, both on `align` (the
+    /// size rounded down).
+    pub fn new(begin: u64, size: u64, align: u64) -> Arena {
+        assert!(align > 0 && begin.is_multiple_of(align), "a range that starts on its alignment");
         let size = size / align * align;
-        let free = if size > 0 { BTreeMap::from([(0, size)]) } else { BTreeMap::new() };
+        let free = if size > 0 { BTreeMap::from([(begin, size)]) } else { BTreeMap::new() };
         Arena { size, align, free }
     }
 

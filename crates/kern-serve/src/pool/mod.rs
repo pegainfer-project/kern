@@ -11,8 +11,8 @@
 //! the rank's own copies through a pinned block carry them, and those are
 //! issued on the thread that drives the device ([`Client::issue`]).
 
-mod mooncake;
-mod ssd;
+pub mod mooncake;
+pub mod ssd;
 
 use std::collections::BTreeMap;
 
@@ -21,8 +21,6 @@ use kern_pool::{Kind, Object};
 use kern_runtime::{Runtime, Span};
 
 use crate::ranks::Landed;
-
-pub use mooncake::Transport;
 
 /// Where a pooled object's bytes live on this rank: one range per state,
 /// in the states' name order, which is also the order of its bytes in a
@@ -50,8 +48,20 @@ pub enum Config {
     Ssd(ssd::Config),
 }
 
-pub use mooncake::Config as MooncakeConfig;
-pub use ssd::Config as SsdConfig;
+impl Config {
+    /// Refuse a deployment the store cannot serve: a disk is one rank's
+    /// own, while the scheduler asks rank 0 alone whether the tier holds a
+    /// prompt and a pipeline's stages answer through the head.
+    pub fn admits(&self, ranks: usize, pipeline: bool) -> Result<()> {
+        match self {
+            Config::Ssd(_) if pipeline => bail!("`--pool-ssd` serves one rank's scheduler, not a pipeline"),
+            Config::Ssd(_) if ranks > 1 => {
+                bail!("`--pool-ssd` keeps one rank's tier on its own disk; this manifest runs as {ranks} ranks")
+            }
+            _ => Ok(()),
+        }
+    }
+}
 
 /// This rank's client of the tier.
 pub enum Client {
@@ -63,9 +73,13 @@ impl Client {
     /// Join the tier with every pooled state of `rt`. Called on the thread
     /// that drives the device, once it is loaded.
     pub fn open(cfg: &Config, rt: &Runtime) -> Result<Client> {
+        let spans: BTreeMap<String, Span> = rt.pooled_spans().into_iter().map(|s| (s.state.clone(), s)).collect();
+        if spans.is_empty() {
+            bail!("pool: the manifest has no pooled state to keep");
+        }
         Ok(match cfg {
-            Config::Mooncake(c) => Client::Mooncake(mooncake::Client::open(c, rt.pooled_spans())?),
-            Config::Ssd(c) => Client::Ssd(ssd::Client::open(c, rt)?),
+            Config::Mooncake(c) => Client::Mooncake(mooncake::Client::open(c, spans)?),
+            Config::Ssd(c) => Client::Ssd(ssd::Client::open(c, rt, spans)?),
         })
     }
 
@@ -129,7 +143,9 @@ impl Client {
     pub fn forward(&mut self, f: impl FnMut(Landed) -> bool + Send + 'static) -> Result<()> {
         match self {
             Client::Mooncake(c) => c.forward(f),
-            Client::Ssd(_) => bail!("the disk tier (`--pool-ssd`) serves a scheduler's ranks, not a pipeline stage"),
+            Client::Ssd(_) => {
+                bail!("the disk tier answers on the thread that drives its device, not on a thread of its own")
+            }
         }
     }
 }

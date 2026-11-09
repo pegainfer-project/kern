@@ -527,7 +527,8 @@ pub(crate) fn copy_batch(stream: sys::CUstream, runs: &[(u64, u64, u64)]) -> Res
     let mut sizes: Vec<usize> = runs.iter().map(|r| r.2 as usize).collect();
     let mut attrs: sys::CUmemcpyAttributes = unsafe { std::mem::zeroed() };
     attrs.srcAccessOrder = sys::CUmemcpySrcAccessOrder::CU_MEMCPY_SRC_ACCESS_ORDER_STREAM;
-    let mut first = 0usize;
+    // Every run takes the one attribute set.
+    let mut attr_of = 0usize;
     let r = unsafe {
         sys::cuMemcpyBatchAsync_v2(
             dsts.as_mut_ptr(),
@@ -535,7 +536,7 @@ pub(crate) fn copy_batch(stream: sys::CUstream, runs: &[(u64, u64, u64)]) -> Res
             sizes.as_mut_ptr(),
             runs.len(),
             &mut attrs,
-            &mut first,
+            &mut attr_of,
             1,
             stream,
         )

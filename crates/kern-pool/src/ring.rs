@@ -10,28 +10,35 @@
 //! A placement is two-phase. [`Ring::place`] reserves the bytes for a
 //! write; [`Ring::commit`] makes the object findable once the write
 //! landed, or forgets it when the write failed. A placement that would lap
-//! a write still running is refused ([`Placed::Busy`]), so two writes
-//! never share a byte. A read is checked against the tail after it lands
+//! a write still running is refused, as is one larger than the ring, so
+//! two writes never share a byte. A read is checked against the tail after it lands
 //! ([`Ring::holds`]): whatever overwrote it was placed first, and placing
 //! moved the tail past it.
 //!
 //! A key written or being written is not placed again ([`Placed::Held`]):
 //! the tier puts a snapshot's whole prefix every time, and the ring keeps
 //! the first copy. An object of no bytes (a mark) takes no room and lives
-//! until the tail passes where it was placed.
+//! until the tail passes where it was placed. Nothing is refreshed: an
+//! object read every turn is evicted as surely as one never read.
 
 use std::collections::{BTreeMap, VecDeque};
 
-/// Where one object's bytes are: `len` bytes at `offset` in the file,
+/// Where one object's `bytes` are: `len` bytes at `offset` in the file,
 /// placed at logical position `begin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extent {
     begin: u64,
     offset: u64,
     len: u64,
+    bytes: u64,
 }
 
 impl Extent {
+    /// The object's own bytes, as placed.
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
     /// The byte in the file it starts at, a multiple of the ring's alignment.
     pub fn offset(&self) -> u64 {
         self.offset
@@ -54,10 +61,9 @@ pub enum Placed {
     New(Extent),
     /// The key is written or being written already.
     Held,
-    /// Room for it would lap a write still running.
-    Busy,
-    /// The object is larger than the ring.
-    TooLarge,
+    /// Room for it would lap a write still running, or the object is
+    /// larger than the ring.
+    Refused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +107,7 @@ impl Ring {
         }
         let len = bytes.div_ceil(self.align) * self.align;
         if len > self.capacity {
-            return Placed::TooLarge;
+            return Placed::Refused;
         }
         let at = self.head % self.capacity.max(1);
         let begin = match len > self.capacity - at {
@@ -116,11 +122,11 @@ impl Ring {
             .take_while(|(b, _)| *b < tail)
             .any(|(b, k)| matches!(self.entries.get(k), Some((e, State::Writing)) if e.begin == *b));
         if laps_a_write {
-            return Placed::Busy;
+            return Placed::Refused;
         }
         self.head = head;
         self.evict();
-        let e = Extent { begin, offset: begin % self.capacity.max(1), len };
+        let e = Extent { begin, offset: begin % self.capacity.max(1), len, bytes };
         self.entries.insert(key.to_string(), (e, State::Writing));
         self.order.push_back((begin, key.to_string()));
         Placed::New(e)

@@ -32,7 +32,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use kern_runtime::{Mark, Span};
 use mooncake_store::{MooncakeStore, ReplicateConfig};
 use tracing::{debug, info, warn};
@@ -280,7 +280,7 @@ pub struct Client {
 impl Client {
     /// Connect to the pool and register every span, whole. Called on the
     /// thread that drives the device, once it is loaded.
-    pub fn open(cfg: &Config, spans: Vec<Span>) -> Result<Client> {
+    pub fn open(cfg: &Config, spans: BTreeMap<String, Span>) -> Result<Client> {
         if let Some(lib) = &cfg.library {
             mooncake_store::load_library(lib).with_context(|| format!("loading {}", lib.display()))?;
         }
@@ -297,14 +297,11 @@ impl Client {
             )
             .with_context(|| format!("pool: connecting to master {} as {}", cfg.master, cfg.hostname))?;
         let mut registered = 0u64;
-        for s in &spans {
+        for s in spans.values() {
             let bytes = (s.object * s.objects) as usize;
             unsafe { store.register_buffer(s.ptr as *mut std::ffi::c_void, bytes) }
                 .with_context(|| format!("pool: registering `{}` ({bytes} bytes)", s.state))?;
             registered += bytes as u64;
-        }
-        if spans.is_empty() {
-            bail!("pool: the manifest has no pooled state to share");
         }
         info!(
             master = %cfg.master,
@@ -342,7 +339,6 @@ impl Client {
             Ok(tx)
         };
         let (probes, gets, puts) = (worker("probe")?, worker("get")?, worker("put")?);
-        let spans = spans.into_iter().map(|s| (s.state.clone(), s)).collect();
         Ok(Client { probes, gets, puts, done, spans })
     }
 

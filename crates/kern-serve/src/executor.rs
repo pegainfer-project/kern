@@ -197,6 +197,9 @@ impl Joined {
 pub fn head(m: &Verified, weights: &Weights, o: &Load, listen: Option<&str>) -> Result<Joined> {
     let groups = world(m)?;
     let n = groups.ranks();
+    if let Some(cfg) = &o.pool {
+        cfg.admits(n, false)?;
+    }
     let listener = match (n, listen) {
         (1, _) => None,
         (_, Some(a)) => Some(TcpListener::bind(a).with_context(|| format!("binding {a}"))?),
@@ -264,6 +267,9 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
         "--rank {q}: the manifest spans ranks 0..{}, rank 0 the head",
         groups.ranks()
     );
+    if let Some(cfg) = &o.pool {
+        cfg.admits(groups.ranks(), false)?;
+    }
     let p = Protocol::check(m)?;
     let mut rt = load(m, weights, groups, q, o)?;
     let mut s = connect(head, CONNECT)?;

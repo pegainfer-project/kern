@@ -396,7 +396,7 @@ mark 等全部 stage；get 异步，没有同步版本；replicated（dealt）�
 ### 决策在 kern-pool，client 在 kern-serve
 
 `crates/kern-pool/src/pooled.rs` 是纯函数：同样的 token 给同样的 key，同样的答案给同样的选择。
-Mooncake client（`crates/kern-serve/src/pool.rs`）只搬字节、报落地；scheduler 和 PP head
+Mooncake client（`crates/kern-serve/src/pool/mooncake.rs`）只搬字节、报落地；scheduler 和 PP head
 从不调 Mooncake。kern-runtime 多暴露 `pooled_spans()`（每个 pooled state 的地址段，注册给
 RDMA）和已有的 `mark()`。
 
@@ -487,6 +487,46 @@ turn 之间）。DP（prefill tier，
 | get 部分成员失败 | 整体失败；重排 device 拷贝后从 device_hit prefill |
 | 10 秒租约内没传完 | 返回错误，按失败处理 |
 | master 不可达 | 探测失败，`--pool-cooldown` 内全部直接 miss，decode 不受影响 |
+
+### The disk tier (`--pool-ssd`, 2026-11-09)
+
+Some machines keep the pooled tier on their own NVMe instead of Mooncake: one rank, one GPU, one
+file. The decisions above do not change (the same keys, the same `Act::{Probe, Put, Get, Mark}`,
+the same three rules); only the store does. `pool::Client` is an enum over the two stores, and the
+scheduler cannot tell them apart.
+
+- **Accounting is pure** (`kern-pool`: `Ring`, `Arena`, `Disk`). `Ring` places objects in one file
+  used as a ring: logical positions only grow, an object never straddles the end, the tail is one
+  capacity behind the head, and eviction is first in, first out. A placement is two-phase (place,
+  then commit once the write landed), and a placement that would lap a running write is refused,
+  so two writes never share a byte. `Arena` hands out rooms of the pinned block (first fit); puts
+  and gets each have half of it, so a write backlog never leaves a fetch without room. `Disk`
+  turns one act into a `Plan`: a put takes its room before it places, so a full block never evicts
+  a live object; a key written or being written moves nothing; a get stops at the first object the
+  file does not hold at exactly its size, because a fetch lands a leading run or nothing.
+- **The shell moves bytes** (`kern-serve/src/pool/ssd.rs`). The disk reaches no device memory, so
+  every byte passes through a pinned block, copied on the compute stream (`Runtime::copy_bytes`,
+  one `cuMemcpyBatchAsync` per act). A put copies device → room behind everything issued so far
+  and marks the stream; the write thread waits for the mark, then writes. **The put is answered
+  once the stream passed that mark, not once the disk wrote it**: the scheduler holds a put's pages
+  until it lands, so answering at the write would hold prefill to the disk's write speed (a
+  16k-token prompt behind 4.5 GiB of filler puts waited 2.6 s for its pages on a 1.7 GiB/s
+  RAID5). Answered early, the backlog is bounded by the block's put half and a put it cannot stage
+  is refused (`pool_put_fails`). Rule 1 covers the rest: an object is found only once written, a
+  mark that precedes its pages makes the probe choose an older snapshot, and a state not yet
+  written fails the get and recomputes. A get is read into rooms
+  by the read thread; the next `issue()` on the device thread copies them into the lease and
+  answers the get at once, since that copy is in stream order ahead of anything the scheduler
+  issues after hearing it landed. Neither disk thread calls CUDA (rule 2).
+- **Reads are checked after they land** (rule 1): an extent is believed only if the tail has not
+  passed it, since anything that overwrote it was placed (and moved the tail) first.
+- io_uring with `O_DIRECT`, one ring per thread, 2 MiB chunks, 64 in flight. Each thread drains
+  everything queued as one batch, so a stream of one-page puts still keeps every member of a RAID
+  busy, and the write thread waits only for the batch's last mark.
+- Nothing outlives the process: the file has no name (`O_TMPFILE`), is reserved whole at start
+  (`fallocate`, so a short disk fails there), and a restart starts cold. The tier is a cache.
+- Refused with more than one rank or in a pipeline (`Config::admits`): the scheduler asks rank 0
+  alone whether the tier holds a prompt, which only holds when every rank shares the store.
 
 ### 门禁
 

@@ -16,6 +16,7 @@ target/release/kern-serve --manifest examples/qwen3-4b.json --kernels kernels --
 # KV 页与 state slot 共用这份预算、按需互换（runtime.md）。`--capacity <tokens>` 显式给则照旧。
 # /v1/completions、/v1/chat/completions（流式 + chat template）、/v1/models、/metrics
 # --pool-master host:port --pool-device mlx5_bond_0 加入 Mooncake 池化 KV 层（下文「池化 KV 层」）
+# --pool-ssd <dir> keeps the pooled tier on a local disk instead, one GPU ("The pooled tier on a local disk" below)
 # --trace --trace-port <p>: per-rank kernel counters at :<p>/kern/metrics; --trace-dir <dir>: every kernel on disk ("Tracing" below)
 ```
 
@@ -1090,6 +1091,27 @@ consistent_hash 稳态 TTFT 是 round_robin 的 0.64×：会话黏在同一 tier
 命中率不变；power_of_all（全体最少）和 round_robin 一样——router 的负载是 in-flight 请求数，prompt 30k–250k 差 8 倍，
 请求数不代表行数。这三者各跑一次，1.4–1.8 s 的差距里噪声占多少未定；consistent_hash 的差距是机制性的。cache_aware 最差：按文本前缀树把同源会话堆到一个 tier（burst 期一个 tier 跑 32 个、其余 0），均衡差而
 命中率没涨。c128 时 4 tier in-flight ≤ 8、没有队列，策略之间看不出差别；c512 稳态每 tier 9–18 个仍无队列。
+
+## The pooled tier on a local disk (`--pool-ssd`, 2026-11-09, GB300, one GPU)
+
+`--pool-ssd <dir>` keeps the pooled tier (above) in one file on this machine's disk instead of
+Mooncake: `--pool-ssd-gib` (default 1024) reserved at start, `--pool-ssd-staging-gib` (default 16) of
+pinned memory every transfer passes through, half for puts and half for gets. One rank, no pipeline;
+design in `pool.md` §9 "The disk tier". The disk: ext4 on md RAID5 over four Gen5 NVMe, O_DIRECT
+io_uring 2 MiB × 64 measures ~2.1 GiB/s write and ~35–42 GiB/s read with fio.
+
+A prompt pushed out of the device pool by other prompts, sent again:
+
+| manifest | prompt | cold | from the disk | from the device | answer |
+|---|---|---|---|---|---|
+| qwen3-4b (paged-only) | 16178 tokens | 1.61 s | 0.65 s | 0.43 s | identical in all three |
+| qwen3.8-27b (pages + state), turn 2 | 15962 tokens | — | 1.06 s | 1.01 s | identical |
+
+Reads land at 33–34 GiB/s (2274 MiB in 65 ms; 1143 MiB of pages and state in 33 ms); probe to admit
+is 122 ms for the qwen3-4b prompt. Writes reach 1.7–2.0 GiB/s, the RAID's ceiling. A put is answered
+once its copy into the block has run, so prefill never waits for the disk: answered at the write, the
+same qwen3-4b prompt waited 2.6 s for pages still held by 4.5 GiB of unwritten filler puts (3.15 s).
+A burst faster than the disk is refused instead (609 of 3842 puts in that run).
 
 ## Tracing: per-rank health counters and a black box (`--trace`, 2026-11-04)
 

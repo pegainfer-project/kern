@@ -1,14 +1,15 @@
 //! The local-disk tier's accounting through its public API: a ring that
 //! never hands out bytes a running write or a findable object still owns,
-//! keeps what was placed less than a lap ago, and an arena whose rooms
-//! never overlap and merge back into one block.
+//! keeps what was placed less than a lap ago; an arena whose rooms never
+//! overlap and merge back into one block; and the plans an act gets, one
+//! flag per object and every byte it moves staged in a room of its own.
 
 mod common;
 
 use std::collections::BTreeMap;
 
 use common::Rand;
-use kern_pool::{Arena, Extent, Placed, Ring, Room};
+use kern_pool::{Arena, Disk, Extent, Placed, Plan, Ring, Room};
 
 fn new(p: Placed) -> Extent {
     match p {
@@ -39,7 +40,7 @@ fn a_ring_places_at_the_head_skips_the_end_and_evicts_the_oldest() {
     assert!(!r.commit("c", c, false));
     assert_eq!(r.find("c"), None);
     assert!(matches!(r.place("c", 32), Placed::New(_)));
-    assert_eq!(r.place("huge", 97), Placed::TooLarge);
+    assert_eq!(r.place("huge", 97), Placed::Refused);
 }
 
 #[test]
@@ -47,7 +48,7 @@ fn a_ring_refuses_to_lap_a_running_write() {
     let mut r = Ring::new(64, 8);
     let a = new(r.place("a", 48));
     // `b` would overwrite `a`'s bytes while its write runs.
-    assert_eq!(r.place("b", 32), Placed::Busy);
+    assert_eq!(r.place("b", 32), Placed::Refused);
     assert!(r.commit("a", a, true));
     let b = new(r.place("b", 32));
     assert_eq!((b.offset(), r.find("a")), (0, None));
@@ -133,8 +134,8 @@ fn a_ring_never_shows_bytes_but_the_ones_written_for_the_key() {
                             next_id += 1;
                         }
                         Placed::Held => assert!(known, "seed {seed}: `{key}` held but never placed"),
-                        Placed::Busy => assert!(!writing.is_empty(), "seed {seed}: busy with nothing written"),
-                        Placed::TooLarge => panic!("seed {seed}: {len} bytes too large for {cap}"),
+                        // Never larger than the ring here: only a running write refuses.
+                        Placed::Refused => assert!(!writing.is_empty(), "seed {seed}: refused with nothing written"),
                     }
                 }
                 4..=6 if !writing.is_empty() => {
@@ -182,7 +183,7 @@ fn a_ring_never_shows_bytes_but_the_ones_written_for_the_key() {
 
 #[test]
 fn an_arena_hands_out_aligned_rooms_first_fit() {
-    let mut a = Arena::new(100, 16);
+    let mut a = Arena::new(0, 100, 16);
     assert_eq!((a.size(), a.free()), (96, 96));
     let x = a.take(20).unwrap();
     let y = a.take(16).unwrap();
@@ -199,7 +200,7 @@ fn an_arena_hands_out_aligned_rooms_first_fit() {
 fn an_arena_never_overlaps_and_merges_back_whole() {
     for seed in 1..=40u64 {
         let mut rand = Rand::new((seed * 0x2545_f491) | 1);
-        let mut a = Arena::new(1024, 8);
+        let mut a = Arena::new(0, 1024, 8);
         let mut held: Vec<Room> = Vec::new();
         for _ in 0..2000 {
             if rand.next(2) == 0 || held.is_empty() {
@@ -227,5 +228,143 @@ fn an_arena_never_overlaps_and_merges_back_whole() {
             a.give(r);
         }
         assert_eq!(a.take(1024).map(|r| r.offset()), Some(0), "seed {seed}");
+    }
+}
+
+fn put(d: &mut Disk, objects: &[(&str, u64)], landed: bool) -> Vec<bool> {
+    let p = d.put(objects);
+    let ok = p.ok.clone();
+    let n = p.moves.len();
+    let kept = d.wrote(p, &vec![landed; n]);
+    assert_eq!(kept, if landed { n } else { 0 });
+    ok
+}
+
+#[test]
+fn a_put_stages_before_it_places_and_skips_what_the_disk_holds() {
+    // 64 bytes of block: 32 stage puts, 32 gets.
+    let mut d = Disk::new(64, 64, 8);
+    assert_eq!(put(&mut d, &[("a", 30), ("none", 0)], true), [true, true]);
+    assert_eq!(d.probe(&["a".into(), "none".into()]), [true, false]);
+    // On disk already: landed, nothing moves.
+    let p = d.put(&[("a", 30)]);
+    assert_eq!((p.ok.as_slice(), p.moves.len()), (&[true][..], 0));
+    // No room in the puts' half: refused, and `a` was not evicted for it.
+    assert_eq!(put(&mut d, &[("b", 40)], true), [false]);
+    assert_eq!(d.probe(&["a".into(), "b".into()]), [true, false]);
+    // A write that did not land is forgotten, though its put was answered.
+    assert_eq!(put(&mut d, &[("c", 8)], false), [true]);
+    assert_eq!(d.probe(&["c".into()]), [false]);
+}
+
+#[test]
+fn a_key_another_put_is_writing_moves_nothing_and_is_found_once_written() {
+    let mut d = Disk::new(256, 128, 8);
+    let first = d.put(&[("k", 16)]);
+    let second = d.put(&[("k", 16), ("j", 8)]);
+    assert_eq!((first.moves.len(), second.moves.len(), second.ok.as_slice()), (1, 1, &[true, true][..]));
+    assert_eq!(d.probe(&["k".into()]), [false]);
+    assert_eq!(d.wrote(first, &[true]), 1);
+    assert_eq!(d.probe(&["k".into()]), [true]);
+}
+
+#[test]
+fn a_backlog_of_puts_leaves_the_gets_their_room() {
+    let mut d = Disk::new(1024, 64, 8);
+    put(&mut d, &[("g", 32)], true);
+    let backlog = d.put(&[("a", 32)]);
+    assert_eq!((backlog.moves.len(), d.put(&[("b", 8)]).ok.as_slice()), (1, &[false][..]));
+    assert_eq!(d.get(&[("g", 32)]).moves.len(), 1);
+}
+
+#[test]
+fn a_get_moves_the_leading_run_the_disk_holds_at_its_size() {
+    let mut d = Disk::new(256, 128, 8);
+    put(&mut d, &[("p0", 16), ("p1", 16), ("p3", 16)], true);
+    let at = |p: &Plan| p.moves.iter().map(|m| (m.at, m.key.clone())).collect::<Vec<_>>();
+    // `p2` is missing: nothing past it is read.
+    let p = d.get(&[("p0", 16), ("p1", 16), ("p2", 16), ("p3", 16)]);
+    assert_eq!(at(&p), [(0, "p0".to_string()), (1, "p1".to_string())]);
+    // Held at another size is not held.
+    assert!(d.get(&[("p0", 24)]).moves.is_empty());
+    // The gets' half holds 64: four rooms of 16, then none.
+    let q = d.get(&[("p3", 16), ("p3", 16), ("p3", 16)]);
+    assert_eq!(q.moves.len(), 2);
+    let mut p = p;
+    d.read(&mut p, &[true, false]);
+    assert_eq!(p.ok, [true, false, false, false]);
+}
+
+#[test]
+fn an_abandoned_put_commits_nothing_and_keeps_its_rooms() {
+    let mut d = Disk::new(256, 64, 8);
+    let p = d.put(&[("a", 32)]);
+    d.abandon(p);
+    assert_eq!(d.probe(&["a".into()]), [false]);
+    // Its room may still be written by a copy that never ran.
+    assert_eq!(d.put(&[("b", 8)]).ok, [false]);
+}
+
+#[test]
+fn every_plan_flags_each_object_and_stages_each_move_alone() {
+    for seed in 1..=40u64 {
+        let mut rand = Rand::new((seed * 0x5851_f42d) | 1);
+        let mut d = Disk::new(4096, 512, 8);
+        let mut open: Vec<(bool, Plan)> = Vec::new();
+        for _ in 0..1500 {
+            if rand.next(3) > 0 || open.is_empty() {
+                let keys: Vec<String> = (0..1 + rand.next(6)).map(|_| format!("k{}", rand.next(40))).collect();
+                let objects: Vec<(&str, u64)> = keys.iter().map(|k| (k.as_str(), (rand.next(5) * 8) as u64)).collect();
+                let get = rand.next(2) == 0;
+                let p = if get { d.get(&objects) } else { d.put(&objects) };
+                assert_eq!(p.ok.len(), objects.len(), "seed {seed}");
+                for m in &p.moves {
+                    let (key, bytes) = objects[m.at];
+                    assert_eq!((m.key.as_str(), m.extent.bytes(), m.room.len()), (key, bytes, bytes.div_ceil(8) * 8));
+                }
+                if get {
+                    // The moves are the objects in order, the empty ones skipped.
+                    let ats: Vec<usize> = p.moves.iter().map(|m| m.at).collect();
+                    let lead: Vec<usize> = (0..objects.len()).filter(|&i| objects[i].1 > 0).take(ats.len()).collect();
+                    assert_eq!(ats, lead, "seed {seed}");
+                }
+                let rooms = || open.iter().flat_map(|(_, p)| &p.moves).map(|m| &m.room);
+                for m in &p.moves {
+                    assert!(
+                        rooms()
+                            .all(|r| m.room.offset() + m.room.len() <= r.offset()
+                                || r.offset() + r.len() <= m.room.offset()),
+                        "seed {seed}: a room staged twice"
+                    );
+                }
+                open.push((get, p));
+            } else {
+                let (get, mut p) = open.remove(0);
+                let flags: Vec<bool> = p.moves.iter().map(|_| rand.next(8) > 0).collect();
+                if get {
+                    d.read(&mut p, &flags);
+                    // A get lands what moved and landed, and nothing else.
+                    let moved: Vec<usize> = p.moves.iter().zip(&flags).filter(|(_, &f)| f).map(|(m, _)| m.at).collect();
+                    assert!(
+                        p.ok.iter()
+                            .enumerate()
+                            .all(|(i, &ok)| !ok || moved.contains(&i) || !p.moves.iter().any(|m| m.at == i)),
+                        "seed {seed}"
+                    );
+                    for m in p.moves {
+                        d.give(m.room);
+                    }
+                } else {
+                    // A write is found once it landed, never when it did not.
+                    let keys: Vec<(String, bool)> =
+                        p.moves.iter().zip(&flags).map(|(m, &f)| (m.key.clone(), f)).collect();
+                    let landed = flags.iter().filter(|&&f| f).count();
+                    assert_eq!(d.wrote(p, &flags), landed, "seed {seed}");
+                    for (k, f) in keys {
+                        assert_eq!(d.probe(std::slice::from_ref(&k)), [f], "seed {seed}: `{k}`");
+                    }
+                }
+            }
+        }
     }
 }

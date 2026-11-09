@@ -64,6 +64,7 @@ use kern_manifest::types::BufferKind;
 /// could block on the context lock that thread holds inside a blocking
 /// launch (lessons.md, 2026-10-08). So a mark carries no event and says
 /// nothing about faults; the issuing thread asks [`Runtime::fault`].
+#[derive(Clone)]
 pub struct Mark {
     seq: u64,
     passed: Arc<Pinned>,
@@ -339,9 +340,13 @@ impl Runtime {
     }
 
     /// Queue every `(dst, src, bytes)` run on the compute stream, behind
-    /// everything issued so far: device addresses of this runtime's states
-    /// or a [`Runtime::pinned`] block on either side, one driver call.
-    pub fn copy_bytes(&self, runs: &[(u64, u64, u64)]) -> Result<()> {
+    /// everything issued so far, in one driver call.
+    ///
+    /// # Safety
+    /// Every run lies within this runtime's states or a [`Runtime::pinned`]
+    /// block, and the caller keeps that block alive and its range unused
+    /// until the stream has passed the copy (a [`Runtime::mark`] after it).
+    pub unsafe fn copy_bytes(&self, runs: &[(u64, u64, u64)]) -> Result<()> {
         self.ctx.bind_to_thread()?;
         copy_batch(self.stream.cu_stream(), runs)
     }

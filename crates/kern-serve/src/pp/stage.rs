@@ -89,7 +89,8 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         table.decode.into_iter().map(|d| Mirrors::map(&rt, d, &mine)).collect::<Result<_>>()?;
     let prev = Prev::accept(&rt, &listener, hello.arrivals.keys().cloned().collect())?;
     kern_run::run_once(&rt, &p)?;
-    let mut client = o.pool.as_ref().map(|cfg| pool::Client::open(cfg, &rt)).transpose()?;
+    let mut client =
+        o.pool.as_ref().map(|cfg| cfg.admits(1, true).and_then(|()| pool::Client::open(cfg, &rt))).transpose()?;
     info!(stage = cut.stage, head = %o.head, last, pooled = client.is_some(), "stage serving");
 
     let (tx, jobs) = mpsc::channel::<Job>();
