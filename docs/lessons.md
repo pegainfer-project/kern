@@ -9,14 +9,16 @@
 DSpine speculative decoding (programs `prefill` and `round`) stopped making progress partway and never
 returned, with no error and nothing logged. One GB300 (sm_103, aarch64), driver 610.57.04 (open kernel
 module, CUDA 13.3), CUPTI 13.4.46, master at `6a547fe`. The first six scenarios reproduce it: every run
-stalls at the 6th, about 40 s in. The host thread spins in user mode in `Probe::sample` →
+stalls at the 6th. The host thread spins in user mode in `Probe::sample` →
 `CudaStream::synchronize` → `cuStreamSynchronize`, which has no deadline, while the GPU reads 0%
 utilization at about 293 W, against 65-100% and 600-770 W for a running scenario. The first suspect, the
 sampler's multi-CTA radix top-k with its software barrier between CTAs, was wrong twice over: a control
 bundle using another GPU's partition stalls the same way, and a spinning barrier would keep the GPU busy.
 What decided it was an A/B on HES alone, which `kern bench` turns on unconditionally (`trace::start`):
-the same diagnostic build with `ENABLE_HES` set to 0 finishes the six in 38 s and all 141 in 233 s with
-no kernel record dropped; its p50s read 0.3-0.8% above HES on the scenarios HES completed.
+one diagnostic build of master whose only change is an environment switch for `ENABLE_HES`, on the same
+workload and GPU. With HES on it stalls at the 6th as master does; with HES off it finishes the six in
+38 s and all 141 in 233 s (job wall time) with no kernel record dropped, its p50s 0.3-0.8% above HES on
+the scenarios HES completed.
 
 With HES on, no single thing triggers it: each of the six passes alone, four two-scenario pairs pass,
 8 tiny scenarios x 21 replays and 4 x 69 pass, three copies of the largest `round` scenario (18,624 page
