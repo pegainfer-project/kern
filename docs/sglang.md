@@ -389,12 +389,73 @@ the two traced servers crossed a quarter hour and rotated by itself. A
 server started with the image's libcupti 13.0 did not come up, and said
 why. Scripts and results: `~/bench_results/2026-11-10-sglang-hes`.
 
+**Measured on a group** (2026-11-10, two trays of 4 GB300, Kimi-K3.1-Pro's D
+at TP8 / DCP8 in SGLang `afcd7d6b4`, whose image already has libcupti 13.4
+first on the path). Closed batches of one-token prompts, 256 output tokens
+each, twice per server; a fresh server per arm, off / on / off / on. The
+step is SGLang's own decode log, running requests over generation
+throughput:
+
+| running requests | 1 | 32 | 64 | 128 |
+|---|---|---|---|---|
+| tracer off, ms a step | 9.60, 9.59 | 20.98, 21.01 | 27.55, 27.60 | 36.15, 36.14 |
+| tracer on | 9.58, 9.58 | 20.94, 20.99 | 27.60, 27.60 | 36.13, 36.16 |
+
+- **Every rank records for itself.** The eight ranks each wrote a
+  `rank=<q>` directory with HES on and no record dropped: 36.6 million
+  kernels in 171 MB over a server's 12 minutes (4.7 bytes a kernel), each
+  rank rotating at the quarter hour on its own.
+- **A graph step has its eager kernels under every call, not in eager
+  order.** Each rank traced 3,153 launches of the decode graph as one
+  `decode_batch` step (1,286 to 1,446 kernels, by batch) and one `head`
+  step. In all 50,448 of them every call has the kernels it has when the
+  program runs eagerly at the same var values, and none is unnamed. K3.1's
+  D runs its indexer beside its attention, and a replayed graph interleaves
+  two lanes differently than an eager run does (as two eager runs do
+  between themselves), so a step's rows are compared per call. 98.1% of
+  the kernel time is in a step; the rest is SGLang's (the logits' gather
+  over NCCL, the attention metadata, sampling).
+- **An eager step pays per call, a graph step per launch.** The step that
+  admits a request on a unified server is `decode_batch` issued eagerly,
+  1,354 calls each tagged by itself: 16.9 ms untraced, 18.2 to 18.4 ms
+  traced (200 requests one at a time, twice per arm), about 1 µs a call.
+  Output tokens were the same in every pair of arms wherever SGLang
+  admitted the batch in the same pieces; where the pieces differ they
+  differ between two untraced servers too.
+- **Behind a prefill tier a traced D costs nothing measurable.** The same
+  D as the decode tier of SGLang's P/D (SGLang's own prefill at TP8 on two
+  more trays, Mooncake over NVLink, SGLang's router), under AgentX's replay
+  of its 256k corpus at 4 concurrent sessions for 900 s, one traced server
+  and then one untraced. D's step at 1 / 2 / 3 / 4 running requests is
+  9.87 / 10.36 / 11.31 / 11.31 ms traced and 9.83 / 10.35 / 11.28 /
+  11.29 ms untraced; the gap between output tokens is 11.28 and 11.22 ms
+  at p50, TTFT 447 and 454 ms. The prefix hit is 93.0% and 92.8%, within
+  1.3 points of an infinite cache both times. Every step D ran while
+  serving was a graph step, 147,572 a rank: its eager steps are SGLang's
+  warmups before each capture, so no step there pays per call. The traced
+  server kept 792 million kernels in 2.83 GB (3.6 bytes a kernel), none
+  dropped, 99.2% of the kernel time in a step.
+- **A launch that stalls midway keeps its kernels.** In that run one rank
+  compiled a Triton kernel at serving time for 9.7 s while the other seven
+  sat in the decode graph's first kernel that waits on a peer. CUPTI
+  delivers a launch's correlation record behind its kernel records, so
+  the four kernels already done arrived long before their tag, and the
+  tracer gave them up as SGLang's own. A graph's kernel now waits while a
+  graph issued has no tag yet. Starving one node of CPU under load stalls
+  every launch on the other the same way: before the change 8 steps came
+  out four kernels short, after it none of 50,448.
+- **Volume.** A decode rank at full duty writes 35 thousand rows a second
+  at 157 running requests and 139 thousand at one: 14 to 55 GB a day, and
+  32 GB under the replay above. Reducing a rank's file to a row per shape
+  and call is issue #130.
+
+Scripts and results: `~/bench_results/2026-11-10-sglang-hes-k31`.
+
 Not traced yet: `kv` is null in the steps (under a host the sequence
 lengths are the host's, written through `region`); SGLang's breakable /
 deduplicated graph backend (`SGLANG_USE_BREAKABLE_CUDA_GRAPH`) launches its
 graphs through cuda-python instead of `torch.cuda.CUDAGraph`, so its decode
-steps would be rows no step claims; and a multi-rank group writes one
-`rank=<q>` directory per TP rank but has only been run on one GPU.
+steps would be rows no step claims.
 
 ## Limits
 
