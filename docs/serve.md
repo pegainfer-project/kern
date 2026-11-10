@@ -1194,6 +1194,9 @@ so ranks, files and logs share one time axis. Each file's key-value metadata: `k
 `kern.clock_offset_ns`. zstd level 3, dictionaries for the strings, delta encoding for the integer
 columns.
 
+`kern workload` reads the steps files back into the workload `kern bench` prices, one sweep per
+label set ([bench.md](bench.md), "A workload from a served trace").
+
 **Measured** (2026-11-04, one GB300 tray, 4 GPUs, DeepSeek V4.1 Flash prefill tier, DP4/EP4, AgentX
 256k c32, 900 s): ~1750 kernels/s per rank at 5.7–5.9 bytes a kernel on disk, ~10 MB per quarter-hour
 pair per rank, ~0.9 GB a day per rank. TTFT mean 2497.5 ms recording against 2495.9 ms without. The

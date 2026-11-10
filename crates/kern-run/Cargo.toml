@@ -14,9 +14,11 @@ kern-runtime.workspace = true
 kern-test.workspace = true
 
 anyhow.workspace = true
+arrow-array.workspace = true
 clap.workspace = true
 hex.workspace = true
 memmap2.workspace = true
+parquet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

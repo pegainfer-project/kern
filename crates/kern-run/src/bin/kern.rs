@@ -45,6 +45,16 @@ enum Cmd {
         #[command(flatten)]
         opts: RunOpts,
     },
+    /// Turn a server's traced steps into the workload `kern bench` prices
+    Workload {
+        /// Target in kern.toml whose manifest served the trace
+        target: Option<String>,
+        /// Manifest JSON the trace was served on, in place of a target's
+        #[arg(long, conflicts_with = "target")]
+        manifest: Option<PathBuf>,
+        #[command(flatten)]
+        opts: kern_run::bench::served::ServedOpts,
+    },
     /// Serve a target through the separately installed kern-serve binary
     Server {
         /// Target in kern.toml
@@ -122,6 +132,15 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Bench { target, opts } => kern_run::bench::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
         Cmd::Run { target, opts } => kern_run::run::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
+        Cmd::Workload { target, manifest, opts } => {
+            let manifest = match manifest {
+                Some(m) => m,
+                None => target_of(cfg.as_ref(), target)?
+                    .map(|t| t.manifest.clone())
+                    .context("no --manifest, and no kern.toml target to take one from")?,
+            };
+            kern_run::bench::served::run(opts, &manifest)
+        }
         Cmd::Server { target, args } => {
             let cfg = cfg.as_ref().context("kern server needs a kern.toml with targets")?;
             let (_, target) = cfg.one(Some(&target))?;
