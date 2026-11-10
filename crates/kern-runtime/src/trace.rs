@@ -32,6 +32,10 @@
 //! and fills between programs, everything a host runs itself). An issue
 //! is complete once a graph's every node has a record, a later launch on
 //! its device has kernels, or [`PATIENCE`] collects brought it nothing.
+//! CUPTI delivers a graph launch's correlation record behind its kernel
+//! records, so a launch that stalls midway (a kernel waiting on a peer
+//! that is late) has its first kernels arrive long before their tag: a
+//! graph's kernel without a tag waits while a graph issued has none yet.
 //!
 //! CUPTI hands a buffer over only when asked; a periodic flush would hand
 //! over only full ones, and a buffer of eight megabytes takes seconds to
@@ -64,6 +68,9 @@ const LAUNCH_BITS: u32 = 24;
 /// Folds a kernel may wait for its tag before it counts as unclaimed: the
 /// correlation record can land in a later buffer than the kernel's.
 const PATIENCE: u32 = 4;
+/// Folds a graph's kernel may wait for its tag while a graph issued has
+/// none yet.
+const STALLED: u32 = 4096;
 /// Issues kept waiting for their kernels; past this the oldest go.
 const PENDING: usize = 4096;
 const KIND: cupti::CUpti_ExternalCorrelationKind =
@@ -138,6 +145,8 @@ struct Pending {
     kernels: Vec<(Kernel, Option<u32>)>,
     /// Folds since a kernel last arrived for it.
     quiet: u32,
+    /// Whether a tag that carries it has arrived.
+    tagged: bool,
 }
 
 /// What a tag says was launched.
@@ -199,7 +208,7 @@ impl Ledger {
     }
 
     fn issue(&mut self, seq: u64, issue: Issue) {
-        self.issues.insert(seq, Pending { issue, kernels: Vec::new(), quiet: 0 });
+        self.issues.insert(seq, Pending { issue, kernels: Vec::new(), quiet: 0, tagged: false });
         while self.issues.len() > PENDING {
             self.issues.pop_first();
         }
@@ -209,13 +218,17 @@ impl Ledger {
     /// records; returns the issues now complete and the kernels no issue
     /// claims.
     fn fold(&mut self, kernels: Vec<Kernel>, links: Vec<(u32, u64)>) -> Collected {
+        for (_, tag) in &links {
+            self.issues.range_mut(carried(*tag)).for_each(|(_, p)| p.tagged = true);
+        }
         self.links.extend(links);
+        let launching = self.issues.values().any(|p| p.issue.graph && !p.tagged);
         let mut unclaimed = Vec::new();
         let mut touched = BTreeSet::new();
         let arrived = std::mem::take(&mut self.waiting).into_iter().chain(kernels.into_iter().map(|k| (k, 0)));
         for (k, waited) in arrived {
             let Some(tag) = self.links.get(&k.correlation).copied() else {
-                match waited < PATIENCE {
+                match waited < PATIENCE || (launching && k.node.is_some() && waited < STALLED) {
                     true => self.waiting.push((k, waited + 1)),
                     false => unclaimed.push(k),
                 }
@@ -630,6 +643,33 @@ mod tests {
         let c = l.fold(vec![node(21, 30)], Vec::new());
         assert_eq!((calls(&c), c.unclaimed.len()), (vec![(2, vec![Some(0), Some(1)])], 0));
         assert_eq!(l.links.len(), 0);
+    }
+
+    #[test]
+    fn a_graphs_kernel_waits_for_the_tag_of_a_launch_that_stalled() {
+        let mut l = Ledger::new();
+        l.issue(1, graph(&[(10, 0), (11, 1)]));
+        l.issue(2, graph(&[(20, 0)]));
+        // Node 10 ran, node 11 waits on a peer: the launch's tag is behind node 11's record.
+        // Kernel 9 is the host's own, eager, and never tagged.
+        let c = l.fold(vec![node(10, 10), kernel(9, 5)], Vec::new());
+        assert_eq!((c.steps.len(), c.unclaimed.len()), (0, 0));
+        let quiet: Vec<usize> = (0..2 * PATIENCE).map(|_| l.fold(Vec::new(), Vec::new()).unclaimed.len()).collect();
+        assert_eq!((quiet.iter().sum::<usize>(), l.waiting.len()), (1, 1));
+        let c = l.fold(vec![node(11, 9000), node(20, 9010)], vec![(5, tag(1, Launch::Host(2)))]);
+        assert_eq!((calls(&c), c.unclaimed.len()), (vec![(1, vec![Some(0), Some(1)]), (2, vec![Some(0)])], 0));
+    }
+
+    #[test]
+    fn a_graphs_kernel_nobody_tagged_is_unclaimed_once_every_graph_issued_has_its_tag() {
+        let mut l = Ledger::new();
+        l.issue(1, graph(&[(10, 0)]));
+        // Correlation 6 is a graph the host launched untagged.
+        let other = Kernel { correlation: 6, ..node(30, 20) };
+        let c = l.fold(vec![node(10, 10), other], vec![(5, tag(1, Launch::Graph))]);
+        assert_eq!((calls(&c), c.unclaimed.len()), (vec![(1, vec![Some(0)])], 0));
+        let later: Vec<usize> = (0..PATIENCE).map(|_| l.fold(Vec::new(), Vec::new()).unclaimed.len()).collect();
+        assert_eq!(later, vec![0, 0, 0, 1]);
     }
 
     #[test]
