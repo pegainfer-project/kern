@@ -249,10 +249,18 @@ CUPTI subscription (kineto, nsys) cannot also trace. While on, every program `is
 written since the previous issue, and for a graph the call each kernel node came from, recorded at
 capture: a program captured off one stream is a chain, so its kernels run in node order) and runs under
 a CUPTI external correlation id: the issue's sequence number, plus the call for an eager program.
+A graph the host captured (`enqueue_after` under the host's capture) is launched by the host, with no
+call into the runtime: while tracing, each program enqueued into a capture keeps the call that added
+each of its kernel nodes, `Runtime::captured()` hands the host what its last capture took as a
+`HostGraph`, and the host brackets every launch of that graph with `HostGraph::launching()` /
+`launched()` on the launching thread. A launch then registers one issue per program, numbered in a row,
+under one id that says how many, and a kernel record goes to the issue whose nodes name it; a node
+none of them added is the host's own kernel and stays unclaimed.
 `trace::collect()` flushes CUPTI twice and returns `Collected { steps, unclaimed }`: each `Step` is an issue
 with its kernels as `Span`s (call, kernel name, start, end in CUPTI's clock, `trace::now()`), complete
-once a graph has a record for every node, a later issue on its device has kernels, or a few collects
-brought it nothing; `unclaimed` are the kernels no issue tagged (the runtime's own copies and fills).
+once a graph has a record for every node, a later launch on its device has kernels, or a few collects
+brought it nothing; `unclaimed` are the kernels no issue claims (the runtime's own copies and fills,
+everything a host runs itself).
 The joining is a pure fold over the records; the CUPTI callbacks only copy records out.
 CUPTI hands a buffer over only when asked: a periodic flush (`cuptiActivityFlushPeriod`) hands over only
 full ones, and an 8 MiB buffer holds 20–30 thousand kernels, seconds of serving. Under HES a flush seals

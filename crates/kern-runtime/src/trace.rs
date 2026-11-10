@@ -9,18 +9,28 @@
 //! CUPTI launch hook; nothing is inserted between kernels. Every call is
 //! CUPTI's subscriber-scoped (V2) API, which libcupti 13.3 and newer have.
 //!
-//! While tracing, every issue carries a tag as CUPTI's external
-//! correlation id: its high bits the issue's sequence number, its low bits
-//! the call plus one for an eager program, zero for a graph's single
-//! launch. Capture keeps, per kernel node, the call that added it, keyed
-//! by the node's local id: CUPTI's graph node id is the graph's id in its
-//! high half and the node's local id in its low half, and instantiation
-//! keeps the local ids, so a kernel record of the graph exec names its
-//! call exactly, whatever order a program's lanes ran in. [`collect`]
-//! flushes CUPTI and returns every
-//! [`Step`] whose kernels have all arrived, and the kernels no issue
-//! claims (the runtime's own copies and fills between programs). An issue
-//! is complete once a graph's every node has a record, a later issue on
+//! While tracing, every launch carries a tag as CUPTI's external
+//! correlation id: its high bits an issue's sequence number, its low bits
+//! what was launched (`Launch`): one call of an eager program, the
+//! issue's own graph, or a graph of the host's. Capture keeps, per kernel
+//! node, the call that added it, keyed by the node's local id: CUPTI's
+//! graph node id is the graph's id in its high half and the node's local
+//! id in its low half, and instantiation keeps the local ids, so a kernel
+//! record of the graph exec names its call exactly, whatever order a
+//! program's lanes ran in.
+//!
+//! A graph the host captured holds the programs it enqueued while
+//! capturing and nodes of its own, and the host launches it without the
+//! runtime. Each of those programs kept its nodes at capture
+//! ([`crate::HostGraph`]); the host's launch registers one issue per
+//! program, numbered in a row, under one tag that says how many, and a
+//! kernel record goes to the issue whose nodes name it. A node none of
+//! them added is the host's own kernel, and no issue claims it.
+//!
+//! [`collect`] flushes CUPTI and returns every [`Step`] whose kernels have
+//! all arrived, and the kernels no issue claims (the runtime's own copies
+//! and fills between programs, everything a host runs itself). An issue
+//! is complete once a graph's every node has a record, a later launch on
 //! its device has kernels, or [`PATIENCE`] collects brought it nothing.
 //!
 //! CUPTI hands a buffer over only when asked; a periodic flush would hand
@@ -50,8 +60,7 @@ use crate::{Error, Result};
 
 const BUFFER: usize = 8 << 20;
 const ALIGN: usize = 8;
-const CALL_BITS: u32 = 16;
-const CALL_MASK: u64 = (1 << CALL_BITS) - 1;
+const LAUNCH_BITS: u32 = 24;
 /// Folds a kernel may wait for its tag before it counts as unclaimed: the
 /// correlation record can land in a later buffer than the kernel's.
 const PATIENCE: u32 = 4;
@@ -131,13 +140,56 @@ struct Pending {
     quiet: u32,
 }
 
+/// What a tag says was launched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Launch {
+    /// One call of an eager issue.
+    Call(u32),
+    /// The issue's own graph.
+    Graph,
+    /// A graph of the host's carrying this many issues, the tagged one
+    /// first.
+    Host(u64),
+}
+
+/// The low bits are odd for a call, zero for an issue's own graph, and
+/// otherwise twice the issues a graph of the host's carries.
+fn tag(seq: u64, launch: Launch) -> u64 {
+    let low = match launch {
+        Launch::Call(c) => u64::from(c) << 1 | 1,
+        Launch::Graph => 0,
+        Launch::Host(issues) => issues << 1,
+    };
+    seq << LAUNCH_BITS | low
+}
+
+fn untag(tag: u64) -> (u64, Launch) {
+    let low = tag & ((1 << LAUNCH_BITS) - 1);
+    let launch = match (low & 1, low >> 1) {
+        (1, call) => Launch::Call(call as u32),
+        (_, 0) => Launch::Graph,
+        (_, issues) => Launch::Host(issues),
+    };
+    (tag >> LAUNCH_BITS, launch)
+}
+
+/// The issues a tag's launch carries, by sequence number.
+fn carried(tag: u64) -> std::ops::Range<u64> {
+    match untag(tag) {
+        (seq, Launch::Host(issues)) => seq..seq + issues,
+        (seq, _) => seq..seq + 1,
+    }
+}
+
 /// Issues waiting for their kernels and kernels waiting for their tags.
 struct Ledger {
     issues: BTreeMap<u64, Pending>,
     links: BTreeMap<u32, u64>,
     waiting: Vec<(Kernel, u32)>,
-    /// Per device, the newest issue any kernel has arrived for: a stream
-    /// runs in order, so every issue before it on that device is done.
+    /// Per device, the newest launch any kernel has arrived for, by its
+    /// first issue: a stream runs in order, so every issue before it on
+    /// that device is done, and the issues of one launch never pass each
+    /// other.
     newest: BTreeMap<u32, u64>,
 }
 
@@ -162,20 +214,28 @@ impl Ledger {
         let mut touched = BTreeSet::new();
         let arrived = std::mem::take(&mut self.waiting).into_iter().chain(kernels.into_iter().map(|k| (k, 0)));
         for (k, waited) in arrived {
-            match self.links.get(&k.correlation).copied() {
-                Some(tag) => {
-                    let seq = tag >> CALL_BITS;
-                    match self.issues.get_mut(&seq) {
-                        Some(p) => {
-                            let newest = self.newest.entry(k.device).or_default();
-                            *newest = (*newest).max(seq);
-                            p.kernels.push((k, ((tag & CALL_MASK) as u32).checked_sub(1)));
-                            touched.insert(seq);
-                        }
-                        None => unclaimed.push(k),
-                    }
+            let Some(tag) = self.links.get(&k.correlation).copied() else {
+                match waited < PATIENCE {
+                    true => self.waiting.push((k, waited + 1)),
+                    false => unclaimed.push(k),
                 }
-                None if waited < PATIENCE => self.waiting.push((k, waited + 1)),
+                continue;
+            };
+            let (seq, launch) = untag(tag);
+            let named =
+                |s: &u64| k.node.is_some_and(|n| self.issues.get(s).is_some_and(|p| p.issue.kernels.contains_key(&n)));
+            let (owner, call) = match launch {
+                Launch::Call(c) => (Some(seq), Some(c)),
+                Launch::Graph => (Some(seq), None),
+                Launch::Host(_) => (carried(tag).find(named), None),
+            };
+            match owner.and_then(|s| Some((s, self.issues.get_mut(&s)?))) {
+                Some((s, p)) => {
+                    let newest = self.newest.entry(k.device).or_default();
+                    *newest = (*newest).max(seq);
+                    p.kernels.push((k, call));
+                    touched.insert(s);
+                }
                 None => unclaimed.push(k),
             }
         }
@@ -194,8 +254,8 @@ impl Ledger {
             .map(|(seq, _)| *seq)
             .collect();
         let steps = done.into_iter().filter_map(|seq| self.issues.remove(&seq).map(|p| step(seq, p))).collect();
-        let live: BTreeSet<u64> = self.issues.keys().copied().collect();
-        self.links.retain(|_, tag| live.contains(&(*tag >> CALL_BITS)));
+        let live = &self.issues;
+        self.links.retain(|_, tag| live.range(carried(*tag)).next().is_some());
         Collected { steps, unclaimed }
     }
 
@@ -329,22 +389,40 @@ pub(crate) fn on() -> bool {
     ON.load(Ordering::Acquire)
 }
 
-/// Registers an issue and returns its sequence number.
-pub(crate) fn begin(issue: Issue) -> u64 {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    ISSUED.lock().unwrap_or_else(|e| e.into_inner()).push((seq, issue));
-    seq
+/// Registers the issues of one launch and returns the first's sequence
+/// number; the rest follow it in a row.
+pub(crate) fn begin(issues: Vec<Issue>) -> u64 {
+    let first = SEQ.fetch_add(issues.len() as u64, Ordering::Relaxed);
+    ISSUED.lock().unwrap_or_else(|e| e.into_inner()).extend((first..).zip(issues));
+    first
+}
+
+fn push(tag: u64) -> Result<()> {
+    ok(unsafe { cupti::cuptiActivityPushExternalCorrelationId_v2(subscriber(), KIND, tag) }, "push correlation")
+}
+
+fn pop() -> Result<()> {
+    let mut last = 0;
+    ok(unsafe { cupti::cuptiActivityPopExternalCorrelationId_v2(subscriber(), KIND, &mut last) }, "pop correlation")
 }
 
 /// Runs `f` with `seq`'s tag for `call` (`None`: a whole graph) on this
 /// thread's correlation stack.
 pub(crate) fn tagged<T>(seq: u64, call: Option<usize>, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let tag = seq << CALL_BITS | call.map_or(0, |c| c as u64 + 1);
-    ok(unsafe { cupti::cuptiActivityPushExternalCorrelationId_v2(subscriber(), KIND, tag) }, "push correlation")?;
+    push(tag(seq, call.map_or(Launch::Graph, |c| Launch::Call(c as u32))))?;
     let r = f();
-    let mut last = 0;
-    ok(unsafe { cupti::cuptiActivityPopExternalCorrelationId_v2(subscriber(), KIND, &mut last) }, "pop correlation")?;
+    pop()?;
     r
+}
+
+/// Tags this thread for a graph of the host's that carries `issues` issues
+/// from `seq` on, until [`host_launched`].
+pub(crate) fn host_launch(seq: u64, issues: u64) -> Result<()> {
+    push(tag(seq, Launch::Host(issues)))
+}
+
+pub(crate) fn host_launched() -> Result<()> {
+    pop()
 }
 
 /// A graph node's local id, the half of CUPTI's id its records keep
@@ -487,12 +565,71 @@ mod tests {
     fn a_graph_record_names_its_call_by_node_whatever_order_the_lanes_ran_in() {
         let mut l = Ledger::new();
         // Nodes 0..3 from calls 0, 1, 1, 2; call 1 ran on a side lane and finished first.
-        let nodes = BTreeMap::from([(0, 0), (1, 1), (2, 1), (3, 2)]);
-        l.issue(1, Issue { graph: true, kernels: Arc::new(nodes), ..eager() });
-        let at = |node: u32, start: u64| Kernel { node: Some(node), ..kernel(5, start) };
-        let c = l.fold(vec![at(3, 40), at(1, 10), at(0, 20), at(2, 15), at(9, 50)], vec![(5, 1 << CALL_BITS)]);
+        l.issue(1, graph(&[(0, 0), (1, 1), (2, 1), (3, 2)]));
+        let records = vec![node(3, 40), node(1, 10), node(0, 20), node(2, 15), node(9, 50)];
+        let c = l.fold(records, vec![(5, tag(1, Launch::Graph))]);
         let calls: Vec<(u64, Option<u32>)> = c.steps[0].spans.iter().map(|s| (s.start, s.call)).collect();
         assert_eq!(calls, vec![(10, Some(1)), (15, Some(1)), (20, Some(0)), (40, Some(2)), (50, None)]);
+    }
+
+    fn graph(nodes: &[(u32, u32)]) -> Issue {
+        Issue { graph: true, kernels: Arc::new(nodes.iter().copied().collect()), ..eager() }
+    }
+
+    fn node(n: u32, start: u64) -> Kernel {
+        Kernel { node: Some(n), ..kernel(5, start) }
+    }
+
+    fn calls(c: &Collected) -> Vec<(u64, Vec<Option<u32>>)> {
+        c.steps.iter().map(|s| (s.seq, s.spans.iter().map(|k| k.call).collect())).collect()
+    }
+
+    #[test]
+    fn a_tag_reads_back_as_what_was_launched() {
+        let launches = [Launch::Call(0), Launch::Call(1), Launch::Call(70_000), Launch::Graph, Launch::Host(1)];
+        for seq in [1, 2, 1 << 30] {
+            for launch in launches.into_iter().chain([Launch::Host(2), Launch::Host(4096)]) {
+                assert_eq!(untag(tag(seq, launch)), (seq, launch));
+            }
+        }
+        assert_eq!((carried(tag(7, Launch::Call(3))), carried(tag(7, Launch::Host(3)))), (7..8, 7..10));
+    }
+
+    #[test]
+    fn a_host_launch_gives_each_issue_the_nodes_it_added_and_no_issue_the_hosts_own() {
+        let mut l = Ledger::new();
+        l.issue(1, graph(&[(10, 0), (11, 1)]));
+        l.issue(2, graph(&[(20, 0)]));
+        // Node 99 is a kernel the host captured itself, between the two programs.
+        let c =
+            l.fold(vec![node(20, 40), node(10, 10), node(99, 30), node(11, 20)], vec![(5, tag(1, Launch::Host(2)))]);
+        let unclaimed: Vec<Option<u32>> = c.unclaimed.iter().map(|k| k.node).collect();
+        assert_eq!((calls(&c), unclaimed), (vec![(1, vec![Some(0), Some(1)]), (2, vec![Some(0)])], vec![Some(99)]));
+    }
+
+    #[test]
+    fn the_issues_of_one_launch_wait_for_a_later_launch_not_for_each_other() {
+        let mut l = Ledger::new();
+        l.issue(1, graph(&[(10, 0), (11, 0)]));
+        l.issue(2, graph(&[(20, 0), (21, 0)]));
+        l.issue(3, eager());
+        // Issue 2 has a kernel while issue 1 still misses one: neither is done.
+        let c = l.fold(vec![node(20, 30), node(10, 10)], vec![(5, tag(1, Launch::Host(2)))]);
+        assert_eq!(calls(&c), vec![]);
+        let c = l.fold(vec![kernel(6, 50)], vec![(6, tag(3, Launch::Call(0)))]);
+        assert_eq!(calls(&c), vec![(1, vec![Some(0)]), (2, vec![Some(0)])]);
+    }
+
+    #[test]
+    fn a_host_launch_keeps_its_tag_while_any_of_its_issues_waits() {
+        let mut l = Ledger::new();
+        l.issue(1, graph(&[(10, 0)]));
+        l.issue(2, graph(&[(20, 0), (21, 1)]));
+        let c = l.fold(vec![node(10, 10), node(20, 20)], vec![(5, tag(1, Launch::Host(2)))]);
+        assert_eq!(calls(&c), vec![(1, vec![Some(0)])]);
+        let c = l.fold(vec![node(21, 30)], Vec::new());
+        assert_eq!((calls(&c), c.unclaimed.len()), (vec![(2, vec![Some(0), Some(1)])], 0));
+        assert_eq!(l.links.len(), 0);
     }
 
     #[test]
@@ -500,9 +637,8 @@ mod tests {
         let mut l = Ledger::new();
         l.issue(1, eager());
         l.issue(2, eager());
-        let tag = |seq: u64, call: u64| seq << CALL_BITS | (call + 1);
         // Issue 1 has a kernel, issue 2 none; kernel 9's tag has not arrived.
-        let c = l.fold(vec![kernel(7, 10), kernel(9, 20)], vec![(7, tag(1, 0))]);
+        let c = l.fold(vec![kernel(7, 10), kernel(9, 20)], vec![(7, tag(1, Launch::Call(0)))]);
         assert_eq!((c.steps.len(), c.unclaimed.len()), (0, 0));
         let c = l.drain();
         let steps: Vec<(u64, Vec<Option<u32>>)> =
