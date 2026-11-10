@@ -10,8 +10,9 @@
 //! manifest says how: the program's `batch` gives the kind of call and a
 //! step's rows, the vars over the groups and rows axes give the rest, and
 //! the summed lengths less the call's own rows are its sequences' context.
-//! The trace keeps only that sum, so a call's sequences are taken to be
-//! equally deep.
+//! The trace keeps only the sums, so a call's sequences are taken to be
+//! equally deep and, where rows are as fed, equally fed. A step of a
+//! program the manifest does not have is another manifest's, and refused.
 //!
 //! Steps are bucketed as the server's own metrics label them: program,
 //! shape, context rounded up to a power of two. A scenario is then one
@@ -93,15 +94,22 @@ struct Call {
 }
 
 /// A step read back through the protocol; `None` for a program no caller
-/// drives (what runs once after load).
+/// drives (what runs once after load, or inside it). Rows as fed to
+/// several sequences are split evenly, to the nearest row the manifest's
+/// bound allows.
 fn call(p: &Protocol, s: &Step) -> Result<Option<Call>> {
     let Some(f) = p.forwards.iter().find(|f| f.name == s.program) else {
+        ensure!(
+            p.once.contains(&s.program) || p.derive.contains(&s.program),
+            "a `{}` step, and the manifest has no program of that name: the trace is not this manifest's",
+            s.program
+        );
         return Ok(None);
     };
     let groups = s.vars.get(&p.groups.var).copied().unwrap_or(f.groups);
     let fed = s.vars.get(&p.rows.var).copied();
     ensure!(groups > 0, "a `{}` step of no sequences", s.program);
-    let (chunk, rows) = match f.rows {
+    let (chunk, rows, own) = match f.rows {
         Rows::Const(r) => {
             ensure!(
                 fed.is_none_or(|n| n == groups * r),
@@ -111,16 +119,16 @@ fn call(p: &Protocol, s: &Step) -> Result<Option<Call>> {
                 p.rows.var,
                 fed.unwrap_or(0)
             );
-            (false, r)
+            (false, r, groups * r)
         }
         Rows::Var => {
             let n = fed.with_context(|| {
                 format!("a `{}` step carries no `{}`: the trace is not this manifest's", s.program, p.rows.var)
             })?;
-            (true, (n / groups).max(1))
+            (true, ((n + groups / 2) / groups).min(p.rows.max / groups).max(1), n)
         }
     };
-    let context = s.kv.map_or(0, |kv| kv.saturating_sub(groups * rows) / groups);
+    let context = s.kv.map_or(0, |kv| kv.saturating_sub(own) / groups);
     Ok(Some(Call { chunk, groups, rows, context }))
 }
 

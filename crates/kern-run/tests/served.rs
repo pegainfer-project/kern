@@ -65,6 +65,11 @@ fn calls(s: &Served) -> Vec<(&str, bool, u64, u64, u64, u64)> {
 fn a_step_is_read_back_into_the_call_its_program_declares() {
     let s = served(&[decode(4, 100, 10), chunk(512, 1000, 30)], 1., false);
     assert_eq!(calls(&s), [("prefill", true, 1, 512, 1000, 1), ("decode_batch", false, 4, 1, 100, 1)]);
+
+    // Rows fed unevenly to several sequences: an even split to the nearest row, none of them context.
+    let ragged = |rows| Step { shape: "seqs<=4,tokens<=32".into(), vars: vars(4, rows), ..chunk(rows, 400, 5) };
+    assert_eq!(calls(&served(&[ragged(31)], 1., false)), [("prefill", true, 4, 8, 100, 1)]);
+    assert_eq!(calls(&served(&[ragged(29)], 1., false)), [("prefill", true, 4, 7, 100, 1)]);
 }
 
 #[test]
@@ -106,8 +111,11 @@ fn the_cheapest_buckets_are_left_out_once_the_rest_cover_enough() {
 #[test]
 fn what_no_caller_drives_is_counted_and_another_manifests_trace_is_refused() {
     let load = Step { program: "load".into(), shape: String::new(), vars: BTreeMap::new(), kv: None, ns: 5 };
-    let s = served(&[load, decode(1, 8, 1)], 1., false);
+    let once = Protocol { once: vec!["load".into()], ..protocol() };
+    let s = Served::new(&[load.clone(), decode(1, 8, 1)], &once, 1., false).unwrap();
     assert_eq!((s.other, s.kept.len(), s.ns()), (1, 1, 1));
+    let err = Served::new(&[load, decode(1, 8, 1)], &protocol(), 1., false).unwrap_err().to_string();
+    assert!(err.contains("a `load` step, and the manifest has no program of that name"), "{err}");
 
     let unfed = Step { vars: BTreeMap::new(), ..chunk(64, 0, 1) };
     let err = Served::new(&[unfed], &protocol(), 1., false).unwrap_err().to_string();

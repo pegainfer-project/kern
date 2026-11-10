@@ -115,12 +115,14 @@ kern workload --manifest served.json --trace steps.parquet --out loop.toml --coa
 
 `--trace` takes steps files or directories of them; the manifest is the
 target's, or the one `--manifest` names in its place, and must be the one
-the trace was served on (the files' `kern.manifest_sha256` is checked
-when they carry one). The
-manifest is what reads a step back: its program's `batch` says whether the
-call was a step or a chunk, the vars over the groups and rows axes say how
-many sequences and rows, and the step's summed sequence lengths less its
-own rows are the context, taken as equal across the call's sequences.
+the trace was served on (the files' `kern.manifest_sha256` is checked when
+they carry one, and a step of a program the manifest does not have is
+refused either way). The manifest is what reads a step back: its program's
+`batch` says whether the call was a step or a chunk, the vars over the
+groups and rows axes say how many sequences and rows, and the step's
+summed sequence lengths less its own rows are the context. The trace keeps
+only the sums, so the context is taken as equal across the call's
+sequences, and so are a chunk's rows, to the nearest row.
 
 On 3.3 hours of a public Qwen3.8-27B service (2026-11-10; one sm120 GPU,
 fp8 weights, speculative rounds over up to 16 sequences, prefill in
