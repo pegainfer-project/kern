@@ -65,10 +65,11 @@ has lengths for, which must be one of the sweep's `groups`.
 
 A sweep may also say `weight = <calls>`: how many calls of each of its
 shapes the traffic being modeled makes (default 1; a shape repeated across
-sweeps sums its weights). `python -m kern_vllm.workload <trace>` writes one
-such sweep per bucket of a vLLM step trace. After the last scenario the
-report prices the workload: every shape's program time, times its weight,
-and that time by op:
+sweeps sums its weights). `kern workload` writes one such sweep per bucket
+of a kern-serve trace ([below](#a-workload-from-a-served-trace)), and
+`python -m kern_vllm.workload <trace>` per bucket of a vLLM step trace.
+After the last scenario the report prices the workload: every shape's
+program time, times its weight, and that time by op:
 
 ```
 cost      <seconds> · <calls> calls[ · <n> dropped] · <op> <share> · … · +<n> more
@@ -100,6 +101,81 @@ advances state. Which of them a call was is part of its shape, so each
 has one program and its own id: `round-g1-r16-kv128` and
 `prefill-g1-c16-kv128`. To ask whether a one-row step or a one-row chunk
 is faster, sweep both.
+
+## A workload from a served trace
+
+`kern-serve --trace-dir` records every step it issues
+([serve.md](serve.md), "Tracing"). `kern workload` reads those steps back
+into the calls they were and writes the workload that stands for them:
+
+```bash
+kern workload qwen3.8-27b --trace traces/date=2026-11-10 --out served.toml
+kern workload --manifest served.json --trace steps.parquet --out served.toml
+```
+
+`--trace` takes one rank's steps files or directories of them (bench
+issues a call on every rank of the manifest, so a group's directory is
+given as `…/rank=0`); the manifest is the target's, or the one
+`--manifest` names in its place, and must be the one the trace was served
+on (the files' `kern.manifest_sha256` is checked when they carry one, and
+a step of a program the manifest does not have is refused either way). The
+manifest is what reads a step back: its program's `batch` says whether the
+call was a step or a chunk, the vars over the groups and rows axes say how
+many sequences and rows, and the step's summed sequence lengths less its
+own rows are the context. The trace keeps only the sums, so the context is
+taken as equal across the call's sequences, and so are a chunk's rows, to
+the nearest row. A manifest that deals a sequence's positions over a rank
+group is refused: a member's trace holds the lengths of its own share.
+
+On 3.3 hours of a public Qwen3.8-27B service (2026-11-10; one sm120 GPU,
+fp8 weights, speculative rounds over up to 16 sequences, prefill in
+1024-row chunks; the snapshot is one merged steps file, which carries no
+sha256):
+
+```
+trace     85284 steps · 1 file · 8621.7 s of step time · 1 from programs no caller drives · no manifest sha256 in the files to check
+fidelity  +0.48% priced at the trace's own nearest steps · worst prefill seqs<=1,tokens<=1024 +0.85%
+plan      141 scenarios · 0 dropped · 718272 tokens of state · 17 seqs
+out       served.toml
+```
+
+- **A bucket is a metric label set.** Steps are grouped as
+  `kern_step_compute_seconds_total` labels them: program, shape, context
+  rounded up to a power of two. A scenario is then one series, and what
+  bench measures of it can be held against what the server reports for
+  the same labels.
+- **A bucket's sweep keeps its totals.** It is the call in the middle of
+  the bucket's steps (so a bucket that is mostly full chunks is a full
+  chunk, a shape that was served, and not an average row count that never
+  was), at the bucket's mean context, weighted by their count. The mean
+  keeps the bucket's total context, and a cost linear in context is
+  priced by the total.
+- **`fidelity` is the trace pricing itself.** Each bucket is priced at
+  the median of the traced steps nearest its sweep (the 25 nearest in
+  context, and every step as near as the last of them), and the sum is
+  held against the time the bucket's steps took. It is the error of
+  standing a bucket for its steps, known before a GPU is involved;
+  `worst` is the program and shape furthest off in seconds.
+- **`plan`** is what `kern bench` will make of the file on this manifest;
+  a `drop` line names a sweep it will not take.
+
+That is all it does: every bucket becomes a sweep, most expensive first,
+so the file is the whole trace and its `cost` is held against the trace's
+own step time. Each sweep carries a comment saying what it stands for:
+
+```toml
+# prefill · seqs<=1,tokens<=1024 · kv<=64k · 3314 steps · 1274.0 s
+[[sweep]]
+groups = [1]
+chunk = [1024]
+context = [46502]
+weight = 3314
+```
+
+A smaller workload for a faster loop is an edit to the file, not a flag:
+drop the sweeps of the tail, or merge a shape's context buckets into one
+sweep (weights summed, context their weighted mean). The same goes for
+`samples`, `seed`, and a sweep the plan dropped.
 
 ## What the terminal says
 

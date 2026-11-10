@@ -7,14 +7,16 @@
 //! inserted between kernels.
 //!
 //! Nothing here names a program, a buffer or a model. A workload gives
-//! shapes ([`workload`]), `Protocol` turns a shape into a program, and the
-//! fill table says what to stage. Samples are kept verbatim, slow tails
+//! shapes ([`workload`]), written by hand or read off a server's trace
+//! ([`served`]), `Protocol` turns a shape into a program, and the fill
+//! table says what to stage. Samples are kept verbatim, slow tails
 //! included; no minimum-only or outlier filtering.
 //!
 //! A manifest with a topology runs as its ranks, every rank fed the same
 //! shape with its own sequences, in lockstep: a call that reads its peers
 //! finds them issuing. Attribution is per rank.
 
+pub mod served;
 pub mod workload;
 
 use std::collections::BTreeMap;
