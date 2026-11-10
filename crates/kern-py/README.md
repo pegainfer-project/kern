@@ -4,7 +4,8 @@
 buffers, states, ops and programs, compiled kernels, and weights. This package is kern for Python:
 
 - `kern`: the runtime binding (`kern.Runtime`), the readers of a manifest's host contract
-  (`kern.host`) and the rank group over `torch.distributed` (`kern.group`);
+  (`kern.host`), the rank group over `torch.distributed` (`kern.group`) and the kernel tracer
+  (`kern.trace`);
 - `kern_vllm`: a vLLM plugin that runs a manifest as the model;
 - `kern_sglang`: the same for SGLang.
 

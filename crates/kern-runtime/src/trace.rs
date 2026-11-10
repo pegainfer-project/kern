@@ -398,7 +398,8 @@ pub fn dropped() -> u64 {
     DROPPED.load(Ordering::Relaxed)
 }
 
-pub(crate) fn on() -> bool {
+/// Whether [`start`] has subscribed the process.
+pub fn on() -> bool {
     ON.load(Ordering::Acquire)
 }
 

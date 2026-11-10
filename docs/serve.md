@@ -1190,9 +1190,14 @@ hive-style partitions.
 
 Timestamps are CUPTI's clock moved by the offset to the wall clock sampled when the pair was opened,
 so ranks, files and logs share one time axis. Each file's key-value metadata: `kern.rank`,
-`kern.model`, `kern.manifest_sha256` (of the manifest JSON as read), `kern.version` (the binary's) and
-`kern.clock_offset_ns`. zstd level 3, dictionaries for the strings, delta encoding for the integer
-columns.
+`kern.model`, `kern.manifest_sha256` (of the manifest JSON as read), `kern.version` (the binary's),
+`kern.clock_offset_ns`, `kern.hes` (whether the GPU stamped the kernels; `false` means CUPTI fell back
+to its software timestamps) and `kern.dropped_records` (kernel records CUPTI lost since the process
+began tracing, as of the file's close, so the difference between two files is what the later one
+misses). zstd level 3, dictionaries for the strings, delta encoding for the integer columns.
+
+A manifest hosted in another engine writes the same files with `KERN_TRACE_DIR`
+([sglang.md](sglang.md), "Tracing"); there the files are the only place the last two are said.
 
 `kern workload` reads the steps files back into the workload `kern bench` prices, one sweep per
 label set ([bench.md](bench.md), "A workload from a served trace").

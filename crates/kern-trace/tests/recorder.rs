@@ -66,9 +66,9 @@ fn a_quarter_hour_closes_into_whole_files_that_name_calls_as_the_manifest_does()
     let _ = std::fs::remove_dir_all(&root);
     let mut r = Recorder::new(root.clone(), 3, meta(&m, PAGED, "1.2.3"));
     let t0 = 1_793_797_134 * SEC;
-    r.write(&collected(1, "decode", true, ("seqs", 4), 100), sites, Now { unix: t0, cupti: 0 }).unwrap();
-    r.write(&collected(2, "prefill", false, ("tokens", 5), 200), sites, Now { unix: t0 + SEC, cupti: SEC as u64 })
-        .unwrap();
+    let now = |unix, cupti| Now { unix, cupti, hes: Some(true) };
+    r.write(&collected(1, "decode", true, ("seqs", 4), 100), sites, now(t0, 0)).unwrap();
+    r.write(&collected(2, "prefill", false, ("tokens", 5), 200), sites, now(t0 + SEC, SEC as u64)).unwrap();
     let dir = root.join("date=2026-11-04/rank=3");
     let names = || {
         let mut v: Vec<String> =
@@ -77,7 +77,7 @@ fn a_quarter_hour_closes_into_whole_files_that_name_calls_as_the_manifest_does()
         v
     };
     assert_eq!(names(), ["125854.kernels.parquet.part", "125854.steps.parquet.part"]);
-    r.write(&Collected::default(), sites, Now { unix: t0 + 120 * SEC, cupti: 0 }).unwrap();
+    r.write(&Collected::default(), sites, now(t0 + 120 * SEC, 0)).unwrap();
     assert_eq!(names(), ["125854.kernels.parquet", "125854.steps.parquet"]);
     let (kernels, steps) = (dir.join("125854.kernels.parquet"), dir.join("125854.steps.parquet"));
 
@@ -109,6 +109,8 @@ fn a_quarter_hour_closes_into_whole_files_that_name_calls_as_the_manifest_does()
     );
     let some = |s: &str| Some(s.to_string());
     assert_eq!(said, (some("3"), some(&m.model), some("1.2.3"), Some(t0.to_string()), Some(64)));
+    // What the rows cannot say: the GPU stamped them, and none was lost by the close.
+    assert_eq!((says(&kernels, "kern.hes"), says(&steps, "kern.dropped_records")), (some("true"), some("0")));
     assert_eq!(r.rotate().unwrap(), Vec::<std::path::PathBuf>::new());
     std::fs::remove_dir_all(&root).unwrap();
 }

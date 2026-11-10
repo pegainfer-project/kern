@@ -322,6 +322,80 @@ minutes).
 Scripts, logs and the gate and A/B tables:
 `~/bench_results/2026-10-13-kern-sglang-k3-ab`.
 
+## Tracing
+
+With `KERN_TRACE_DIR` set, the plugin keeps every kernel the model's process
+runs, stamped by the GPU itself (CUPTI's hardware event system,
+[runtime.md](runtime.md) "Tracing"), in the Parquet files kern-serve's
+`--trace-dir` writes ([serve.md](serve.md) "Tracing"): per rank and quarter
+hour, a `kernels` file with one row per kernel and a `steps` file with one
+row per program issue.
+
+```bash
+# libcupti 13.3 or newer, as the first libcupti.so on the library path (SGLang's image has 13.0 there)
+pip install --no-deps --target /opt/cupti 'nvidia-cuda-cupti>=13.3'
+ln -s libcupti.so.13 /opt/cupti/nvidia/cu13/lib/libcupti.so
+export LD_LIBRARY_PATH=/opt/cupti/nvidia/cu13/lib:$LD_LIBRARY_PATH
+
+KERN_TRACE_DIR=/var/kern-trace KERN_MANIFEST=... sglang serve ...
+touch /var/kern-trace/rotate    # close the files being written, to read them now
+```
+
+- **A prefill** is one eager `prefill` step per request, each kernel under
+  the label of the manifest call that launched it.
+- **A decode step** is SGLang's CUDA graph, which SGLang replays without
+  calling the model. While SGLang captures, the runtime keeps which call
+  added each kernel node; torch's graph hooks tell it when a graph is
+  launched (`kern.trace`). Every replay is then one `decode_batch` step and
+  one `head` step, numbered in a row, `graph` true, with the kernels and
+  labels of the same programs run eagerly.
+- **SGLang's own kernels** are rows with a null `seq`: sampling, the
+  metadata it updates per step, and the nodes it captures into the decode
+  graph beside kern's (the attention metadata update, the recurrent-state
+  tracking, a few elementwise ops).
+- **Whether to believe a file** is in its metadata: `kern.hes` says the GPU
+  stamped the kernels, `kern.dropped_records` how many records were lost.
+
+The tracer starts in `register()`, which SGLang calls in every process
+before it loads the model: the hardware event system is chosen before a
+process's first CUDA context. A tracer that cannot start (an older
+libcupti) stops the server at model load with its reason, instead of
+serving untraced. A pair of files is readable once closed, at the quarter
+hour or when `<dir>/rotate` is touched; a kernel reaches the files up to
+about a second after it ran, so touch it a moment after the work of
+interest. SGLang ends its scheduler process with a signal, so the pair
+being written is lost unless it is rotated first.
+
+**Measured** (2026-11-10, one GB300, Qwen3.8-27B, SGLang nightly `f70e8c68`,
+the launch command at the top). 384 requests of 2048 prompt tokens and 256
+output tokens at 32 concurrent, twice per server with other prompts the
+second time; a fresh server per arm, off / on / off / on, the same libcupti
+13.4.92 on the path in every arm:
+
+| | output tok/s, first load | second load | e2e p50 |
+|---|---|---|---|
+| tracer off | 1432.1, 1430.2 | 1447.2, 1448.3 | 5594–5601 ms |
+| tracer on | 1425.3, 1424.0 | 1445.3, 1441.2 | 5619–5623 ms |
+| on / off | 0.9955 | 0.9969 | |
+
+A traced server kept 5.22 million kernels in 196 s (26.7 thousand a second)
+in 22.5–23.1 MB (4.3–4.4 bytes a kernel), with HES on and no record
+dropped. 99.0% of the kernel time is in a step: 768 `prefill` steps, and
+6,153 launches of the decode graph, each one `decode_batch` step and one
+`head` step, whose 4,144,242 kernels all carry the label they have when the
+same program runs eagerly at the same var values, in the same order. The
+1.0% no step claims (260 thousand kernels, 1.43 s) is SGLang's own. One of
+the two traced servers crossed a quarter hour and rotated by itself. A
+server started with the image's libcupti 13.0 did not come up, and said
+why. Scripts and results: `~/bench_results/2026-11-10-sglang-hes`.
+
+Not traced yet: `kv` is null in the steps (under a host the sequence
+lengths are the host's, written through `region`); SGLang's breakable /
+deduplicated graph backend (`SGLANG_USE_BREAKABLE_CUDA_GRAPH`) launches its
+graphs through cuda-python instead of `torch.cuda.CUDAGraph`, so its decode
+steps would be rows no step claims; and a multi-rank group writes one
+`rank=<q>` directory per TP rank but has only been run on one GPU.
+
 ## Limits
 
 - **One program call per prefill request**, as under vLLM; a request with a

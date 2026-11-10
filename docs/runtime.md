@@ -276,8 +276,9 @@ last collect: a forced flush on top, kernel records with no end yet dropped, and
 waiting returned with the kernels it has. `trace::dropped()` counts records CUPTI dropped or handed
 over unfinished, `trace::hes()` says whether HES is what CUPTI ended
 up using (it falls back to software timestamps silently). No kernel is inserted; the consumers are
-kern-serve's `--trace` (serve.md "Tracing") and `kern bench`, whose samples are traced replays of a
-program's graph, any of its calls left out (`profile::Graph`, bench.md).
+kern-serve's `--trace` (serve.md "Tracing"), a manifest hosted in another engine (`kern.trace`,
+sglang.md "Tracing"), both writing kern-trace's files, and `kern bench`, whose samples are traced
+replays of a program's graph, any of its calls left out (`profile::Graph`, bench.md).
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、
