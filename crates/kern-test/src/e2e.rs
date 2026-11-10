@@ -23,8 +23,13 @@
 //! Scoring is [`kl`]: KL(baseline ‖ candidate) on the baseline's
 //! top-[`TOP`] with the rest as one bucket, against the candidate's full
 //! row. The verdict is one number: the mean over every position against a
-//! limit the caller gives ([`Judgment`]); depth and decode step only break
-//! it down for whoever reads a red one.
+//! limit the caller gives ([`Judgment`]). A mean does not say what it
+//! averaged, so the report reads the positions one by one beside it: where
+//! the KL sits (its median and 99th percentile, by depth, by decode step)
+//! and, for every top-1 the candidate flipped, the [`Position::regret`],
+//! how much less the baseline thought of the candidate's token than of its
+//! own. A tie that flips costs nothing; a token the baseline was sure of
+//! does.
 //!
 //! Nothing here touches a device or a clock. A draw is a function of
 //! `(seed, row, step)` and the logits alone, so batching can move a
@@ -566,21 +571,28 @@ pub struct Position {
     pub kl: f64,
     /// Baseline top-1 minus top-2, in nats.
     pub margin: f64,
+    /// The baseline's log probability of its own top-1 minus that of the
+    /// candidate's, in nats: 0 where they agree, and a lower bound where
+    /// the candidate's token is outside the baseline's kept ones.
+    pub regret: f64,
     pub base: i64,
     pub cand: i64,
 }
 
 impl Position {
     pub fn of(row: usize, step: usize, depth: usize, base: &Top, logits: &[f32]) -> Position {
+        let cand = argmax(logits) as i64;
+        let first = base.logprobs.first().copied().unwrap_or(0.0) as f64;
+        let seen = base.ids.iter().position(|&id| id as i64 == cand).or(base.ids.len().checked_sub(1));
         Position {
             row,
             step,
             depth,
             kl: kl(base, logits),
-            margin: base.logprobs.first().copied().unwrap_or(0.0) as f64
-                - base.logprobs.get(1).copied().unwrap_or(f32::NEG_INFINITY) as f64,
+            margin: first - base.logprobs.get(1).copied().unwrap_or(f32::NEG_INFINITY) as f64,
+            regret: seen.and_then(|k| base.logprobs.get(k)).map_or(0.0, |&l| first - l as f64),
             base: base.ids.first().copied().unwrap_or(-1) as i64,
-            cand: argmax(logits) as i64,
+            cand,
         }
     }
     pub fn flip(&self) -> bool {
@@ -594,6 +606,8 @@ const DEPTHS: [usize; 4] = [0, 8 << 10, 32 << 10, 128 << 10];
 const STEPS: [usize; 4] = [0, 1, 64, 512];
 /// Flips the report names.
 const WORST: usize = 8;
+/// Regrets, in nats, the report counts the flips at or above.
+const REGRETS: [f64; 3] = [0.5, 1.0, 2.0];
 
 /// Mean KL over the positions of one bucket.
 #[derive(Clone, Debug, PartialEq)]
@@ -608,10 +622,15 @@ pub struct Judgment {
     pub positions: usize,
     pub mean_kl: f64,
     pub limit: f64,
+    /// The KL half the positions stay under, and the KL 99 in 100 do.
+    pub median_kl: f64,
+    pub p99_kl: f64,
     pub depth: Vec<Bucket>,
     pub step: Vec<Bucket>,
     pub flips: usize,
-    /// The flips with the most KL, most first.
+    /// A regret, and the flips at or above it.
+    pub regrets: Vec<(f64, usize)>,
+    /// The flips with the most regret, most first.
     pub worst: Vec<Position>,
 }
 
@@ -635,17 +654,30 @@ fn mean(v: &[f64]) -> f64 {
     }
 }
 
+/// The value `q` of the way through `sorted`.
+fn quantile(sorted: &[f64], q: f64) -> f64 {
+    sorted.get((sorted.len().saturating_sub(1) as f64 * q).round() as usize).copied().unwrap_or(0.0)
+}
+
 impl Judgment {
     pub fn of(ps: &[Position], limit: f64) -> Judgment {
         let mut flips: Vec<Position> = ps.iter().filter(|p| p.flip()).cloned().collect();
-        flips.sort_by(|a, b| b.kl.total_cmp(&a.kl).then((a.row, a.step).cmp(&(b.row, b.step))));
+        flips.sort_by(|a, b| {
+            b.regret.total_cmp(&a.regret).then(b.kl.total_cmp(&a.kl)).then((a.row, a.step).cmp(&(b.row, b.step)))
+        });
+        let mut kls: Vec<f64> = ps.iter().map(|p| p.kl).collect();
+        let mean_kl = mean(&kls);
+        kls.sort_by(f64::total_cmp);
         Judgment {
             positions: ps.len(),
-            mean_kl: mean(&ps.iter().map(|p| p.kl).collect::<Vec<_>>()),
+            mean_kl,
             limit,
+            median_kl: quantile(&kls, 0.5),
+            p99_kl: quantile(&kls, 0.99),
             depth: buckets(ps, &DEPTHS, |p| p.depth),
             step: buckets(ps, &STEPS, |p| p.step),
             flips: flips.len(),
+            regrets: REGRETS.iter().map(|&r| (r, flips.iter().filter(|p| p.regret >= r).count())).collect(),
             worst: flips.into_iter().take(WORST).collect(),
         }
     }
@@ -675,23 +707,29 @@ impl Judgment {
             Some(t) => format!("{from}–{}", t - 1),
             None => format!("≥{from}"),
         };
-        let mut v = vec![row("depth", cells(&self.depth, &depth), None), row("step", cells(&self.step, &step), None)];
+        let mut v = vec![
+            row("depth", cells(&self.depth, &depth), None),
+            row("step", cells(&self.step, &step), None),
+            row("kl", format!("median {:.2e} · p99 {:.2e}", self.median_kl, self.p99_kl), None),
+        ];
         let mut f = plural(self.flips, "flip");
-        if !self.worst.is_empty() {
-            f += " · most KL first:";
+        if let Some(most) = self.worst.first() {
+            let at: Vec<String> = self.regrets.iter().map(|(r, n)| format!("{n} ≥ {r}")).collect();
+            f += &format!(" · by regret in nats: {} · most {:.3} · most regret first:", at.join(" · "), most.regret);
         }
         v.push(row("flips", f, None));
         v.extend(self.worst.iter().map(|p| {
             row(
                 "flip",
                 format!(
-                    "{} step {} (depth {}) · {} → {} · margin {:.3} · KL {:.3}",
+                    "{} step {} (depth {}) · {} → {} · margin {:.3} · regret {:.3} · KL {:.3}",
                     sources.get(p.row).map_or("?", |s| s.as_str()),
                     p.step,
                     p.depth,
                     p.base,
                     p.cand,
                     p.margin,
+                    p.regret,
                     p.kl
                 ),
                 None,
