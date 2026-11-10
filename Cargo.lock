@@ -2048,6 +2048,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.7.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "878c26bc5e45fe089ce2ca25689260c152a87ce1d7de2ca86101efeea6973932"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2234,10 +2245,12 @@ dependencies = [
  "hex",
  "infront-engine",
  "infront-vllm",
+ "io-uring",
  "kern-manifest",
  "kern-pool",
  "kern-run",
  "kern-runtime",
+ "libc",
  "mooncake_store",
  "parquet",
  "serde",

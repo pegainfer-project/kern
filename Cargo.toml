@@ -55,6 +55,8 @@ clap = { version = "4", features = ["derive"] }
 cudarc = { version = "=0.19.10", features = ["cuda-13030", "f16", "nccl", "cupti"] }
 half = "=2.7.1"
 hex = "0.4"
+# kern-serve's disk tier drives its file through io_uring with O_DIRECT.
+io-uring = "0.7"
 libc = "0.2"
 memmap2 = "0.9"
 schemars = "1"

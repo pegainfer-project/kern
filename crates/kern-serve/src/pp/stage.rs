@@ -89,7 +89,8 @@ pub fn run(m: Verified, weights: &Weights, o: Stage) -> Result<()> {
         table.decode.into_iter().map(|d| Mirrors::map(&rt, d, &mine)).collect::<Result<_>>()?;
     let prev = Prev::accept(&rt, &listener, hello.arrivals.keys().cloned().collect())?;
     kern_run::run_once(&rt, &p)?;
-    let mut client = o.pool.as_ref().map(|cfg| pool::Client::open(cfg, rt.pooled_spans())).transpose()?;
+    let mut client =
+        o.pool.as_ref().map(|cfg| cfg.admits(1, true).and_then(|()| pool::Client::open(cfg, &rt))).transpose()?;
     info!(stage = cut.stage, head = %o.head, last, pooled = client.is_some(), "stage serving");
 
     let (tx, jobs) = mpsc::channel::<Job>();
@@ -184,14 +185,8 @@ fn act(rt: &mut Runtime, act: Act, holds: (bool, bool), client: Option<&pool::Cl
         }
         Act::Probe { id, keys } => client()?.probe(id, keys),
         Act::Mark { id, key } => client()?.mark(id, key),
-        Act::Put { id, objects } => {
-            let after = rt.mark()?;
-            client()?.put(id, after, &objects)
-        }
-        Act::Get { id, objects } => {
-            let after = rt.mark()?;
-            client()?.get(id, after, &objects)
-        }
+        Act::Put { id, objects } => client()?.put(rt, id, &objects)?,
+        Act::Get { id, objects } => client()?.get(rt, id, &objects)?,
     }
     Ok(())
 }

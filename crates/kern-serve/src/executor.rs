@@ -161,7 +161,7 @@ fn join(
     for prog in &p.once {
         rt.run(prog, &vars).with_context(|| format!("`{prog}`"))?;
     }
-    pool.map(|cfg| pool::Client::open(cfg, rt.pooled_spans())).transpose()
+    pool.map(|cfg| pool::Client::open(cfg, rt)).transpose()
 }
 
 /// What names a manifest's objects in the pool: the manifest, the
@@ -197,6 +197,9 @@ impl Joined {
 pub fn head(m: &Verified, weights: &Weights, o: &Load, listen: Option<&str>) -> Result<Joined> {
     let groups = world(m)?;
     let n = groups.ranks();
+    if let Some(cfg) = &o.pool {
+        cfg.admits(n, false)?;
+    }
     let listener = match (n, listen) {
         (1, _) => None,
         (_, Some(a)) => Some(TcpListener::bind(a).with_context(|| format!("binding {a}"))?),
@@ -264,6 +267,9 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
         "--rank {q}: the manifest spans ranks 0..{}, rank 0 the head",
         groups.ranks()
     );
+    if let Some(cfg) = &o.pool {
+        cfg.admits(groups.ranks(), false)?;
+    }
     let p = Protocol::check(m)?;
     let mut rt = load(m, weights, groups, q, o)?;
     let mut s = connect(head, CONNECT)?;
@@ -292,9 +298,11 @@ pub fn rank(m: &Verified, weights: &Weights, o: &Load, head: &str, q: usize) -> 
 /// One rank's runtime, running orders: acts in order, then the item.
 pub struct Executor {
     rank: usize,
+    // Before `rt`, so it drops first: the disk tier's pinned block is
+    // freed while the context it was pinned in still lives.
+    pool: Option<pool::Client>,
     rt: Runtime,
     p: Protocol,
-    pool: Option<pool::Client>,
 }
 
 impl Executor {
@@ -318,20 +326,17 @@ impl Executor {
 
     /// Queue the acts and the item; the wall clock once the item's inputs are written.
     fn issue(&mut self, o: &Order) -> Result<u64> {
+        if let Some(pool) = &self.pool {
+            pool.issue(&self.rt)?;
+        }
         for a in &o.acts {
             match a {
                 Act::Zero(s) => self.rt.zero_slot(*s)?,
                 Act::Copy(c) => self.rt.copy(&c.pages, c.slot.as_slice())?,
                 Act::Probe { id, keys } => self.pool()?.probe(*id, keys.clone()),
                 Act::Mark { id, key } => self.pool()?.mark(*id, key.clone()),
-                Act::Put { id, objects } => {
-                    let after = self.rt.mark()?;
-                    self.pool()?.put(*id, after, objects);
-                }
-                Act::Get { id, objects } => {
-                    let after = self.rt.mark()?;
-                    self.pool()?.get(*id, after, objects);
-                }
+                Act::Put { id, objects } => self.pool()?.put(&self.rt, *id, objects)?,
+                Act::Get { id, objects } => self.pool()?.get(&self.rt, *id, objects)?,
             }
         }
         if let Some(item) = &o.item {

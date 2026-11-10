@@ -81,7 +81,7 @@
 //!   dropped. A replicated group (positions dealt over its members) keeps
 //!   nothing: its checkpoints and retires answer `None` and the prefix
 //!   tree stays empty;
-//! - the pooled tier (`pool.rs`, over Mooncake Store), when the ranks
+//! - the pooled tier (`pool/`, over Mooncake Store or a local disk), when the ranks
 //!   joined one: every snapshot the prefix tree keeps is also put to the
 //!   pool, whole pages and the state object of each member, and marked
 //!   once every member's put landed, so a prompt arriving on any instance

@@ -8,7 +8,10 @@
 //! start from (`prefix`: [`Prefix`]), and which rows of a sequence go to
 //! which member of a group that deals positions (`deal`: [`Interleave`],
 //! [`deal`]), and what the pooled tier is asked and told (`pooled`:
-//! [`Keys`], [`Probe`], [`Landing`], [`snapshots`]). Every decision comes
+//! [`Keys`], [`Probe`], [`Landing`], [`snapshots`]), and where that tier
+//! keeps its objects when it is one local disk (`disk`: [`Disk`], over the
+//! file as a [`Ring`] and the pinned block its bytes pass through as an
+//! [`Arena`]). Every decision comes
 //! back as data — a [`Copies`], a [`Deal`] — that the runtime executes on
 //! its streams; every handle owns what it names and returns it when
 //! dropped.
@@ -18,16 +21,22 @@
 //! slots and name the same keys. The tests in `tests/` drive it against reference models
 //! and need no GPU.
 
+mod arena;
 mod deal;
+mod disk;
 mod error;
 mod pages;
 mod pooled;
 mod prefix;
+mod ring;
 mod store;
 
+pub use arena::{Arena, Room};
 pub use deal::{deal, runs, Deal, Interleave, Pages, RowRun};
+pub use disk::{Disk, Move, Plan};
 pub use error::{Error, Result};
 pub use pages::{page_unit, row_tokens, Denied, Kind, Lease, Pool, Pooled};
 pub use pooled::{grid, landed, objects, snapshots, Chain, Hash, Keys, Landing, Object, Probe};
 pub use prefix::{Hit, Kept, Prefix};
+pub use ring::{Extent, Placed, Ring};
 pub use store::{Checkpoint, Copies};

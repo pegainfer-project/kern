@@ -47,7 +47,7 @@ use cudarc::driver::{sys, CudaContext, CudaStream};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
 use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn, Blas};
-use crate::device::Pinned;
+use crate::device::{copy_batch, Pinned};
 use crate::error::{bail, cuda_check};
 use crate::{trace, Error, Result, Runtime};
 use kern_manifest::types::BufferKind;
@@ -64,6 +64,7 @@ use kern_manifest::types::BufferKind;
 /// could block on the context lock that thread holds inside a blocking
 /// launch (lessons.md, 2026-10-08). So a mark carries no event and says
 /// nothing about faults; the issuing thread asks [`Runtime::fault`].
+#[derive(Clone)]
 pub struct Mark {
     seq: u64,
     passed: Arc<Pinned>,
@@ -329,6 +330,25 @@ impl Runtime {
         let seq = self.signals.seq.fetch_add(1, Ordering::Relaxed) + 1;
         self.signal(self.signals.flag, self.signals.passed_device, seq, "cuLaunchKernel(flag)")?;
         Ok(Mark { seq, passed: self.signals.passed.clone() })
+    }
+
+    /// `bytes` of page-locked host memory on the NUMA node this runtime's
+    /// device hangs off, for [`Runtime::copy_bytes`] to move through.
+    pub fn pinned(&self, bytes: u64) -> Result<Pinned> {
+        self.ctx.bind_to_thread()?;
+        Pinned::alloc(bytes, self.gpu as i32)
+    }
+
+    /// Queue every `(dst, src, bytes)` run on the compute stream, behind
+    /// everything issued so far, in one driver call.
+    ///
+    /// # Safety
+    /// Every run lies within this runtime's states or a [`Runtime::pinned`]
+    /// block, and the caller keeps that block alive and its range unused
+    /// until the stream has passed the copy (a [`Runtime::mark`] after it).
+    pub unsafe fn copy_bytes(&self, runs: &[(u64, u64, u64)]) -> Result<()> {
+        self.ctx.bind_to_thread()?;
+        copy_batch(self.stream.cu_stream(), runs)
     }
 
     /// The fault of any launch so far, without waiting for the rest: the

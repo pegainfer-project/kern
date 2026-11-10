@@ -432,7 +432,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
     let event_tx = tx.clone();
     let pool = match &h.pool {
         Some(cfg) => {
-            let mut client = pool::Client::open(cfg, rt.pooled_spans())?;
+            cfg.admits(1, true)?;
+            let mut client = pool::Client::open(cfg, &rt)?;
             let tx = tx.clone();
             client.forward(move |l| tx.send(Event::Landed { stage: 0, l }).is_ok())?;
             Some(Pooled {
@@ -764,13 +765,11 @@ impl PpHead {
             let acts = shared.iter().cloned().chain([act(objects)]).collect();
             send(w, &Job::Acts(acts))?;
         }
-        let after = self.rt.mark()?;
         let client = &self.pool.as_ref().expect("a transfer needs a pool").client;
         match put {
-            true => client.put(id, after, &mine),
-            false => client.get(id, after, &mine),
+            true => client.put(&self.rt, id, &mine),
+            false => client.get(&self.rt, id, &mine),
         }
-        Ok(())
     }
 
     /// Put `lease` back as the cache leased it, on the head and the
