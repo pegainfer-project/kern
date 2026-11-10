@@ -464,7 +464,7 @@ impl Runtime {
             bail!(Api, "no program `{program}`");
         };
         let vars = Dense::check(&self.manifest, vars, &prog.vars)?;
-        let (exec, kernels) = self.record(prog, &vars, |_| true)?;
+        let (exec, kernels) = self.record(prog, &vars)?;
         if trace::on() {
             self.traced.insert((program.to_string(), vars.clone()), kernels.into());
         }
@@ -474,14 +474,13 @@ impl Runtime {
         Ok(())
     }
 
-    /// Capture and instantiate `prog`'s calls that `keep` admits; with the
-    /// tracer on, also the call that added each kernel node, by its local
-    /// id (empty when off). The caller owns the returned graph.
+    /// Capture and instantiate `prog`; with the tracer on, also the call
+    /// that added each kernel node, by its local id (empty when off). The
+    /// caller owns the returned graph.
     pub(crate) fn record(
         &self,
         prog: &CompiledProgram,
         vars: &Dense,
-        keep: impl Fn(usize) -> bool,
     ) -> Result<(sys::CUgraphExec, BTreeMap<u32, u32>)> {
         self.require_peers()?;
         self.require_nccl()?;
@@ -496,10 +495,8 @@ impl Runtime {
             "cuStreamBeginCapture",
         )?;
         let replayed = match trace::on() {
-            true => self.replay_counted(prog, vars, &keep),
-            false => {
-                self.replay_each(prog, vars, |c, issue| if keep(c) { issue() } else { Ok(()) }).map(|_| BTreeMap::new())
-            }
+            true => self.replay_counted(prog, vars),
+            false => self.replay(prog, vars).map(|()| BTreeMap::new()),
         };
         // Always end the capture, even on error — a stream stuck in capture
         // mode poisons every later operation on it.
@@ -528,18 +525,10 @@ impl Runtime {
 
     /// Replay into the capture, keeping per kernel node, by its local id,
     /// the call that added it.
-    fn replay_counted(
-        &self,
-        prog: &CompiledProgram,
-        vars: &Dense,
-        keep: impl Fn(usize) -> bool,
-    ) -> Result<BTreeMap<u32, u32>> {
+    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<BTreeMap<u32, u32>> {
         let mut seen = BTreeSet::new();
         let mut calls = BTreeMap::new();
         self.replay_each(prog, vars, |c, issue| {
-            if !keep(c) {
-                return Ok(());
-            }
             issue()?;
             calls.extend(self.new_kernel_nodes(&mut seen)?.into_iter().map(|n| (n, c as u32)));
             Ok(())
