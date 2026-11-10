@@ -124,7 +124,8 @@ call was a step or a chunk, the vars over the groups and rows axes say how
 many sequences and rows, and the step's summed sequence lengths less its
 own rows are the context. The trace keeps only the sums, so the context is
 taken as equal across the call's sequences, and so are a chunk's rows, to
-the nearest row.
+the nearest row. A manifest that deals a sequence's positions over a rank
+group is refused: a member's trace holds the lengths of its own share.
 
 On 3.3 hours of a public Qwen3.8-27B service (2026-11-10; one sm120 GPU,
 fp8 weights, speculative rounds over up to 16 sequences, prefill in

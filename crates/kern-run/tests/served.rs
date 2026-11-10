@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, UInt64Array};
+use kern_manifest::protocol::{Positions, Shards};
 use kern_manifest::{Protocol, Verified};
 use kern_run::bench::served::{read, Served, Step};
 use kern_run::bench::workload::{Plan, Workload};
@@ -103,6 +104,12 @@ fn what_no_caller_drives_is_counted_and_another_manifests_trace_is_refused() {
     let wide = Step { vars: vars(4, 64), ..decode(4, 8, 1) };
     let err = Served::new(&[wide], &protocol()).unwrap_err().to_string();
     assert!(err.contains("lays it out for 1 rows each"), "{err}");
+
+    // A member of a group that deals positions traces its share of each length, not the sequence's.
+    let positions = Some(Positions { group: "cp".into(), members: 2 });
+    let dealt = Protocol { shards: Shards { positions, ..Shards::default() }, ..protocol() };
+    let err = Served::new(&[decode(1, 8, 1)], &dealt).unwrap_err().to_string();
+    assert!(err.contains("over the 2 members of `cp`"), "{err}");
 }
 
 #[test]

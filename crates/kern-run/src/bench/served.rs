@@ -203,8 +203,18 @@ impl Bucket {
 }
 
 impl Served {
-    /// Bucket `steps` and stand a call for each bucket.
+    /// Bucket `steps` and stand a call for each bucket. A manifest that
+    /// deals a sequence's positions over a group is refused: each member
+    /// writes, and its trace records, only the lengths of its own share.
     pub fn new(steps: &[Step], p: &Protocol) -> Result<Served> {
+        if let Some(dealt) = &p.shards.positions {
+            anyhow::bail!(
+                "the manifest deals each sequence's positions over the {} members of `{}`, and a member's trace \
+                 records the lengths of its share, not the sequences': a context cannot be read back from it",
+                dealt.members,
+                dealt.group
+            );
+        }
         let read = steps.iter().map(|s| Ok((s, call(p, s)?))).collect::<Result<Vec<_>>>()?;
         let calls: Vec<(&Step, Call)> = read.iter().filter_map(|(s, c)| c.map(|c| (*s, c))).collect();
         ensure!(!calls.is_empty(), "none of the {} steps is of a program a caller drives", steps.len());
