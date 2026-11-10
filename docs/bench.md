@@ -109,8 +109,8 @@ is faster, sweep both.
 into the calls they were and writes the workload that stands for them:
 
 ```bash
-kern workload qwen3.8-27b --trace traces/date=2026-11-10 --out gate.toml
-kern workload --manifest served.json --trace steps.parquet --out loop.toml --coarse
+kern workload qwen3.8-27b --trace traces/date=2026-11-10 --out served.toml
+kern workload --manifest served.json --trace steps.parquet --out served.toml
 ```
 
 `--trace` takes one rank's steps files or directories of them (bench
@@ -133,18 +133,9 @@ sha256):
 
 ```
 trace     85284 steps · 1 file · 8621.7 s of step time · 1 from programs no caller drives · no manifest sha256 in the files to check
-buckets   58 of 141 kept · 99.04% of the step time · 1711 steps and 83.2 s left out
-fidelity  +0.55% priced at the trace's own nearest steps · worst prefill seqs<=1,tokens<=1024 +0.85%
-plan      58 scenarios · 0 dropped · 718272 tokens of state · 17 seqs
-out       gate.toml
-```
-
-and with `--coarse`:
-
-```
-buckets   8 of 15 kept · 99.34% of the step time · 1280 steps and 57.3 s left out
-fidelity  +1.10% priced at the trace's own nearest steps · worst round seqs=1,tokens=16 +2.96%
-plan      8 scenarios · 0 dropped · 366848 tokens of state · 17 seqs
+fidelity  +0.48% priced at the trace's own nearest steps · worst prefill seqs<=1,tokens<=1024 +0.85%
+plan      141 scenarios · 0 dropped · 718272 tokens of state · 17 seqs
+out       served.toml
 ```
 
 - **A bucket is a metric label set.** Steps are grouped as
@@ -158,21 +149,32 @@ plan      8 scenarios · 0 dropped · 366848 tokens of state · 17 seqs
   was), at the bucket's mean context, weighted by their count. The mean
   keeps the bucket's total context, and a cost linear in context is
   priced by the total.
-- **Coverage is by time.** Buckets are kept from the most expensive down
-  until they cover `--coverage` of the traced step time (default 0.99);
-  the rest are counted on the `buckets` line and left out.
-- **`fidelity` is the trace pricing itself.** Each kept bucket is priced
-  at the median of the traced steps nearest its sweep (the 25 nearest in
+- **`fidelity` is the trace pricing itself.** Each bucket is priced at
+  the median of the traced steps nearest its sweep (the 25 nearest in
   context, and every step as near as the last of them), and the sum is
   held against the time the bucket's steps took. It is the error of
   standing a bucket for its steps, known before a GPU is involved;
   `worst` is the program and shape furthest off in seconds.
-- **`--coarse` leaves the context out of the bucket**: one sweep per
-  program and shape, at its mean context. It is the few-second workload
-  an optimization loop turns on; the default is the one a result is gated
-  on, and since their contexts differ, a kernel tuned to the coarse points
-  shows on the gate.
-- **`plan`** is what `kern bench` will make of the file on this manifest.
+- **`plan`** is what `kern bench` will make of the file on this manifest;
+  a `drop` line names a sweep it will not take.
+
+That is all it does: every bucket becomes a sweep, most expensive first,
+so the file is the whole trace and its `cost` is held against the trace's
+own step time. Each sweep carries a comment saying what it stands for:
+
+```toml
+# prefill · seqs<=1,tokens<=1024 · kv<=64k · 3314 steps · 1274.0 s
+[[sweep]]
+groups = [1]
+chunk = [1024]
+context = [46502]
+weight = 3314
+```
+
+A smaller workload for a faster loop is an edit to the file, not a flag:
+drop the sweeps of the tail, or merge a shape's context buckets into one
+sweep (weights summed, context their weighted mean). The same goes for
+`samples`, `seed`, and a sweep the plan dropped.
 
 ## What the terminal says
 

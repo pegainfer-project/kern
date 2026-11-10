@@ -52,76 +52,56 @@ fn chunk(rows: u64, context: u64, ns: u64) -> Step {
     }
 }
 
-fn served(steps: &[Step], coverage: f64, coarse: bool) -> Served {
-    Served::new(steps, &protocol(), coverage, coarse).unwrap()
+fn served(steps: &[Step]) -> Served {
+    Served::new(steps, &protocol()).unwrap()
 }
 
-/// Every kept bucket as (program, chunk, groups, rows, context, steps).
+/// Every bucket as (program, chunk, groups, rows, context, steps).
 fn calls(s: &Served) -> Vec<(&str, bool, u64, u64, u64, u64)> {
-    s.kept.iter().map(|b| (b.program.as_str(), b.chunk, b.groups, b.rows, b.context, b.steps)).collect()
+    s.buckets.iter().map(|b| (b.program.as_str(), b.chunk, b.groups, b.rows, b.context, b.steps)).collect()
 }
 
 #[test]
 fn a_step_is_read_back_into_the_call_its_program_declares() {
-    let s = served(&[decode(4, 100, 10), chunk(512, 1000, 30)], 1., false);
+    let s = served(&[decode(4, 100, 10), chunk(512, 1000, 30)]);
     assert_eq!(calls(&s), [("prefill", true, 1, 512, 1000, 1), ("decode_batch", false, 4, 1, 100, 1)]);
 
     // Rows fed unevenly to several sequences: an even split to the nearest row, none of them context.
     let ragged = |rows| Step { shape: "seqs<=4,tokens<=32".into(), vars: vars(4, rows), ..chunk(rows, 400, 5) };
-    assert_eq!(calls(&served(&[ragged(31)], 1., false)), [("prefill", true, 4, 8, 100, 1)]);
-    assert_eq!(calls(&served(&[ragged(29)], 1., false)), [("prefill", true, 4, 7, 100, 1)]);
+    assert_eq!(calls(&served(&[ragged(31)])), [("prefill", true, 4, 8, 100, 1)]);
+    assert_eq!(calls(&served(&[ragged(29)])), [("prefill", true, 4, 7, 100, 1)]);
 }
 
 #[test]
 fn a_bucket_is_a_label_set_at_its_mean_context() {
     let steps = [decode(4, 100, 10), decode(4, 110, 10), decode(4, 121, 10), decode(4, 1000, 50)];
-    let s = served(&steps, 1., false);
-    let buckets: Vec<(Option<u64>, u64, u64, u64)> = s.kept.iter().map(|b| (b.kv, b.steps, b.context, b.ns)).collect();
+    let s = served(&steps);
+    let buckets: Vec<(Option<u64>, u64, u64, u64)> =
+        s.buckets.iter().map(|b| (b.kv, b.steps, b.context, b.ns)).collect();
     assert_eq!(buckets, [(Some(4096), 1, 1000, 50), (Some(512), 3, 110, 30)]);
-}
-
-#[test]
-fn a_coarse_workload_leaves_the_context_out_of_the_bucket() {
-    let steps = [decode(4, 100, 10), decode(4, 110, 10), decode(4, 120, 10), decode(4, 1000, 50)];
-    let s = served(&steps, 1., true);
-    assert_eq!(calls(&s), [("decode_batch", false, 4, 1, 333, 4)]);
-    assert_eq!(s.kept[0].kv, None);
 }
 
 #[test]
 fn a_chunk_bucket_is_the_call_in_the_middle_of_its_steps() {
     let full = (0..5).map(|_| chunk(1024, 2000, 100));
     let steps: Vec<Step> = full.chain([chunk(700, 2100, 60), chunk(600, 2200, 50)]).collect();
-    assert_eq!(calls(&served(&steps, 1., false)), [("prefill", true, 1, 1024, 2043, 7)]);
-}
-
-#[test]
-fn the_cheapest_buckets_are_left_out_once_the_rest_cover_enough() {
-    let steps = [decode(1, 100, 90), decode(2, 100, 9), decode(4, 100, 1)];
-    let cut = |coverage| {
-        let s = served(&steps, coverage, false);
-        (s.kept.len(), s.cut.buckets, s.cut.steps, s.cut.ns)
-    };
-    assert_eq!(cut(0.9), (1, 2, 2, 10));
-    assert_eq!(cut(0.95), (2, 1, 1, 1));
-    assert_eq!(cut(1.), (3, 0, 0, 0));
-    assert!(Served::new(&steps, &protocol(), 0., false).is_err());
+    assert_eq!(calls(&served(&steps)), [("prefill", true, 1, 1024, 2043, 7)]);
 }
 
 #[test]
 fn what_no_caller_drives_is_counted_and_another_manifests_trace_is_refused() {
     let load = Step { program: "load".into(), shape: String::new(), vars: BTreeMap::new(), kv: None, ns: 5 };
     let once = Protocol { once: vec!["load".into()], ..protocol() };
-    let s = Served::new(&[load.clone(), decode(1, 8, 1)], &once, 1., false).unwrap();
-    assert_eq!((s.other, s.kept.len(), s.ns()), (1, 1, 1));
-    let err = Served::new(&[load, decode(1, 8, 1)], &protocol(), 1., false).unwrap_err().to_string();
+    let s = Served::new(&[load.clone(), decode(1, 8, 1)], &once).unwrap();
+    assert_eq!((s.other, s.buckets.len(), s.ns()), (1, 1, 1));
+    let err = Served::new(&[load, decode(1, 8, 1)], &protocol()).unwrap_err().to_string();
     assert!(err.contains("a `load` step, and the manifest has no program of that name"), "{err}");
 
     let unfed = Step { vars: BTreeMap::new(), ..chunk(64, 0, 1) };
-    let err = Served::new(&[unfed], &protocol(), 1., false).unwrap_err().to_string();
+    let err = Served::new(&[unfed], &protocol()).unwrap_err().to_string();
     assert!(err.contains("carries no `tokens`"), "{err}");
     let wide = Step { vars: vars(4, 64), ..decode(4, 8, 1) };
-    let err = Served::new(&[wide], &protocol(), 1., false).unwrap_err().to_string();
+    let err = Served::new(&[wide], &protocol()).unwrap_err().to_string();
     assert!(err.contains("lays it out for 1 rows each"), "{err}");
 }
 
@@ -129,18 +109,18 @@ fn what_no_caller_drives_is_counted_and_another_manifests_trace_is_refused() {
 fn a_bucket_is_priced_at_what_the_trace_measured_nearest_its_call() {
     // Time linear in context: the mean context prices the bucket exactly.
     let steps: Vec<Step> = (0..11).map(|i| decode(2, 1100 + 10 * i, 2100 + 10 * i)).collect();
-    let s = served(&steps, 1., false);
-    assert_eq!((s.kept.len(), s.kept[0].context, s.kept[0].priced_ns), (1, 1150, 11. * 2150.));
+    let s = served(&steps);
+    assert_eq!((s.buckets.len(), s.buckets[0].context, s.buckets[0].priced_ns), (1, 1150, 11. * 2150.));
     assert_eq!(s.fidelity(), (0., Some(("decode_batch seqs=2,tokens=2".into(), 0.))));
 
     // Equally near steps all count, however many: not the fastest of them.
     let tied: Vec<Step> = (1..=100).map(|ns| decode(2, 1150, ns)).collect();
-    let s = served(&tied, 1., false);
-    assert_eq!((s.kept[0].priced_ns, s.ns()), (100. * 51., 5050));
+    let s = served(&tied);
+    assert_eq!((s.buckets[0].priced_ns, s.ns()), (100. * 51., 5050));
 
-    // One slow step far from the mean is missed by the call at the mean.
-    let skewed: Vec<Step> = steps.iter().cloned().chain([decode(2, 2000, 9000)]).collect();
-    assert!(served(&skewed, 1., true).fidelity().0 < 0.);
+    // A slow step far from the others in its bucket is missed by the call at their mean.
+    let skewed: Vec<Step> = steps.iter().cloned().chain([decode(2, 2040, 9000)]).collect();
+    assert!(served(&skewed).fidelity().0 < 0.);
 }
 
 /// splitmix64 over a counter: the tests' only randomness, seeded.
@@ -174,11 +154,11 @@ fn any_trace_is_a_workload_the_manifest_takes_whole() {
             })
             .collect();
         let steps: Vec<Step> = made.iter().map(|(s, _)| s.clone()).collect();
-        let s = served(&steps, 1., false);
+        let s = served(&steps);
 
         // Every step is in one bucket, with its time.
-        let (count, ns) = (s.kept.iter().map(|b| b.steps).sum::<u64>(), steps.iter().map(|x| x.ns).sum::<u64>());
-        assert_eq!((count, s.ns(), s.cut.buckets), (300, ns, 0), "seed {seed}");
+        let (count, ns) = (s.buckets.iter().map(|b| b.steps).sum::<u64>(), steps.iter().map(|x| x.ns).sum::<u64>());
+        assert_eq!((count, s.ns()), (300, ns), "seed {seed}");
 
         // A bucket's mean context keeps its total, to half a token a step.
         let mut total: BTreeMap<(&str, &str, u64), u64> = BTreeMap::new();
@@ -186,7 +166,7 @@ fn any_trace_is_a_workload_the_manifest_takes_whole() {
             *total.entry((x.program.as_str(), x.shape.as_str(), x.kv.unwrap().next_power_of_two())).or_default() +=
                 context;
         }
-        for b in &s.kept {
+        for b in &s.buckets {
             let want = total[&(b.program.as_str(), b.shape.as_str(), b.kv.unwrap())];
             assert!((b.steps * b.context).abs_diff(want) <= b.steps / 2, "seed {seed}: {b:?} against {want}");
         }
@@ -194,10 +174,10 @@ fn any_trace_is_a_workload_the_manifest_takes_whole() {
         // The order the steps arrive in is not part of the answer.
         let mut reversed = steps.clone();
         reversed.reverse();
-        assert_eq!(served(&reversed, 1., false), s, "seed {seed}");
+        assert_eq!(served(&reversed), s, "seed {seed}");
 
         // The manifest has a program for every sweep, and they stand for every step.
-        let plan = Plan::check(&Workload::parse(&s.toml(12, 1)).unwrap(), &p, unit as usize, Some(row)).unwrap();
+        let plan = Plan::check(&Workload::parse(&s.toml()).unwrap(), &p, unit as usize, Some(row)).unwrap();
         let weight: u64 = plan.scenarios.iter().map(|x| x.shape.weight).sum();
         assert_eq!((plan.dropped.len(), weight), (0, 300), "seed {seed}");
     }
@@ -205,16 +185,18 @@ fn any_trace_is_a_workload_the_manifest_takes_whole() {
 
 #[test]
 fn the_workload_file_says_what_each_sweep_stands_for() {
-    let s = served(&[decode(16, 2000, 3_000_000_000), chunk(1024, 0, 500_000_000), decode(1, 5, 1)], 0.99, false);
+    let s = served(&[decode(16, 2000, 3_000_000_000), chunk(1024, 0, 500_000_000), decode(1, 5, 1)]);
     assert_eq!(
-        s.toml(16, 7),
-        "# 3 steps, 3.5 s of traced step time: 100.00% of it in 2 of 3 buckets\n\
-         # the kept buckets priced at the trace's own nearest steps: +0.00%\n\
-         samples = 16\nseed = 7\n\
+        s.toml(),
+        "# 3 steps, 3.5 s of traced step time in 3 buckets\n\
+         # priced at the trace's own nearest steps: +0.00%\n\
+         samples = 16\nseed = 0\n\
          \n# decode_batch · seqs=16,tokens=16 · kv<=32k · 1 steps · 3.0 s\n\
          [[sweep]]\ngroups = [16]\nrows = [1]\ncontext = [2000]\nweight = 1\n\
          \n# prefill · seqs<=1,tokens<=1024 · kv<=1k · 1 steps · 0.5 s\n\
-         [[sweep]]\ngroups = [1]\nchunk = [1024]\ncontext = [0]\nweight = 1\n"
+         [[sweep]]\ngroups = [1]\nchunk = [1024]\ncontext = [0]\nweight = 1\n\
+         \n# decode_batch · seqs=1,tokens=1 · kv<=8 · 1 steps · 0.0 s\n\
+         [[sweep]]\ngroups = [1]\nrows = [1]\ncontext = [5]\nweight = 1\n"
     );
 }
 

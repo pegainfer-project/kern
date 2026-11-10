@@ -20,12 +20,17 @@
 //! can be held against what that series says. A bucket becomes the call in
 //! the middle of its steps, at the bucket's mean context, weighted by
 //! their count: the mean keeps the bucket's total context, and a cost
-//! linear in context is priced by the total. Buckets are kept from the
-//! most expensive down until they cover the asked share of the traced
-//! step time; the rest are counted and left out.
+//! linear in context is priced by the total.
+//!
+//! Every bucket is a sweep, and that is all this does. The file is the
+//! whole trace, so it prices to the trace's own total; a smaller workload
+//! for a faster loop (the tail dropped, a shape's contexts merged at their
+//! weighted mean) is an edit to the file, which says beside each sweep
+//! what it stands for. So is a sweep the manifest will not take: the
+//! `plan` and `drop` lines name it.
 //!
 //! The trace also says how much standing a bucket for its steps costs,
-//! before any GPU is involved: each kept bucket is priced at what the
+//! before any GPU is involved: each bucket is priced at what the
 //! server measured for the steps nearest its call, and the sum is held
 //! against the time the bucket's own steps took ([`Served::fidelity`]).
 //!
@@ -57,19 +62,6 @@ pub struct ServedOpts {
     /// The workload to write (TOML)
     #[arg(long)]
     out: PathBuf,
-    /// Share of the traced step time the kept shapes cover
-    #[arg(long, default_value_t = 0.99)]
-    coverage: f64,
-    /// One shape per program and shape label at its mean context, instead
-    /// of one per power of two of context
-    #[arg(long)]
-    coarse: bool,
-    /// Samples per measurement the workload asks for
-    #[arg(long, default_value_t = 16)]
-    samples: usize,
-    /// Seed of the prose the workload's contexts are built from
-    #[arg(long, default_value_t = 0)]
-    seed: u64,
 }
 
 /// One traced step, as a steps file records it.
@@ -141,8 +133,7 @@ fn call(p: &Protocol, s: &Step) -> Result<Option<Call>> {
 pub struct Bucket {
     pub program: String,
     pub shape: String,
-    /// The label's context bound; `None` for a step that wrote no lengths,
-    /// and for every bucket of a coarse workload.
+    /// The label's context bound; `None` for a step that wrote no lengths.
     pub kv: Option<u64>,
     pub steps: u64,
     /// The time its steps took.
@@ -156,22 +147,13 @@ pub struct Bucket {
     pub priced_ns: f64,
 }
 
-/// What was left out of a workload, counted.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Cut {
-    pub buckets: usize,
-    pub steps: u64,
-    pub ns: u64,
-}
-
-/// A trace as a workload: the buckets that cover it, most expensive first,
-/// and what they leave out. Only [`Served::new`] makes one, from steps the
-/// protocol could read back, so every bucket's call is one the manifest
-/// declares.
+/// A trace as a workload: a bucket for every label set it holds, most
+/// expensive first. Only [`Served::new`] makes one, from steps the
+/// protocol could read back, so there is a bucket and every bucket's call
+/// is one the manifest declares.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Served {
-    pub kept: Vec<Bucket>,
-    pub cut: Cut,
+    pub buckets: Vec<Bucket>,
     /// Steps of programs no caller drives.
     pub other: u64,
 }
@@ -221,18 +203,16 @@ impl Bucket {
 }
 
 impl Served {
-    /// Bucket `steps`, stand a call for each bucket, and keep the most
-    /// expensive until they cover `coverage` of the step time. `coarse`
-    /// leaves the context out of the bucket.
-    pub fn new(steps: &[Step], p: &Protocol, coverage: f64, coarse: bool) -> Result<Served> {
-        ensure!(coverage > 0. && coverage <= 1., "coverage is a share in (0, 1], got {coverage}");
+    /// Bucket `steps` and stand a call for each bucket.
+    pub fn new(steps: &[Step], p: &Protocol) -> Result<Served> {
         let read = steps.iter().map(|s| Ok((s, call(p, s)?))).collect::<Result<Vec<_>>>()?;
         let calls: Vec<(&Step, Call)> = read.iter().filter_map(|(s, c)| c.map(|c| (*s, c))).collect();
+        ensure!(!calls.is_empty(), "none of the {} steps is of a program a caller drives", steps.len());
         let mut classes: BTreeMap<(&str, bool, u64, u64), Vec<(u64, u64)>> = BTreeMap::new();
         let mut buckets: BTreeMap<(&str, &str, Option<u64>), Vec<(Call, u64)>> = BTreeMap::new();
         for (s, c) in &calls {
             classes.entry((s.program.as_str(), c.chunk, c.groups, c.rows)).or_default().push((c.context, s.ns));
-            let kv = s.kv.filter(|_| !coarse).map(u64::next_power_of_two);
+            let kv = s.kv.map(u64::next_power_of_two);
             buckets.entry((s.program.as_str(), s.shape.as_str(), kv)).or_default().push((*c, s.ns));
         }
         classes.values_mut().for_each(|v| v.sort_unstable());
@@ -256,33 +236,20 @@ impl Served {
             })
             .collect();
         all.sort_by(|a, b| b.ns.cmp(&a.ns).then_with(|| a.label().cmp(&b.label())));
-        let total: u64 = all.iter().map(|b| b.ns).sum();
-        let mut covered = 0u64;
-        let keep = all
-            .iter()
-            .take_while(|b| {
-                let short = (covered as f64) < coverage * total as f64;
-                covered += b.ns;
-                short
-            })
-            .count();
-        let rest = all.split_off(keep);
-        let cut =
-            Cut { buckets: rest.len(), steps: rest.iter().map(|b| b.steps).sum(), ns: rest.iter().map(|b| b.ns).sum() };
-        Ok(Served { kept: all, cut, other: (read.len() - calls.len()) as u64 })
+        Ok(Served { buckets: all, other: (read.len() - calls.len()) as u64 })
     }
 
-    /// The step time the kept buckets took, in ns.
+    /// The time the bucketed steps took, in ns.
     pub fn ns(&self) -> u64 {
-        self.kept.iter().map(|b| b.ns).sum()
+        self.buckets.iter().map(|b| b.ns).sum()
     }
 
-    /// The kept buckets as their calls price them against the time their
-    /// steps took: the relative error overall, and that of the program and
-    /// shape furthest off in time.
+    /// The buckets as their calls price them against the time their steps
+    /// took: the relative error overall, and that of the program and shape
+    /// furthest off in time.
     pub fn fidelity(&self) -> (f64, Option<(String, f64)>) {
         let mut by: BTreeMap<(&str, &str), (f64, f64)> = BTreeMap::new();
-        for b in &self.kept {
+        for b in &self.buckets {
             let e = by.entry((b.program.as_str(), b.shape.as_str())).or_default();
             *e = (e.0 + b.priced_ns, e.1 + b.ns as f64);
         }
@@ -293,21 +260,18 @@ impl Served {
         (err(priced, ns), worst.map(|((program, shape), e)| (format!("{program} {shape}"), err(e.0, e.1))))
     }
 
-    /// The workload file: one sweep a kept bucket, most expensive first.
-    pub fn toml(&self, samples: usize, seed: u64) -> String {
-        let all = self.ns() + self.cut.ns;
-        let share = if all > 0 { 100. * self.ns() as f64 / all as f64 } else { 100. };
+    /// The workload file: one sweep a bucket, most expensive first.
+    pub fn toml(&self) -> String {
         let mut out = format!(
-            "# {} steps, {:.1} s of traced step time: {share:.2}% of it in {} of {} buckets\n\
-             # the kept buckets priced at the trace's own nearest steps: {:+.2}%\n\
-             samples = {samples}\nseed = {seed}\n",
-            self.kept.iter().map(|b| b.steps).sum::<u64>() + self.cut.steps,
-            all as f64 / 1e9,
-            self.kept.len(),
-            self.kept.len() + self.cut.buckets,
+            "# {} steps, {:.1} s of traced step time in {} buckets\n\
+             # priced at the trace's own nearest steps: {:+.2}%\n\
+             samples = 16\nseed = 0\n",
+            self.buckets.iter().map(|b| b.steps).sum::<u64>(),
+            self.ns() as f64 / 1e9,
+            self.buckets.len(),
             100. * self.fidelity().0,
         );
-        for b in &self.kept {
+        for b in &self.buckets {
             let rows = if b.chunk { "chunk" } else { "rows" };
             write!(
                 out,
@@ -427,7 +391,7 @@ pub fn read(paths: &[PathBuf]) -> Result<Trace> {
 }
 
 /// Writes the workload the traces in `o` are on the manifest at `path`,
-/// saying what it keeps, what it leaves out and how well it stands for them.
+/// saying what it read and how well the workload stands for it.
 pub fn run(o: ServedOpts, path: &Path) -> Result<()> {
     let json = std::fs::read(path).with_context(|| format!("manifest {}", path.display()))?;
     // As bench loads it, so the plan below is the plan bench will make.
@@ -441,8 +405,7 @@ pub fn run(o: ServedOpts, path: &Path) -> Result<()> {
         trace.manifests.iter().map(String::as_str).collect::<Vec<_>>().join(", "),
         path.display()
     );
-    let served = Served::new(&trace.steps, &protocol, o.coverage, o.coarse)?;
-    let all = served.ns() + served.cut.ns;
+    let served = Served::new(&trace.steps, &protocol)?;
     say(
         "trace",
         format!(
@@ -450,26 +413,15 @@ pub fn run(o: ServedOpts, path: &Path) -> Result<()> {
             trace.steps.len(),
             trace.files,
             if trace.files == 1 { "" } else { "s" },
-            all as f64 / 1e9,
+            served.ns() as f64 / 1e9,
             served.other,
             if trace.manifests.is_empty() { " · no manifest sha256 in the files to check" } else { "" },
-        ),
-    );
-    say(
-        "buckets",
-        format!(
-            "{} of {} kept · {:.2}% of the step time · {} steps and {:.1} s left out",
-            served.kept.len(),
-            served.kept.len() + served.cut.buckets,
-            if all > 0 { 100. * served.ns() as f64 / all as f64 } else { 100. },
-            served.cut.steps,
-            served.cut.ns as f64 / 1e9,
         ),
     );
     let (err, worst) = served.fidelity();
     let worst = worst.map(|(what, e)| format!(" · worst {what} {:+.2}%", 100. * e)).unwrap_or_default();
     say("fidelity", format!("{:+.2}% priced at the trace's own nearest steps{worst}", 100. * err));
-    let text = served.toml(o.samples, o.seed);
+    let text = served.toml();
     let unit = kern_pool::page_unit(&m);
     let plan = Plan::check(&Workload::parse(&text)?, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
     say(
