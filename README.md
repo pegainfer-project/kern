@@ -177,8 +177,7 @@ The verdict is one line and an exit code: 0 pass, 1 fail, 2 inconclusive.
 
 `kern bench` takes a workload of shapes (sequences × rows × context) and
 attributes time to every call inside the real program, read off the
-kernels' own timestamps; `--ablate` times the program with each op left
-out. A server's traced steps become a workload directly, so a change is
+kernels' own timestamps. A server's traced steps become a workload directly, so a change is
 priced in GPU seconds on the traffic actually served. `kern cut` slices a manifest into pipeline stages by
 liveness, each stage a manifest whose inputs are the previous stage's
 outputs.

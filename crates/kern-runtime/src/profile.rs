@@ -1,13 +1,12 @@
 //! Opt-in measurement for `kern bench`. A sample is one traced replay of a
-//! program's graph, any of its calls left out, from the program's
-//! pre-image behind an L2 flush. The tracer names every kernel by the call
+//! program's graph, from the program's pre-image behind an L2 flush. The tracer names every kernel by the call
 //! that launched it, so a call's time and the whole graph's come from the
 //! same uninstrumented replay; nothing is inserted between kernels.
 //! Profiling never changes the serving path. Like every runtime entry
 //! point, these bind the runtime's context on entry: a rank is measured
 //! from whichever thread holds it.
 //!
-//! This lives inside the runtime because a sample captures a subset of the
+//! This lives inside the runtime because a sample owns a graph of the
 //! compiled launch list and copies pre-images on the runtime's own stream:
 //! none of that is reachable through the public surface.
 
@@ -124,8 +123,8 @@ impl PreImage {
     }
 }
 
-/// A program's graph at one set of var values with some calls left out,
-/// and the call behind each of its kernel nodes.
+/// A program's graph at one set of var values, and the call behind each
+/// of its kernel nodes.
 pub struct Graph {
     exec: sys::CUgraphExec,
     program: String,
@@ -134,14 +133,12 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// A left-out call's outputs keep what the last full run wrote, so
-    /// every other call still reads well-formed inputs.
-    pub fn new(rt: &Runtime, program: &str, vars: &BTreeMap<String, u64>, skip: &BTreeSet<usize>) -> Result<Self> {
+    pub fn new(rt: &Runtime, program: &str, vars: &BTreeMap<String, u64>) -> Result<Self> {
         let Some(prog) = rt.programs.get(program) else {
             bail!(Api, "no program `{program}`");
         };
         let vars = Dense::check(&rt.manifest, vars, &prog.vars)?;
-        let (exec, kernels) = rt.record(prog, &vars, |c| !skip.contains(&c))?;
+        let (exec, kernels) = rt.record(prog, &vars)?;
         Ok(Self { exec, program: program.to_string(), vars, kernels: Arc::new(kernels) })
     }
 }

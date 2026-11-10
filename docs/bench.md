@@ -17,7 +17,6 @@ CUPTI subscription excludes kern's.
 
 ```bash
 kern bench qwen3-4b --workload tools/profiles/quick.toml --out results/quick.json
-kern bench qwen3-4b --workload tools/profiles/quick.toml --out results/quick.json --ablate
 kern bench dsv41 --gpu 0 --workload decode.toml --out results/decode.json   # EP4: gpus 0–3
 ```
 
@@ -110,7 +109,6 @@ plan      6 scenarios · 0 dropped · 2640 tokens of state · 5 seqs
 scenario  decode-g1-r1-kv128
 program   2.657 ms · p10–p90 2.656–2.659 · cv 0.1% · 436 calls   905.5ms
 mix       gemm 65.6% · attn 8.7% · fused_add_rms_norm 6.5% · silu_mul 4.1% · rotary_embedding 3.9% · sample 3.8% · +5 more
-free      gemm 67.5% · attn 8.6% · fused_add_rms_norm 6.3% · rotary_embedding 4.0% · sample 3.8% · silu_mul 3.4% · +5 more
 …
 cost      0.011 s · 4 calls · gemm 60.2% · attn_batch 10.9% · fused_add_rms_norm 5.9% · rotary_embedding 3.9% · silu_mul 3.7% · attn 2.9% · +7 more
 out       results/quick.json   5.6s
@@ -125,23 +123,14 @@ kernel time, summed by op, as a share of all kernel time. Time between
 kernels belongs to no call, and kernels that overlap (programmatic
 dependent launch, lanes) are each charged in full.
 
-## What an op is worth
-
-`mix` says where the time is; `--ablate` says what removing it would buy.
-For each op the program is captured again with all of that op's calls
-left out and timed as a whole graph, and the `free` line says what share
-of the step (and, after `cost`, of the workload) would go if the op were
-free, overlap and launch gaps included. A left out call's outputs keep
-what the last full run wrote, so the rest of the program reads
-well-formed inputs. Single-device only: leaving a call out on every rank
-can strand a peer's barrier.
-
-Before kern bench read kernel records, `mix` bracketed every call with
-CUDA events, which cost a few microseconds each and broke programmatic
-dependent launch: on the Qwen3-4B decode above it gave gemm 49.7% and
-the fused add-norm 11.6%, against `free`'s 67.5% and 6.6% (tray03,
-2026-11-08). Read off the kernels, `mix` and `free` agree to a point or
-two.
+`mix` is also what removing an op would buy. Before kern bench read
+kernel records it bracketed every call with CUDA events, which cost a few
+microseconds each and broke programmatic dependent launch, and it was
+checked against the program captured again with the op's calls left out:
+on the Qwen3-4B decode above the events gave gemm 49.7% and the fused
+add-norm 11.6%, against 67.5% and 6.6% with the op gone (tray03,
+2026-11-08). Read off the kernels, `mix` agreed with that to a point or
+two, so the second capture was removed.
 
 ## What is actually measured
 

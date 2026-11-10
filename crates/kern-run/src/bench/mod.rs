@@ -4,9 +4,7 @@
 //! the real graph, from the program's pre-image behind an L2 flush, and
 //! the tracer names each kernel by the call that launched it, so the
 //! graph's time and every call's come from the same replay with nothing
-//! inserted between kernels. What would an op be worth: with `--ablate`
-//! the program is captured again without that op's calls and timed whole,
-//! overlap and launch gaps included.
+//! inserted between kernels.
 //!
 //! Nothing here names a program, a buffer or a model. A workload gives
 //! shapes ([`workload`]), `Protocol` turns a shape into a program, and the
@@ -15,12 +13,11 @@
 //!
 //! A manifest with a topology runs as its ranks, every rank fed the same
 //! shape with its own sequences, in lockstep: a call that reads its peers
-//! finds them issuing. Attribution is per rank; leaving a call out on
-//! every rank can strand a peer's barrier, so `--ablate` is single-device.
+//! finds them issuing. Attribution is per rank.
 
 pub mod workload;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -41,7 +38,7 @@ use crate::Vars;
 use workload::{Plan, Scenario, Shape, Workload};
 
 /// The report schema. Readers check it before they read anything else.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// Untimed replays before a graph's samples.
 const WARMUP: usize = 4;
@@ -57,10 +54,6 @@ pub struct BenchOpts {
     /// Portable JSON with raw samples and all call locations; no machine paths
     #[arg(long)]
     out: PathBuf,
-    /// Also time each program with every call of one op left out: what the
-    /// step would save if that op were free
-    #[arg(long)]
-    ablate: bool,
     /// Manifest JSON (must pass verification)
     #[arg(long)]
     manifest: Option<PathBuf>,
@@ -144,14 +137,12 @@ fn mix(calls: &[(String, f64)]) -> Vec<(String, f64)> {
     v
 }
 
-/// One scenario's result on its slowest rank: program p50 µs, the share of
-/// it each op was attributed, and with `--ablate` the p50 µs of the program
-/// with each op left out.
+/// One scenario's result on its slowest rank: program p50 µs and the share
+/// of it each op was attributed.
 struct Priced {
     shape: Shape,
     us: f64,
     shares: Vec<(String, f64)>,
-    free: Vec<(String, f64)>,
 }
 
 /// Each shape once, at the fastest program that takes it.
@@ -176,20 +167,6 @@ fn cost(runs: &[Priced]) -> (f64, Vec<(String, f64)>) {
         .flat_map(|r| r.shares.iter().map(move |(op, f)| (op.clone(), r.shape.weight as f64 * r.us * f)))
         .collect();
     (total, mix(&by_op))
-}
-
-/// What the workload would save if each op were free, in µs, largest
-/// first, priced like [`cost`].
-fn savings(runs: &[Priced]) -> Vec<(String, f64)> {
-    let mut by_op: BTreeMap<String, f64> = BTreeMap::new();
-    for r in fastest(runs) {
-        for (op, without) in &r.free {
-            *by_op.entry(op.clone()).or_default() += r.shape.weight as f64 * (r.us - without).max(0.);
-        }
-    }
-    let mut v: Vec<(String, f64)> = by_op.into_iter().collect();
-    v.sort_by(|a, b| b.1.total_cmp(&a.1));
-    v
 }
 
 fn series(v: Vec<f64>) -> Value {
@@ -371,17 +348,15 @@ fn preamble(m: &Verified, json_bytes: &[u8], w: &Workload, plan: &Plan, probe: &
 struct Measured {
     vars: Vars,
     program: Vec<u64>,
-    free: Vec<(String, Vec<u64>)>,
     telemetry: (Value, Value),
 }
 
 /// One rank's evidence of one scenario: per sample the graph's time and
-/// every call's, and per ablated op the graph's time without it.
+/// every call's.
 struct Timed {
     vars: Vars,
     graph_us: Vec<f64>,
     calls_us: Vec<Vec<f64>>,
-    free: Vec<(String, Vec<f64>)>,
     telemetry: (Value, Value),
 }
 
@@ -392,16 +367,8 @@ impl Measured {
         for (_, per) in &timed {
             calls_us.iter_mut().zip(per).for_each(|(v, us)| v.push(*us));
         }
-        let free = self
-            .free
-            .into_iter()
-            .map(|(op, seqs)| {
-                let us = take(steps, &seqs)?.iter().map(|s| timing(s, calls).map(|t| t.0)).collect::<Result<_>>()?;
-                Ok((op, us))
-            })
-            .collect::<Result<_>>()?;
         let graph_us = timed.into_iter().map(|t| t.0).collect();
-        Ok(Timed { vars: self.vars, graph_us, calls_us, free, telemetry: self.telemetry })
+        Ok(Timed { vars: self.vars, graph_us, calls_us, telemetry: self.telemetry })
     }
 }
 
@@ -415,9 +382,8 @@ fn record(m: &Manifest, s: &Scenario, rank: usize, x: Timed, elapsed_s: f64) -> 
         .enumerate()
         .map(|(i, (c, us))| json!({"index":i,"label":c.label,"op":c.op,"in_program":series(us)}))
         .collect();
-    let free: Vec<Value> = x.free.into_iter().map(|(op, us)| json!({"op":op,"graph":series(us)})).collect();
     json!({"scenario":s,"program":s.program,"rank":rank,"vars":x.vars,"graph":series(x.graph_us),
-        "calls":calls,"without_op":free,
+        "calls":calls,
         "telemetry_before":x.telemetry.0,"telemetry_after":x.telemetry.1,"elapsed_s":elapsed_s})
 }
 
@@ -436,14 +402,7 @@ struct Rank {
 /// lockstep and a peer read finds its peer issuing. One more replay must
 /// emit the tokens the last sample did, or restoring the pre-image does
 /// not put the state back.
-fn measure(
-    r: &mut Rank,
-    p: &Protocol,
-    s: &Scenario,
-    corpus: &[i64],
-    samples: usize,
-    ablating: bool,
-) -> Result<Measured> {
+fn measure(r: &mut Rank, p: &Protocol, s: &Scenario, corpus: &[i64], samples: usize) -> Result<Measured> {
     let shape = &s.shape;
     let before = telemetry(r.gpu);
     let leases = shape.context.iter().map(|n| r.rt.lease(n + shape.rows)).collect::<kern_runtime::Result<Vec<_>>>()?;
@@ -457,47 +416,16 @@ fn measure(
         shape.context.iter().enumerate().flat_map(|(i, &pos)| tokens(corpus, seq(i), pos, shape.rows)).collect();
     let vars = crate::stage_batch(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
     let pre = PreImage::new(&r.rt, &s.program)?;
-    let whole = Graph::new(&r.rt, &s.program, &vars, &BTreeSet::new())?;
-    let program = replays(r, &pre, &whole, samples)?;
+    let graph = Graph::new(&r.rt, &s.program, &vars)?;
+    let program = replays(r, &pre, &graph, samples)?;
     let last = output_fingerprints(&r.rt, p, shape.groups)?;
-    r.probe.sample(&r.rt, &pre, &whole)?;
+    r.probe.sample(&r.rt, &pre, &graph)?;
     ensure!(
         output_fingerprints(&r.rt, p, shape.groups)? == last,
         "{}: a replay from the restored pre-image emitted different tokens",
         s.id
     );
-    let free = match ablating {
-        true => ablate(r, &pre, &s.program, &vars, samples)?,
-        false => Vec::new(),
-    };
-    Ok(Measured { vars, program, free, telemetry: (before, telemetry(r.gpu)) })
-}
-
-/// For each op of `program`, in first-call order, the issues of the
-/// step's graph with all of its calls left out.
-fn ablate(r: &Rank, pre: &PreImage, program: &str, vars: &Vars, samples: usize) -> Result<Vec<(String, Vec<u64>)>> {
-    let calls = &r.rt.manifest.programs[program].calls;
-    let mut ops: Vec<&str> = Vec::new();
-    for c in calls {
-        if !ops.contains(&c.op.as_str()) {
-            ops.push(&c.op);
-        }
-    }
-    ops.into_iter()
-        .map(|op| {
-            let skip = calls.iter().enumerate().filter(|(_, c)| c.op == op).map(|(i, _)| i).collect();
-            let g = Graph::new(&r.rt, program, vars, &skip)?;
-            Ok((op.to_string(), replays(r, pre, &g, samples)?))
-        })
-        .collect()
-}
-
-/// Each op's saving as a share of `graph_us`, largest first.
-fn freed(graph_us: f64, free: &[(String, f64)]) -> Vec<(String, f64)> {
-    let mut v: Vec<(String, f64)> =
-        free.iter().map(|(op, us)| (op.clone(), (graph_us - us).max(0.) / graph_us)).collect();
-    v.sort_by(|a, b| b.1.total_cmp(&a.1));
-    v
+    Ok(Measured { vars, program, telemetry: (before, telemetry(r.gpu)) })
 }
 
 /// What every scenario is measured against: loaded once, and unchanged by
@@ -508,18 +436,13 @@ struct Bench {
     protocol: Protocol,
     corpus: Vec<i64>,
     samples: usize,
-    ablate: bool,
 }
 
 impl Bench {
     /// Every rank on its GPU, peers connected, what the manifest runs once
     /// run, a probe over each.
-    fn load(m: &Verified, inputs: &crate::Inputs, protocol: Protocol, plan: &Plan, ablate: bool) -> Result<Bench> {
+    fn load(m: &Verified, inputs: &crate::Inputs, protocol: Protocol, plan: &Plan) -> Result<Bench> {
         let n = crate::ranks_of(m)?;
-        ensure!(
-            n == 1 || !ablate,
-            "--ablate needs a single-device manifest: leaving a call out on every rank can strand a peer's barrier"
-        );
         let gpus: Vec<usize> = (inputs.gpu..inputs.gpu + n).collect();
         let host_weights = HostWeights::new();
         let capacity = Capacity { tokens: Some(plan.tokens), slots: plan.seqs, landings: 0 };
@@ -560,7 +483,7 @@ impl Bench {
             .enumerate()
             .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank, source: None })
             .collect();
-        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, ablate })
+        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0 })
     }
 
     /// Build every rank's source prefix, the longest context any scenario
@@ -580,8 +503,8 @@ impl Bench {
     fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, Priced)> {
         let started = Instant::now();
         say("scenario", s.id.clone());
-        let (p, corpus, samples, ablating) = (&self.protocol, &self.corpus, self.samples, self.ablate);
-        let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples, ablating))?;
+        let (p, corpus, samples) = (&self.protocol, &self.corpus, self.samples);
+        let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples))?;
         let m = &self.ranks[0].rt.manifest;
         let calls = &m.programs[&s.program].calls;
         let mut steps: BTreeMap<u64, Step> = trace::finish()?.steps.into_iter().map(|t| (t.seq, t)).collect();
@@ -597,12 +520,8 @@ impl Bench {
             calls.iter().zip(&slow.calls_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
         let shares = mix(&attributed);
         say("mix", mix_line(&shares));
-        let free: Vec<(String, f64)> = slow.free.iter().map(|(op, us)| (op.clone(), stats(us).p50)).collect();
-        if !free.is_empty() {
-            say("free", mix_line(&freed(p50(slow), &free)));
-        }
         let elapsed_s = started.elapsed().as_secs_f64();
-        let priced = Priced { shape: s.shape.clone(), us: p50(slow), shares, free };
+        let priced = Priced { shape: s.shape.clone(), us: p50(slow), shares };
         Ok((timed.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), priced))
     }
 }
@@ -627,7 +546,7 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     let protocol = Protocol::check_unsampled(&m)?;
     let unit = kern_pool::page_unit(&m);
     let plan = Plan::check(&w, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
-    let mut bench = Bench::load(&m, &inputs, protocol, &plan, o.ablate)?;
+    let mut bench = Bench::load(&m, &inputs, protocol, &plan)?;
     bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
     bench.samples = w.samples;
     let at = Instant::now();
@@ -679,11 +598,6 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     say("cost", format!("{:.3} s · {} calls{unpriced} · {}", total_us / 1e6, calls - dropped, mix_line(&by_op)));
     report["cost"] = json!({"total_us":total_us,"calls":calls - dropped,"dropped_calls":dropped,
         "by_op":by_op.iter().map(|(op, f)| json!({"op":op,"share":f})).collect::<Vec<_>>()});
-    if o.ablate {
-        let saved: Vec<(String, f64)> = savings(&runs).into_iter().map(|(op, us)| (op, us / total_us)).collect();
-        say("free", mix_line(&saved));
-        report["cost"]["free"] = json!(saved.iter().map(|(op, f)| json!({"op":op,"share":f})).collect::<Vec<_>>());
-    }
     write(&o.out, &report)?;
     say_timed("out", o.out.display().to_string(), started);
     Ok(())
@@ -700,31 +614,20 @@ fn write(out: &std::path::Path, report: &Value) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn priced(shape: Shape, us: f64, shares: Vec<(String, f64)>, free: Vec<(String, f64)>) -> Priced {
-        Priced { shape, us, shares, free }
+    fn priced(shape: Shape, us: f64, shares: Vec<(String, f64)>) -> Priced {
+        Priced { shape, us, shares }
     }
 
     #[test]
     fn cost_prices_each_shape_once_at_its_fastest_program() {
         let shape = |rows, weight| Shape { groups: 1, rows, context: vec![0], weight };
         let runs = [
-            priced(shape(1, 10), 2., vec![("gemm".into(), 1.)], vec![]),
-            priced(shape(1, 10), 3., vec![("attn".into(), 1.)], vec![]),
-            priced(shape(64, 2), 5., vec![("gemm".into(), 0.5), ("attn".into(), 0.5)], vec![]),
+            priced(shape(1, 10), 2., vec![("gemm".into(), 1.)]),
+            priced(shape(1, 10), 3., vec![("attn".into(), 1.)]),
+            priced(shape(64, 2), 5., vec![("gemm".into(), 0.5), ("attn".into(), 0.5)]),
         ];
         let (total, by_op) = cost(&runs);
         assert_eq!((total, by_op), (30., vec![("gemm".into(), 25. / 30.), ("attn".into(), 5. / 30.)]));
-    }
-
-    #[test]
-    fn savings_price_each_shape_at_its_fastest_program() {
-        let shape = |rows, weight| Shape { groups: 1, rows, context: vec![0], weight };
-        let runs = [
-            priced(shape(1, 10), 2., vec![], vec![("gemm".into(), 1.5), ("attn".into(), 1.75)]),
-            priced(shape(1, 10), 3., vec![], vec![("gemm".into(), 0.)]),
-            priced(shape(64, 2), 5., vec![], vec![("gemm".into(), 4.), ("attn".into(), 6.)]),
-        ];
-        assert_eq!(savings(&runs), vec![("gemm".into(), 10. * 0.5 + 2. * 1.), ("attn".into(), 10. * 0.25)]);
     }
 
     #[test]
