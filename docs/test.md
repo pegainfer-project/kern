@@ -118,12 +118,71 @@ mean KL ≤ --kl  →  PASS，否则 FAIL
   必须红，阈值定在中间；过程与数字记进本文，带日期和机器。
 - 消融掉的：band 文件与 `d_band`（"可信 manifest"本身就是以前通过测试的候选，循环
   定义；一次采样乘 2 也是拍的）、翻转率进判定（凡是它分得开的变体 KL 也分得开，反之
-  不然）、有把握的翻转这条兜底（实验里从未触发）、KL 中位数和 p99、按 source /
-  按 margin 分档、单 producer 时的固定阈值族。
+  不然）、有把握的翻转这条兜底（实验里从未触发）、按 source / 按 margin 分档、
+  单 producer 时的固定阈值族。
 
-报告除了判定行，按**上下文深度**与 **decode 步数**两个维度分组给 mean KL（误差的两种
-长法），再给翻转数与最坏的几个翻转（位置、margin、KL）。`--out` 写候选文件（同一
-schema）。
+The report carries more than the verdict line, because a mean does not say what it
+averaged. Mean KL by **context depth** and by **decode step** (the two ways an error
+grows); the KL's median and 99th percentile; and the flips, counted by **regret** and
+named most regret first. The regret of a flip is the baseline's log probability of its
+own top-1 minus that of the token the candidate chose, in nats: a tie that flips has
+none, a token the baseline was sure of has a lot. A candidate token outside the
+baseline's top-20 takes the 20th's probability, so its regret is a lower bound.
+`--out` writes the candidate's recording (same schema).
+
+```
+kl        median 1.01e-4 · p99 1.29e-2
+flips     573 flips · by regret in nats: 6 ≥ 0.5 · 0 ≥ 1 · 0 ≥ 2 · most 0.750 · most regret first:
+flip      <source> step 400 (depth 62699) · 19 → 16 · margin 0.000 · regret 0.750 · KL 0.092
+```
+
+### What the positions say that the mean does not (2026-11-10)
+
+Every recording at hand read position by position: October's on the bf16 manifest
+(tray03 GB300), and kern-qwen38's FP8 bundle with its decode linears W8A16 (baseline)
+against W8A8 (tray02 GB300, `standard`, `--max-new 512`).
+
+| split, positions | candidate | mean KL | median KL | flips | regret ≥ 0.5 | ≥ 1 | most |
+|---|---|---|---|---|---|---|---|
+| smoke, 7 080 | `attn-bf16` (normal) | 5.1e-4 | 4.8e-5 | 58 | 0 | 0 | 0.25 |
+| | `state-m7` (normal) | 5.3e-4 | 5.0e-5 | 52 | 0 | 0 | 0.25 |
+| | `attn-e4m3` (bad) | 6.0e-4 | 7.1e-5 | 74 | 1 | 0 | 0.75 |
+| | `state-m4` (bad) | 2.5e-3 | 5.4e-4 | 154 | 2 | 0 | 0.50 |
+| standard, 42 673 | `state-m7` (normal) | 4.4e-4 | 1.4e-5 | 265 | 0 | 0 | 0.25 |
+| | `state-m4` (bad) | 2.0e-3 | 1.4e-4 | 678 | 12 | 2 | 1.50 |
+| standard to 16k, 677 337 | the baseline, other batches | 4.2e-4 | 4.5e-5 | 4 746 | 0 | 0 | 0.38 |
+| | `state-m7` | 2.0e-3 | 5.3e-4 | 11 813 | 168 | 16 | 2.81 |
+| | `state-m4` (bad) | 1.8e-2 | 5.2e-3 | 35 172 | 7 332 | 1 432 | 9.25 |
+| FP8 standard, 43 859 | the baseline, other batches | 3.3e-4 | 1.7e-7 | 231 | 1 | 0 | 0.63 |
+| | W8A8 decode | 1.4e-3 | 1.0e-4 | 573 | 6 | 0 | 0.75 |
+
+- **A manifest replayed along its own recording is itself only when the batches match.**
+  `record` and the test group rows differently; where that changes a batch, the replay
+  sits at 3–4e-4 with hundreds of flips, all of them between tokens the baseline held
+  close (0.38 and 0.63 nats at most). That much is in any candidate's number before the
+  candidate did anything.
+- **The mean is carried by the tail, a precision change moves the bulk.** W8A8's median
+  is 600 times the replay's and its mean 4.3 times, while its worst flip is the replay's
+  (0.75 nats against 0.63). A rounded state does the opposite at length: flips the
+  baseline was sure of, 9 nats under `state-m4`.
+- **The mean moves with the output length.** `state-m7` passes at 512 tokens and fails at
+  16k: its KL stays within 1.5 times the replay's for a thousand steps, is 2.4 times it
+  from 1 024 to 4 095 and 6 times past that, where its regret reaches 2.8.
+- **No harmless candidate has a flip of 1 nat; every candidate that has one is also over
+  the provisional 1e-3.** The two agree on these samples, which is not either being
+  right: the limit itself has a band four times wide to sit in (the harmless samples top
+  out at 5.3e-4, the bad ones the mean catches start at 2.0e-3) and W8A8 is inside it.
+  So the regret is in the report as a reason and not yet in the verdict as a rule.
+  `attn-e4m3` on smoke is the one bad candidate the mean passes: its most regret stands
+  out (0.75 against 0.25), on a single flip, and the FP8 replay reaches 0.63.
+- Ablated again, on these recordings: pairing the candidate with the baseline's own
+  scoring instead of its recording (the same numbers: 157 flips of 0.5 nats against 168
+  for `state-m7`, 5 against 6 for W8A8); a rule on growth with the decode step (it fires
+  only where the regret already does); a rule on the median against the replay's (harmless
+  medians span 1.7e-7 to 5e-5, and the replay's is 0 when the batches match); storing a
+  candidate's log probabilities on the baseline's ids (the two top-20s, read on the ids
+  both hold, give the tool's mean within 2% and its flips exactly, which is how the table
+  was computed; the two FP8 rows are also the report's own lines).
 
 ### 标定（Qwen3.8-27B，2026-10-19，tray03 GB300）
 

@@ -242,17 +242,41 @@ fn a_sampled_plan_stops_at_a_stop_token_or_the_cap() {
 }
 
 #[test]
-fn a_judgment_breaks_the_mean_down_by_depth_and_step() {
-    let at = |row, step, depth, kl, cand| Position { row, step, depth, kl, margin: 1.0, base: 7, cand };
-    let ps = vec![at(0, 0, 100, 0.1, 7), at(0, 1, 100, 0.3, 8), at(1, 600, 40 << 10, 0.5, 9)];
+fn a_position_carries_what_the_baseline_thought_of_the_candidates_token() {
+    let base = Top { ids: vec![3, 1, 0], logprobs: vec![-0.5, -1.25, -3.0] };
+    let regret = |logits: &[f32]| {
+        let p = Position::of(0, 0, 0, &base, logits);
+        (p.base, p.cand, p.flip(), p.margin, p.regret)
+    };
+    assert_eq!(regret(&[0.0, 1.0, 0.0, 2.0]), (3, 3, false, 0.75, 0.0));
+    assert_eq!(regret(&[0.0, 2.0, 0.0, 1.0]), (3, 1, true, 0.75, 0.75));
+    // a token the baseline did not keep is at most as likely as the last it kept
+    assert_eq!(regret(&[0.0, 0.0, 2.0, 1.0]), (3, 2, true, 0.75, 2.5));
+}
+
+#[test]
+fn a_judgment_reads_the_positions_behind_its_mean() {
+    let at = |row, step, depth, kl, cand, regret| Position { row, step, depth, kl, margin: 1.0, regret, base: 7, cand };
+    let ps = vec![at(0, 0, 100, 0.1, 7, 0.0), at(0, 1, 100, 0.3, 8, 1.5), at(1, 600, 40 << 10, 0.5, 9, 0.25)];
     let j = Judgment::of(&ps, 0.4);
     let depth: Vec<(usize, usize)> = j.depth.iter().map(|b| (b.from, b.positions)).collect();
     let step: Vec<(usize, usize)> = j.step.iter().map(|b| (b.from, b.positions)).collect();
     assert_eq!((j.positions, (j.mean_kl - 0.3).abs() < 1e-12, j.pass()), (3, true, true));
+    assert_eq!((j.median_kl, j.p99_kl), (0.3, 0.5));
     assert_eq!(
         (depth, step),
         (vec![(0, 2), (8 << 10, 0), (32 << 10, 1), (128 << 10, 0)], vec![(0, 1), (1, 1), (64, 0), (512, 1)])
     );
-    assert_eq!((j.flips, j.worst.iter().map(|p| p.row).collect::<Vec<_>>()), (2, vec![1, 0]));
+    assert_eq!((j.flips, j.worst.iter().map(|p| p.row).collect::<Vec<_>>()), (2, vec![0, 1]));
+    assert_eq!(j.regrets, vec![(0.5, 1), (1.0, 1), (2.0, 0)]);
+    let lines = j.lines(&["a".to_string(), "b".to_string()]);
+    assert_eq!(
+        (lines[2].as_str(), lines[3].as_str()),
+        (
+            "kl        median 3.00e-1 · p99 5.00e-1",
+            "flips     2 flips · by regret in nats: 1 ≥ 0.5 · 1 ≥ 1 · 0 ≥ 2 · most 1.500 · most regret first:"
+        )
+    );
+    assert!(lines[4].ends_with("a step 1 (depth 100) · 7 → 8 · margin 1.000 · regret 1.500 · KL 0.300"));
     assert!(!Judgment::of(&ps, 0.2).pass() && !Judgment::of(&[], 1.0).pass());
 }
