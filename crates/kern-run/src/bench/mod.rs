@@ -38,7 +38,7 @@ use crate::Vars;
 use workload::{Plan, Scenario, Shape, Workload};
 
 /// The report schema. Readers check it before they read anything else.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 /// Untimed replays before a graph's samples.
 const WARMUP: usize = 4;
@@ -145,24 +145,11 @@ struct Priced {
     shares: Vec<(String, f64)>,
 }
 
-/// Each shape once, at the fastest program that takes it.
-fn fastest(runs: &[Priced]) -> Vec<&Priced> {
-    let mut best: BTreeMap<String, &Priced> = BTreeMap::new();
-    for r in runs {
-        let e = best.entry(r.shape.label()).or_insert(r);
-        if r.us < e.us {
-            *e = r;
-        }
-    }
-    best.into_values().collect()
-}
-
-/// What the workload's traffic costs on this manifest: every shape at its
-/// fastest program times its weight, in µs; and that time's share by op.
+/// What the workload's traffic costs on this manifest: every shape's
+/// program time times its weight, in µs; and that time's share by op.
 fn cost(runs: &[Priced]) -> (f64, Vec<(String, f64)>) {
-    let fastest = fastest(runs);
-    let total = fastest.iter().map(|r| r.shape.weight as f64 * r.us).sum();
-    let by_op: Vec<(String, f64)> = fastest
+    let total = runs.iter().map(|r| r.shape.weight as f64 * r.us).sum();
+    let by_op: Vec<(String, f64)> = runs
         .iter()
         .flat_map(|r| r.shares.iter().map(move |(op, f)| (op.clone(), r.shape.weight as f64 * r.us * f)))
         .collect();
@@ -619,11 +606,10 @@ mod tests {
     }
 
     #[test]
-    fn cost_prices_each_shape_once_at_its_fastest_program() {
-        let shape = |rows, weight| Shape { groups: 1, rows, context: vec![0], weight };
+    fn cost_is_every_shapes_time_at_its_weight() {
+        let shape = |rows, weight| Shape { groups: 1, rows, chunk: false, context: vec![0], weight };
         let runs = [
             priced(shape(1, 10), 2., vec![("gemm".into(), 1.)]),
-            priced(shape(1, 10), 3., vec![("attn".into(), 1.)]),
             priced(shape(64, 2), 5., vec![("gemm".into(), 0.5), ("attn".into(), 0.5)]),
         ];
         let (total, by_op) = cost(&runs);

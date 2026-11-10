@@ -5,10 +5,12 @@
 //! rows each, on top of a previous context: [`Protocol`] turns that into a
 //! program, so a decode step, a prefill chunk and a speculative round are
 //! the same kind of entry in the file and nothing here knows their names.
-//! One shape can become more than one scenario — a manifest that has both
-//! a one-row step and a rows-as-fed chunk takes a single row either way,
-//! and which is faster is a fair question — so the program is part of a
-//! scenario's id rather than something the file chooses.
+//! What a sweep does say is which of the protocol's two kinds of call its
+//! rows are: `rows`, a step laid out for exactly that many rows a
+//! sequence, or `chunk`, rows as fed. The two are different work at the
+//! same row count (a sixteen-row speculative round drafts, verifies and
+//! samples; a sixteen-row chunk only advances state), so a shape is one of
+//! them and has one program.
 //!
 //! A sweep is a cross product, because a cross product is how the mix is
 //! found: the same 2,048-row chunk is mostly matrix multiply over an empty
@@ -18,8 +20,8 @@
 //!
 //! A sweep may carry a `weight`: how many calls of each of its shapes the
 //! traffic being modeled makes. The report prices the workload by it
-//! (every shape at its fastest program, times its weight), so a workload
-//! taken from a server's step trace says what that traffic costs.
+//! (every shape's program time, times its weight), so a workload taken
+//! from a server's step trace says what that traffic costs.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -37,14 +39,18 @@ enum Context {
     Each(Vec<usize>),
 }
 
-/// One cross product of shapes. `groups` defaults to a single sequence,
-/// `weight` to one call of each shape.
+/// One cross product of shapes, its rows under `rows` (a step's, exactly
+/// that many a sequence) or under `chunk` (as fed). `groups` defaults to a
+/// single sequence, `weight` to one call of each shape.
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Sweep {
     #[serde(default = "alone")]
     groups: Vec<usize>,
+    #[serde(default)]
     rows: Vec<usize>,
+    #[serde(default)]
+    chunk: Vec<usize>,
     context: Vec<Context>,
     #[serde(default = "once")]
     weight: u64,
@@ -70,19 +76,21 @@ pub struct Workload {
     sweep: Vec<Sweep>,
 }
 
-/// A call shape: one sequence per `context` entry, `rows` rows each, and
-/// how many calls of it the workload stands for.
+/// A call shape: one sequence per `context` entry, `rows` rows each, a
+/// step's or (`chunk`) rows as fed, and how many calls of it the workload
+/// stands for.
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 pub struct Shape {
     pub groups: usize,
     pub rows: usize,
+    pub chunk: bool,
     pub context: Vec<usize>,
     pub weight: u64,
 }
 
 impl Shape {
-    fn new(rows: usize, context: Vec<usize>, weight: u64) -> Shape {
-        Shape { groups: context.len(), rows, context, weight }
+    fn new(rows: usize, chunk: bool, context: Vec<usize>, weight: u64) -> Shape {
+        Shape { groups: context.len(), rows, chunk, context, weight }
     }
 
     /// The context: one number when every sequence is at the same depth,
@@ -94,10 +102,11 @@ impl Shape {
         }
     }
 
-    /// What the shape is called before a program is chosen. It carries the
-    /// whole shape, so anything printed beside it can say something else.
+    /// What the shape is called before a program is chosen: `r` before a
+    /// step's rows, `c` before a chunk's. It carries the whole shape, so
+    /// anything printed beside it can say something else.
     pub fn label(&self) -> String {
-        format!("g{}-r{}-kv{}", self.groups, self.rows, self.kv())
+        format!("g{}-{}{}-kv{}", self.groups, if self.chunk { 'c' } else { 'r' }, self.rows, self.kv())
     }
 
     /// Tokens of state this shape reaches, its rows included, rounded up to
@@ -117,9 +126,13 @@ impl Workload {
         let w: Workload = toml::from_str(text)?;
         ensure!((12..=256).contains(&w.samples), "samples must be in 12..=256, got {}", w.samples);
         for s in &w.sweep {
-            ensure!(!s.rows.is_empty() && !s.context.is_empty(), "a sweep needs rows and context");
+            ensure!(
+                s.rows.is_empty() != s.chunk.is_empty(),
+                "a sweep gives its rows as `rows` (a step's) or as `chunk` (as fed), one of the two"
+            );
+            ensure!(!s.context.is_empty(), "a sweep needs a context");
             ensure!(s.groups.iter().all(|&g| g > 0), "groups must be positive");
-            ensure!(s.rows.iter().all(|&r| r > 0), "rows must be positive");
+            ensure!(s.rows.iter().chain(&s.chunk).all(|&r| r > 0), "rows must be positive");
             ensure!(s.weight > 0, "weight must be positive");
             for c in &s.context {
                 if let Context::Each(v) = c {
@@ -141,11 +154,12 @@ impl Workload {
     /// is in the sweep.
     pub fn shapes(&self) -> Vec<Shape> {
         let all = self.sweep.iter().flat_map(|s| {
+            let rows = s.rows.iter().map(|&r| (r, false)).chain(s.chunk.iter().map(|&r| (r, true)));
             s.groups.iter().flat_map(move |&g| {
-                s.rows.iter().flat_map(move |&r| {
+                rows.clone().flat_map(move |(r, chunk)| {
                     s.context.iter().filter_map(move |c| match c {
-                        Context::Every(n) => Some(Shape::new(r, vec![*n; g], s.weight)),
-                        Context::Each(v) if v.len() == g => Some(Shape::new(r, v.clone(), s.weight)),
+                        Context::Every(n) => Some(Shape::new(r, chunk, vec![*n; g], s.weight)),
+                        Context::Each(v) if v.len() == g => Some(Shape::new(r, chunk, v.clone(), s.weight)),
                         Context::Each(_) => None,
                     })
                 })
@@ -173,7 +187,7 @@ pub struct Dropped {
     pub why: String,
 }
 
-/// A shape and one program that takes it.
+/// A shape and the program that takes it.
 #[derive(Serialize, Debug)]
 pub struct Scenario {
     pub id: String,
@@ -204,13 +218,9 @@ impl Plan {
     pub fn check(w: &Workload, p: &Protocol, unit: usize, row: Option<u64>) -> Result<Plan> {
         let (mut scenarios, mut dropped) = (Vec::new(), Vec::new());
         for shape in w.shapes() {
-            match fits(&shape, row).and_then(|()| forwards(p, &shape)) {
+            match fits(&shape, row).and_then(|()| forward(p, &shape)) {
                 Err(why) => dropped.push(Dropped { shape: shape.label(), weight: shape.weight, why }),
-                Ok(taken) => scenarios.extend(taken.into_iter().map(|program| Scenario {
-                    id: format!("{program}-{}", shape.label()),
-                    shape: shape.clone(),
-                    program,
-                })),
+                Ok(program) => scenarios.push(Scenario { id: format!("{program}-{}", shape.label()), shape, program }),
             }
         }
         ensure!(
@@ -241,22 +251,20 @@ fn fits(s: &Shape, row: Option<u64>) -> std::result::Result<(), String> {
     }
 }
 
-/// Every program that takes a shape: the one declaring exactly these rows,
-/// and the one that takes rows as fed, when both do. A shape over context
-/// also needs the second kind to build its prefix, whatever runs the step.
-fn forwards(p: &Protocol, s: &Shape) -> std::result::Result<Vec<String>, String> {
+/// The program that takes a shape: the one declaring exactly a step's
+/// rows, or the one that takes a chunk's as fed. A shape over context also
+/// needs the second kind to build its prefix, whatever runs the step.
+fn forward(p: &Protocol, s: &Shape) -> std::result::Result<String, String> {
     if s.groups * s.rows > p.rows.max as usize {
         return Err(format!("{} rows exceeds the manifest's {}", s.groups * s.rows, p.rows.max));
     }
     if s.context.iter().any(|&n| n > 0) && p.chunk().is_none() {
         return Err("a prefix needs a rows-as-fed program and this manifest has none".into());
     }
-    let taken: Vec<String> = [Rows::Const(s.rows as u64), Rows::Var]
-        .into_iter()
-        .filter_map(|rows| p.forward(s.groups as u64, rows).map(|f| f.name.clone()))
-        .collect();
-    match taken.is_empty() {
-        true => Err(format!("no program takes {} sequences × {} rows", s.groups, s.rows)),
-        false => Ok(taken),
-    }
+    let (rows, what) = match s.chunk {
+        true => (Rows::Var, "of rows as fed".to_string()),
+        false => (Rows::Const(s.rows as u64), format!("× {} rows", s.rows)),
+    };
+    let taken = p.forward(s.groups as u64, rows).map(|f| f.name.clone());
+    taken.ok_or_else(|| format!("no program takes {} sequences {what}", s.groups))
 }
