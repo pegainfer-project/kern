@@ -22,14 +22,18 @@
 //!
 //! Scoring is [`kl`]: KL(baseline ‖ candidate) on the baseline's
 //! top-[`TOP`] with the rest as one bucket, against the candidate's full
-//! row. The verdict is one number: the mean over every position against a
-//! limit the caller gives ([`Judgment`]). A mean does not say what it
-//! averaged, so the report reads the positions one by one beside it: where
-//! the KL sits (its median and 99th percentile, by depth, by decode step)
-//! and, for every top-1 the candidate flipped, the [`Position::regret`],
-//! how much less the baseline thought of the candidate's token than of its
-//! own. A tie that flips costs nothing; a token the baseline was sure of
-//! does.
+//! row. The verdict is one number, the mean over every position
+//! ([`Judgment`]), held to a [`Bar`] nobody has to name: the recording's
+//! own noise. A baseline replayed along its own tokens under other batches
+//! is not itself, because every batch rounds its own way; `record` measures
+//! that at every position and the recording carries it. A candidate that
+//! only rounds differently lands on the noise, one that adds error stands
+//! above it. A mean does not say what it averaged, so the report reads the
+//! positions one by one beside it: where the KL sits (its median and 99th
+//! percentile, by depth, by decode step) and, for every top-1 the
+//! candidate flipped, the [`Position::regret`], how much less the baseline
+//! thought of the candidate's token than of its own. A tie that flips
+//! costs nothing; a token the baseline was sure of does.
 //!
 //! Nothing here touches a device or a clock. A draw is a function of
 //! `(seed, row, step)` and the logits alone, so batching can move a
@@ -40,8 +44,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{bail, ensure, Context, Result};
-use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder, StringBuilder};
-use arrow_array::{Array, ArrayRef, Float32Array, Int32Array, ListArray, RecordBatch, StringArray};
+use arrow_array::builder::{Float32Builder, Float64Builder, Int32Builder, ListBuilder, StringBuilder};
+use arrow_array::{Array, ArrayRef, Float32Array, Float64Array, Int32Array, ListArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
@@ -77,11 +81,14 @@ pub struct Row {
 }
 
 /// One producer over a question set. `meta` is the file's key-value
-/// metadata: who produced it and how it was sampled.
+/// metadata: who produced it and how it was sampled. `noise` is what a
+/// baseline declares about itself: per row, the KL at every output position
+/// when it is replayed along its own tokens under other batches.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Recording {
     pub meta: BTreeMap<String, String>,
     pub rows: Vec<Row>,
+    pub noise: Option<Vec<Vec<f64>>>,
 }
 
 pub fn questions(path: &Path) -> Result<Vec<Question>> {
@@ -114,13 +121,11 @@ pub fn questions(path: &Path) -> Result<Vec<Question>> {
 impl Recording {
     pub fn read(path: &Path) -> Result<Recording> {
         let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        let meta = ParquetRecordBatchReaderBuilder::try_new(f)
+        let schema = ParquetRecordBatchReaderBuilder::try_new(f)
             .with_context(|| format!("{} as parquet", path.display()))?
             .schema()
-            .metadata()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+            .clone();
+        let meta = schema.metadata().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let batches = batches(
             path,
             &[
@@ -132,7 +137,15 @@ impl Recording {
             ],
         )?;
         let mut rows = Vec::new();
+        let mut noise = Vec::new();
         for b in &batches {
+            let declared = match b.column_by_name("noise") {
+                None => None,
+                Some(c) if same(c.data_type(), &list_of(DataType::Float64)) => {
+                    Some(c.as_any().downcast_ref::<ListArray>().expect("list").clone())
+                }
+                Some(c) => bail!("{}: column `noise` is {}, expected list<float64>", path.display(), c.data_type()),
+            };
             let source = strings(b, "source");
             let list = |n: &str| {
                 b.column_by_name(n).expect("checked").as_any().downcast_ref::<ListArray>().expect("list").clone()
@@ -156,10 +169,22 @@ impl Recording {
                     row.output.len(),
                     row.top.len()
                 );
+                if let Some(d) = &declared {
+                    let kls = d.value(r).as_any().downcast_ref::<Float64Array>().expect("f64").values().to_vec();
+                    ensure!(
+                        kls.len() == row.output.len(),
+                        "{}: row `{}` has {} output tokens and {} noise values",
+                        path.display(),
+                        row.source,
+                        row.output.len(),
+                        kls.len()
+                    );
+                    noise.push(kls);
+                }
                 rows.push(row);
             }
         }
-        Ok(Recording { meta, rows })
+        Ok(Recording { meta, rows, noise: schema.field_with_name("noise").is_ok().then_some(noise) })
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {
@@ -183,16 +208,24 @@ impl Recording {
             ids.append(true);
             lps.append(true);
         }
-        let cols: Vec<ArrayRef> = vec![
+        let mut cols: Vec<ArrayRef> = vec![
             Arc::new(source.finish()),
             Arc::new(prompt.finish()),
             Arc::new(output.finish()),
             Arc::new(ids.finish()),
             Arc::new(lps.finish()),
         ];
+        if let Some(noise) = &self.noise {
+            let mut kls = ListBuilder::new(Float64Builder::new());
+            for row in noise {
+                kls.values().append_slice(row);
+                kls.append(true);
+            }
+            cols.push(Arc::new(kls.finish()));
+        }
         let fields: Vec<Field> = cols
             .iter()
-            .zip(["source", "prompt", "output", "top_ids", "top_logprobs"])
+            .zip(["source", "prompt", "output", "top_ids", "top_logprobs", "noise"])
             .map(|(c, n)| Field::new(n, c.data_type().clone(), false))
             .collect();
         let schema = Arc::new(Schema::new(fields).with_metadata(self.meta.clone()));
@@ -575,12 +608,15 @@ pub struct Position {
     /// candidate's, in nats: 0 where they agree, and a lower bound where
     /// the candidate's token is outside the baseline's kept ones.
     pub regret: f64,
+    /// What the recording declares its own producer scores here under
+    /// other batches; 0 when it declares nothing.
+    pub noise: f64,
     pub base: i64,
     pub cand: i64,
 }
 
 impl Position {
-    pub fn of(row: usize, step: usize, depth: usize, base: &Top, logits: &[f32]) -> Position {
+    pub fn of(row: usize, step: usize, depth: usize, base: &Top, noise: f64, logits: &[f32]) -> Position {
         let cand = argmax(logits) as i64;
         let first = base.logprobs.first().copied().unwrap_or(0.0) as f64;
         let seen = base.ids.iter().position(|&id| id as i64 == cand).or(base.ids.len().checked_sub(1));
@@ -591,6 +627,7 @@ impl Position {
             kl: kl(base, logits),
             margin: first - base.logprobs.get(1).copied().unwrap_or(f32::NEG_INFINITY) as f64,
             regret: seen.and_then(|k| base.logprobs.get(k)).map_or(0.0, |&l| first - l as f64),
+            noise,
             base: base.ids.first().copied().unwrap_or(-1) as i64,
             cand,
         }
@@ -608,6 +645,21 @@ const STEPS: [usize; 4] = [0, 1, 64, 512];
 const WORST: usize = 8;
 /// Regrets, in nats, the report counts the flips at or above.
 const REGRETS: [f64; 3] = [0.5, 1.0, 2.0];
+/// Standard errors a candidate's mean may stand above the recording's noise.
+const SIGMAS: f64 = 3.0;
+
+/// What a candidate's mean KL is held to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Bar {
+    /// A mean the caller named, in nats.
+    Nats(f64),
+    /// The recording's noise: its mean over the scored positions, how far
+    /// above it the candidate's mean stands, and the standard error of that
+    /// difference. The error is taken over rows, since the positions of one
+    /// conversation move together and conversations do not; a single row
+    /// has none.
+    Noise { mean_kl: f64, excess: f64, se: f64 },
+}
 
 /// Mean KL over the positions of one bucket.
 #[derive(Clone, Debug, PartialEq)]
@@ -621,7 +673,7 @@ pub struct Bucket {
 pub struct Judgment {
     pub positions: usize,
     pub mean_kl: f64,
-    pub limit: f64,
+    pub bar: Bar,
     /// The KL half the positions stay under, and the KL 99 in 100 do.
     pub median_kl: f64,
     pub p99_kl: f64,
@@ -659,8 +711,34 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
     sorted.get((sorted.len().saturating_sub(1) as f64 * q).round() as usize).copied().unwrap_or(0.0)
 }
 
+/// The candidate's KL beside the noise the positions carry, row by row.
+fn beside(ps: &[Position]) -> Bar {
+    let mut rows: BTreeMap<usize, (f64, f64)> = BTreeMap::new();
+    for p in ps {
+        let (over, n) = rows.entry(p.row).or_default();
+        *over += p.kl - p.noise;
+        *n += 1.0;
+    }
+    let n = ps.len().max(1) as f64;
+    let excess = rows.values().map(|r| r.0).sum::<f64>() / n;
+    let k = rows.len() as f64;
+    let spread: f64 = rows.values().map(|&(over, m)| (over - m * excess).powi(2)).sum();
+    let se = if rows.len() > 1 { (k / (k - 1.0) * spread).sqrt() / n } else { 0.0 };
+    Bar::Noise { mean_kl: mean(&ps.iter().map(|p| p.noise).collect::<Vec<_>>()), excess, se }
+}
+
 impl Judgment {
+    /// Against a mean the caller names.
     pub fn of(ps: &[Position], limit: f64) -> Judgment {
+        Judgment::read(ps, Bar::Nats(limit))
+    }
+
+    /// Against the noise the recording declared at the same positions.
+    pub fn beside(ps: &[Position]) -> Judgment {
+        Judgment::read(ps, beside(ps))
+    }
+
+    fn read(ps: &[Position], bar: Bar) -> Judgment {
         let mut flips: Vec<Position> = ps.iter().filter(|p| p.flip()).cloned().collect();
         flips.sort_by(|a, b| {
             b.regret.total_cmp(&a.regret).then(b.kl.total_cmp(&a.kl)).then((a.row, a.step).cmp(&(b.row, b.step)))
@@ -671,7 +749,7 @@ impl Judgment {
         Judgment {
             positions: ps.len(),
             mean_kl,
-            limit,
+            bar,
             median_kl: quantile(&kls, 0.5),
             p99_kl: quantile(&kls, 0.99),
             depth: buckets(ps, &DEPTHS, |p| p.depth),
@@ -683,7 +761,11 @@ impl Judgment {
     }
 
     pub fn pass(&self) -> bool {
-        self.positions > 0 && self.mean_kl <= self.limit
+        self.positions > 0
+            && match self.bar {
+                Bar::Nats(limit) => self.mean_kl <= limit,
+                Bar::Noise { excess, se, .. } => excess <= SIGMAS * se,
+            }
     }
 
     /// The breakdown, a line per fact; `sources` names a row.
@@ -739,12 +821,13 @@ impl Judgment {
     }
 
     pub fn summary(&self) -> String {
-        format!(
-            "mean KL {:.2e} {} {:.2e} over {}",
-            self.mean_kl,
-            if self.pass() { "≤" } else { ">" },
-            self.limit,
-            plural(self.positions, "scored position")
-        )
+        let cmp = if self.pass() { "≤" } else { ">" };
+        let bar = match self.bar {
+            Bar::Nats(limit) => format!("{limit:.2e}"),
+            Bar::Noise { mean_kl, se, .. } => {
+                format!("noise {mean_kl:.2e} + {SIGMAS} × {se:.2e} ({:.2} × the noise)", self.mean_kl / mean_kl)
+            }
+        };
+        format!("mean KL {:.2e} {cmp} {bar} over {}", self.mean_kl, plural(self.positions, "scored position"))
     }
 }

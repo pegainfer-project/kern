@@ -94,10 +94,17 @@ kern 在内部 RSI 里是 kernel agent 的反馈环境（`kern test` 裁判、`k
 |---|---|---|
 | T1 | `kern test e2e-logits record / test`：问题集经 kern-serve 同一条渲染路径变 token，基线 manifest 采样生成并录 top-20，候选沿基线 token 成批 teacher forcing（decode 路径），mean KL ≤ `--kl`；`kern_test::trace`（旧"录好的参考"）删除 | Qwen3.8-27B，kern-prompts `smoke`：生产 manifest 录基线，同一 manifest 对自己的基线跑两遍输出逐字节相同；`attn-bf16`（正常差异）与 `state-m4` / `attn-e4m3`（坏变体）的 mean KL 分得开，阈值定在中间并记进 test.md；`standard` 跑通一遍，耗时记进 test.md。**2026-10-19 tray03**：smoke 两遍逐字节同，`state-m4` 两个 split 都红（2.6e-3 / 2.0e-3，`--kl 1e-3`），`attn-e4m3` 在 smoke 上没分开（6.0e-4），standard 上没测完（naive 注意力太慢）：未关 |
 
-What is open in T1 is the limit: `--kl` has a band four times wide to sit in and nothing
-to derive it from (test.md, 2026-11-10). A verdict that reads the tail as well (any flip
-of regret ≥ 1 nat fails) agrees with the mean on every sample at hand, and waits for one
-where it does not.
+The limit of T1 is no longer a number somebody names: a recording declares its own noise
+and a candidate is held to it (test.md, 2026-11-10: on the FP8 bundle the equivalent
+variants pass at 1.00 times the noise and W8A8 decode fails at 2.92). Open:
+
+- October's variants have not been held to a declared noise, so `attn-e4m3` is still not
+  separated.
+- The noise says a candidate is not equivalent, not that it is worse. A more precise
+  manifest's recording does say it (W8A8 at 1.23 times the bundle's distance from bf16,
+  the equivalent variants at 1.00) and the tool does not judge by it.
+- A verdict that reads the tail as well (any flip of regret ≥ 1 nat fails) waits for a
+  sample where it and the mean disagree.
 
 `decode_batch` 换成 cuBLASLt 之后，HF `Pegainfer/kern-qwen38-sm103` 上发布的 manifest 若还带 `gemm16_*`（17 条序列起最后一条全错），照 `examples/qwen3.8-27b.json` 重新生成发布。
 

@@ -43,9 +43,11 @@ kern test v2 由一个个套件组成，现在只有一个：**e2e_logits**—�
 | `output` | list\<int32\> | 续写的 token：基线自己采样的，候选照抄基线 |
 | `top_ids` | list\<list\<int32\>\> | 第 k 项是预测 `output[k]` 那一步的 top-20 id |
 | `top_logprobs` | list\<list\<float32\>\> | 与 `top_ids` 一一对应，温度之前的原始分布 |
+| `noise` | list\<float64\> | A baseline's only: the KL at each output position when it is replayed along its own tokens in other batches (the bar of the judge below) |
 
 文件 metadata：`producer`（manifest 文件名与 sha256）、`questions`（问题集文件的
-sha256）、`temperature`、`top_k`、`top_p`、`seed`、`max_new`。
+sha256）、`temperature`、`top_k`、`top_p`、`seed`、`max_new`、`noise_groups`（a baseline's
+only: the sequences a decode call took at most in the replay that measured `noise`）。
 
 有意不放：`messages`（`source` 连得回去）；"其他"那一桶（1 减 top-20 之和）；原文词的
 logprob（不判 perplexity）；producer 列（一个文件一个 producer）。候选文件的 `prompt`
@@ -107,15 +109,29 @@ loop:
 完整 logits 就在手上，所以每个基线 id 的候选概率都是确切的。
 
 ```
-mean KL ≤ --kl  →  PASS，否则 FAIL
+mean KL ≤ the recording's noise + 3 standard errors  →  PASS, else FAIL
 ```
 
 - 只用平均值：博客附录的上界管住的就是逐步 KL 的平均；处处慢慢变差、只有深上下文
   一截坏得厉害，都会抬高它，不像中位数会被稀释。风险是单个离群位置；真遇到再把 p99
   加回来。
-- 阈值是人给的数，没有默认值：没有放之四海皆准的 KL 阈值。标定照博客：生产 manifest
-  对基线的距离是正常差异，人为制造的坏变体（GDN 状态只留 4 位尾数、P 直接转 fp8）
-  必须红，阈值定在中间；过程与数字记进本文，带日期和机器。
+- **Nobody names the bar; the recording declares it.** A baseline replayed along its own
+  tokens is not itself: every batch rounds its own way, and where a replay's batches
+  differ from the recording's the logits differ by a rounding. An equivalent candidate
+  (another kernel, another order of accumulation) does exactly that and no more. So
+  `record` measures it once: after sampling it feeds the baseline its own tokens again,
+  in decode batches half the size so that every position lands in another batch, and
+  keeps the KL of every position in the recording (`noise`). A candidate that only rounds
+  differently lands on the noise; one that adds error stands above it.
+- **Three standard errors are the measurement's own.** The candidate's KL and the noise
+  are read at the same positions and the error of their mean difference is taken over
+  rows: the positions of one conversation move together, conversations do not. A
+  recording of one row has no such error and passes nothing above its noise.
+- **Above the noise is not wrong, it is not equivalent.** A candidate that trades
+  precision for speed fails, and the report says by how much (times the noise, the regret
+  of its flips); whether that is worth the speed is a decision. `--kl <nats>` holds a
+  candidate to a named mean instead, which writes the price of such a decision into the
+  command; it is also the only bar for a recording that declares no noise.
 - 消融掉的：band 文件与 `d_band`（"可信 manifest"本身就是以前通过测试的候选，循环
   定义；一次采样乘 2 也是拍的）、翻转率进判定（凡是它分得开的变体 KL 也分得开，反之
   不然）、有把握的翻转这条兜底（实验里从未触发）、按 source / 按 margin 分档、
@@ -184,6 +200,58 @@ against W8A8 (tray02 GB300, `standard`, `--max-new 512`).
   both hold, give the tool's mean within 2% and its flips exactly, which is how the table
   was computed; the two FP8 rows are also the report's own lines).
 
+### The noise a recording declares (2026-11-10)
+
+kern-qwen38's FP8 bundle (W8A16 decode linears, decode batches of at most 16) on a GB300
+(tray02), `standard`, `--max-new 512`: 43 859 positions over 96 rows. Three kinds of
+candidate: the bundle itself; the bundle generated for decode batches of at most 8 and of
+at most 12, the same arithmetic in other batches and so equivalent by construction; and
+the bundle with W8A8 decode linears, which quantizes the activations as well and so adds
+an error.
+
+| along the bundle's own recording | mean KL | × the noise | verdict |
+|---|---|---|---|
+| the noise `record` declared (itself, 8 at a time) | 4.81e-4 | | |
+| itself | 3.28e-4 | 0.68 | PASS |
+| batches of at most 12 | 4.79e-4 | 1.00 | PASS |
+| batches of at most 8 | 4.81e-4 | 1.00 | PASS |
+| W8A8 decode | 1.40e-3 | 2.92 | FAIL, 18 standard errors above |
+
+```
+PASS      mean KL 4.79e-4 ≤ noise 4.81e-4 + 3 × 6.25e-6 (1.00 × the noise) over 43859 scored positions
+FAIL      mean KL 1.40e-3 > noise 4.81e-4 + 3 × 5.14e-5 (2.92 × the noise) over 43859 scored positions
+```
+
+- **An equivalent candidate lands on the noise, whichever batches it runs.** The variant
+  for batches of at most 8 runs the very batches the replay ran and reproduces it bit for
+  bit. W8A8 stands 9.2e-4 above the noise with a standard error of 5.1e-5.
+- **The noise has to be measured in other batches.** Replayed in its own batch sizes the
+  bundle scores 3.28e-4, because only 43% of its positions land in a batch other than the
+  one that recorded them. Held to that, the two equivalent variants stand 1.47 times
+  above and fail by 6 standard errors. Hence the replay at half the batch, where every
+  position rounds anew.
+- **This replaces the provisional `--kl 1e-3`** of 2026-10-19, which had a band four
+  times wide to sit in. October's variants have not been held to a declared noise.
+- Where a baseline's batches cannot differ (one sequence at a time, a single row) its
+  noise is zero and only `--kl` judges.
+- Cost: `record` takes 1 387 s where sampling alone took 675 s; a candidate takes what it
+  took, 660 to 720 s.
+
+The same four scored along a more precise manifest's recording, October's of the bf16
+`examples/qwen3.8-27b.json` (42 673 positions; the standard errors read off the
+recordings' top-20s):
+
+| along the bf16 recording | mean KL | × the bundle's | standard errors from the bundle |
+|---|---|---|---|
+| the bundle | 3.47e-3 | | |
+| batches of at most 8 | 3.47e-3 | 1.000 | −0.1 |
+| batches of at most 12 | 3.49e-3 | 1.006 | +0.8 |
+| W8A8 decode | 4.26e-3 | 1.228 | +13.4 |
+
+An equivalent candidate stands as far from the more precise manifest as the bundle does,
+and W8A8 stands farther. That comparison says worse where the noise says only different;
+the tool does not judge by it (`roadmap.md`).
+
 ### 标定（Qwen3.8-27B，2026-10-19，tray03 GB300）
 
 基线 `examples/qwen3.8-27b.json`，温度 1.0、seed 0、`--max-new 512`；变体来自博客实验
@@ -219,7 +287,7 @@ kern test e2e-logits record \
 
 kern test e2e-logits \
   --manifest cand.json --kernels kernels/ --weights <checkpoint dir> \
-  --reference base-standard.parquet --kl 1e-3 [--gpu 0] [--out cand-standard.parquet]
+  --reference base-standard.parquet [--kl <nats>] [--gpu 0] [--out cand-standard.parquet]
 ```
 
 只有命令行参数，不读 kern.toml，没有默认路径。带 topology 的 manifest 跑法同下文"多
