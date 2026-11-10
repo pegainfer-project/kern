@@ -3,9 +3,7 @@
 //! With `--trace` the process subscribes CUPTI's hardware event system
 //! before any context exists ([`kern_runtime::trace`]), and a thread folds
 //! what it collects into a [`Board`] every 200 ms. A step is named by its
-//! program and shape: a graph program's var values (its graph key), an
-//! eager one's rounded up to a power of two, so a prefill chunk's label
-//! set stays small.
+//! program and shape ([`kern_trace::shape`]).
 //!
 //! `/kern/metrics` is four counters per rank, the health view, low enough
 //! in cardinality to keep for months; no op, call or kernel name is a
@@ -25,7 +23,7 @@
 //! their time was settled.
 //!
 //! With `--trace-dir` every kernel is also kept on disk
-//! ([`crate::recorder`]); `POST /kern/trace/rotate` closes the files being
+//! ([`kern_trace::Recorder`]); `POST /kern/trace/rotate` closes the files being
 //! written so the last minutes can be read without waiting for the
 //! quarter hour. Both endpoints are served on `--trace-port`, on every
 //! rank alike; without it a rank still traces and records.
@@ -48,11 +46,10 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use kern_manifest::types::{Arg, BufferKind, Call, Launch, Manifest};
-use kern_runtime::trace::{self, Collected, Step};
+use kern_runtime::trace::{self, Collected};
+use kern_trace::{shape, Now, Recorder, Sites};
 use serde_json::json;
 use tracing::{info, warn};
-
-use crate::recorder::{Now, Recorder};
 
 const EVERY: Duration = Duration::from_millis(200);
 /// How long [`exit`] waits for the last collect.
@@ -122,23 +119,12 @@ fn kv(rows: Option<u64>) -> String {
 /// The counters so far, and what the manifest says each call is.
 pub struct Board {
     rank: String,
-    /// Per program, per call: (label, op).
-    sites: BTreeMap<String, Vec<(String, String)>>,
+    sites: Sites,
     /// Per program, per call: whether it communicates.
     comm: BTreeMap<String, Vec<bool>>,
     clock: Clock,
     /// Per (program, shape, kv): compute seconds and steps.
     work: BTreeMap<(String, String, String), (f64, u64)>,
-}
-
-/// An issue's shape label: its graph key, or its vars rounded up to a
-/// power of two.
-pub(crate) fn shape(s: &Step) -> String {
-    let vars = s.issue.vars.iter().map(|(n, v)| match s.issue.graph {
-        true => format!("{n}={v}"),
-        false => format!("{n}<={}", v.next_power_of_two()),
-    });
-    vars.collect::<Vec<_>>().join(",")
 }
 
 fn secs(ns: u64) -> f64 {
@@ -158,26 +144,19 @@ fn communicates(m: &Manifest, c: &Call) -> bool {
 }
 
 /// `f` of every call, by program and call index.
-fn per_call<T>(m: &Manifest, f: impl Fn(usize, &Call) -> T) -> BTreeMap<String, Vec<T>> {
-    m.programs
-        .iter()
-        .map(|(p, prog)| (p.clone(), prog.calls.iter().enumerate().map(|(i, c)| f(i, c)).collect()))
-        .collect()
+fn per_call<T>(m: &Manifest, f: impl Fn(&Call) -> T) -> BTreeMap<String, Vec<T>> {
+    m.programs.iter().map(|(p, prog)| (p.clone(), prog.calls.iter().map(&f).collect())).collect()
 }
 
 impl Board {
     pub fn new(m: &Manifest, rank: usize) -> Self {
         Self {
             rank: rank.to_string(),
-            sites: per_call(m, |i, c| (c.label.clone().unwrap_or_else(|| format!("{}#{i}", c.op)), c.op.clone())),
-            comm: per_call(m, |_, c| communicates(m, c)),
+            sites: Sites::new(m),
+            comm: per_call(m, |c| communicates(m, c)),
             clock: Clock::default(),
             work: BTreeMap::new(),
         }
-    }
-
-    fn site(&self, program: &str, call: Option<u32>) -> (String, String) {
-        call.and_then(|c| self.sites.get(program)?.get(c as usize).cloned()).unwrap_or_else(|| ("?".into(), "?".into()))
     }
 
     fn is_comm(&self, program: &str, call: Option<u32>) -> bool {
@@ -262,17 +241,11 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn now() -> kern_runtime::Result<Now> {
-    let cupti = trace::now()?;
-    let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
-    Ok(Now { unix, cupti })
-}
-
 /// Writes `c` while the files are open, then folds it into the board.
 fn settle(board: &Mutex<Board>, r: &mut Option<Recorder>, c: Collected, now: Now) -> anyhow::Result<()> {
     let mut board = lock(board);
     let written = match r {
-        Some(r) => r.write(&c, &|p: &str, call| board.site(p, call), now),
+        Some(r) => r.write(&c, &board.sites, now),
         None => Ok(()),
     };
     board.fold(c, now.cupti);
@@ -294,7 +267,7 @@ pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String,
         loop {
             std::thread::sleep(EVERY);
             let mut r = lock(&t.recorder);
-            let (c, now) = match trace::collect().and_then(|c| Ok((c, now()?))) {
+            let (c, now) = match trace::collect().and_then(|c| Ok((c, Now::read()?))) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!(error = %e, "trace collect");
@@ -325,7 +298,7 @@ pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String,
 pub fn finish() {
     let Some(t) = TRACING.get() else { return };
     let mut r = lock(&t.recorder);
-    let settled = trace::finish().map_err(anyhow::Error::from).and_then(|c| settle(&t.board, &mut r, c, now()?));
+    let settled = trace::finish().map_err(anyhow::Error::from).and_then(|c| settle(&t.board, &mut r, c, Now::read()?));
     if let Err(e) = settled {
         warn!(error = %format!("{e:#}"), "trace finish");
     }

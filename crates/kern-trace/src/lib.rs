@@ -1,6 +1,6 @@
 //! Every traced kernel on disk, kept for as long as the disk allows.
 //!
-//! With `--trace-dir` a rank writes what [`crate::kernels`] collects into
+//! A rank writes what the tracer collects ([`kern_runtime::trace`]) into
 //! Parquet files of its own, a pair per quarter hour:
 //! `<dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.{kernels,steps}.parquet`, named
 //! by the UTC time the pair was opened. `kernels` is one row per kernel
@@ -12,8 +12,12 @@
 //! when the pair was opened, so ranks, files, logs and alerts share one
 //! time axis.
 //! The call is its label, which survives a manifest that renumbers its
-//! calls. A file's key-value metadata names the rank, the manifest's
-//! sha256, the binary's version and the clock offset.
+//! calls ([`Sites`]). A step is named by its program and shape
+//! ([`shape`]): a graph program's var values (its graph key), an eager
+//! one's rounded up to a power of two, so a prefill chunk's label set
+//! stays small. A file's key-value metadata names the rank, the model,
+//! the manifest's sha256, its writer's version ([`meta`]) and the clock
+//! offset.
 //!
 //! A Parquet file is readable once closed, when its footer is written:
 //! a pair closes at the next quarter hour, or when `rotate` asks. It is
@@ -21,7 +25,12 @@
 //! globs `*.parquet` only ever finds whole files. Strings go through
 //! Parquet's dictionaries and the integer columns through delta encoding
 //! under zstd, so a kernel costs a few bytes on disk (docs/serve.md).
+//!
+//! The crate is the format and nothing else, so that everything that
+//! traces writes the same files: kern-serve's ranks, and a manifest hosted
+//! in another engine's process.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,7 +38,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use kern_runtime::trace::Collected;
+use kern_manifest::types::Manifest;
+use kern_runtime::trace::{self, Collected, Step};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
 use parquet::file::metadata::KeyValue;
@@ -47,13 +57,62 @@ pub struct Now {
 }
 
 impl Now {
+    /// Reads both; the tracer is on.
+    pub fn read() -> kern_runtime::Result<Now> {
+        let cupti = trace::now()?;
+        let unix =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+        Ok(Now { unix, cupti })
+    }
+
     fn offset(self) -> i64 {
         self.unix - self.cupti as i64
     }
 }
 
-/// A call's (label, op) by program and index.
-pub type Site<'a> = &'a dyn Fn(&str, Option<u32>) -> (String, String);
+/// What the manifest says each call is: per program, per call, its label
+/// (its op and index when it has none) and its op.
+pub struct Sites(BTreeMap<String, Vec<(String, String)>>);
+
+impl Sites {
+    pub fn new(m: &Manifest) -> Self {
+        let named = |(i, c): (usize, &kern_manifest::types::Call)| {
+            (c.label.clone().unwrap_or_else(|| format!("{}#{i}", c.op)), c.op.clone())
+        };
+        Self(
+            m.programs
+                .iter()
+                .map(|(p, prog)| (p.clone(), prog.calls.iter().enumerate().map(named).collect()))
+                .collect(),
+        )
+    }
+
+    /// A call's (label, op); `?` for a kernel whose call is not known.
+    fn site(&self, program: &str, call: Option<u32>) -> (String, String) {
+        call.and_then(|c| self.0.get(program)?.get(c as usize).cloned()).unwrap_or_else(|| ("?".into(), "?".into()))
+    }
+}
+
+/// What every file says of its writer: the manifest's model, the sha256 of
+/// the manifest as it was read (`json`), and the writer's version.
+pub fn meta(m: &Manifest, json: &str, version: &str) -> Vec<(String, String)> {
+    use sha2::Digest;
+    vec![
+        ("kern.model".to_string(), m.model.clone()),
+        ("kern.manifest_sha256".to_string(), hex::encode(sha2::Sha256::digest(json.as_bytes()))),
+        ("kern.version".to_string(), version.to_string()),
+    ]
+}
+
+/// An issue's shape label: its graph key, or its vars rounded up to a
+/// power of two.
+pub fn shape(s: &Step) -> String {
+    let vars = s.issue.vars.iter().map(|(n, v)| match s.issue.graph {
+        true => format!("{n}={v}"),
+        false => format!("{n}<={}", v.next_power_of_two()),
+    });
+    vars.collect::<Vec<_>>().join(",")
+}
 
 struct Open {
     quarter: u64,
@@ -66,7 +125,7 @@ struct Open {
 pub struct Recorder {
     root: PathBuf,
     rank: usize,
-    /// What every file's metadata says besides its clock offset.
+    /// What every file's metadata says besides its rank and clock offset.
     meta: Vec<(String, String)>,
     open: Option<Open>,
 }
@@ -96,17 +155,17 @@ fn steps_schema() -> SchemaRef {
 }
 
 /// The issue's var values as given, `name=value` joined by commas.
-fn exact(s: &kern_runtime::trace::Step) -> String {
+fn exact(s: &Step) -> String {
     s.issue.vars.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join(",")
 }
 
 /// What was collected as the two tables' rows, timestamps moved by `offset`.
-pub fn batches(c: &Collected, site: Site<'_>, offset: i64) -> Result<(RecordBatch, RecordBatch)> {
+fn batches(c: &Collected, sites: &Sites, offset: i64) -> Result<(RecordBatch, RecordBatch)> {
     let at = |ns: u64| ns as i64 + offset;
     let steps: Vec<_> = c.steps.iter().filter(|s| !s.spans.is_empty()).collect();
     let claimed = steps.iter().flat_map(|s| {
         s.spans.iter().map(move |k| {
-            let (call, op) = site(&s.issue.program, k.call);
+            let (call, op) = sites.site(&s.issue.program, k.call);
             (Some(s.seq), at(k.start), (k.end.saturating_sub(k.start)) as i64, Some(call), Some(op), k.name.to_string())
         })
     });
@@ -124,12 +183,12 @@ pub fn batches(c: &Collected, site: Site<'_>, offset: i64) -> Result<(RecordBatc
         Arc::new(rows.iter().map(|r| r.4.as_deref()).collect::<StringArray>()),
         Arc::new(rows.iter().map(|r| Some(r.5.as_str())).collect::<StringArray>()),
     ];
-    let first = |s: &kern_runtime::trace::Step| s.spans.iter().map(|k| k.start).min().unwrap_or(0);
-    let last = |s: &kern_runtime::trace::Step| s.spans.iter().map(|k| k.end).max().unwrap_or(0);
+    let first = |s: &Step| s.spans.iter().map(|k| k.start).min().unwrap_or(0);
+    let last = |s: &Step| s.spans.iter().map(|k| k.end).max().unwrap_or(0);
     let step_cols: Vec<ArrayRef> = vec![
         Arc::new(steps.iter().map(|s| Some(s.seq)).collect::<UInt64Array>()),
         Arc::new(steps.iter().map(|s| Some(s.issue.program.as_str())).collect::<StringArray>()),
-        Arc::new(steps.iter().map(|s| Some(crate::kernels::shape(s))).collect::<StringArray>()),
+        Arc::new(steps.iter().map(|s| Some(shape(s))).collect::<StringArray>()),
         Arc::new(steps.iter().map(|s| Some(exact(s))).collect::<StringArray>()),
         Arc::new(steps.iter().map(|s| s.issue.kv).collect::<UInt64Array>()),
         Arc::new(steps.iter().map(|s| Some(s.issue.graph)).collect::<BooleanArray>()),
@@ -181,7 +240,7 @@ impl Recorder {
 
     /// Appends what was collected to the open pair, first closing it if
     /// `now` is past its quarter hour and opening one if none is.
-    pub fn write(&mut self, c: &Collected, site: Site<'_>, now: Now) -> Result<()> {
+    pub fn write(&mut self, c: &Collected, sites: &Sites, now: Now) -> Result<()> {
         let secs = (now.unix / SEC) as u64;
         if self.open.as_ref().is_some_and(|o| o.quarter != secs / QUARTER) {
             self.rotate()?;
@@ -193,7 +252,7 @@ impl Recorder {
             Some(o) => o,
             None => self.open.insert(self.create(now)?),
         };
-        let (kernels, steps) = batches(c, site, open.offset)?;
+        let (kernels, steps) = batches(c, sites, open.offset)?;
         open.kernels.write(&kernels)?;
         open.steps.write(&steps)?;
         Ok(())
@@ -204,10 +263,9 @@ impl Recorder {
         let (date, time) = utc(secs);
         let dir = self.root.join(format!("date={date}")).join(format!("rank={}", self.rank));
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let meta: Vec<KeyValue> = self
-            .meta
-            .iter()
-            .cloned()
+        let meta: Vec<KeyValue> = [("kern.rank".to_string(), self.rank.to_string())]
+            .into_iter()
+            .chain(self.meta.iter().cloned())
             .chain([("kern.clock_offset_ns".to_string(), now.offset().to_string())])
             .map(|(k, v)| KeyValue::new(k, v))
             .collect();
@@ -240,7 +298,7 @@ mod tests {
     use super::*;
 
     fn collected(seq: u64, at: u64) -> Collected {
-        use kern_runtime::trace::{Issue, Kernel, Span, Step};
+        use kern_runtime::trace::{Issue, Kernel, Span};
         let span = |call, start, end| Span { call: Some(call), name: "k".into(), start, end };
         let issue = Issue {
             program: "decode".into(),
@@ -256,13 +314,13 @@ mod tests {
 
     #[test]
     fn a_quarter_hour_closes_into_whole_files() {
-        let root = std::env::temp_dir().join(format!("kern-recorder-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("kern-trace-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let mut r = Recorder::new(root.clone(), 3, vec![("kern.rank".into(), "3".into())]);
-        let site = |_: &str, c: Option<u32>| (format!("l{}", c.unwrap_or(9)), "attn".to_string());
+        let mut r = Recorder::new(root.clone(), 3, vec![("kern.model".into(), "toy".into())]);
+        let site = &Sites([("decode".into(), vec![("l0".into(), "attn".into()), ("l1".into(), "attn".into())])].into());
         let t0 = 1_793_797_134 * SEC;
-        r.write(&collected(1, 100), &site, Now { unix: t0, cupti: 0 }).unwrap();
-        r.write(&collected(2, 200), &site, Now { unix: t0 + SEC, cupti: SEC as u64 }).unwrap();
+        r.write(&collected(1, 100), site, Now { unix: t0, cupti: 0 }).unwrap();
+        r.write(&collected(2, 200), site, Now { unix: t0 + SEC, cupti: SEC as u64 }).unwrap();
         let dir = root.join("date=2026-11-04/rank=3");
         let names = || {
             let mut v: Vec<String> =
@@ -271,7 +329,7 @@ mod tests {
             v
         };
         assert_eq!(names(), ["125854.kernels.parquet.part", "125854.steps.parquet.part"]);
-        r.write(&Collected::default(), &site, Now { unix: t0 + 120 * SEC, cupti: 0 }).unwrap();
+        r.write(&Collected::default(), site, Now { unix: t0 + 120 * SEC, cupti: 0 }).unwrap();
         assert_eq!(names(), ["125854.kernels.parquet", "125854.steps.parquet"]);
         let rows = |f: &str| {
             let file = File::open(dir.join(f)).unwrap();
@@ -296,6 +354,18 @@ mod tests {
         let call = |s: &str| Some(s.to_string());
         assert_eq!(calls, [call("l0"), call("l1"), None, call("l0"), call("l1"), None]);
         assert_eq!(rows("125854.steps.parquet").iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+        let says = |f: &str, key: &str| {
+            let file = File::open(dir.join(f)).unwrap();
+            let b = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+            let said = b.metadata().file_metadata().key_value_metadata().cloned().unwrap_or_default();
+            said.into_iter().find(|k| k.key == key).and_then(|k| k.value)
+        };
+        let said = (
+            says("125854.kernels.parquet", "kern.rank"),
+            says("125854.steps.parquet", "kern.model"),
+            says("125854.steps.parquet", "kern.clock_offset_ns"),
+        );
+        assert_eq!(said, (Some("3".into()), Some("toy".into()), Some(t0.to_string())));
         assert_eq!(r.rotate().unwrap(), Vec::<PathBuf>::new());
         std::fs::remove_dir_all(&root).unwrap();
     }

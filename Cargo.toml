@@ -5,6 +5,7 @@ members = [
     "crates/kern-pool",
     "crates/kern-runtime",
     "crates/kern-test",
+    "crates/kern-trace",
     "crates/kern-run",
     "crates/kern-serve",
     "crates/kern-py",
@@ -14,7 +15,7 @@ members = [
 # the rest of the pegainfer/vLLM serving stack (protoc, ~500 crates), so it is
 # built by name. kern-py is a Python extension, built by maturin where a Python
 # is.
-default-members = ["crates/kern-manifest", "crates/kern-pool", "crates/kern-runtime", "crates/kern-test", "crates/kern-run"]
+default-members = ["crates/kern-manifest", "crates/kern-pool", "crates/kern-runtime", "crates/kern-test", "crates/kern-trace", "crates/kern-run"]
 
 [workspace.package]
 version = "0.4.0"
@@ -26,6 +27,7 @@ kern-manifest = { path = "crates/kern-manifest" }
 kern-pool = { path = "crates/kern-pool" }
 kern-runtime = { path = "crates/kern-runtime" }
 kern-test = { path = "crates/kern-test" }
+kern-trace = { path = "crates/kern-trace" }
 kern-run = { path = "crates/kern-run" }
 
 # The serving frontend (infront: the scheduler contract and vLLM's Rust

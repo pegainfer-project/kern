@@ -46,6 +46,10 @@ the schema golden, lints) belongs in CI, not here.
   verdict in one report (`report`), all spoken to a `Side`; and the
   e2e-logits scoring (`e2e`). Pure host code with no CUDA; its tests drive a
   fake side.
+- `crates/kern-trace` — the trace on disk: what the runtime's tracer
+  collected, written as a rank's Parquet pairs of kernels and steps. The
+  format and nothing else, so kern-serve's ranks and a hosted manifest
+  write the same files.
 - `crates/kern-run` — the `kern` binary: `run`, `test` (and `test
   e2e-logits`), `bench`, `kernels`, `verify`, `cut`, and `server`, which
   launches kern-serve. Around it: `kern.toml` (`config`), where inputs and

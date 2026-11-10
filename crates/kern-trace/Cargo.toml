@@ -1,0 +1,19 @@
+[package]
+name = "kern-trace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kern-manifest.workspace = true
+kern-runtime.workspace = true
+
+anyhow.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+hex.workspace = true
+parquet.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
