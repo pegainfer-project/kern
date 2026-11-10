@@ -2,7 +2,7 @@
 //! writes (kern-trace), from inside another engine's process.
 //!
 //! The process subscribed CUPTI before its first CUDA context
-//! (`kern.trace_start()`). [`start`] is the thread that collects every
+//! (`kern.trace.start()`). [`start`] is the thread that collects every
 //! [`EVERY`] and appends what arrived under a directory: the steps of the
 //! programs the host issued or launched as its own graphs, and the kernels
 //! no step claims, which are the host's own.

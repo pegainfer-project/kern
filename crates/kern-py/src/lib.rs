@@ -212,8 +212,10 @@ impl Runtime {
         if RECORDING.swap(true, Ordering::AcqRel) {
             return Err(PyRuntimeError::new_err("this process already records its kernels"));
         }
-        record::start(dir, rank, kern_trace::Sites::new(&self.rt.manifest), self.meta.clone())
-            .map_err(|e| PyRuntimeError::new_err(format!("starting the recording thread: {e}")))
+        record::start(dir, rank, kern_trace::Sites::new(&self.rt.manifest), self.meta.clone()).map_err(|e| {
+            RECORDING.store(false, Ordering::Release);
+            PyRuntimeError::new_err(format!("starting the recording thread: {e}"))
+        })
     }
 
     /// What the host's last capture took from this runtime, once it has
