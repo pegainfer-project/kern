@@ -38,11 +38,15 @@ fn a_shape_asked_for_twice_is_one_shape_with_both_weights() {
     let w = Workload::parse(
         "samples = 12\nseed = 1\n\
          [[sweep]]\nrows = [1]\ncontext = [8, 16]\n\
-         [[sweep]]\nrows = [1]\ncontext = [16, 32]\n",
+         [[sweep]]\nrows = [1]\ncontext = [16, 32]\n\
+         [[sweep]]\nchunk = [1]\ncontext = [16]\n",
     )
     .unwrap();
     let shapes: Vec<(String, u64)> = w.shapes().iter().map(|s| (s.label(), s.weight)).collect();
-    assert_eq!(shapes, [("g1-r1-kv8".into(), 1), ("g1-r1-kv16".into(), 2), ("g1-r1-kv32".into(), 1)]);
+    assert_eq!(
+        shapes,
+        [("g1-r1-kv8".into(), 1), ("g1-r1-kv16".into(), 2), ("g1-r1-kv32".into(), 1), ("g1-c1-kv16".into(), 1)]
+    );
 }
 
 #[test]
@@ -68,17 +72,23 @@ fn a_per_sequence_context_only_pairs_with_its_own_group_count() {
 }
 
 #[test]
-fn a_shape_two_programs_take_becomes_two_scenarios() {
-    let p = plan("[[sweep]]\nrows = [1]\ncontext = [128]\n");
-    assert_eq!(ids(&p), ["decode-g1-r1-kv128", "prefill-g1-r1-kv128"]);
+fn one_row_is_a_step_or_a_chunk_as_the_sweep_says() {
+    let p = plan("[[sweep]]\nrows = [1]\ncontext = [128]\n[[sweep]]\nchunk = [1]\ncontext = [128]\n");
+    assert_eq!(ids(&p), ["decode-g1-r1-kv128", "prefill-g1-c1-kv128"]);
 }
 
 #[test]
 fn the_program_follows_from_the_shape_and_nothing_else() {
     let p = plan("[[sweep]]\ngroups = [4]\nrows = [1]\ncontext = [512]\n");
     assert_eq!(ids(&p), ["decode_batch-g4-r1-kv512"]);
-    let p = plan("[[sweep]]\nrows = [2048]\ncontext = [0]\n");
-    assert_eq!(ids(&p), ["prefill-g1-r2048-kv0"]);
+    let p = plan("[[sweep]]\nchunk = [2048]\ncontext = [0]\n");
+    assert_eq!(ids(&p), ["prefill-g1-c2048-kv0"]);
+    let p = plan("[[sweep]]\nrows = [1]\ncontext = [0]\n[[sweep]]\nrows = [2048]\ncontext = [0]\n");
+    assert_eq!(ids(&p), ["decode-g1-r1-kv0"]);
+    assert_eq!(
+        (p.dropped[0].shape.as_str(), p.dropped[0].why.as_str()),
+        ("g1-r2048-kv0", "no program takes 1 sequences × 2048 rows")
+    );
 }
 
 #[test]
@@ -95,7 +105,7 @@ fn a_sequence_longer_than_a_page_table_row_is_dropped() {
     let m = manifest();
     let row = kern_pool::row_tokens(&m, kern_pool::page_unit(&m)).unwrap();
     let p = plan(&format!("[[sweep]]\nrows = [1]\ncontext = [{}, {}]\n", row - 1, row));
-    assert_eq!(ids(&p), [format!("decode-g1-r1-kv{}", row - 1), format!("prefill-g1-r1-kv{}", row - 1)]);
+    assert_eq!(ids(&p), [format!("decode-g1-r1-kv{}", row - 1)]);
     assert_eq!(
         (p.dropped[0].shape.clone(), p.dropped[0].why.contains("page-table row")),
         (format!("g1-r1-kv{row}"), true)
@@ -121,6 +131,9 @@ fn a_malformed_workload_is_an_error_not_a_dropped_shape() {
     assert!(Workload::parse("samples = 4\nseed = 1\n").is_err());
     assert!(Workload::parse("samples = 12\nseed = 1\n[[sweep]]\nrows = [0]\ncontext = [1]\n").is_err());
     assert!(Workload::parse("samples = 12\nseed = 1\n[[sweep]]\nrows = [1]\n").is_err());
+    let both = "samples = 12\nseed = 1\n[[sweep]]\nrows = [1]\nchunk = [8]\ncontext = [1]\n";
+    assert!(Workload::parse(both).unwrap_err().to_string().contains("one of the two"));
+    assert!(Workload::parse("samples = 12\nseed = 1\n[[sweep]]\ncontext = [1]\n").is_err());
     let unpaired = "samples = 12\nseed = 1\n[[sweep]]\ngroups = [4]\nrows = [1]\ncontext = [[128, 512]]\n";
     assert!(Workload::parse(unpaired).unwrap_err().to_string().contains("pairs with no group count"));
 }

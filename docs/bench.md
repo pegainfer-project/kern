@@ -32,7 +32,11 @@ which file.
 A workload names **shapes**. `groups` sequences of `rows` rows each, on
 top of a previous `context`. `Protocol` turns a shape into a program, so
 a decode step, a prefill chunk and a speculative round are the same kind
-of entry and the file never contains a program name.
+of entry and the file never contains a program name. What a sweep does
+say is which of the protocol's two kinds of call its rows are: under
+`rows` they are a step's, laid out for exactly that many a sequence (1 for
+a decode step, 16 for a sixteen-row speculative round); under `chunk`
+they are fed as they come (a prefill chunk).
 
 ```toml
 samples = 32                  # per measurement, 12..=256; every sample is kept
@@ -49,22 +53,22 @@ rows = [1]
 context = [[128, 512, 1024, 2048]]
 
 [[sweep]]                     # prefill chunks over an empty cache
-rows = [1, 16, 64, 128, 256, 512, 1024, 2048]
+chunk = [1, 16, 64, 128, 256, 512, 1024, 2048]
 context = [0]
 ```
 
 Each `[[sweep]]` is a cross product; the sweeps are unioned and repeated
-shapes collapse. `groups` defaults to `[1]`. A `context` entry may be a
-list instead of a number, meaning one length per sequence; it pairs
-only with the group count it has lengths for, which must be one of the
-sweep's `groups`.
+shapes collapse. A sweep gives `rows` or `chunk`, never both. `groups`
+defaults to `[1]`. A `context` entry may be a list instead of a number,
+meaning one length per sequence; it pairs only with the group count it
+has lengths for, which must be one of the sweep's `groups`.
 
 A sweep may also say `weight = <calls>`: how many calls of each of its
 shapes the traffic being modeled makes (default 1; a shape repeated across
 sweeps sums its weights). `python -m kern_vllm.workload <trace>` writes one
 such sweep per bucket of a vLLM step trace. After the last scenario the
-report prices the workload: every shape once, at the fastest program that
-takes it, times its weight, and that time by op:
+report prices the workload: every shape's program time, times its weight,
+and that time by op:
 
 ```
 cost      <seconds> · <calls> calls[ · <n> dropped] · <op> <share> · … · +<n> more
@@ -90,12 +94,12 @@ drop      g4-r2048-kv0 · 8192 rows exceeds the manifest's 2048
 drop      g512-r1-kv0 · no program takes 512 sequences × 1 rows
 ```
 
-**One shape can become more than one scenario.** A manifest with both a
-one-row step program and a rows-as-fed chunk takes a single row either
-way, and which is faster is a fair question, so both run. That is why the
-program is part of a scenario's id and not something the file chooses:
-`decode-g1-r1-kv128` and `prefill-g1-r1-kv128` are two scenarios of one
-shape.
+**A step and a chunk of the same rows are two shapes.** A sixteen-row
+speculative round drafts, verifies and samples; a sixteen-row chunk only
+advances state. Which of them a call was is part of its shape, so each
+has one program and its own id: `round-g1-r16-kv128` and
+`prefill-g1-c16-kv128`. To ask whether a one-row step or a one-row chunk
+is faster, sweep both.
 
 ## What the terminal says
 

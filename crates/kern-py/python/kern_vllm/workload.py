@@ -5,7 +5,9 @@
 A step is the program calls the model makes of it: its one-token rows
 together, one sequence each at its previous length, and every longer row
 alone. Calls are counted into buckets, and each bucket becomes one shape
-weighted by its count, so `kern bench` prices the traced traffic.
+weighted by its count, so `kern bench` prices the traced traffic. The
+one-token rows are a decode step (`rows = [1]`) and a longer row is a
+prefill chunk (`chunk`), which is how a workload tells the two apart.
 
 A decode call's sequence count rounds up to vLLM's CUDA graph sizes, which
 is what a pure decode step runs at; its context is the mean previous
@@ -51,7 +53,7 @@ def workload(steps: list[dict], samples: int, seed: int) -> str:
     live = [s for s in steps if not dummy(s)]
     longest = max(n for s in live for n in s["s"])
     counts = collections.Counter(bucket(c, longest) for s in live for c in calls(s))
-    body = [f"[[sweep]]\ngroups = [{g}]\nrows = [{r}]\ncontext = [{c}]\nweight = {n}\n"
+    body = [f"[[sweep]]\ngroups = [{g}]\n{'rows' if r == 1 else 'chunk'} = [{r}]\ncontext = [{c}]\nweight = {n}\n"
             for (g, r, c), n in sorted(counts.items())]
     return "\n".join([f"# {sum(counts.values())} calls in {len(counts)} buckets",
                       f"samples = {samples}", f"seed = {seed}", ""] + body)
