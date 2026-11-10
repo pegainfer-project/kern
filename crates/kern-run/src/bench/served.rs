@@ -28,6 +28,10 @@
 //! before any GPU is involved: each kept bucket is priced at what the
 //! server measured for the steps nearest its call, and the sum is held
 //! against the time the bucket's own steps took ([`Served::fidelity`]).
+//!
+//! A trace is one rank's files. Bench issues a call on every rank of the
+//! manifest, so one rank's steps are the group's calls, and the ranks'
+//! files together would count each call once a rank.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -42,7 +46,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use super::workload::{Plan, Workload};
 use super::{digest, say};
 
-/// Measured steps a bucket's price is the median of.
+/// Measured steps a bucket's price is the median of, before ties.
 const NEAR: usize = 25;
 
 #[derive(clap::Args, Debug)]
@@ -182,15 +186,20 @@ fn middle(members: &[(Call, u64)]) -> Call {
 }
 
 /// The median time of the steps nearest `context` in `class`, which is
-/// every step of one exact call shape as (context, ns), sorted.
+/// every step of one exact call shape as (context, ns), sorted: the
+/// `NEAR` nearest and every step as near as the last of them, so which of
+/// several equally near steps count never depends on how long they took.
 fn nearest(class: &[(u64, u64)], context: u64) -> f64 {
     let at = class.partition_point(|&(c, _)| c < context);
-    let mut near: Vec<(u64, u64, u64)> = class[at.saturating_sub(NEAR)..(at + NEAR).min(class.len())]
+    let mut off: Vec<u64> = class[at.saturating_sub(NEAR)..(at + NEAR).min(class.len())]
         .iter()
-        .map(|&(c, ns)| (c.abs_diff(context), c, ns))
+        .map(|&(c, _)| c.abs_diff(context))
         .collect();
-    near.sort_unstable();
-    let mut ns: Vec<u64> = near.iter().take(NEAR).map(|n| n.2).collect();
+    off.sort_unstable();
+    let reach = off[(NEAR - 1).min(off.len() - 1)];
+    let from = class.partition_point(|&(c, _)| c + reach < context);
+    let to = class.partition_point(|&(c, _)| c <= context + reach);
+    let mut ns: Vec<u64> = class[from..to].iter().map(|&(_, ns)| ns).collect();
     ns.sort_unstable();
     ns[ns.len() / 2] as f64
 }
@@ -319,7 +328,7 @@ impl Served {
     }
 }
 
-/// What a set of steps files holds.
+/// What a set of steps files holds: one rank's steps.
 #[derive(Debug, Default)]
 pub struct Trace {
     pub steps: Vec<Step>,
@@ -382,29 +391,39 @@ fn steps_of(b: &RecordBatch) -> Result<Vec<Step>> {
         .collect()
 }
 
-/// Read every steps file among `paths`.
+/// Read every steps file among `paths`. They are one rank's: a workload
+/// is the calls one rank took, and bench issues each on every rank of the
+/// manifest, so the files of a group's ranks together would count every
+/// call once a rank.
 pub fn read(paths: &[PathBuf]) -> Result<Trace> {
     let found = files(paths)?;
     let given = || paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
     ensure!(!found.is_empty(), "no steps.parquet among {}", given());
-    found.iter().try_fold(Trace::default(), |mut t, path| {
-        let one = |path: &Path| -> Result<(Vec<Step>, Option<String>)> {
+    let (trace, ranks) = found.iter().try_fold((Trace::default(), BTreeSet::new()), |(mut t, mut ranks), path| {
+        let one = |path: &Path| -> Result<(Vec<Step>, [Option<String>; 2])> {
             let reader = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
-            let sha = reader
-                .metadata()
-                .file_metadata()
-                .key_value_metadata()
-                .and_then(|kv| kv.iter().find(|k| k.key == "kern.manifest_sha256").and_then(|k| k.value.clone()));
+            let meta = reader.metadata().file_metadata().key_value_metadata();
+            let named = |key| meta.and_then(|kv| kv.iter().find(|k| k.key == key).and_then(|k| k.value.clone()));
+            let said = [named("kern.manifest_sha256"), named("kern.rank")];
             let batches = reader.build()?.collect::<std::result::Result<Vec<RecordBatch>, _>>()?;
             let steps = batches.iter().map(steps_of).collect::<Result<Vec<_>>>()?;
-            Ok((steps.into_iter().flatten().collect(), sha))
+            Ok((steps.into_iter().flatten().collect(), said))
         };
-        let (steps, sha) = one(path).with_context(|| path.display().to_string())?;
+        let (steps, [sha, rank]) = one(path).with_context(|| path.display().to_string())?;
         t.steps.extend(steps);
         t.manifests.extend(sha);
         t.files += 1;
-        Ok(t)
-    })
+        ranks.extend(rank);
+        anyhow::Ok((t, ranks))
+    })?;
+    ensure!(
+        ranks.len() <= 1,
+        "the steps files among {} are of ranks {}, and a workload is one rank's calls: give one rank's files, \
+         as in `--trace <dir>/rank=0`",
+        given(),
+        ranks.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+    );
+    Ok(trace)
 }
 
 /// Writes the workload the traces in `o` are on the manifest at `path`,

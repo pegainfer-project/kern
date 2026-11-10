@@ -113,16 +113,18 @@ kern workload qwen3.8-27b --trace traces/date=2026-11-10 --out gate.toml
 kern workload --manifest served.json --trace steps.parquet --out loop.toml --coarse
 ```
 
-`--trace` takes steps files or directories of them; the manifest is the
-target's, or the one `--manifest` names in its place, and must be the one
-the trace was served on (the files' `kern.manifest_sha256` is checked when
-they carry one, and a step of a program the manifest does not have is
-refused either way). The manifest is what reads a step back: its program's
-`batch` says whether the call was a step or a chunk, the vars over the
-groups and rows axes say how many sequences and rows, and the step's
-summed sequence lengths less its own rows are the context. The trace keeps
-only the sums, so the context is taken as equal across the call's
-sequences, and so are a chunk's rows, to the nearest row.
+`--trace` takes one rank's steps files or directories of them (bench
+issues a call on every rank of the manifest, so a group's directory is
+given as `…/rank=0`); the manifest is the target's, or the one
+`--manifest` names in its place, and must be the one the trace was served
+on (the files' `kern.manifest_sha256` is checked when they carry one, and
+a step of a program the manifest does not have is refused either way). The
+manifest is what reads a step back: its program's `batch` says whether the
+call was a step or a chunk, the vars over the groups and rows axes say how
+many sequences and rows, and the step's summed sequence lengths less its
+own rows are the context. The trace keeps only the sums, so the context is
+taken as equal across the call's sequences, and so are a chunk's rows, to
+the nearest row.
 
 On 3.3 hours of a public Qwen3.8-27B service (2026-11-10; one sm120 GPU,
 fp8 weights, speculative rounds over up to 16 sequences, prefill in
@@ -132,7 +134,7 @@ sha256):
 ```
 trace     85284 steps · 1 file · 8621.7 s of step time · 1 from programs no caller drives · no manifest sha256 in the files to check
 buckets   58 of 141 kept · 99.04% of the step time · 1711 steps and 83.2 s left out
-fidelity  +0.53% priced at the trace's own nearest steps · worst round seqs=16,tokens=256 +1.66%
+fidelity  +0.55% priced at the trace's own nearest steps · worst prefill seqs<=1,tokens<=1024 +0.85%
 plan      58 scenarios · 0 dropped · 718272 tokens of state · 17 seqs
 out       gate.toml
 ```
@@ -160,7 +162,8 @@ plan      8 scenarios · 0 dropped · 366848 tokens of state · 17 seqs
   until they cover `--coverage` of the traced step time (default 0.99);
   the rest are counted on the `buckets` line and left out.
 - **`fidelity` is the trace pricing itself.** Each kept bucket is priced
-  at the median of the 25 traced steps nearest its sweep, and the sum is
+  at the median of the traced steps nearest its sweep (the 25 nearest in
+  context, and every step as near as the last of them), and the sum is
   held against the time the bucket's steps took. It is the error of
   standing a bucket for its steps, known before a GPU is involved;
   `worst` is the program and shape furthest off in seconds.

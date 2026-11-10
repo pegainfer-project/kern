@@ -133,6 +133,11 @@ fn a_bucket_is_priced_at_what_the_trace_measured_nearest_its_call() {
     assert_eq!((s.kept.len(), s.kept[0].context, s.kept[0].priced_ns), (1, 1150, 11. * 2150.));
     assert_eq!(s.fidelity(), (0., Some(("decode_batch seqs=2,tokens=2".into(), 0.))));
 
+    // Equally near steps all count, however many: not the fastest of them.
+    let tied: Vec<Step> = (1..=100).map(|ns| decode(2, 1150, ns)).collect();
+    let s = served(&tied, 1., false);
+    assert_eq!((s.kept[0].priced_ns, s.ns()), (100. * 51., 5050));
+
     // One slow step far from the mean is missed by the call at the mean.
     let skewed: Vec<Step> = steps.iter().cloned().chain([decode(2, 2000, 9000)]).collect();
     assert!(served(&skewed, 1., true).fidelity().0 < 0.);
@@ -213,7 +218,7 @@ fn the_workload_file_says_what_each_sweep_stands_for() {
     );
 }
 
-fn write(path: &std::path::Path, steps: &[Step], sha: &str) {
+fn write(path: &std::path::Path, steps: &[Step], sha: &str, rank: u32) {
     let text = |f: fn(&Step) -> String| Arc::new(StringArray::from_iter_values(steps.iter().map(f))) as ArrayRef;
     let named = |s: &Step| s.vars.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join(",");
     let batch = RecordBatch::try_from_iter([
@@ -226,7 +231,10 @@ fn write(path: &std::path::Path, steps: &[Step], sha: &str) {
     ])
     .unwrap();
     let meta = WriterProperties::builder()
-        .set_key_value_metadata(Some(vec![KeyValue::new("kern.manifest_sha256".to_string(), sha.to_string())]))
+        .set_key_value_metadata(Some(vec![
+            KeyValue::new("kern.manifest_sha256".to_string(), sha.to_string()),
+            KeyValue::new("kern.rank".to_string(), rank.to_string()),
+        ]))
         .build();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut w = ArrowWriter::try_new(std::fs::File::create(path).unwrap(), batch.schema(), Some(meta)).unwrap();
@@ -241,15 +249,21 @@ fn a_trace_directory_is_every_closed_steps_file_under_it() {
     let load = Step { program: "load".into(), shape: String::new(), vars: BTreeMap::new(), kv: None, ns: 5 };
     let (early, late) = (vec![load, decode(4, 100, 10)], vec![chunk(512, 1000, 30)]);
     let day = root.join("date=2026-11-10").join("rank=0");
-    write(&day.join("041500.steps.parquet"), &early, "abc");
-    write(&day.join("043000.steps.parquet"), &late, "abc");
-    write(&day.join("044500.steps.parquet.part"), &late, "open");
-    write(&day.join("041500.kernels.parquet"), &late, "not steps");
+    write(&day.join("041500.steps.parquet"), &early, "abc", 0);
+    write(&day.join("043000.steps.parquet"), &late, "abc", 0);
+    write(&day.join("044500.steps.parquet.part"), &late, "open", 0);
+    write(&day.join("041500.kernels.parquet"), &late, "not steps", 0);
 
     let t = read(std::slice::from_ref(&root)).unwrap();
     assert_eq!((t.files, t.manifests.into_iter().collect::<Vec<_>>()), (2, vec!["abc".to_string()]));
     assert_eq!(t.steps, [early.clone(), late.clone()].concat());
     assert_eq!(read(&[day.join("043000.steps.parquet")]).unwrap().steps, late);
     assert!(read(&[root.join("date=2026-11-11")]).is_err());
+
+    // A group's ranks each recorded the same calls: one rank's files are the workload.
+    write(&root.join("date=2026-11-10").join("rank=1").join("041500.steps.parquet"), &early, "abc", 1);
+    let err = read(std::slice::from_ref(&root)).unwrap_err().to_string();
+    assert!(err.contains("are of ranks 0, 1"), "{err}");
+    assert_eq!(read(std::slice::from_ref(&day)).unwrap().files, 2);
     std::fs::remove_dir_all(&root).unwrap();
 }
