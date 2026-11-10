@@ -155,9 +155,11 @@ Nothing is done until its gate closes; a PR is not done until CI is green.
   kernel noise, a confident token that flips is a bug.
 - `kern test e2e-logits` is the end-to-end numerics gate: `record` samples a
   baseline from the production manifest over a `Pegainfer/kern-prompts`
-  split, the candidate is teacher-forced along those tokens in batches
-  through its own decode path, and it passes when mean KL(baseline ‖
-  candidate) ≤ `--kl` (design, commands and calibration in `docs/test.md`).
+  split and declares its noise (what it scores replayed along its own tokens
+  in other batches), the candidate is teacher-forced along those tokens in
+  batches through its own decode path, and it passes when its mean
+  KL(baseline ‖ candidate) does not stand above that noise (design, commands
+  and calibration in `docs/test.md`).
 - `kern test <target>` records A, replays B span by span, and returns the
   noise floor, performance and verdict in one report, so a kernel swap is never discussed without its report. `kern bench
   <target> --workload <sweep.toml> --out <json>` says where a program's time

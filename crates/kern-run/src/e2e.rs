@@ -9,10 +9,12 @@
 //! rank at once so a collective finds its peers issuing, and the
 //! distribution is read back from rank 0, whose logits every rank holds
 //! whole. `record` renders the question
-//! set the way kern-serve does ([`crate::chat`]) and samples on the host;
-//! the test feeds the baseline's tokens and scores the candidate's rows
-//! against the baseline's. Neither captures a graph or pads a batch: the
-//! numbers are those of the programs the manifest declares, eager.
+//! set the way kern-serve does ([`crate::chat`]) and samples on the host,
+//! then feeds the baseline its own tokens again in batches half the size
+//! and keeps what that scores as the recording's noise; the test feeds the
+//! baseline's tokens and scores the candidate's rows against the
+//! baseline's. Neither captures a graph or pads a batch: the numbers are
+//! those of the programs the manifest declares, eager.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,8 +47,8 @@ pub struct E2eOpts {
     /// The baseline recording to score against
     #[arg(long, required = true)]
     reference: Option<PathBuf>,
-    /// The largest mean KL(baseline ‖ candidate), in nats, that still PASSes
-    #[arg(long, required = true)]
+    /// A mean KL(baseline ‖ candidate), in nats, to PASS under instead of the recording's noise
+    #[arg(long)]
     kl: Option<f64>,
     /// Write the candidate's recording here (the baseline's schema)
     #[arg(long)]
@@ -107,12 +109,7 @@ struct Load {
 pub fn run(o: E2eOpts) -> Result<i32> {
     match o.record {
         Some(Sub::Record(r)) => record(r).map(|()| 0),
-        None => test(
-            &o.load,
-            o.reference.as_deref().expect("clap requires --reference"),
-            o.kl.expect("clap requires --kl"),
-            o.out.as_deref(),
-        ),
+        None => test(&o.load, o.reference.as_deref().expect("clap requires --reference"), o.kl, o.out.as_deref()),
     }
 }
 
@@ -151,8 +148,15 @@ fn record(o: RecordOpts) -> Result<()> {
             top: s.into_iter().map(|(t, _)| t).collect(),
         })
         .collect();
+    let fed: Vec<(Vec<i64>, Vec<i64>)> =
+        prompts.iter().zip(&rows).map(|(p, r)| (p.clone(), widen(&r.output))).collect();
+    // other batches than the ones the sampling ran, so every position rounds anew
+    let other = d.groups.min(rows.len()).div_ceil(2);
+    let mut replay = Plan::forced(&fed, other, d.chunk_rows, d.chunk_scores)?;
+    let noise = d.drive(&mut replay, &names, |r, k, logits| e2e::kl(&rows[r].top[k], logits), |_| None)?;
     let meta = BTreeMap::from([
         ("producer".to_string(), d.producer.clone()),
+        ("noise_groups".to_string(), other.to_string()),
         ("questions".to_string(), format!("sha256:{}", sha256(&o.questions)?)),
         ("temperature".to_string(), sampling.temperature.to_string()),
         ("top_k".to_string(), sampling.top_k.to_string()),
@@ -161,18 +165,25 @@ fn record(o: RecordOpts) -> Result<()> {
         ("max_new".to_string(), o.max_new.to_string()),
     ]);
     let positions: usize = rows.iter().map(|r| r.output.len()).sum();
-    let rec = Recording { meta, rows };
+    let mean = noise.iter().flatten().sum::<f64>() / positions.max(1) as f64;
+    let rec = Recording { meta, rows, noise: Some(noise) };
     rec.write(&o.out)?;
     println!("{}", d.coverage());
+    println!("{}", row("noise", format!("mean KL {mean:.2e} replayed {other} at a time"), None));
     println!("{}", row("out", o.out.display().to_string(), None));
     let summary = format!("{} · {}", plural(rec.rows.len(), "row"), plural(positions, "scored position"));
     println!("{}", row("recorded", summary, Some(t0.elapsed().as_secs_f32())));
     Ok(())
 }
 
-fn test(load: &Load, reference: &Path, limit: f64, out: Option<&Path>) -> Result<i32> {
+fn test(load: &Load, reference: &Path, limit: Option<f64>, out: Option<&Path>) -> Result<i32> {
     let t0 = Instant::now();
     let base = Recording::read(reference)?;
+    ensure!(
+        limit.is_some() || base.noise.is_some(),
+        "{} declares no noise (`record` writes it): record it again, or give --kl",
+        reference.display()
+    );
     let inputs = load.inputs()?;
     let mut d = Device::load(load, &inputs)?;
     let vocab = d.vocab;
@@ -191,13 +202,14 @@ fn test(load: &Load, reference: &Path, limit: f64, out: Option<&Path>) -> Result
         &mut plan,
         &names,
         |r, k, logits| {
-            let p = Position::of(r, k, rows[r].0.len(), &base.rows[r].top[k], logits);
+            let noise = base.noise.as_ref().map_or(0.0, |n| n[r][k]);
+            let p = Position::of(r, k, rows[r].0.len(), &base.rows[r].top[k], noise, logits);
             (keep.then(|| e2e::top(logits)), p)
         },
         |_| None,
     )?;
     let positions: Vec<Position> = scored.iter().flatten().map(|(_, p)| p.clone()).collect();
-    let j = Judgment::of(&positions, limit);
+    let j = limit.map_or_else(|| Judgment::beside(&positions), |l| Judgment::of(&positions, l));
     let mut lines = [vec![d.coverage()], j.lines(&names)].concat();
     if let Some(out) = out {
         let rows = scored
@@ -205,8 +217,14 @@ fn test(load: &Load, reference: &Path, limit: f64, out: Option<&Path>) -> Result
             .zip(&base.rows)
             .map(|(s, b)| Row { top: s.into_iter().filter_map(|(t, _)| t).collect(), ..b.clone() })
             .collect();
-        let meta = base.meta.clone().into_iter().chain([("producer".to_string(), d.producer.clone())]).collect();
-        Recording { meta, rows }.write(out)?;
+        let meta = base
+            .meta
+            .iter()
+            .filter(|(k, _)| k.as_str() != "noise_groups")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .chain([("producer".to_string(), d.producer.clone())])
+            .collect();
+        Recording { meta, rows, noise: None }.write(out)?;
         lines.push(row("out", out.display().to_string(), None));
     }
     lines.iter().for_each(|l| println!("{l}"));

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use kern_test::e2e::{self, Judgment, Plan, Position, Recording, Row, Sampling, Step, Top, TOP};
+use kern_test::e2e::{self, Bar, Judgment, Plan, Position, Recording, Row, Sampling, Step, Top, TOP};
 
 /// splitmix64 over a counter: the tests' only randomness, seeded.
 struct Rand(u64);
@@ -47,15 +47,22 @@ fn a_recording_reads_back_as_written() {
         ("producer".to_string(), "m.json sha256:00".to_string()),
         ("seed".to_string(), "3".to_string()),
     ]);
-    let rec = Recording { meta, rows };
     let path = scratch("roundtrip").join("r.parquet");
-    rec.write(&path).unwrap();
-    assert_eq!(Recording::read(&path).unwrap(), rec);
+    let noise: Vec<Vec<f64>> = rows.iter().map(|r| r.output.iter().map(|&t| t as f64 * 1e-4).collect()).collect();
+    for noise in [None, Some(noise)] {
+        let rec = Recording { meta: meta.clone(), rows: rows.clone(), noise };
+        rec.write(&path).unwrap();
+        assert_eq!(Recording::read(&path).unwrap(), rec);
+    }
+    let short = Recording { noise: Some(rows.iter().map(|_| vec![0.0]).collect()), meta, rows };
+    short.write(&path).unwrap();
+    let err = Recording::read(&path).unwrap_err().to_string();
+    assert!(err.contains("row `q1` has 2 output tokens and 1 noise values"), "{err}");
 }
 
 #[test]
 fn a_recording_with_the_wrong_columns_is_named() {
-    let rec = Recording { meta: BTreeMap::new(), rows: Vec::new() };
+    let rec = Recording::default();
     let path = scratch("columns").join("r.parquet");
     rec.write(&path).unwrap();
     let err = e2e::questions(&path).unwrap_err().to_string();
@@ -245,7 +252,7 @@ fn a_sampled_plan_stops_at_a_stop_token_or_the_cap() {
 fn a_position_carries_what_the_baseline_thought_of_the_candidates_token() {
     let base = Top { ids: vec![3, 1, 0], logprobs: vec![-0.5, -1.25, -3.0] };
     let regret = |logits: &[f32]| {
-        let p = Position::of(0, 0, 0, &base, logits);
+        let p = Position::of(0, 0, 0, &base, 0.0, logits);
         (p.base, p.cand, p.flip(), p.margin, p.regret)
     };
     assert_eq!(regret(&[0.0, 1.0, 0.0, 2.0]), (3, 3, false, 0.75, 0.0));
@@ -256,12 +263,22 @@ fn a_position_carries_what_the_baseline_thought_of_the_candidates_token() {
 
 #[test]
 fn a_judgment_reads_the_positions_behind_its_mean() {
-    let at = |row, step, depth, kl, cand, regret| Position { row, step, depth, kl, margin: 1.0, regret, base: 7, cand };
+    let at = |row, step, depth, kl, cand, regret| Position {
+        row,
+        step,
+        depth,
+        kl,
+        margin: 1.0,
+        regret,
+        noise: 0.0,
+        base: 7,
+        cand,
+    };
     let ps = vec![at(0, 0, 100, 0.1, 7, 0.0), at(0, 1, 100, 0.3, 8, 1.5), at(1, 600, 40 << 10, 0.5, 9, 0.25)];
     let j = Judgment::of(&ps, 0.4);
     let depth: Vec<(usize, usize)> = j.depth.iter().map(|b| (b.from, b.positions)).collect();
     let step: Vec<(usize, usize)> = j.step.iter().map(|b| (b.from, b.positions)).collect();
-    assert_eq!((j.positions, (j.mean_kl - 0.3).abs() < 1e-12, j.pass()), (3, true, true));
+    assert_eq!((j.positions, (j.mean_kl - 0.3).abs() < 1e-12, j.pass(), &j.bar), (3, true, true, &Bar::Nats(0.4)));
     assert_eq!((j.median_kl, j.p99_kl), (0.3, 0.5));
     assert_eq!(
         (depth, step),
@@ -279,4 +296,26 @@ fn a_judgment_reads_the_positions_behind_its_mean() {
     );
     assert!(lines[4].ends_with("a step 1 (depth 100) · 7 → 8 · margin 1.000 · regret 1.500 · KL 0.300"));
     assert!(!Judgment::of(&ps, 0.2).pass() && !Judgment::of(&[], 1.0).pass());
+}
+
+#[test]
+fn a_judgment_beside_the_noise_allows_what_the_rows_scatter() {
+    let at =
+        |row, step, kl, noise| Position { row, step, depth: 10, kl, margin: 1.0, regret: 0.0, noise, base: 7, cand: 7 };
+    let noise = [(0, 0, 0.125), (0, 1, 0.25), (1, 0, 0.5), (2, 0, 0.5)];
+    let scored = |kls: [f64; 4]| -> Vec<Position> {
+        noise.iter().zip(kls).map(|(&(row, step, noise), kl)| at(row, step, kl, noise)).collect()
+    };
+    // one row above its noise, one on it, one below: on the noise, and the rows disagree
+    let j = Judgment::beside(&scored([0.25, 0.375, 0.5, 0.25]));
+    let Bar::Noise { mean_kl, excess, se } = j.bar else { panic!("{:?}", j.bar) };
+    assert_eq!((mean_kl, excess, (se - 0.1875f64.sqrt() / 4.0).abs() < 1e-15, j.pass()), (0.34375, 0.0, true, true));
+    assert_eq!(j.summary(), "mean KL 3.44e-1 ≤ noise 3.44e-1 + 3 × 1.08e-1 (1.00 × the noise) over 4 scored positions");
+    // every position a quarter nat above its noise: no row disagrees, so nothing excuses it
+    let j = Judgment::beside(&scored([0.375, 0.5, 0.75, 0.75]));
+    assert_eq!((&j.bar, j.pass()), (&Bar::Noise { mean_kl: 0.34375, excess: 0.25, se: 0.0 }, false));
+    assert_eq!(j.summary(), "mean KL 5.94e-1 > noise 3.44e-1 + 3 × 0.00e0 (1.73 × the noise) over 4 scored positions");
+    // a single row has no scatter to allow for
+    let one = Judgment::beside(&scored([0.25, 0.375, 0.5, 0.25])[..2]);
+    assert_eq!((&one.bar, one.pass()), (&Bar::Noise { mean_kl: 0.1875, excess: 0.125, se: 0.0 }, false));
 }
