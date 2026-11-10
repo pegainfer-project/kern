@@ -260,7 +260,10 @@ none of them added is the host's own kernel and stays unclaimed.
 with its kernels as `Span`s (call, kernel name, start, end in CUPTI's clock, `trace::now()`), complete
 once a graph has a record for every node, a later launch on its device has kernels, or a few collects
 brought it nothing; `unclaimed` are the kernels no issue claims (the runtime's own copies and fills,
-everything a host runs itself).
+everything a host runs itself). CUPTI delivers a graph launch's correlation record behind its kernel
+records, so a launch that stalls midway (a kernel waiting on a peer that is late) has its first kernels
+arrive long before their id: a graph's kernel with no id yet waits while a graph issued has none, and
+counts as unclaimed after a few collects otherwise.
 The joining is a pure fold over the records; the CUPTI callbacks only copy records out.
 CUPTI hands a buffer over only when asked: a periodic flush (`cuptiActivityFlushPeriod`) hands over only
 full ones, and an 8 MiB buffer holds 20–30 thousand kernels, seconds of serving. Under HES a flush seals
