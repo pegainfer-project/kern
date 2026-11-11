@@ -25,6 +25,13 @@ are closed and atomically renamed to `.parquet` at the next quarter-hour
 boundary, on `POST /kern/trace/rotate` (served on `--trace-port`), or on clean
 process exit. Globbing `*.parquet` reads only finalized files.
 
+A hosted manifest has no trace port: touching `<trace-dir>/rotate` closes its
+files instead. SGLang ends its scheduler with a signal, which is no clean
+exit, so rotate before stopping the server. Under SGLang's `--dp-size` above
+one, every replica is a group of its own and writes this layout under
+`<trace-dir>/dp=<i>` (rotated by `<trace-dir>/dp=<i>/rotate`), so `rank` stays
+the rank within a replica and `dp` reads as one more partition.
+
 Files use Zstandard compression (level 3), dictionary encoding for strings, and
 delta encoding for integer columns.
 

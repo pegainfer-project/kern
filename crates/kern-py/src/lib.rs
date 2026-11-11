@@ -33,7 +33,6 @@ mod record;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use kern_manifest::types::DType;
 use kern_manifest::Verified;
@@ -71,9 +70,6 @@ impl HostGraph {
         self.graph.launched().map_err(runtime_err)
     }
 }
-
-/// Whether this process already has a thread recording its kernels.
-static RECORDING: AtomicBool = AtomicBool::new(false);
 
 fn runtime_err(e: kern_runtime::Error) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -201,28 +197,23 @@ impl Runtime {
     /// Keep every kernel this process runs under `dir` as `rank`, in the
     /// files kern-serve's `--trace-dir` writes, each kernel of a program
     /// named by its call in this runtime's manifest. Once per process,
-    /// which `trace_start` subscribed before its first CUDA context.
+    /// which `trace_start` subscribed before its first CUDA context, until
+    /// `trace_finish`.
     #[pyo3(signature = (dir, rank=0))]
     fn record(&self, dir: PathBuf, rank: usize) -> PyResult<()> {
         if !trace::on() {
-            return Err(PyRuntimeError::new_err(
-                "tracing is off: kern.trace.start() must run before the process's first CUDA context",
-            ));
+            return Err(PyRuntimeError::new_err("tracing is off: kern.trace.start() has not run in this process"));
         }
-        if RECORDING.swap(true, Ordering::AcqRel) {
-            return Err(PyRuntimeError::new_err("this process already records its kernels"));
-        }
-        record::start(dir, rank, kern_trace::Sites::new(&self.rt.manifest), self.meta.clone()).map_err(|e| {
-            RECORDING.store(false, Ordering::Release);
-            PyRuntimeError::new_err(format!("starting the recording thread: {e}"))
-        })
+        record::start(dir, rank, kern_trace::Sites::new(&self.rt.manifest), self.meta.clone())
+            .map_err(|e| PyRuntimeError::new_err(format!("{e:#}")))
     }
 
-    /// What the host's last capture took from this runtime, once it has
-    /// ended: `None` when no program was enqueued into it, or tracing is
-    /// off.
-    fn captured(&self) -> Option<HostGraph> {
-        self.rt.captured().map(|graph| HostGraph { graph })
+    /// What the host's capture into `graph` took from this runtime, once:
+    /// `None` when no program was enqueued into it, or tracing is off.
+    /// `graph` is the address of the capture's `cudaGraph_t`, still alive:
+    /// call it as the capture ends.
+    fn captured(&self, graph: u64) -> PyResult<Option<HostGraph>> {
+        Ok(self.rt.captured(graph).map_err(runtime_err)?.map(|graph| HostGraph { graph }))
     }
 }
 
@@ -236,11 +227,19 @@ fn trace_start() -> PyResult<()> {
     }
 }
 
+/// End what `Runtime.record` started: the kernels still on their way are
+/// written and the files closed. Nothing when nothing records.
+#[pyfunction]
+fn trace_finish(py: Python<'_>) {
+    py.detach(record::finish)
+}
+
 #[pymodule]
 fn _kern(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Runtime>()?;
     m.add_class::<HostGraph>()?;
     m.add_function(wrap_pyfunction!(trace_start, m)?)?;
+    m.add_function(wrap_pyfunction!(trace_finish, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

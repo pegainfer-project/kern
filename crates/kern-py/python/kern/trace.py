@@ -14,19 +14,38 @@ kernel node while the host captured, and torch's graph hooks tell it when
 the graph is launched. The host's own kernels, inside its graphs or outside
 them, are rows no step claims.
 
-The files being written are closed, and so readable, at every quarter hour
-and whenever `<root>/rotate` is touched. A kernel reaches them up to about a
-second after it ran. An engine ends its processes with a signal nobody
-handles, which loses the pair being written: touch the file before stopping
-the engine.
+The files being written are closed, and so readable, at every quarter hour,
+whenever `<root>/rotate` is touched, and when the interpreter exits. A kernel
+reaches them up to about a second after it ran. An engine that ends its
+processes with a signal nobody handles loses the pair being written: touch
+the file before stopping such an engine.
 """
+import atexit
+import warnings
 import weakref
 
 import torch
 
-from kern._kern import trace_start as start
+from kern._kern import trace_finish, trace_start as start
 
 __all__ = ["start", "record"]
+
+
+def heard(hook):
+    """`hook`, saying the first thing it raises: torch drops what a graph hook raises, and a
+    graph the tracer lost is traced as the host's own kernels."""
+    said = []
+
+    def run(graph):
+        try:
+            hook(graph)
+        except Exception as e:
+            if not said:
+                said.append(e)
+                warnings.warn(f"kern.trace: {hook.__name__} failed, so CUDA graphs may be traced as the host's own "
+                              f"kernels: {e!r}", RuntimeWarning)
+
+    return run
 
 
 def record(rt, root: str, rank: int = 0) -> None:
@@ -37,10 +56,11 @@ def record(rt, root: str, rank: int = 0) -> None:
         raise RuntimeError(f"tracing a host's CUDA graphs needs torch.cuda.graphs' capture and replay hooks, "
                            f"which torch {torch.__version__} does not have")
     rt.record(root, rank)
+    atexit.register(trace_finish)
     taken = weakref.WeakKeyDictionary()
 
     def captured(graph):
-        programs = rt.captured()
+        programs = rt.captured(graph.raw_cuda_graph())
         if programs is None:
             taken.pop(graph, None)
         else:
@@ -54,6 +74,6 @@ def record(rt, root: str, rank: int = 0) -> None:
         if (programs := taken.get(graph)) is not None:
             programs.launched()
 
-    graphs.register_graph_capture_end_hook(captured)
-    graphs.register_graph_replay_start_hook(launching)
-    graphs.register_graph_replay_end_hook(launched)
+    graphs.register_graph_capture_end_hook(heard(captured))
+    graphs.register_graph_replay_start_hook(heard(launching))
+    graphs.register_graph_replay_end_hook(heard(launched))

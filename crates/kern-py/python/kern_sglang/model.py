@@ -155,7 +155,9 @@ class KernForCausalLM(nn.Module):
                                torch.cuda.current_device(),
                                None if self.group is None else group.topology(m, self.group))
         if root:
-            trace.record(self.rt, root, 0 if self.group is None else torch.distributed.get_rank(self.group))
+            replica = get_parallel().dp_rank
+            trace.record(self.rt, root if replica is None else os.path.join(root, f"dp={replica}"),
+                         0 if self.group is None else torch.distributed.get_rank(self.group))
         if self.group is not None:
             group.connect(self.rt, m, self.group)
         self.states = host_states(m)

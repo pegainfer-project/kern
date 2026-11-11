@@ -36,6 +36,10 @@
 //! records, so a launch that stalls midway (a kernel waiting on a peer
 //! that is late) has its first kernels arrive long before their tag: a
 //! graph's kernel without a tag waits while a graph issued has none yet.
+//! A launch that stalls on its first kernel has nothing arrive at all, so
+//! an issue waits as long for its first record; one nothing ever arrives
+//! for (the launch failed, CUPTI dropped its records) is then forgotten,
+//! and stops holding the kernels that wait.
 //!
 //! CUPTI hands a buffer over only when asked; a periodic flush would hand
 //! over only full ones, and a buffer of eight megabytes takes seconds to
@@ -53,6 +57,7 @@
 //! The joining is `Ledger::fold`, a pure function of the records; the
 //! CUPTI callbacks only copy records out of their buffers.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
@@ -69,7 +74,7 @@ const LAUNCH_BITS: u32 = 24;
 /// correlation record can land in a later buffer than the kernel's.
 const PATIENCE: u32 = 4;
 /// Folds a graph's kernel may wait for its tag while a graph issued has
-/// none yet.
+/// none yet, and an issue for its first record.
 const STALLED: u32 = 4096;
 /// Issues kept waiting for their kernels; past this the oldest go.
 const PENDING: usize = 4096;
@@ -143,7 +148,7 @@ pub struct Collected {
 struct Pending {
     issue: Issue,
     kernels: Vec<(Kernel, Option<u32>)>,
-    /// Folds since a kernel last arrived for it.
+    /// Folds since a kernel last arrived for it, or since it was issued.
     quiet: u32,
     /// Whether a tag that carries it has arrived.
     tagged: bool,
@@ -169,6 +174,7 @@ fn tag(seq: u64, launch: Launch) -> u64 {
         Launch::Graph => 0,
         Launch::Host(issues) => issues << 1,
     };
+    debug_assert!(low >> LAUNCH_BITS == 0 && launch != Launch::Host(0), "{launch:?} does not fit a tag");
     seq << LAUNCH_BITS | low
 }
 
@@ -252,7 +258,7 @@ impl Ledger {
                 None => unclaimed.push(k),
             }
         }
-        for (seq, p) in self.issues.iter_mut().filter(|(_, p)| !p.kernels.is_empty()) {
+        for (seq, p) in self.issues.iter_mut() {
             p.quiet = if touched.contains(seq) { 0 } else { p.quiet + 1 };
         }
         let done: Vec<u64> = self
@@ -262,11 +268,15 @@ impl Ledger {
                 let full = p.issue.graph && p.kernels.len() >= p.issue.kernels.len();
                 let passed =
                     p.kernels.first().is_some_and(|(k, _)| self.newest.get(&k.device).is_some_and(|n| n > seq));
-                full || passed || p.quiet >= PATIENCE
+                let patience = if p.kernels.is_empty() { STALLED } else { PATIENCE };
+                full || passed || p.quiet >= patience
             })
             .map(|(seq, _)| *seq)
             .collect();
-        let steps = done.into_iter().filter_map(|seq| self.issues.remove(&seq).map(|p| step(seq, p))).collect();
+        let steps = done
+            .into_iter()
+            .filter_map(|seq| self.issues.remove(&seq).filter(|p| !p.kernels.is_empty()).map(|p| step(seq, p)))
+            .collect();
         let live = &self.issues;
         self.links.retain(|_, tag| live.range(carried(*tag)).next().is_some());
         Collected { steps, unclaimed }
@@ -429,14 +439,31 @@ pub(crate) fn tagged<T>(seq: u64, call: Option<usize>, f: impl FnOnce() -> Resul
     r
 }
 
-/// Tags this thread for a graph of the host's that carries `issues` issues
-/// from `seq` on, until [`host_launched`].
-pub(crate) fn host_launch(seq: u64, issues: u64) -> Result<()> {
-    push(tag(seq, Launch::Host(issues)))
+thread_local! {
+    /// Whether this thread carries a host launch's tag. A host whose launch
+    /// failed between the two calls may never make the second, or make it
+    /// without the first.
+    static HOSTING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Tags this thread for a graph of the host's that carries `issues`, which
+/// are registered once the tag is on, until [`host_launched`].
+pub(crate) fn host_launch(issues: Vec<Issue>) -> Result<()> {
+    host_launched()?;
+    let seq = SEQ.fetch_add(issues.len() as u64, Ordering::Relaxed);
+    push(tag(seq, Launch::Host(issues.len() as u64)))?;
+    HOSTING.set(true);
+    ISSUED.lock().unwrap_or_else(|e| e.into_inner()).extend((seq..).zip(issues));
+    Ok(())
+}
+
+/// Takes the tag of [`host_launch`] off this thread; nothing when it
+/// carries none.
 pub(crate) fn host_launched() -> Result<()> {
-    pop()
+    match HOSTING.replace(false) {
+        true => pop(),
+        false => Ok(()),
+    }
 }
 
 /// A graph node's local id, the half of CUPTI's id its records keep
@@ -669,6 +696,21 @@ mod tests {
         let other = Kernel { correlation: 6, ..node(30, 20) };
         let c = l.fold(vec![node(10, 10), other], vec![(5, tag(1, Launch::Graph))]);
         assert_eq!((calls(&c), c.unclaimed.len()), (vec![(1, vec![Some(0)])], 0));
+        let later: Vec<usize> = (0..PATIENCE).map(|_| l.fold(Vec::new(), Vec::new()).unclaimed.len()).collect();
+        assert_eq!(later, vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn an_issue_nothing_arrives_for_is_forgotten_and_stops_holding_graph_kernels() {
+        let mut l = Ledger::new();
+        // The launch of issue 1 failed, or CUPTI dropped its records: no kernel, no tag.
+        l.issue(1, graph(&[(10, 0)]));
+        let steps: usize = (1..STALLED).map(|_| l.fold(Vec::new(), Vec::new()).steps.len()).sum();
+        assert_eq!((steps, l.issues.len()), (0, 1));
+        // Correlation 6 is a graph the host launched untagged, held while issue 1 may be stalled.
+        let other = Kernel { correlation: 6, ..node(30, 20) };
+        let c = l.fold(vec![other], Vec::new());
+        assert_eq!((c.steps.len(), c.unclaimed.len(), l.issues.len()), (0, 0, 0));
         let later: Vec<usize> = (0..PATIENCE).map(|_| l.fold(Vec::new(), Vec::new()).unclaimed.len()).collect();
         assert_eq!(later, vec![0, 0, 0, 1]);
     }

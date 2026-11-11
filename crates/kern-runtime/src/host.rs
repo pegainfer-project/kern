@@ -28,12 +28,15 @@
 //! A graph the host captured is launched by the host, with no call into
 //! the runtime, so the tracer ([`crate::trace`]) needs two things from the
 //! host. While tracing, a program enqueued into a capture keeps the call
-//! that added each of its kernel nodes; once the capture has ended,
-//! [`Runtime::captured`] hands the host what it took as a [`HostGraph`],
-//! and the host brackets every launch of that graph with
+//! that added each of its kernel nodes; as the capture ends,
+//! [`Runtime::captured`] hands the host what that graph took as a
+//! [`HostGraph`], and the host brackets every launch of the graph with
 //! [`HostGraph::launching`] and [`HostGraph::launched`]. Each launch is
 //! then one step per program, and the graph's other nodes, the host's own
-//! kernels, belong to no step.
+//! kernels, belong to no step. The host names the graph it asks for: a
+//! capture whose end the host never reports (another library's, or one
+//! that failed) leaves its programs untaken, and the next graph, which
+//! holds none of them, must not launch as them.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -62,42 +65,81 @@ pub struct HostRegion {
 pub struct HostGraph(Vec<trace::Issue>);
 
 impl HostGraph {
-    /// Registers one issue per program and tags the calling thread, so the
+    /// Tags the calling thread and registers one issue per program, so the
     /// launch of the graph the host makes next on it is theirs, until
-    /// [`HostGraph::launched`] on the same thread.
+    /// [`HostGraph::launched`] on the same thread. A launch that never
+    /// reached `launched` is ended first.
     pub fn launching(&self) -> Result<()> {
-        trace::host_launch(trace::begin(self.0.clone()), self.0.len() as u64)
+        trace::host_launch(self.0.clone())
     }
 
+    /// Ends what `launching` began on this thread; nothing when it began
+    /// nothing.
     pub fn launched(&self) -> Result<()> {
         trace::host_launched()
     }
 }
 
-impl Runtime {
-    /// Keeps a program enqueued into the host's capture `capture` with the
-    /// call that added each of its kernel nodes, dropping what an earlier
+/// While tracing, the programs enqueued into the last host capture that
+/// took any, until the host takes them.
+#[derive(Debug, Default)]
+pub(crate) struct Hosted {
+    /// The capture's id, which no other capture of the process has.
+    capture: u64,
+    /// The id of the graph it captures into.
+    graph: u32,
+    programs: Vec<trace::Issue>,
+}
+
+impl Hosted {
+    /// Adds a program enqueued into `capture`, dropping what an earlier
     /// capture left untaken.
-    pub(crate) fn keep(&self, capture: u64, program: &str, vars: Vec<(String, u64)>, kernels: BTreeMap<u32, u32>) {
-        let mut kept = self.hosted.lock().unwrap_or_else(|e| e.into_inner());
-        if kept.0 != capture {
-            *kept = (capture, Vec::new());
+    fn keep(&mut self, capture: u64, graph: u32, program: trace::Issue) {
+        if self.capture != capture {
+            *self = Hosted { capture, graph, programs: Vec::new() };
         }
-        kept.1.push(trace::Issue {
-            program: program.to_string(),
-            vars,
-            graph: true,
-            kv: None,
-            kernels: Arc::new(kernels),
-        });
+        self.programs.push(program);
     }
 
-    /// What the host's last capture took from this runtime, once: `None`
-    /// when no program was enqueued into it, or the tracer is off. Call it
-    /// when the capture has ended.
-    pub fn captured(&self) -> Option<HostGraph> {
-        let programs = std::mem::take(&mut self.hosted.lock().unwrap_or_else(|e| e.into_inner()).1);
-        (!programs.is_empty()).then_some(HostGraph(programs))
+    /// The programs kept for `graph`, once; another graph's stay.
+    fn take(&mut self, graph: u32) -> Option<HostGraph> {
+        (self.graph == graph && !self.programs.is_empty()).then(|| HostGraph(std::mem::take(&mut self.programs)))
+    }
+}
+
+/// A graph's id: CUDA numbers the graphs of a process.
+fn graph_id(graph: sys::CUgraph) -> Result<u32> {
+    let mut id = 0;
+    cuda_check(unsafe { sys::cuGraphGetId(graph, &mut id) }, "cuGraphGetId")?;
+    Ok(id)
+}
+
+impl Runtime {
+    /// Keeps a program enqueued into the host's capture `capture` into
+    /// `graph`, with the call that added each of its kernel nodes.
+    pub(crate) fn keep(
+        &self,
+        (capture, graph): (u64, sys::CUgraph),
+        program: &str,
+        vars: Vec<(String, u64)>,
+        kernels: BTreeMap<u32, u32>,
+    ) -> Result<()> {
+        let program =
+            trace::Issue { program: program.to_string(), vars, graph: true, kv: None, kernels: Arc::new(kernels) };
+        self.hosted.lock().unwrap_or_else(|e| e.into_inner()).keep(capture, graph_id(graph)?, program);
+        Ok(())
+    }
+
+    /// What the host's capture into the graph at `graph` took from this
+    /// runtime, once: `None` when no program was enqueued into it, or the
+    /// tracer is off. `graph` is the address of the capture's `CUgraph`,
+    /// which must be alive: call it as the capture ends.
+    pub fn captured(&self, graph: u64) -> Result<Option<HostGraph>> {
+        let mut kept = self.hosted.lock().unwrap_or_else(|e| e.into_inner());
+        match kept.programs.is_empty() {
+            true => Ok(None),
+            false => Ok(kept.take(graph_id(graph as sys::CUgraph)?)),
+        }
     }
 
     /// Bind every host state to the host's memory and compile the programs.
@@ -181,5 +223,37 @@ impl Runtime {
     /// Whether the manifest has host states still waiting for [`Runtime::bind_host`].
     pub fn awaits_host(&self) -> bool {
         self.manifest.states.keys().any(|n| !self.states.contains_key(n))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn program(name: &str) -> trace::Issue {
+        trace::Issue { program: name.into(), vars: Vec::new(), graph: true, kv: None, kernels: Arc::default() }
+    }
+
+    fn names(g: Option<HostGraph>) -> Option<Vec<String>> {
+        g.map(|g| g.0.into_iter().map(|i| i.program).collect())
+    }
+
+    #[test]
+    fn a_captures_programs_go_to_its_own_graph_once() {
+        let mut kept = Hosted::default();
+        kept.keep(7, 3, program("decode"));
+        kept.keep(7, 3, program("head"));
+        // Graph 4 ended its capture first and holds none of them.
+        assert_eq!(names(kept.take(4)), None);
+        assert_eq!(names(kept.take(3)), Some(vec!["decode".into(), "head".into()]));
+        assert_eq!(names(kept.take(3)), None);
+    }
+
+    #[test]
+    fn a_capture_nobody_took_is_dropped_by_the_next_that_keeps() {
+        let mut kept = Hosted::default();
+        kept.keep(7, 3, program("decode"));
+        kept.keep(8, 5, program("head"));
+        assert_eq!((names(kept.take(3)), names(kept.take(5))), (None, Some(vec!["head".into()])));
     }
 }
