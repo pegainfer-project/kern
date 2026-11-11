@@ -304,6 +304,7 @@ golden-checked in CI:
 | `crates/kern-pool` | KV pages, state slots, prefix cache (pure, no CUDA) |
 | `crates/kern-runtime` | The executor: fetch, verify, allocate, CUDA graphs |
 | `crates/kern-test` | The `kern test` harness: diff, tap, noise floor, fuzz, perf, verdict (pure, no CUDA) |
+| `crates/kern-trace` | The trace on disk: a rank's kernels and steps as Parquet |
 | `crates/kern-run` | The `kern` binary: `run`, `test`, `bench`, `server`, `verify`, `cut`, `kernels` |
 | `crates/kern-serve` | Continuous batching and the OpenAI-compatible endpoint |
 | `crates/kern-py` | `pip install kern-llm`: `import kern`, and the vLLM and SGLang plugins |

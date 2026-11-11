@@ -12,7 +12,7 @@
 //! (logprobs; a draw from a manifest without sampling fills) is declared to
 //! infront, which refuses it at the HTTP layer. With `--trace` each
 //! rank also counts what its device did (`kernels`) and, with
-//! `--trace-dir`, keeps every kernel on disk (`recorder`). The crate's
+//! `--trace-dir`, keeps every kernel on disk (kern-trace). The crate's
 //! public surface is [`serve`], its option structs, and the accounting,
 //! protocols and packing policy its tests drive.
 
@@ -27,7 +27,6 @@ pub mod pd;
 mod pool;
 mod pp;
 pub mod ranks;
-mod recorder;
 pub mod scheduler;
 mod watch;
 
@@ -292,13 +291,7 @@ fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
         Verified::from_json(&manifest_json).with_context(|| format!("manifest {}", art.manifest.display()))?;
     log_manifest(&manifest);
     if o.trace {
-        use sha2::Digest;
-        let meta = vec![
-            ("kern.rank".to_string(), o.rank.unwrap_or(0).to_string()),
-            ("kern.model".to_string(), manifest.model.clone()),
-            ("kern.manifest_sha256".to_string(), hex::encode(sha2::Sha256::digest(manifest_json.as_bytes()))),
-            ("kern.version".to_string(), kern_run::VERSION.clone()),
-        ];
+        let meta = kern_trace::meta(&manifest, &manifest_json, &kern_run::VERSION);
         let board = kernels::start(&manifest, o.rank.unwrap_or(0), o.trace_dir.clone(), meta)?;
         if let Some(port) = o.trace_port {
             kernels::serve(board, port)?;

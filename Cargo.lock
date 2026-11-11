@@ -2240,8 +2240,6 @@ name = "kern-serve"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "arrow-array",
- "arrow-schema",
  "axum",
  "clap",
  "hex",
@@ -2252,9 +2250,9 @@ dependencies = [
  "kern-pool",
  "kern-run",
  "kern-runtime",
+ "kern-trace",
  "libc",
  "mooncake_store",
- "parquet",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2276,6 +2274,20 @@ dependencies = [
  "parquet",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "kern-trace"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-schema",
+ "hex",
+ "kern-manifest",
+ "kern-runtime",
+ "parquet",
+ "sha2 0.11.0",
 ]
 
 [[package]]
