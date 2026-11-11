@@ -9,6 +9,7 @@ The JSON Schema is generated from the Rust manifest types and checked into the
 repository:
 
 - [Browse the rendered schema](https://kern-baa.pages.dev/schema/)
+- [Inspect a manifest in Studio](https://kern-baa.pages.dev/studio/)
 - [Download `manifest-v7.schema.json`](https://kern-baa.pages.dev/schema/manifest-v7.schema.json)
 - [View the source on GitHub](https://github.com/pegainfer-project/kern/blob/master/schema/manifest-v7.schema.json)
 
