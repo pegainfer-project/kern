@@ -3,6 +3,37 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-11-10, a synchronize that spins while the GPU is idle: A/B the instrumentation first
+
+`kern bench` over 141 scenarios that `kern workload` made from a served trace of Qwen3.8-27B FP8 with
+DSpine speculative decoding (programs `prefill` and `round`) stopped making progress partway and never
+returned, with no error and nothing logged. One GB300 (sm_103, aarch64), driver 610.57.04 (open kernel
+module, CUDA 13.3), CUPTI 13.4.46, master at `6a547fe`. The first six scenarios reproduce it: every run
+stalls at the 6th. The host thread spins in user mode in `Probe::sample` →
+`CudaStream::synchronize` → `cuStreamSynchronize`, which has no deadline, while the GPU reads 0%
+utilization at about 293 W, against 65-100% and 600-770 W for a running scenario. The first suspect, the
+sampler's multi-CTA radix top-k with its software barrier between CTAs, was wrong twice over: a control
+bundle using another GPU's partition stalls the same way, and a spinning barrier would keep the GPU busy.
+What decided it was an A/B on HES alone, which `kern bench` turns on unconditionally (`trace::start`):
+one diagnostic build of master whose only change is an environment switch for `ENABLE_HES`, on the same
+workload and GPU. With HES on it stalls at the 6th as master does; with HES off it finishes the six in
+38 s and all 141 in 233 s (job wall time) with no kernel record dropped, its p50s 0.3-0.8% above HES on
+the scenarios HES completed.
+
+With HES on, no single thing triggers it: each of the six passes alone, four two-scenario pairs pass,
+8 tiny scenarios x 21 replays and 4 x 69 pass, three copies of the largest `round` scenario (18,624 page
+copies) pass, and a new order moves the stall to whichever scenario is now 6th. Something accumulates
+across scenarios. What it is, and whether the fault is in CUPTI, the driver or how kern bench uses them,
+is not known; only this one GPU on one machine was tested. After a stall HES on that GPU is healthy (a
+standalone CUPTI probe gets 282,007 of 282,007 records, none zero), so this is not the failure where HES
+returns zero timestamps until the GPU is reset. CUPTI's CUDA 13.5 release notes list "Fixed several
+failures, crashes, and hangs when tracing CUDA graph workloads on Blackwell GPUs"; whether that is this
+one was not tested.
+
+Rule: a synchronize that never returns while the GPU reads idle is not a kernel hang; A/B the
+instrumentation, HES first, before reading kernels. On this driver and CUPTI, a bench of more than a few
+scenarios needs software timestamps, which master cannot select yet.
+
 ## 2026-11-05, `pdl` is the kernel's promise, and no neighbour covers for it
 
 K3.1 D moved q_b + absorb to lane 1, beside the indexer chain (lanes' first real model). s64 was
