@@ -30,13 +30,22 @@ export LD_LIBRARY_PATH=/opt/cupti/nvidia/cu13/lib:$LD_LIBRARY_PATH
 
 ## Qwen3.8-27B on one GPU
 
-The bundle is the one [Run a model](/guides/run-a-model) uses; its `-sglang` manifests
-run on SGLang's memory. The server is started as usual, with `KERN_TRACE_DIR`
-added:
+Start SGLang's image with the directory the trace goes to mounted from the
+host:
+
+```sh
+docker run -it --gpus '"device=0"' --network host --ipc host --shm-size 16g \
+  -v ~/.cache/huggingface:/root/.cache/huggingface -v /var/kern-trace:/var/kern-trace \
+  lmsysorg/sglang:dev-kimi-k31-pro-cu134 bash
+```
+
+Inside it, install kern and fetch the model's bundle, the one
+[Run a model](/guides/run-a-model) uses; its `-sglang` manifests run on SGLang's
+memory. The server is then started as usual, with `KERN_TRACE_DIR` added:
 
 ```sh
 pip install "kern-llm>=0.5.0"
-hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
+python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Pegainfer/kern-qwen38-sm103', local_dir='kern-qwen38')"
 
 KERN_TRACE_DIR=/var/kern-trace \
 KERN_MANIFEST=kern-qwen38/manifests/qwen3.8-27b-rsi-sglang.json KERN_KERNELS=kern-qwen38/cubins \
@@ -46,12 +55,13 @@ sglang serve --model-path Qwen/Qwen3.8-27B \
   --chunked-prefill-size 8192
 ```
 
-Serve traffic as usual, then close the pair of files being written:
+Serve traffic as usual, then close the pair of files being written, from the
+host or inside the container:
 
 ```sh
 touch /var/kern-trace/rotate
 ls /var/kern-trace/date=*/rank=0/
-# 092934.kernels.parquet  092934.steps.parquet
+# 095324.kernels.parquet  095324.steps.parquet
 ```
 
 A pair also closes by itself at every quarter hour. SGLang ends its scheduler
@@ -74,7 +84,7 @@ kern runs Kimi-K3.1 Pro's decode at TP8 / DCP8 over two nodes of four GPUs as
 the decode instance of an SGLang prefill/decode deployment; the deployment is
 [kern-k31's](https://github.com/pegainfer-project/kern-k31/blob/main/docs/try-in-sglang.md).
 Tracing it is the same variable in the environment of both decode servers,
-with `kern-llm` 0.5.0 or newer installed on those nodes:
+in the same image, with `kern-llm` 0.5.0 or newer installed on those nodes:
 
 ```sh
 export KERN_TRACE_DIR=/var/kern-trace   # then the decode command of that page, unchanged
