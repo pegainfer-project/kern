@@ -310,6 +310,7 @@ impl Runtime {
             graphs: BTreeMap::new(),
             traced: BTreeMap::new(),
             kv: std::sync::atomic::AtomicU64::new(crate::trace::NO_KV),
+            hosted: std::sync::Mutex::new((0, Vec::new())),
             eager: false,
             gpu,
             nccl: BTreeMap::new(),

@@ -276,6 +276,25 @@ impl Drop for Fetch {
     }
 }
 
+/// The local ids of the kernel nodes in the capture graph not in `seen`,
+/// which takes every node. Side lanes capture into lane 0's graph, so
+/// their nodes are there too.
+fn new_kernel_nodes(graph: sys::CUgraph, seen: &mut BTreeSet<usize>) -> Result<Vec<u32>> {
+    let mut n = 0;
+    cuda_check(unsafe { sys::cuGraphGetNodes(graph, std::ptr::null_mut(), &mut n) }, "cuGraphGetNodes")?;
+    let mut nodes = vec![std::ptr::null_mut(); n];
+    cuda_check(unsafe { sys::cuGraphGetNodes(graph, nodes.as_mut_ptr(), &mut n) }, "cuGraphGetNodes")?;
+    let mut kernels = Vec::new();
+    for node in nodes.into_iter().filter(|node| seen.insert(*node as usize)) {
+        let mut t = sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_EMPTY;
+        cuda_check(unsafe { sys::cuGraphNodeGetType(node, &mut t) }, "cuGraphNodeGetType")?;
+        if t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL {
+            kernels.push(trace::node(node)?);
+        }
+    }
+    Ok(kernels)
+}
+
 impl Runtime {
     fn signal(&self, f: sys::CUfunction, word: u64, value: u64, what: &str) -> Result<()> {
         self.ctx.bind_to_thread()?;
@@ -443,13 +462,23 @@ impl Runtime {
         if !trace::on() {
             return self.replay(prog, &vars);
         }
-        let seq = trace::begin(trace::Issue {
+        let named = vars.named(&self.manifest, &prog.vars);
+        if let Some((capture, graph)) = self.capturing()? {
+            // The host is capturing: nothing runs now, and its graph holds
+            // nodes already, so only what each call adds is the program's.
+            let mut seen = BTreeSet::new();
+            new_kernel_nodes(graph, &mut seen)?;
+            let kernels = self.replay_counted(prog, &vars, seen)?;
+            self.keep(capture, program, named, kernels);
+            return Ok(());
+        }
+        let seq = trace::begin(vec![trace::Issue {
             program: program.to_string(),
-            vars: vars.named(&self.manifest, &prog.vars),
+            vars: named,
             graph: false,
             kv: self.take_kv(),
             kernels: Arc::default(),
-        });
+        }]);
         self.replay_each(prog, &vars, |c, issue| trace::tagged(seq, Some(c), issue))
     }
 
@@ -495,7 +524,7 @@ impl Runtime {
             "cuStreamBeginCapture",
         )?;
         let replayed = match trace::on() {
-            true => self.replay_counted(prog, vars),
+            true => self.replay_counted(prog, vars, BTreeSet::new()),
             false => self.replay(prog, vars).map(|()| BTreeMap::new()),
         };
         // Always end the capture, even on error — a stream stuck in capture
@@ -523,31 +552,40 @@ impl Runtime {
         Some(self.kv.swap(trace::NO_KV, Ordering::Relaxed)).filter(|&v| v != trace::NO_KV)
     }
 
-    /// Replay into the capture, keeping per kernel node, by its local id,
-    /// the call that added it.
-    fn replay_counted(&self, prog: &CompiledProgram, vars: &Dense) -> Result<BTreeMap<u32, u32>> {
-        let mut seen = BTreeSet::new();
+    /// Replay into the capture the compute stream is in, keeping per
+    /// kernel node, by its local id, the call that added it. `seen` is the
+    /// nodes the capture's graph held before.
+    fn replay_counted(
+        &self,
+        prog: &CompiledProgram,
+        vars: &Dense,
+        mut seen: BTreeSet<usize>,
+    ) -> Result<BTreeMap<u32, u32>> {
         let mut calls = BTreeMap::new();
         self.replay_each(prog, vars, |c, issue| {
             issue()?;
-            calls.extend(self.new_kernel_nodes(&mut seen)?.into_iter().map(|n| (n, c as u32)));
+            let Some((_, graph)) = self.capturing()? else {
+                bail!(Cuda, "the compute stream left its capture while a program was replayed into it");
+            };
+            calls.extend(new_kernel_nodes(graph, &mut seen)?.into_iter().map(|n| (n, c as u32)));
             Ok(())
         })?;
         Ok(calls)
     }
 
-    /// The local ids of the kernel nodes in the capture graph not in
-    /// `seen`, which takes every node. Side lanes capture into lane 0's
-    /// graph, so their nodes are there too.
-    fn new_kernel_nodes(&self, seen: &mut BTreeSet<usize>) -> Result<Vec<u32>> {
+    /// The capture the compute stream is in, its own or one it joined by
+    /// waiting on a capturing stream's event: the capture's id, unique in
+    /// the process, and its graph.
+    fn capturing(&self) -> Result<Option<(u64, sys::CUgraph)>> {
         let mut status = sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE;
+        let mut id = 0;
         let mut graph: sys::CUgraph = std::ptr::null_mut();
         cuda_check(
             unsafe {
                 sys::cuStreamGetCaptureInfo_v3(
                     self.stream.cu_stream(),
                     &mut status,
-                    std::ptr::null_mut(),
+                    &mut id,
                     &mut graph,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -556,19 +594,7 @@ impl Runtime {
             },
             "cuStreamGetCaptureInfo",
         )?;
-        let mut n = 0;
-        cuda_check(unsafe { sys::cuGraphGetNodes(graph, std::ptr::null_mut(), &mut n) }, "cuGraphGetNodes")?;
-        let mut nodes = vec![std::ptr::null_mut(); n];
-        cuda_check(unsafe { sys::cuGraphGetNodes(graph, nodes.as_mut_ptr(), &mut n) }, "cuGraphGetNodes")?;
-        let mut kernels = Vec::new();
-        for node in nodes.into_iter().filter(|node| seen.insert(*node as usize)) {
-            let mut t = sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_EMPTY;
-            cuda_check(unsafe { sys::cuGraphNodeGetType(node, &mut t) }, "cuGraphNodeGetType")?;
-            if t == sys::CUgraphNodeType::CU_GRAPH_NODE_TYPE_KERNEL {
-                kernels.push(trace::node(node)?);
-            }
-        }
-        Ok(kernels)
+        Ok((status == sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE).then_some((id, graph)))
     }
 
     /// Whether `capture(program, vars)` has been done for exactly these var
@@ -639,13 +665,13 @@ impl Runtime {
         kernels: Arc<BTreeMap<u32, u32>>,
     ) -> Result<u64> {
         self.ctx.bind_to_thread()?;
-        let seq = trace::begin(trace::Issue {
+        let seq = trace::begin(vec![trace::Issue {
             program: program.to_string(),
             vars: vars.named(&self.manifest, &self.programs[program].vars),
             graph: true,
             kv: self.take_kv(),
             kernels,
-        });
+        }]);
         trace::tagged(seq, None, || {
             cuda_check(unsafe { sys::cuGraphLaunch(exec, self.stream.cu_stream()) }, "cuGraphLaunch")
         })?;

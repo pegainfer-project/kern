@@ -24,15 +24,26 @@
 //! [`Runtime::region`] hands the host the address of a runtime buffer, so it
 //! writes inputs and reads outputs in its own stream order instead of
 //! through the runtime's staging.
+//!
+//! A graph the host captured is launched by the host, with no call into
+//! the runtime, so the tracer ([`crate::trace`]) needs two things from the
+//! host. While tracing, a program enqueued into a capture keeps the call
+//! that added each of its kernel nodes; once the capture has ended,
+//! [`Runtime::captured`] hands the host what it took as a [`HostGraph`],
+//! and the host brackets every launch of that graph with
+//! [`HostGraph::launching`] and [`HostGraph::launched`]. Each launch is
+//! then one step per program, and the graph's other nodes, the host's own
+//! kernels, belong to no step.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use cudarc::driver::sys;
 use kern_manifest::types::DType;
 
 use crate::device::DeviceBuf;
 use crate::error::{bail, cuda_check};
-use crate::{compile, Error, Result, Runtime};
+use crate::{compile, trace, Error, Result, Runtime};
 
 /// A host tensor as the host has it: its address, element type, extents and
 /// element strides, outermost first.
@@ -44,7 +55,51 @@ pub struct HostRegion {
     pub strides: Vec<u64>,
 }
 
+/// The programs one capture of the host's took from the runtime, in the
+/// order they were enqueued: what a launch of that graph issues. Never
+/// empty.
+#[derive(Debug, Clone)]
+pub struct HostGraph(Vec<trace::Issue>);
+
+impl HostGraph {
+    /// Registers one issue per program and tags the calling thread, so the
+    /// launch of the graph the host makes next on it is theirs, until
+    /// [`HostGraph::launched`] on the same thread.
+    pub fn launching(&self) -> Result<()> {
+        trace::host_launch(trace::begin(self.0.clone()), self.0.len() as u64)
+    }
+
+    pub fn launched(&self) -> Result<()> {
+        trace::host_launched()
+    }
+}
+
 impl Runtime {
+    /// Keeps a program enqueued into the host's capture `capture` with the
+    /// call that added each of its kernel nodes, dropping what an earlier
+    /// capture left untaken.
+    pub(crate) fn keep(&self, capture: u64, program: &str, vars: Vec<(String, u64)>, kernels: BTreeMap<u32, u32>) {
+        let mut kept = self.hosted.lock().unwrap_or_else(|e| e.into_inner());
+        if kept.0 != capture {
+            *kept = (capture, Vec::new());
+        }
+        kept.1.push(trace::Issue {
+            program: program.to_string(),
+            vars,
+            graph: true,
+            kv: None,
+            kernels: Arc::new(kernels),
+        });
+    }
+
+    /// What the host's last capture took from this runtime, once: `None`
+    /// when no program was enqueued into it, or the tracer is off. Call it
+    /// when the capture has ended.
+    pub fn captured(&self) -> Option<HostGraph> {
+        let programs = std::mem::take(&mut self.hosted.lock().unwrap_or_else(|e| e.into_inner()).1);
+        (!programs.is_empty()).then_some(HostGraph(programs))
+    }
+
     /// Bind every host state to the host's memory and compile the programs.
     /// Each region must be the layout the manifest declares; nothing is
     /// bound unless every one is. Binding again replaces the previous binding.

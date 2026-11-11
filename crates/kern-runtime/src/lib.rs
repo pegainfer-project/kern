@@ -64,7 +64,7 @@ use error::{bail, cuda_check};
 pub use error::{Error, Result};
 pub use exec::{Fetch, Gate, Mark};
 pub use harness::Scratch;
-pub use host::HostRegion;
+pub use host::{HostGraph, HostRegion};
 pub use host_weights::HostWeights;
 use kern_pool::{page_unit, row_tokens, Pool};
 pub use load::Resident;
@@ -188,6 +188,9 @@ pub struct Runtime {
     /// While tracing, the sum of the `seq_len` fill last written, which
     /// the next issue takes ([`trace::NO_KV`]: none since the last).
     kv: std::sync::atomic::AtomicU64,
+    /// While tracing, the programs enqueued into the host's capture of
+    /// this id, until [`Runtime::captured`] takes them.
+    hosted: std::sync::Mutex<(u64, Vec<trace::Issue>)>,
     /// Debug override: [`Runtime::issue`] launches every program eagerly,
     /// whatever its manifest says.
     eager: bool,
