@@ -1,0 +1,325 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 468" width="1220" height="468">
+<rect x="0.0" y="0.0" width="1220.0" height="468.0" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0"/>
+<text x="28.0" y="38.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="20.0" font-weight="700" fill="#0F172A" text-anchor="start">Build a Benchmark Workload from Live Traffic</text>
+<text x="1192.0" y="37.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.2" font-weight="500" fill="#64748B" text-anchor="end">Qwen3.8-27B FP8  ·  <tspan fill="#0F172A" font-weight="700">7h 21m online → 6m 20s offline</tspan></text>
+<line x1="28.0" y1="52.0" x2="1192.0" y2="52.0" stroke="#0F172A" stroke-width="1.1"/>
+<rect x="28.0" y="68.0" width="348.0" height="376.0" rx="8.0" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.0"/>
+<text x="46.0" y="97.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="14.5" font-weight="700" fill="#0F172A" text-anchor="start">(a) Online Trace</text>
+<rect x="300.6" y="80.0" width="59.4" height="22.0" rx="5.0" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.0"/>
+<text x="330.3" y="94.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.5" font-weight="600" fill="#1E293B" text-anchor="middle">--trace</text>
+<line x1="44.0" y1="112.0" x2="360.0" y2="112.0" stroke="#E2E8F0" stroke-width="1.0"/>
+<rect x="436.0" y="68.0" width="348.0" height="376.0" rx="8.0" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.0"/>
+<text x="454.0" y="97.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="14.5" font-weight="700" fill="#0F172A" text-anchor="start">(b) Shape × KV Buckets</text>
+<rect x="671.4" y="80.0" width="96.6" height="22.0" rx="5.0" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.0"/>
+<text x="719.7" y="94.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.5" font-weight="600" fill="#1E293B" text-anchor="middle">kern workload</text>
+<line x1="452.0" y1="112.0" x2="768.0" y2="112.0" stroke="#E2E8F0" stroke-width="1.0"/>
+<rect x="844.0" y="68.0" width="348.0" height="376.0" rx="8.0" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.0"/>
+<text x="862.0" y="97.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="14.5" font-weight="700" fill="#0F172A" text-anchor="start">(c) Offline Replay</text>
+<rect x="1098.0" y="80.0" width="78.0" height="22.0" rx="5.0" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.0"/>
+<text x="1137.0" y="94.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.5" font-weight="600" fill="#1E293B" text-anchor="middle">kern bench</text>
+<line x1="860.0" y1="112.0" x2="1176.0" y2="112.0" stroke="#E2E8F0" stroke-width="1.0"/>
+<line x1="386.0" y1="256.0" x2="420.0" y2="256.0" stroke="#0F172A" stroke-width="1.8" stroke-linecap="round"/>
+<polygon points="426.0,256.0 418.0,251.7 418.0,260.3" fill="#0F172A"/>
+<text x="406.0" y="246.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="10.0" font-weight="700" fill="#0F172A" text-anchor="middle">1,667×</text>
+<text x="406.0" y="272.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="9.5" font-weight="400" fill="#64748B" text-anchor="middle" font-style="italic">fold</text>
+<line x1="794.0" y1="256.0" x2="828.0" y2="256.0" stroke="#0F172A" stroke-width="1.8" stroke-linecap="round"/>
+<polygon points="834.0,256.0 826.0,251.7 826.0,260.3" fill="#0F172A"/>
+<text x="814.0" y="246.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="10.0" font-weight="700" fill="#0F172A" text-anchor="middle">70×</text>
+<text x="814.0" y="272.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="9.5" font-weight="400" fill="#64748B" text-anchor="middle" font-style="italic">faster</text>
+<circle cx="88" cy="127" r="3.6" fill="#EA580C"/>
+<text x="97.0" y="131.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.8" font-weight="500" fill="#334155" text-anchor="start">prefill</text>
+<circle cx="152" cy="127" r="3.6" fill="#2B5C8F"/>
+<text x="161.0" y="131.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.8" font-weight="500" fill="#334155" text-anchor="start">round</text>
+<text x="356.0" y="131.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.2" font-weight="400" fill="#64748B" text-anchor="end">CUPTI HES · 0 sync</text>
+<rect x="84.0" y="140.0" width="272.0" height="134.0" rx="3.0" fill="#FCFDFE" stroke="#E2E8F0" stroke-width="0.9"/>
+<line x1="84.0" y1="158.8" x2="356.0" y2="158.8" stroke="#E2E8F0" stroke-width="0.8" stroke-dasharray="3 3"/>
+<text x="78.0" y="162.3" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="400" fill="#64748B" text-anchor="end">1M</text>
+<line x1="84.0" y1="204.3" x2="356.0" y2="204.3" stroke="#E2E8F0" stroke-width="0.8" stroke-dasharray="3 3"/>
+<text x="78.0" y="207.8" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="400" fill="#64748B" text-anchor="end">128k</text>
+<line x1="84.0" y1="252.6" x2="356.0" y2="252.6" stroke="#E2E8F0" stroke-width="0.8" stroke-dasharray="3 3"/>
+<text x="78.0" y="256.1" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="400" fill="#64748B" text-anchor="end">16k</text>
+<text x="46" y="207.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.2" fill="#64748B" text-anchor="middle" transform="rotate(-90 46 207.0)">Summed KV</text>
+<circle cx="336.8" cy="240.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="141.9" cy="153.5" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="102.6" cy="214.8" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="140.4" cy="217.6" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="313.2" cy="168.3" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="188.0" cy="194.5" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="307.2" cy="225.8" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="336.3" cy="225.8" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="333.2" cy="231.7" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="191.7" cy="179.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="268.8" cy="237.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="166.7" cy="202.1" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="150.1" cy="152.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="345.1" cy="211.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="194.7" cy="221.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="337.8" cy="181.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="132.9" cy="192.9" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="208.7" cy="194.8" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="306.4" cy="250.5" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="345.1" cy="221.5" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="160.4" cy="177.8" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="135.4" cy="173.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="236.0" cy="210.3" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="272.8" cy="236.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="197.6" cy="263.3" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="234.8" cy="221.3" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="330.0" cy="235.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="194.2" cy="264.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="275.9" cy="194.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="336.6" cy="165.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="199.6" cy="217.9" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="326.2" cy="181.4" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="136.8" cy="196.9" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="326.5" cy="195.2" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="345.1" cy="259.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="94.9" cy="203.3" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="207.8" cy="189.8" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="106.9" cy="245.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="312.3" cy="198.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="345.1" cy="228.4" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="141.0" cy="257.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="166.5" cy="176.3" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="299.5" cy="266.0" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="244.1" cy="203.9" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="95.3" cy="242.0" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="167.3" cy="219.2" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="130.3" cy="193.9" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="140.8" cy="231.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="335.8" cy="182.5" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="324.6" cy="221.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="303.7" cy="210.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="338.5" cy="211.9" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="94.9" cy="213.0" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="150.5" cy="242.5" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="141.8" cy="219.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="241.4" cy="178.3" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="345.1" cy="197.4" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="344.9" cy="183.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="165.1" cy="183.0" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="117.5" cy="195.5" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="225.8" cy="242.0" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="317.3" cy="206.0" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="188.4" cy="207.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="105.7" cy="187.5" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="290.5" cy="204.9" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="282.8" cy="206.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="327.8" cy="174.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="274.9" cy="237.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="220.3" cy="194.6" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="194.1" cy="250.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="245.5" cy="228.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="341.6" cy="196.0" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="280.2" cy="217.5" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="196.7" cy="232.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="137.9" cy="210.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="304.0" cy="266.0" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="301.9" cy="219.7" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="342.3" cy="244.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="105.3" cy="205.3" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="141.8" cy="178.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="176.0" cy="196.9" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="118.9" cy="230.1" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="101.8" cy="211.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="142.8" cy="160.3" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="133.3" cy="243.5" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="116.6" cy="181.8" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="139.9" cy="201.3" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="343.9" cy="196.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="317.9" cy="211.4" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="322.4" cy="234.3" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="170.8" cy="152.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="255.0" cy="223.2" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="240.5" cy="152.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="199.9" cy="236.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="112.5" cy="181.4" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="214.6" cy="241.9" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="153.5" cy="219.8" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="345.1" cy="219.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="240.3" cy="246.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="135.5" cy="255.4" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="206.9" cy="207.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="331.7" cy="234.7" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="238.7" cy="209.5" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="265.0" cy="198.3" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="340.7" cy="204.9" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="250.9" cy="231.2" r="2.6" fill="#EA580C" fill-opacity="0.80"/>
+<circle cx="183.4" cy="184.6" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="268.8" cy="225.8" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="178.2" cy="191.2" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<circle cx="216.6" cy="152.1" r="2.3" fill="#2B5C8F" fill-opacity="0.70"/>
+<line x1="84.0" y1="140.0" x2="84.0" y2="274.0" stroke="#1E293B" stroke-width="1.0"/>
+<line x1="84.0" y1="274.0" x2="356.0" y2="274.0" stroke="#1E293B" stroke-width="1.0"/>
+<line x1="84.0" y1="274.0" x2="84.0" y2="277.5" stroke="#1E293B" stroke-width="0.9"/>
+<text x="84.0" y="288.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="start">0h</text>
+<line x1="220.0" y1="274.0" x2="220.0" y2="277.5" stroke="#1E293B" stroke-width="0.9"/>
+<text x="220.0" y="288.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="middle">3h 40m</text>
+<line x1="356.0" y1="274.0" x2="356.0" y2="277.5" stroke="#1E293B" stroke-width="0.9"/>
+<text x="356.0" y="288.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="end">7h 21m</text>
+<text x="46.0" y="306.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.8" font-weight="700" fill="#0F172A" text-anchor="start">steps.parquet</text>
+<text x="358.0" y="306.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.0" font-weight="400" fill="#64748B" text-anchor="end">no prompts / tokens</text>
+<line x1="46.0" y1="313.0" x2="358.0" y2="313.0" stroke="#0F172A" stroke-width="1.2"/>
+<line x1="46.0" y1="331.0" x2="358.0" y2="331.0" stroke="#E2E8F0" stroke-width="0.9"/>
+<text x="50.0" y="325.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="700" fill="#64748B" text-anchor="start">program</text>
+<text x="114.0" y="325.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="700" fill="#64748B" text-anchor="start">shape</text>
+<text x="282.0" y="325.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="700" fill="#64748B" text-anchor="end">kv</text>
+<text x="354.0" y="325.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="700" fill="#64748B" text-anchor="end">dur</text>
+<text x="50.0" y="347.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="600" fill="#C2410C" text-anchor="start">prefill</text>
+<text x="114.0" y="347.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="400" fill="#334155" text-anchor="start">seqs&lt;=1,tok&lt;=1024</text>
+<text x="282.0" y="347.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="400" fill="#334155" text-anchor="end">47k</text>
+<text x="354.0" y="347.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="400" fill="#0F172A" text-anchor="end">387ms</text>
+<text x="50.0" y="367.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="600" fill="#2B5C8F" text-anchor="start">round</text>
+<text x="114.0" y="367.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="400" fill="#334155" text-anchor="start">seqs=16,tok=256</text>
+<text x="282.0" y="367.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="400" fill="#334155" text-anchor="end">433k</text>
+<text x="354.0" y="367.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="400" fill="#0F172A" text-anchor="end">204ms</text>
+<line x1="46.0" y1="376.0" x2="358.0" y2="376.0" stroke="#0F172A" stroke-width="1.2"/>
+<rect x="46.0" y="396.0" width="312.0" height="32.0" rx="6.0" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.0"/>
+<text x="202.0" y="416.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="10.0" font-weight="700" fill="#0F172A" text-anchor="middle">261,672 steps  ·  7h 21m online GPU time</text>
+<text x="549.5" y="134.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.5" font-weight="600" fill="#64748B" text-anchor="middle">≤32k</text>
+<text x="588.5" y="134.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.5" font-weight="600" fill="#64748B" text-anchor="middle">≤64k</text>
+<text x="627.5" y="134.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.5" font-weight="600" fill="#64748B" text-anchor="middle">≤128k</text>
+<text x="666.5" y="134.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.5" font-weight="600" fill="#64748B" text-anchor="middle">≤256k</text>
+<text x="705.5" y="134.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.5" font-weight="600" fill="#64748B" text-anchor="middle">≤512k</text>
+<text x="744.5" y="134.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.5" font-weight="600" fill="#64748B" text-anchor="middle">≤1M</text>
+<text x="522.0" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="600" fill="#C2410C" text-anchor="end">prefill</text>
+<rect x="530.0" y="140.0" width="39.0" height="22.0" rx="0.0" fill="#486a9f" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="549.5" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">31m</text>
+<rect x="569.0" y="140.0" width="39.0" height="22.0" rx="0.0" fill="#1d4688" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="588.5" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">49m</text>
+<rect x="608.0" y="140.0" width="39.0" height="22.0" rx="0.0" fill="#3b5f98" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="627.5" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">36m</text>
+<rect x="647.0" y="140.0" width="39.0" height="22.0" rx="0.0" fill="#7891b9" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="666.5" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#FFFFFF" text-anchor="middle">16m</text>
+<rect x="686.0" y="140.0" width="39.0" height="22.0" rx="0.0" fill="#F8FAFC" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="705.5" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#CBD5E1" text-anchor="middle">·</text>
+<rect x="725.0" y="140.0" width="39.0" height="22.0" rx="0.0" fill="#F8FAFC" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="744.5" y="154.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#CBD5E1" text-anchor="middle">·</text>
+<text x="522.0" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="500" fill="#334155" text-anchor="end">round g=1</text>
+<rect x="530.0" y="162.0" width="39.0" height="22.0" rx="0.0" fill="#95a9c9" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="549.5" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">9m</text>
+<rect x="569.0" y="162.0" width="39.0" height="22.0" rx="0.0" fill="#728cb6" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="588.5" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#FFFFFF" text-anchor="middle">18m</text>
+<rect x="608.0" y="162.0" width="39.0" height="22.0" rx="0.0" fill="#7d95bc" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="627.5" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#FFFFFF" text-anchor="middle">15m</text>
+<rect x="647.0" y="162.0" width="39.0" height="22.0" rx="0.0" fill="#8098be" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="666.5" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">14m</text>
+<rect x="686.0" y="162.0" width="39.0" height="22.0" rx="0.0" fill="#F8FAFC" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="705.5" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#CBD5E1" text-anchor="middle">·</text>
+<rect x="725.0" y="162.0" width="39.0" height="22.0" rx="0.0" fill="#F8FAFC" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="744.5" y="176.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#CBD5E1" text-anchor="middle">·</text>
+<text x="522.0" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="500" fill="#334155" text-anchor="end">round g=2</text>
+<rect x="530.0" y="184.0" width="39.0" height="22.0" rx="0.0" fill="#c7d2e4" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="549.5" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">2m</text>
+<rect x="569.0" y="184.0" width="39.0" height="22.0" rx="0.0" fill="#b3c2d9" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="588.5" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">4m</text>
+<rect x="608.0" y="184.0" width="39.0" height="22.0" rx="0.0" fill="#92a7c7" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="627.5" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">10m</text>
+<rect x="647.0" y="184.0" width="39.0" height="22.0" rx="0.0" fill="#5e7bab" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="666.5" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">24m</text>
+<rect x="686.0" y="184.0" width="39.0" height="22.0" rx="0.0" fill="#a6b7d2" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="705.5" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">6m</text>
+<rect x="725.0" y="184.0" width="39.0" height="22.0" rx="0.0" fill="#F8FAFC" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="744.5" y="198.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#CBD5E1" text-anchor="middle">·</text>
+<text x="522.0" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="500" fill="#334155" text-anchor="end">round g=4</text>
+<rect x="530.0" y="206.0" width="39.0" height="22.0" rx="0.0" fill="#dae2ef" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="549.5" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">1m</text>
+<rect x="569.0" y="206.0" width="39.0" height="22.0" rx="0.0" fill="#d0dae9" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="588.5" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">1m</text>
+<rect x="608.0" y="206.0" width="39.0" height="22.0" rx="0.0" fill="#b0c0d8" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="627.5" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">5m</text>
+<rect x="647.0" y="206.0" width="39.0" height="22.0" rx="0.0" fill="#4c6da1" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="666.5" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">30m</text>
+<rect x="686.0" y="206.0" width="39.0" height="22.0" rx="0.0" fill="#90a5c6" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="705.5" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">10m</text>
+<rect x="725.0" y="206.0" width="39.0" height="22.0" rx="0.0" fill="#F8FAFC" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="744.5" y="220.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#CBD5E1" text-anchor="middle">·</text>
+<text x="522.0" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="500" fill="#334155" text-anchor="end">round g=8</text>
+<rect x="530.0" y="228.0" width="39.0" height="22.0" rx="0.0" fill="#ecf1f8" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="549.5" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">&lt;1m</text>
+<rect x="569.0" y="228.0" width="39.0" height="22.0" rx="0.0" fill="#d1dbea" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="588.5" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">1m</text>
+<rect x="608.0" y="228.0" width="39.0" height="22.0" rx="0.0" fill="#bac8dd" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="627.5" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">3m</text>
+<rect x="647.0" y="228.0" width="39.0" height="22.0" rx="0.0" fill="#93a7c8" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="666.5" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">10m</text>
+<rect x="686.0" y="228.0" width="39.0" height="22.0" rx="0.0" fill="#5675a7" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="705.5" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">26m</text>
+<rect x="725.0" y="228.0" width="39.0" height="22.0" rx="0.0" fill="#c0cde1" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="744.5" y="242.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">3m</text>
+<text x="522.0" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.8" font-weight="500" fill="#334155" text-anchor="end">round g=16</text>
+<rect x="530.0" y="250.0" width="39.0" height="22.0" rx="0.0" fill="#eaeff7" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="549.5" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">&lt;1m</text>
+<rect x="569.0" y="250.0" width="39.0" height="22.0" rx="0.0" fill="#e6ecf5" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="588.5" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">&lt;1m</text>
+<rect x="608.0" y="250.0" width="39.0" height="22.0" rx="0.0" fill="#d1dbea" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="627.5" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">1m</text>
+<rect x="647.0" y="250.0" width="39.0" height="22.0" rx="0.0" fill="#a2b3d0" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="666.5" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">7m</text>
+<rect x="686.0" y="250.0" width="39.0" height="22.0" rx="0.0" fill="#2b518f" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="705.5" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="700" fill="#FFFFFF" text-anchor="middle">43m</text>
+<rect x="725.0" y="250.0" width="39.0" height="22.0" rx="0.0" fill="#8ea3c5" stroke="#FFFFFF" stroke-width="1.0"/>
+<text x="744.5" y="264.5" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.2" font-weight="400" fill="#0F172A" text-anchor="middle">11m</text>
+<rect x="530.0" y="140.0" width="234.0" height="132.0" rx="0.0" fill="none" stroke="#1E293B" stroke-width="0.9"/>
+<rect x="686.5" y="250.5" width="38.0" height="21.0" rx="0.0" fill="none" stroke="#EA580C" stroke-width="2.3"/>
+<line x1="705.5" y1="272.0" x2="705.5" y2="288.0" stroke="#EA580C" stroke-width="1.6" stroke-dasharray="3 2"/>
+<polygon points="705.5,292.0 701.9,286.0 709.1,286.0" fill="#EA580C"/>
+<rect x="454.0" y="292.0" width="312.0" height="86.0" rx="6.0" fill="#FFFBF7" stroke="#FDBA74" stroke-width="1.1"/>
+<text x="466.0" y="313.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.8" font-weight="700" fill="#C2410C" text-anchor="start">served.toml</text>
+<text x="466.0" y="335.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="400" fill="#334155" text-anchor="start">groups = [16]   rows = [16]</text>
+<text x="466.0" y="354.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="400" fill="#334155" text-anchor="start">context = [27057]</text>
+<text x="466.0" y="369.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="8.5" font-weight="400" fill="#64748B" text-anchor="start" font-style="italic">median shape · mean context</text>
+<line x1="648.0" y1="304.0" x2="648.0" y2="366.0" stroke="#FED7AA" stroke-width="1.0"/>
+<text x="705.5" y="323.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.2" font-weight="700" fill="#C2410C" text-anchor="middle">weight = 12994</text>
+<text x="705.5" y="342.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="8.8" font-weight="600" fill="#0F172A" text-anchor="middle">43m online</text>
+<text x="705.5" y="359.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="middle" font-style="italic">→ 1 sweep</text>
+<rect x="454.0" y="396.0" width="312.0" height="32.0" rx="6.0" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.1"/>
+<text x="610.0" y="416.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="10.2" font-weight="700" fill="#0F766E" text-anchor="middle">157 sweeps  ·  +0.29% CPU fidelity</text>
+<rect x="862.0" y="122.0" width="312.0" height="52.0" rx="6.0" fill="#F0FDFA" stroke="#0F766E" stroke-width="1.3"/>
+<text x="1018.0" y="143.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="11.8" font-weight="700" fill="#0F172A" text-anchor="middle"><tspan fill="#0F766E">6m 20s offline</tspan> run predicts <tspan fill="#0F172A">7h 21m online</tspan></text>
+<text x="1018.0" y="164.0" font-family="'Nimbus Roman', 'Times New Roman', 'Liberation Serif', Georgia, serif" font-size="10.8" font-weight="500" fill="#1E293B" text-anchor="middle">Cost(<tspan font-style="italic">M</tspan>) = <tspan font-size="11.5">∑</tspan><tspan baseline-shift="sub" font-size="7">b</tspan> <tspan font-style="italic">w</tspan><tspan baseline-shift="sub" font-size="7">b</tspan> · <tspan font-style="italic">t</tspan><tspan baseline-shift="sub" font-size="7">50</tspan>(<tspan font-style="italic">M</tspan>, <tspan font-style="italic">s</tspan><tspan baseline-shift="sub" font-size="7">b</tspan>, <tspan font-style="italic">μ</tspan><tspan baseline-shift="sub" font-size="7">b</tspan>)</text>
+<rect x="862.0" y="188.0" width="8.0" height="8.0" rx="1.5" fill="#EA580C" stroke="none" stroke-width="0"/>
+<text x="873.0" y="195.5" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="8.6" font-weight="400" fill="#334155" text-anchor="start">Verify MLP</text>
+<rect x="936.0" y="188.0" width="8.0" height="8.0" rx="1.5" fill="#2B5C8F" stroke="none" stroke-width="0"/>
+<text x="947.0" y="195.5" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="8.6" font-weight="400" fill="#334155" text-anchor="start">Prefill Attn</text>
+<rect x="1014.0" y="188.0" width="8.0" height="8.0" rx="1.5" fill="#6495ED" stroke="none" stroke-width="0"/>
+<text x="1025.0" y="195.5" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="8.6" font-weight="400" fill="#334155" text-anchor="start">Verify Attn</text>
+<rect x="1090.0" y="188.0" width="8.0" height="8.0" rx="1.5" fill="#CBD5E1" stroke="none" stroke-width="0"/>
+<text x="1101.0" y="195.5" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="8.6" font-weight="400" fill="#334155" text-anchor="start">Other</text>
+<line x1="950.0" y1="208.0" x2="950.0" y2="354.0" stroke="#E2E8F0" stroke-width="0.8"/>
+<text x="950.0" y="368.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="middle">0h</text>
+<line x1="994.0" y1="208.0" x2="994.0" y2="354.0" stroke="#E2E8F0" stroke-width="0.8"/>
+<text x="994.0" y="368.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="middle">2h</text>
+<line x1="1038.0" y1="208.0" x2="1038.0" y2="354.0" stroke="#E2E8F0" stroke-width="0.8"/>
+<text x="1038.0" y="368.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="middle">4h</text>
+<line x1="1082.0" y1="208.0" x2="1082.0" y2="354.0" stroke="#E2E8F0" stroke-width="0.8"/>
+<text x="1082.0" y="368.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.6" font-weight="400" fill="#64748B" text-anchor="middle">6h</text>
+<text x="942.0" y="228.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.6" font-weight="700" fill="#0F172A" text-anchor="end">Online</text>
+<text x="942.0" y="239.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="7.8" font-weight="400" fill="#64748B" text-anchor="end">live trace</text>
+<rect x="950.0" y="216.0" width="161.6" height="26.0" rx="2.5" fill="#64748B" stroke="#475569" stroke-width="0.8"/>
+<text x="1117.6" y="233.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="600" fill="#1E293B" text-anchor="start">7h 21m</text>
+<text x="942.0" y="275.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.6" font-weight="600" fill="#0F172A" text-anchor="end">Offline <tspan font-family="serif" font-style="italic">M</tspan><tspan baseline-shift="sub" font-size="7">0</tspan></text>
+<text x="942.0" y="286.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="7.8" font-weight="400" fill="#64748B" text-anchor="end">same kernels</text>
+<rect x="950.0" y="263.0" width="50.2" height="26.0" rx="0.0" fill="#EA580C" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="1000.2" y="263.0" width="25.7" height="26.0" rx="0.0" fill="#2B5C8F" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="1025.9" y="263.0" width="19.4" height="26.0" rx="0.0" fill="#6495ED" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="1045.3" y="263.0" width="67.7" height="26.0" rx="0.0" fill="#CBD5E1" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="950.0" y="263.0" width="163.0" height="26.0" rx="2.5" fill="none" stroke="#1E293B" stroke-width="0.9"/>
+<text x="1119.0" y="275.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="600" fill="#0F172A" text-anchor="start">7h 25m</text>
+<text x="1119.0" y="286.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.0" font-weight="500" fill="#64748B" text-anchor="start">+0.9% err</text>
+<text x="942.0" y="322.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="9.6" font-weight="700" fill="#0F766E" text-anchor="end">Offline <tspan font-family="serif" font-style="italic">M</tspan><tspan baseline-shift="sub" font-size="7">1</tspan></text>
+<text x="942.0" y="333.0" font-family="Inter, 'Liberation Sans', 'Nimbus Sans', -apple-system, 'Segoe UI', Arial, sans-serif" font-size="7.8" font-weight="600" fill="#C2410C" text-anchor="end">tuned MLP kernel</text>
+<rect x="950.0" y="310.0" width="40.9" height="26.0" rx="0.0" fill="#EA580C" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="990.9" y="310.0" width="25.7" height="26.0" rx="0.0" fill="#2B5C8F" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="1016.6" y="310.0" width="19.4" height="26.0" rx="0.0" fill="#6495ED" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="1036.1" y="310.0" width="67.7" height="26.0" rx="0.0" fill="#CBD5E1" stroke="#FFFFFF" stroke-width="0.7"/>
+<rect x="950.0" y="310.0" width="153.7" height="26.0" rx="2.5" fill="none" stroke="#0F766E" stroke-width="1.2"/>
+<rect x="1103.7" y="310.0" width="9.3" height="26.0" rx="0.0" fill="#F0FDFA" stroke="#0F766E" stroke-width="0.9" stroke-dasharray="2 2"/>
+<text x="1119.0" y="322.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.0" font-weight="700" fill="#0F766E" text-anchor="start">6h 59m</text>
+<text x="1119.0" y="333.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="8.0" font-weight="700" fill="#0F766E" text-anchor="start">−5.7% gain</text>
+<line x1="1111.6" y1="210.0" x2="1111.6" y2="358.0" stroke="#0F172A" stroke-width="1.1" stroke-dasharray="3 2"/>
+<line x1="950.0" y1="208.0" x2="950.0" y2="354.0" stroke="#1E293B" stroke-width="1.0"/>
+<line x1="950.0" y1="354.0" x2="1126.0" y2="354.0" stroke="#1E293B" stroke-width="1.0"/>
+<rect x="862.0" y="396.0" width="312.0" height="32.0" rx="6.0" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.1"/>
+<text x="1018.0" y="416.0" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace" font-size="9.8" font-weight="700" fill="#0F766E" text-anchor="middle">Online match: +0.90%  ·  Kernel swap: −25m</text>
+</svg>

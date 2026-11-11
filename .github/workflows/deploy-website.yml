@@ -7,6 +7,7 @@ on:
       - "website/**"
       - "docs/.vitepress/**"
       - "docs/site/**"
+      - "docs/figures/**"
       - "docs/README.md"
       - "docs/package.json"
       - "docs/package-lock.json"

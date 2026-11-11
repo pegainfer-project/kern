@@ -109,6 +109,8 @@ Every file also carries Parquet footer key-value metadata:
 
 ### 1. Build a benchmark workload from live traffic
 
+![Build a benchmark workload from live traffic: 261,672 online GPU steps fold into 157 weighted shape-by-KV buckets, allowing a 6-minute offline replay to predict over 7 hours of online GPU time within 0.90%](../../figures/trace-workload.svg)
+
 `kern workload` reads one rank's `steps.parquet` files, groups steps by
 `(program, shape, kv bucket)`, and emits a weighted TOML workload that
 `kern bench` can price against any candidate manifest for the same model:
