@@ -17,7 +17,9 @@
 //! one's rounded up to a power of two, so a prefill chunk's label set
 //! stays small. A file's key-value metadata names the rank, the model,
 //! the manifest's sha256, its writer's version ([`meta`]) and the clock
-//! offset.
+//! offset, and says what a reader cannot see in the rows: whether the GPU
+//! stamped the kernels (`kern.hes`), and how many kernel records the
+//! process had lost when the file closed (`kern.dropped_records`).
 //!
 //! A Parquet file is readable once closed, when its footer is written:
 //! a pair closes at the next quarter hour, or when `rotate` asks. It is
@@ -49,11 +51,13 @@ use parquet::schema::types::ColumnPath;
 const QUARTER: u64 = 15 * 60;
 const SEC: i64 = 1_000_000_000;
 
-/// The two clocks read together: unix and CUPTI nanoseconds.
+/// The two clocks read together, unix and CUPTI nanoseconds, and whether
+/// CUPTI's is the GPU's own (`None`: CUPTI would not say).
 #[derive(Debug, Clone, Copy)]
 pub struct Now {
     pub unix: i64,
     pub cupti: u64,
+    pub hes: Option<bool>,
 }
 
 impl Now {
@@ -62,7 +66,7 @@ impl Now {
         let cupti = trace::now()?;
         let unix =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
-        Ok(Now { unix, cupti })
+        Ok(Now { unix, cupti, hes: trace::hes().ok() })
     }
 
     fn offset(self) -> i64 {
@@ -267,6 +271,8 @@ impl Recorder {
             .into_iter()
             .chain(self.meta.iter().cloned())
             .chain([("kern.clock_offset_ns".to_string(), now.offset().to_string())])
+            // A pair opens on its first kernels, so a context exists and CUPTI has chosen.
+            .chain(now.hes.map(|hes| ("kern.hes".to_string(), hes.to_string())))
             .map(|(k, v)| KeyValue::new(k, v))
             .collect();
         let paths = [dir.join(format!("{time}.kernels.parquet")), dir.join(format!("{time}.steps.parquet"))];
@@ -281,7 +287,13 @@ impl Recorder {
 
     /// Closes the open pair, making it readable; returns its paths.
     pub fn rotate(&mut self) -> Result<Vec<PathBuf>> {
-        let Some(o) = self.open.take() else { return Ok(Vec::new()) };
+        let Some(mut o) = self.open.take() else { return Ok(Vec::new()) };
+        for w in [&mut o.kernels, &mut o.steps] {
+            w.append_key_value_metadata(KeyValue::new(
+                "kern.dropped_records".to_string(),
+                trace::dropped().to_string(),
+            ));
+        }
         o.kernels.close()?;
         o.steps.close()?;
         for p in &o.paths {

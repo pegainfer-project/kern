@@ -2186,8 +2186,10 @@ dependencies = [
 name = "kern-py"
 version = "0.4.0"
 dependencies = [
+ "anyhow",
  "kern-manifest",
  "kern-runtime",
+ "kern-trace",
  "pyo3",
 ]
 

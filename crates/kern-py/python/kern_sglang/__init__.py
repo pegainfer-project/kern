@@ -20,6 +20,15 @@ size, KV backend, state dtype) fails when kern binds them, naming the state.
 The manifest
 (`tools/qwen38_sglang.py` writes one; K3's comes from kern-k3-pp-prefill's
 `k3_sglang.py`) follows a small contract, see `model.py`.
+
+With `KERN_TRACE_DIR=<dir>` every kernel the model's process runs is kept
+under that directory, named by the manifest call that launched it, in the
+files kern-serve's `--trace-dir` writes (`kern.trace`). SGLang calls
+`register` in every process before it loads the model, which is before the
+process's first CUDA context, where the tracer has to start. SGLang logs a
+plugin's error and serves on, so the class is registered first and asks for
+the tracer again before it loads: one that cannot start stops the server,
+with its reason.
 """
 import os
 
@@ -32,3 +41,7 @@ def register() -> None:
     from kern_sglang.model import KernForCausalLM
 
     ModelRegistry.models.update(dict.fromkeys(ModelRegistry.get_supported_archs(), KernForCausalLM))
+    if os.environ.get("KERN_TRACE_DIR"):
+        from kern import trace
+
+        trace.start()
