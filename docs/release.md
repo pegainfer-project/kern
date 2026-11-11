@@ -86,7 +86,7 @@ GitHub runner 没有 GPU，流水线只能证明 binary 起得来。release 发�
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 kern --version                  # commit 与 tag 一致，cuda 13.3
-cd <kern checkout> && kern test qwen3-4b   # 最后一行 PASS
+cd <kern checkout> && kern test qwen3.8-27b   # 最后一行 PASS
 pip install kern-llm==0.3.0 && python -c 'import kern; print(kern.__version__)'   # 引擎的 venv 里
 ```
 
