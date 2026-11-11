@@ -48,6 +48,7 @@ function Header() {
         <a href="#proof">PROOF</a>
         <a href="/docs/">DOCS</a>
         <a href="/schema/">SCHEMA</a>
+        <a href="/studio/">STUDIO</a>
         <a href="/qwen38/">+49</a>
         <a
           className="github-link"
@@ -684,6 +685,7 @@ function Footer() {
         <a href="https://github.com/pegainfer-project/kern" target="_blank" rel="noreferrer">SOURCE ↗</a>
         <a href="/docs/">DOCS →</a>
         <a href="/schema/">SCHEMA →</a>
+        <a href="/studio/">STUDIO →</a>
         <a href="#top">BACK TO TOP ↑</a>
       </div>
     </footer>
