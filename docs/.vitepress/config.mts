@@ -54,6 +54,7 @@ export default defineConfig({
           { text: "Command line", link: "/reference/cli" },
           { text: "kern.toml", link: "/reference/config" },
           { text: "Manifest schema", link: "/reference/manifest" },
+          { text: "Trace format", link: "/reference/traces" },
         ],
       },
     ],
