@@ -86,12 +86,19 @@ GitHub runner 没有 GPU，流水线只能证明 binary 起得来。release 发�
 ```bash
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 kern --version                  # commit 与 tag 一致，cuda 13.3
-cd <kern checkout> && kern test qwen3.8-27b   # 最后一行 PASS
+hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
+kern test --reference kern-qwen38/manifests/qwen3.8-27b.json --manifest <kern checkout>/examples/qwen3.8-27b.json \
+  --kernels <两边 cubin 都在的目录> --weights <Qwen3.8-27B checkpoint>   # 最后一行 PASS
 pip install kern-llm==0.3.0 && python -c 'import kern; print(kern.__version__)'   # 引擎的 venv 里
 ```
 
+`kern test` 要一对真的不同的 manifest：A 对 A 什么都不跑，带 host state 的 manifest（vLLM、SGLang 那几份）
+它也不接，因为它们自己不出 token。所以 A 取已发布 bundle 的 manifest，B 取仓库当前的 example。
+
 再在引擎里过一遍 conc1：[vllm.md](vllm.md) 与 [sglang.md](sglang.md) 开头那条命令起
-Qwen3.8-27B，greedy 输出与 `kern run` 逐 token 相同。都过，release 才算发完。
+Qwen3.8-27B，同一组 prompt id、greedy：输出与上一版 wheel 逐 token 相同；与 `kern run` 相同到第一个
+近平局为止，分叉那一步读引擎的 top-2 margin，差一个 bf16 步长（0.125）是平局，更大才是 bug。
+都过，release 才算发完。
 
 不过时：PyPI 上的版本号用过就不能再传，所以不是删了重发，而是 yank 掉 PyPI 上那一版、
 删掉 GitHub release 与 tag，修好后 bump 一个 patch 版本再发：
