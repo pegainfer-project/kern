@@ -364,7 +364,13 @@ serving untraced. A pair of files is readable once closed, at the quarter
 hour or when `<dir>/rotate` is touched; a kernel reaches the files up to
 about a second after it ran, so touch it a moment after the work of
 interest. SGLang ends its scheduler process with a signal, so the pair
-being written is lost unless it is rotated first.
+being written is lost unless it is rotated first; a process that exits by
+itself (an offline engine, a script) closes its files as it exits.
+
+With `--dp-size` above one, every replica is a group of its own running
+the same manifest, so each writes under `<dir>/dp=<i>` and `rank` stays the
+rank within its group. Each replica watches its own `rotate`:
+`for d in <dir>/dp=*; do touch "$d/rotate"; done` closes them all.
 
 **Measured** (2026-11-10, one GB300, Qwen3.8-27B, SGLang nightly `f70e8c68`,
 the launch command at the top). 384 requests of 2048 prompt tokens and 256

@@ -22,8 +22,9 @@ The manifest
 `k3_sglang.py`) follows a small contract, see `model.py`.
 
 With `KERN_TRACE_DIR=<dir>` every kernel the model's process runs is kept
-under that directory, named by the manifest call that launched it, in the
-files kern-serve's `--trace-dir` writes (`kern.trace`). SGLang calls
+under that directory (a replica of `--dp-size` under its own `dp=<i>`),
+named by the manifest call that launched it, in the files kern-serve's
+`--trace-dir` writes (`kern.trace`). SGLang calls
 `register` in every process before it loads the model, which is before the
 process's first CUDA context, where the tracer has to start. SGLang logs a
 plugin's error and serves on, so the class is registered first and asks for

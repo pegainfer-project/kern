@@ -469,8 +469,7 @@ impl Runtime {
             let mut seen = BTreeSet::new();
             new_kernel_nodes(graph, &mut seen)?;
             let kernels = self.replay_counted(prog, &vars, seen)?;
-            self.keep(capture, program, named, kernels);
-            return Ok(());
+            return self.keep((capture, graph), program, named, kernels);
         }
         let seq = trace::begin(vec![trace::Issue {
             program: program.to_string(),

@@ -251,11 +251,15 @@ capture: a program captured off one stream is a chain, so its kernels run in nod
 a CUPTI external correlation id: the issue's sequence number, plus the call for an eager program.
 A graph the host captured (`enqueue_after` under the host's capture) is launched by the host, with no
 call into the runtime: while tracing, each program enqueued into a capture keeps the call that added
-each of its kernel nodes, `Runtime::captured()` hands the host what its last capture took as a
-`HostGraph`, and the host brackets every launch of that graph with `HostGraph::launching()` /
-`launched()` on the launching thread. A launch then registers one issue per program, numbered in a row,
-under one id that says how many, and a kernel record goes to the issue whose nodes name it; a node
-none of them added is the host's own kernel and stays unclaimed.
+each of its kernel nodes, `Runtime::captured(graph)`, called as a capture ends with the address of its
+`CUgraph`, hands the host what that graph took as a `HostGraph`, and the host brackets every launch of
+that graph with `HostGraph::launching()` / `launched()` on the launching thread. The graph is named
+because a capture the host never reports (another library's, or one that failed) leaves its programs
+untaken, and the next graph to end, which holds none of them, must get none. A launch then registers
+one issue per program, numbered in a row, under one id that says how many, and a kernel record goes to
+the issue whose nodes name it; a node none of them added is the host's own kernel and stays unclaimed.
+A `launched()` with no `launching()` before it on its thread does nothing, and a `launching()` ends one
+that never reached its `launched()`: a host whose hooks fail must not leave an id on the thread.
 `trace::collect()` flushes CUPTI twice and returns `Collected { steps, unclaimed }`: each `Step` is an issue
 with its kernels as `Span`s (call, kernel name, start, end in CUPTI's clock, `trace::now()`), complete
 once a graph has a record for every node, a later launch on its device has kernels, or a few collects
@@ -263,7 +267,9 @@ brought it nothing; `unclaimed` are the kernels no issue claims (the runtime's o
 everything a host runs itself). CUPTI delivers a graph launch's correlation record behind its kernel
 records, so a launch that stalls midway (a kernel waiting on a peer that is late) has its first kernels
 arrive long before their id: a graph's kernel with no id yet waits while a graph issued has none, and
-counts as unclaimed after a few collects otherwise.
+counts as unclaimed after a few collects otherwise. An issue waits as long for its first record (its
+launch may have stalled on its first kernel); one nothing ever arrives for, because the launch failed
+or CUPTI dropped its records, is then forgotten and holds no kernel back.
 The joining is a pure fold over the records; the CUPTI callbacks only copy records out.
 CUPTI hands a buffer over only when asked: a periodic flush (`cuptiActivityFlushPeriod`) hands over only
 full ones, and an 8 MiB buffer holds 20–30 thousand kernels, seconds of serving. Under HES a flush seals
