@@ -332,8 +332,8 @@ hour, a `kernels` file with one row per kernel and a `steps` file with one
 row per program issue.
 
 ```bash
-# libcupti 13.3 or newer, as the first libcupti.so on the library path (SGLang's image has 13.0 there)
-pip install --no-deps --target /opt/cupti 'nvidia-cuda-cupti>=13.3'
+# libcupti 13.3 or newer, as the first libcupti.so on the library path (SGLang's image has 13.0 there); 13.4 is what was measured
+pip install --no-deps --target /opt/cupti 'nvidia-cuda-cupti==13.4.*'
 ln -s libcupti.so.13 /opt/cupti/nvidia/cu13/lib/libcupti.so
 export LD_LIBRARY_PATH=/opt/cupti/nvidia/cu13/lib:$LD_LIBRARY_PATH
 

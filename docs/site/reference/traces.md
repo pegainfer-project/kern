@@ -6,6 +6,9 @@ timestamps every GPU kernel execution in hardware without inserting
 synchronization between launches. Each rank streams those records into pairs of
 Apache Parquet files.
 
+[Trace an SGLang server](/guides/trace-sglang) records a hosted manifest step by
+step, with a sample trace to query.
+
 Traces record GPU timing and manifest identifiers only. Prompts, token IDs,
 completions, request identifiers, and client metadata are never written.
 

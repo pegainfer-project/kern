@@ -46,6 +46,7 @@ export default defineConfig({
         items: [
           { text: "Run a model", link: "/guides/run-a-model" },
           { text: "Test a kernel change", link: "/guides/test-a-kernel-change" },
+          { text: "Trace an SGLang server", link: "/guides/trace-sglang" },
         ],
       },
       {
