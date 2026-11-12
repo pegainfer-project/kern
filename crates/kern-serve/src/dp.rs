@@ -67,6 +67,7 @@ use crate::pack::{self, Bounds, Waiting};
 use crate::pp::Item;
 use crate::ranks::{Act, Answer, Landed, Order};
 use crate::scheduler::Facts;
+use crate::Stop;
 
 /// Items a sequence with rows left is passed over before it goes ahead
 /// of every sequence passed over fewer times.
@@ -91,7 +92,7 @@ struct Seq {
     /// The snapshot is in the rank's prefix tree; the end will not be.
     kept: bool,
     passed: usize,
-    stop: infront_engine::StopPolicy,
+    stop: Stop,
     sampling: Sampling,
     admitted: Instant,
 }
@@ -468,7 +469,7 @@ impl Dp {
             mark,
             kept: false,
             passed: 0,
-            stop: q.request.stop_policy.clone(),
+            stop: Stop::of(&q.request),
             sampling: crate::ranks::sampling(&q.request.params),
             admitted: Instant::now(),
         });
@@ -733,7 +734,7 @@ impl Dp {
             done.sort_unstable_by_key(|&(i, _)| std::cmp::Reverse(i));
             for (i, tok) in done {
                 let s = r.seqs.swap_remove(i);
-                let why = s.stop.classify(tok, |_| false).map_or(FinishReason::Length, FinishReason::Stop);
+                let why = s.stop.cause(0, tok).map_or(FinishReason::Length, FinishReason::Stop);
                 ledger.push_tokens(s.id, &[tok], &[]);
                 ledger.finish(s.id, why);
                 self.stats.finished += 1;

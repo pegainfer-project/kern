@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use infront_engine::{FinishReason, StopCause};
 use kern_manifest::types::Manifest;
 use kern_manifest::{verify, Protocol};
 use kern_pool::Pool;
@@ -46,5 +47,28 @@ impl Rand {
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         (self.0 >> 33) as usize % n
+    }
+}
+
+/// What a request whose first token is `first` gets from a model following
+/// each token `t` with `next(t)`: through the first `stop` at index
+/// `min_tokens` or later, or `max_tokens` long, and why it ends there.
+pub fn chain(
+    first: u32,
+    next: impl Fn(u32) -> u32,
+    stop: u32,
+    min_tokens: usize,
+    max_tokens: usize,
+) -> (Vec<u32>, FinishReason) {
+    let mut chain = vec![first];
+    loop {
+        let (at, last) = (chain.len() - 1, chain[chain.len() - 1]);
+        if last == stop && at >= min_tokens {
+            return (chain, FinishReason::Stop(StopCause::Token(stop)));
+        }
+        if chain.len() == max_tokens {
+            return (chain, FinishReason::Length);
+        }
+        chain.push(next(last));
     }
 }

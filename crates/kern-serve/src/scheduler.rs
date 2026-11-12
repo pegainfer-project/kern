@@ -105,7 +105,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use infront_engine::{
     FinishReason, PrefixCacheCounters, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler,
-    SchedulerMetrics, SpecDecodeCounters, StopCause, StopPolicy, MAX_SPEC_TOKENS,
+    SchedulerMetrics, SpecDecodeCounters, StopCause, MAX_SPEC_TOKENS,
 };
 use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::Protocol;
@@ -116,6 +116,7 @@ use crate::executor::Executors;
 use crate::logline;
 use crate::pd::Run;
 use crate::ranks::{Cell, Landed, Rank, Ranks, Row, Snapshot, Staged};
+use crate::Stop;
 
 /// Decode batch buckets; a batch is padded up to the smallest one that
 /// fits and each bucket owns one captured graph.
@@ -211,8 +212,9 @@ struct Seq {
     /// How its tokens are drawn.
     sampling: Sampling,
     /// The request's EOS and explicit stop ids, as the frontend lowered
-    /// them (`ignore_eos` arrives as a policy without an EOS).
-    stop: StopPolicy,
+    /// them (`ignore_eos` arrives as a policy without an EOS), from its
+    /// `min_tokens`th token on.
+    stop: Stop,
     /// Its KV pages and state slots across its group; returned when the
     /// sequence drops.
     row: Row,
@@ -286,13 +288,13 @@ enum End {
 }
 
 /// How many of `toks` a sequence that has generated `generated` of
-/// `max_tokens` takes: through the first stop token or the one reaching
-/// `max_tokens`, and why it ends there; all of them and `None` otherwise.
-/// A stop token wins over `max_tokens` when it is both.
-fn cut(toks: &[u32], generated: usize, max_tokens: usize, stop: &StopPolicy) -> (usize, Option<End>) {
+/// `max_tokens` takes: through the first token that stops it or the one
+/// reaching `max_tokens`, and why it ends there; all of them and `None`
+/// otherwise. A stop wins over `max_tokens` when it is both.
+fn cut(toks: &[u32], generated: usize, max_tokens: usize, stop: &Stop) -> (usize, Option<End>) {
     toks.iter()
         .enumerate()
-        .find_map(|(i, &t)| match stop.classify(t, |_| false) {
+        .find_map(|(i, &t)| match stop.cause(generated + i, t) {
             Some(c) => Some((i + 1, End::Stop(c))),
             None => (generated + i + 1 >= max_tokens).then_some((i + 1, End::Length)),
         })
@@ -840,7 +842,7 @@ impl<E: Run> KernScheduler<E> {
             emitted: 0,
             max_tokens,
             sampling,
-            stop: q.request.stop_policy.clone(),
+            stop: Stop::of(&q.request),
             row,
             prompt_len: prompt,
             history: ids[..n_pre].to_vec(),
@@ -958,7 +960,8 @@ impl<E: Run> KernScheduler<E> {
         // next turn ends the answer with it.
         let visible = s.prompt_len + s.emitted;
         let past = s.history.get(visible..).unwrap_or_default();
-        if s.pos > visible + 1 || past.iter().any(|&t| s.stop.classify(t as u32, |_| false).is_none()) {
+        if s.pos > visible + 1 || past.iter().enumerate().any(|(i, &t)| s.stop.cause(s.emitted + i, t as u32).is_none())
+        {
             debug!(request = %s.id, tokens = s.pos, visible, "not kept");
             return;
         }
@@ -1164,31 +1167,38 @@ mod tests {
 
     #[test]
     fn a_sequence_takes_tokens_through_its_stop_or_its_length() {
-        use infront_engine::EosPolicy;
-        let stop = StopPolicy::new(EosPolicy::Token(9), vec![7]);
+        use infront_engine::{EosPolicy, StopPolicy};
+        let policy = StopPolicy::new(EosPolicy::Token(9), vec![7]);
+        let stop = Stop::new(policy.clone(), 0);
         assert_eq!(cut(&[1, 2, 3], 0, 10, &stop), (3, None));
         assert_eq!(cut(&[1, 9, 3], 0, 10, &stop), (2, Some(End::Stop(StopCause::Eos(9)))));
         assert_eq!(cut(&[1, 2, 3], 8, 10, &stop), (2, Some(End::Length)));
         assert_eq!(cut(&[1, 7], 8, 10, &stop), (2, Some(End::Stop(StopCause::Token(7)))));
         assert_eq!(cut(&[], 0, 10, &stop), (0, None));
+        // Before `min_tokens` a stop token is an ordinary one.
+        let late = Stop::new(policy.clone(), 2);
+        assert_eq!(cut(&[9], 0, 1, &Stop::new(policy.clone(), 1)), (1, Some(End::Length)));
+        assert_eq!(cut(&[9, 7, 9], 0, 10, &late), (3, Some(End::Stop(StopCause::Eos(9)))));
+        assert_eq!(cut(&[7, 9], 1, 10, &late), (2, Some(End::Stop(StopCause::Eos(9)))));
         // Every token string over {plain, stop, eos} up to four long, at
-        // every count already generated short of the limit.
+        // every count already generated short of the limit and every
+        // `min_tokens` up to it.
         let alphabet = [1u32, 7, 9];
         let strings = (0..=4u32).flat_map(|n| {
             (0..3usize.pow(n)).map(move |k| (0..n).map(|i| alphabet[k / 3usize.pow(i) % 3]).collect::<Vec<_>>())
         });
         for toks in strings {
-            for (generated, max) in (1..=5).flat_map(|m| (0..m).map(move |g| (g, m))) {
-                let (taken, end) = cut(&toks, generated, max, &stop);
-                let stops = |s: &[u32]| s.iter().filter(|&&t| t != 1).count();
+            let cases = (1..=5).flat_map(|m| (0..m).flat_map(move |g| (0..=m).map(move |n| (g, m, n))));
+            for (generated, max, min) in cases {
+                let (taken, end) = cut(&toks, generated, max, &Stop::new(policy.clone(), min));
+                let live = |i: usize| toks[i] != 1 && generated + i >= min;
+                let stops = |n: usize| (0..n).filter(|&i| live(i)).count();
                 let fact = match end {
-                    None => taken == toks.len() && stops(&toks) == 0 && generated + taken < max,
-                    Some(End::Stop(_)) => {
-                        stops(&toks[..taken]) == 1 && toks[taken - 1] != 1 && generated + taken <= max
-                    }
-                    Some(End::Length) => stops(&toks[..taken]) == 0 && generated + taken == max,
+                    None => taken == toks.len() && stops(taken) == 0 && generated + taken < max,
+                    Some(End::Stop(_)) => stops(taken) == 1 && live(taken - 1) && generated + taken <= max,
+                    Some(End::Length) => stops(taken) == 0 && generated + taken == max,
                 };
-                assert!(fact, "{toks:?} at {generated}/{max}: ({taken}, {end:?})");
+                assert!(fact, "{toks:?} at {generated}/{max}, min {min}: ({taken}, {end:?})");
             }
         }
     }
