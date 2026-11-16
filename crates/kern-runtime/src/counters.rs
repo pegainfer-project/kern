@@ -21,13 +21,23 @@ use cudarc::cupti::sys as cupti;
 use crate::trace::ok;
 use crate::{Error, Result};
 
-/// In [`Sample`]'s field order.
-const METRICS: [&CStr; 5] = [
-    c"gpc__cycles_elapsed.avg.per_second",
-    c"sm__cycles_active.avg.pct_of_peak_sustained_elapsed",
-    c"sm__pipe_tensor_cycles_active_realtime.avg.pct_of_peak_sustained_elapsed",
-    c"dram__bytes_read.sum.per_second",
-    c"dram__bytes_write.sum.per_second",
+/// In [`Sample`]'s field order; GB20x and GR100 name the DRAM counters
+/// `dram__bytes_op_{read,write}`.
+const METRICS: [[&CStr; 5]; 2] = [
+    [
+        c"gpc__cycles_elapsed.avg.per_second",
+        c"sm__cycles_active.avg.pct_of_peak_sustained_elapsed",
+        c"sm__pipe_tensor_cycles_active_realtime.avg.pct_of_peak_sustained_elapsed",
+        c"dram__bytes_read.sum.per_second",
+        c"dram__bytes_write.sum.per_second",
+    ],
+    [
+        c"gpc__cycles_elapsed.avg.per_second",
+        c"sm__cycles_active.avg.pct_of_peak_sustained_elapsed",
+        c"sm__pipe_tensor_cycles_active_realtime.avg.pct_of_peak_sustained_elapsed",
+        c"dram__bytes_op_read.sum.per_second",
+        c"dram__bytes_op_write.sum.per_second",
+    ],
 ];
 /// The shortest interval [`Sampler::start`] takes.
 pub const FLOOR: Duration = Duration::from_micros(50);
@@ -105,7 +115,7 @@ impl Sampler {
             image: Vec::new(),
             available: Vec::new(),
             config: Vec::new(),
-            names: METRICS.map(CStr::as_ptr),
+            names: METRICS[0].map(CStr::as_ptr),
             overflows: 0,
             begun: false,
         };
@@ -116,14 +126,7 @@ impl Sampler {
         s.available = vec![0u8; avail.counterAvailabilityImageSize];
         avail.pCounterAvailabilityImage = s.available.as_mut_ptr();
         ok(unsafe { cupti::cuptiPmSamplingGetCounterAvailability(&mut avail) }, "counter availability")?;
-        let mut host = params!(CUpti_Profiler_Host_Initialize_Params {
-            profilerType: cupti::CUpti_ProfilerType::CUPTI_PROFILER_TYPE_PM_SAMPLING,
-            pChipName: chip.pChipName,
-            pCounterAvailabilityImage: s.available.as_ptr(),
-        });
-        ok(unsafe { cupti::cuptiProfilerHostInitialize(&mut host) }, "profiler host")?;
-        s.host = host.pHostObject;
-        s.config = s.configure()?;
+        s.config = s.configure(chip.pChipName, s.available.as_ptr())?;
         let mut enable = params!(CUpti_PmSampling_Enable_Params { deviceIndex: device });
         ok(unsafe { cupti::cuptiPmSamplingEnable(&mut enable) }, "enable PM sampling")?;
         s.sampling = enable.pPmSamplingObject;
@@ -142,7 +145,7 @@ impl Sampler {
         let mut size = params!(CUpti_PmSampling_GetCounterDataSize_Params {
             pPmSamplingObject: s.sampling,
             pMetricNames: s.names.as_mut_ptr(),
-            numMetrics: METRICS.len(),
+            numMetrics: s.names.len(),
             maxSamples: (BACKLOG.as_nanos() / interval.as_nanos()).clamp(4, u32::MAX.into()) as u32,
         });
         ok(unsafe { cupti::cuptiPmSamplingGetCounterDataSize(&mut size) }, "counter data size")?;
@@ -160,14 +163,36 @@ impl Sampler {
         Ok(s)
     }
 
-    /// The configuration image that asks the device for [`METRICS`].
-    fn configure(&mut self) -> Result<Vec<u8>> {
-        let mut add = params!(CUpti_Profiler_Host_ConfigAddMetrics_Params {
-            pHostObject: self.host,
-            ppMetricNames: self.names.as_mut_ptr(),
-            numMetrics: METRICS.len(),
-        });
-        ok(unsafe { cupti::cuptiProfilerHostConfigAddMetrics(&mut add) }, "add metrics")?;
+    /// A host profiler and configuration image asking `chip` for one of
+    /// [`METRICS`]. `ConfigAddMetrics` may only be called once per host
+    /// object, so a rejected metric set needs a fresh one.
+    fn configure(&mut self, chip: *const c_char, available: *const u8) -> Result<Vec<u8>> {
+        let try_set = |set: [&CStr; 5]| -> Result<(*mut cupti::CUpti_Profiler_Host_Object, [*const c_char; 5])> {
+            let mut host = params!(CUpti_Profiler_Host_Initialize_Params {
+                profilerType: cupti::CUpti_ProfilerType::CUPTI_PROFILER_TYPE_PM_SAMPLING,
+                pChipName: chip,
+                pCounterAvailabilityImage: available,
+            });
+            ok(unsafe { cupti::cuptiProfilerHostInitialize(&mut host) }, "profiler host")?;
+            let mut names = set.map(CStr::as_ptr);
+            let mut add = params!(CUpti_Profiler_Host_ConfigAddMetrics_Params {
+                pHostObject: host.pHostObject,
+                ppMetricNames: names.as_mut_ptr(),
+                numMetrics: names.len(),
+            });
+            if let Err(e) = ok(unsafe { cupti::cuptiProfilerHostConfigAddMetrics(&mut add) }, "add metrics") {
+                unsafe {
+                    cupti::cuptiProfilerHostDeinitialize(&mut params!(CUpti_Profiler_Host_Deinitialize_Params {
+                        pHostObject: host.pHostObject
+                    }));
+                }
+                return Err(e);
+            }
+            Ok((host.pHostObject, names))
+        };
+        let (host, names) = try_set(METRICS[0]).or_else(|_| try_set(METRICS[1]))?;
+        self.host = host;
+        self.names = names;
         let mut size = params!(CUpti_Profiler_Host_GetConfigImageSize_Params { pHostObject: self.host });
         ok(unsafe { cupti::cuptiProfilerHostGetConfigImageSize(&mut size) }, "config image size")?;
         let mut config = vec![0u8; size.configImageSize];
@@ -228,7 +253,7 @@ impl Sampler {
             counterDataImageSize: self.image.len(),
             rangeIndex: index,
             ppMetricNames: self.names.as_mut_ptr(),
-            numMetrics: METRICS.len(),
+            numMetrics: self.names.len(),
             pMetricValues: v.as_mut_ptr(),
         });
         ok(unsafe { cupti::cuptiProfilerHostEvaluateToGpuValues(&mut eval) }, "evaluate PM sample")?;
@@ -271,6 +296,32 @@ impl Drop for Sampler {
                 }));
             }
             cupti::cuptiProfilerDeInitialize(&mut params!(CUpti_Profiler_DeInitialize_Params {}));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_configure_across_hopper_blackwell_and_rubin_chips() {
+        for chip in [c"GH100", c"GB100", c"GB202", c"GR100"] {
+            ok(unsafe { cupti::cuptiProfilerInitialize(&mut params!(CUpti_Profiler_Initialize_Params {})) }, "profiler")
+                .unwrap();
+            let mut s = Sampler {
+                host: std::ptr::null_mut(),
+                sampling: std::ptr::null_mut(),
+                started: false,
+                image: Vec::new(),
+                available: Vec::new(),
+                config: Vec::new(),
+                names: METRICS[0].map(CStr::as_ptr),
+                overflows: 0,
+                begun: false,
+            };
+            let cfg = s.configure(chip.as_ptr(), std::ptr::null()).unwrap();
+            assert!(!cfg.is_empty(), "{chip:?}");
         }
     }
 }

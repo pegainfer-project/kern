@@ -302,7 +302,9 @@ read. CUPTI pitfalls the sampler handles:
 - a decode that fills the counter data image is followed by decodes that return nothing, and a decode
   costs more the larger the image (at 100 µs: 22 µs a sample with room for 0.3 s, 36 µs with 2 s), so
   the image holds 0.5 s and each collect decodes once;
-- the first sample's start is not a timestamp; it is dropped.
+- the first sample's start is not a timestamp; it is dropped;
+- GB20x and GR100 name the DRAM counters `dram__bytes_op_{read,write}` rather than `dram__bytes_{read,write}`,
+  and `ConfigAddMetrics` may only be called once per host object, so a rejected set needs a fresh one.
 
 Measured on GB300 (2026-11-16): ~24 µs of host time a sample (0.24 core at 100 µs), so `start`
 refuses intervals under 50 µs (`FLOOR`); the hardware samples no faster than ~20 µs anyway. Sampling

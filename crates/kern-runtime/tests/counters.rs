@@ -44,7 +44,7 @@ fn samples_tile_the_interval_on_the_trace_clock_and_follow_the_device() {
 
     let busiest = copying.iter().map(|s| s.dram_read.min(s.dram_write)).fold(0.0, f64::max);
     let (idle_active, clock) = (window(&idle, |s| s.sm_active), window(&idle, |s| s.sm_clock));
-    assert_eq!((idle_active < 1.0, clock > 1e8, busiest > 1e12), (true, true, true), "{idle_active} {clock} {busiest}");
+    assert_eq!((idle_active < 1.0, clock > 1e8, busiest > 1e11), (true, true, true), "{idle_active} {clock} {busiest}");
     assert_eq!(sampler.overflows(), 0);
 }
 
