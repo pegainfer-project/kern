@@ -7,6 +7,7 @@ members = [
     "crates/kern-test",
     "crates/kern-trace",
     "crates/kern-run",
+    "crates/kern-sim",
     "crates/kern-serve",
     "crates/kern-py",
 ]
@@ -29,6 +30,7 @@ kern-runtime = { path = "crates/kern-runtime" }
 kern-test = { path = "crates/kern-test" }
 kern-trace = { path = "crates/kern-trace" }
 kern-run = { path = "crates/kern-run" }
+kern-sim = { path = "crates/kern-sim" }
 
 # The serving frontend (infront: the scheduler contract and vLLM's Rust
 # frontend behind it), pinned to a main commit and bumped deliberately. Its

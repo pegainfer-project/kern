@@ -1,0 +1,27 @@
+[package]
+name = "kern-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-CPU cost repricing, memory budgeting, and discrete-event cluster simulator for kern manifests"
+
+[[bin]]
+name = "kern-sim"
+path = "src/bin/kern-sim.rs"
+
+[dependencies]
+anyhow.workspace = true
+arrow-array.workspace = true
+clap.workspace = true
+hex.workspace = true
+kern-manifest.workspace = true
+kern-pool.workspace = true
+parquet.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true
