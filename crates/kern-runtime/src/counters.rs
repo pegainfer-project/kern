@@ -156,7 +156,7 @@ impl Sampler {
             pPmSamplingObject: s.sampling,
             pMetricNames: s.names.as_mut_ptr(),
             numMetrics: METRICS.len(),
-            maxSamples: (BACKLOG.as_nanos() / interval.as_nanos()) as u32,
+            maxSamples: (BACKLOG.as_nanos() / interval.as_nanos()).clamp(4, u32::MAX.into()) as u32,
         });
         ok(unsafe { cupti::cuptiPmSamplingGetCounterDataSize(&mut size) }, "counter data size")?;
         s.image = vec![0; size.counterDataSize];
