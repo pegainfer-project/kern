@@ -286,6 +286,28 @@ kern-serve's `--trace` (serve.md "Tracing"), a manifest hosted in another engine
 sglang.md "Tracing"), both writing kern-trace's files, and `kern bench`, whose samples are traced
 replays of a program's graph, any of its calls left out (`profile::Graph`, bench.md).
 
+**Counters (`kern_runtime::counters`)**: `Sampler::start(device, interval)` turns on CUPTI's PM
+sampling beside the trace (HES still stamps every kernel): every `interval` the GPU writes its
+performance-monitor counters into a 512 MiB host buffer itself, so no kernel is replayed or inserted.
+`collect()` decodes the buffer into back-to-back `Sample`s on the kernels' clock: SM clock, SM and
+tensor-pipe active (percent of elapsed cycles, averaged over SMs), DRAM bytes read and written per
+second. A sample is the whole device; steps and calls get theirs by a join on time where samples are
+read. CUPTI pitfalls the sampler handles:
+
+- the buffer must keep the latest records: the default keeps the oldest, and once full every decode
+  fails (`overflows()` counts decodes that found records overwritten);
+- `DecodeData`'s `size_of` includes tail padding, which CUPTI refuses; it gets CUPTI's size;
+- CUPTI reads the config and counter-availability images through their pointers while it samples, so
+  the sampler owns them;
+- a decode that fills the counter data image is followed by decodes that return nothing, and a decode
+  costs more the larger the image (at 100 µs: 22 µs a sample with room for 0.3 s, 36 µs with 2 s), so
+  the image holds 0.5 s and each collect decodes once;
+- the first sample's start is not a timestamp; it is dropped.
+
+Measured on GB300 (2026-11-16): ~24 µs of host time a sample (0.24 core at 100 µs), so `start`
+refuses intervals under 50 µs (`FLOOR`); the hardware samples no faster than ~20 µs anyway. Sampling
+draws ~35 W more at any interval and does not change kernel durations.
+
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、
 `KernelArtifact`（cubin 缺失/哈希不符/ABI 不匹配/peer launch 含 multicast

@@ -130,6 +130,12 @@ pub struct ServeOpts {
     #[arg(long, requires = "trace")]
     pub trace_dir: Option<PathBuf>,
 
+    /// With `--trace-dir`: sample the GPU's SM clock, SM and tensor activity
+    /// and DRAM traffic every this many microseconds (50 at least) into the
+    /// rank's files; 0 samples nothing
+    #[arg(long, default_value_t = 100)]
+    pub trace_pm_us: u64,
+
     /// Rows per sequence of a step: a shape some program of the manifest
     /// declares (1 for a plain step, its block for a speculative round).
     /// Default: the widest declared
@@ -292,7 +298,8 @@ fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
     log_manifest(&manifest);
     if o.trace {
         let meta = kern_trace::meta(&manifest, &manifest_json, &kern_run::VERSION);
-        let board = kernels::start(&manifest, o.rank.unwrap_or(0), o.trace_dir.clone(), meta)?;
+        let pm = (o.trace_pm_us > 0).then(|| (o.gpu, std::time::Duration::from_micros(o.trace_pm_us)));
+        let board = kernels::start(&manifest, o.rank.unwrap_or(0), o.trace_dir.clone(), meta, pm)?;
         if let Some(port) = o.trace_port {
             kernels::serve(board, port)?;
         }

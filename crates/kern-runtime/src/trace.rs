@@ -327,7 +327,7 @@ struct Sink {
 const CUPTI_MIN: u32 = 130300;
 const ENABLE_HES: cupti::CUpti_ActivityAttribute = cupti::CUpti_ActivityAttribute::CUPTI_ACTIVITY_ATTR_ENABLE_HES;
 
-fn ok(r: cupti::CUptiResult, what: &str) -> Result<()> {
+pub(crate) fn ok(r: cupti::CUptiResult, what: &str) -> Result<()> {
     match r {
         cupti::CUptiResult::CUPTI_SUCCESS => Ok(()),
         r => Err(Error::Cuda(format!("CUPTI {what}: {r:?}"))),

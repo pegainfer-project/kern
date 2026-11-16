@@ -1118,8 +1118,10 @@ A burst faster than the disk is refused instead (609 of 3842 puts in that run).
 `--trace` subscribes the process to CUPTI's hardware event system before any CUDA context exists
 (runtime.md "Tracing"): the GPU stamps every kernel's start and end itself, and each kernel is named by
 the manifest call that launched it. A thread collects every 200 ms and folds what arrived into four
-counters; with `--trace-dir` it also appends every kernel to Parquet files. Nothing is inserted between
-kernels.
+counters; with `--trace-dir` it also appends every kernel to Parquet files, and every `--trace-pm-us`
+microseconds (100 by default, 50 at least, 0 for none) the GPU's own counters beside them: SM clock,
+SM and tensor-pipe activity, DRAM reads and writes (runtime.md "Counters"). Nothing is inserted between
+kernels. Without `--trace-dir` the GPU is not sampled: sampling draws power and nothing would read it.
 
 **Endpoints.** Every rank, the head included, serves them with `--trace-port <p>` on that port of its
 own (the head's HTTP port is infront's); without it the rank still traces and records.
@@ -1155,9 +1157,11 @@ step's cost for the same work, comparable across ranks and days.
 ```text
 <dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.kernels.parquet
 <dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.steps.parquet
+<dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.counters.parquet
 ```
 
-named by the UTC time the pair was opened (its first write in that quarter). A pair is written as
+named by the UTC time the pair was opened (its first write in that quarter); the counters file joins
+the pair on the quarter's first samples and closes with it. A pair is written as
 `*.parquet.part` and renamed when it closes, at the next quarter hour, on `POST /kern/trace/rotate`,
 or when the process ends: returning from serving, or exiting because its group is gone, it writes the
 last collect (`trace::finish`) and closes the pair, giving that at most 3 s, so a reader that globs
@@ -1188,6 +1192,20 @@ hive-style partitions.
 | `graph` | bool | issued as a captured graph |
 | `start_ns`, `end_ns` | i64 | first kernel start, last kernel end, unix nanoseconds |
 
+`counters`, one row per sample, back to back, each the device's counters averaged over its window:
+
+| Column | Type | |
+|---|---|---|
+| `start_ns` | i64 | unix nanoseconds, on the kernels' time axis |
+| `dur_ns` | i64 | the interval asked for, to a few ns |
+| `sm_mhz` | u16 | SM clock |
+| `sm_active_permille` | u16 | elapsed cycles an SM had a warp resident, averaged over SMs |
+| `tensor_active_permille` | u16 | elapsed cycles the tensor pipes were busy, averaged over SMs |
+| `dram_read_gbs`, `dram_write_gbs` | u16 | DRAM bytes per second, GB/s |
+
+A sample is the whole device: a step's or call's counters are the samples inside its time, a join on
+`start_ns` within one rank's files (a call shorter than a window is read off many steps).
+
 Timestamps are CUPTI's clock moved by the offset to the wall clock sampled when the pair was opened,
 so ranks, files and logs share one time axis. Each file's key-value metadata: `kern.rank`,
 `kern.model`, `kern.manifest_sha256` (of the manifest JSON as read), `kern.version` (the binary's),
@@ -1207,6 +1225,19 @@ label set ([bench.md](bench.md), "A workload from a served trace").
 pair per rank, ~0.9 GB a day per rank. TTFT mean 2497.5 ms recording against 2495.9 ms without. The
 quarter-hour rotations and one forced rotate lost no step: the run's steps files hold
 1134 + 140 + 714 = 1988 rows, every step issued.
+
+**Measured, counters** (2026-11-16, one GB300, Qwen3.8-27B, the same 82-prompt load per arm):
+
+| | off | 100 µs | 50 µs |
+|---|---|---|---|
+| output tok/s | 393.9–394.5 | 395.2–395.5 | 395.1–395.3 |
+| trace thread | 0.03 core | 0.28 core | 0.52 core |
+| on disk, under load | | 4.9 B/sample, ~175 MB/h per rank | ~350 MB/h per rank |
+
+Windows land within 18 ns of the interval, with 5–6 sub-µs gaps in ~250k samples. A window's kernel
+coverage correlates 0.98 with `sm_active_permille`; a window no kernel covers reads 0.05% active.
+Joined to steps: decode 81–84% SM active, 2.5% tensor, 5.1–5.4 TB/s DRAM read; prefill 88% SM
+active, 56% tensor, 1.7 TB/s read.
 
 ## 没做（按需要加）
 
