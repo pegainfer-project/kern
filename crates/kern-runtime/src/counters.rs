@@ -9,17 +9,9 @@
 //! stamped in CUPTI's clock: the one [`crate::trace`] stamps kernels in, so
 //! a sample lines up with the kernels that ran inside it.
 //!
-//! A sample is device-wide. Which step or call it belongs to is a join on
-//! time, made where the samples are read: a step spans tens to hundreds of
-//! samples at 100 µs, and a call shorter than a window is read off many
-//! steps.
-//!
-//! What it costs, measured on GB300 (docs/serve.md "Tracing"): while
-//! sampling is on, the GPU draws about 35 W more whatever the interval,
-//! which only a workload at its power cap feels; kernel durations do not
-//! move between 1 ms and 10 µs. The host spends about 24 µs decoding and
-//! evaluating a sample, on the thread that collects, so an interval below
-//! [`FLOOR`] would take that thread most of a core.
+//! A sample is device-wide; which step or call it belongs to is a join on
+//! time where the samples are read. Costs and CUPTI's pitfalls:
+//! docs/runtime.md "Counters".
 
 use std::ffi::{c_char, CStr};
 use std::time::Duration;
@@ -85,17 +77,15 @@ pub struct Sampler {
 unsafe impl Send for Sampler {}
 
 /// A CUPTI parameter struct, zeroed but for its size and the fields named.
-/// The size is CUPTI's own, which ends at the last field: `size_of` counts
-/// the tail padding too, and CUPTI refuses a struct it does not know.
 macro_rules! params {
-    ($t:ident { $($f:ident: $v:expr),* $(,)? }) => {{ paste::paste! {
+    ($t:ident { $($f:ident: $v:expr),* $(,)? }) => {{
         // SAFETY: CUPTI's parameter structs are plain C: pointers, sizes and enums whose zero is a variant.
         #[allow(unused_unsafe)]
-        let mut p: cupti::[<CUpti_ $t>] = unsafe { std::mem::zeroed() };
-        p.structSize = cupti::[<$t _STRUCT_SIZE>] as usize;
+        let mut p: cupti::$t = unsafe { std::mem::zeroed() };
+        p.structSize = std::mem::size_of::<cupti::$t>();
         $(p.$f = $v;)*
         p
-    }}};
+    }};
 }
 
 impl Sampler {
@@ -107,7 +97,7 @@ impl Sampler {
             )));
         }
         cudarc::driver::result::init().map_err(|e| Error::Cuda(format!("cuInit: {e:?}")))?;
-        ok(unsafe { cupti::cuptiProfilerInitialize(&mut params!(Profiler_Initialize_Params {})) }, "profiler")?;
+        ok(unsafe { cupti::cuptiProfilerInitialize(&mut params!(CUpti_Profiler_Initialize_Params {})) }, "profiler")?;
         let mut s = Sampler {
             host: std::ptr::null_mut(),
             sampling: std::ptr::null_mut(),
@@ -119,14 +109,14 @@ impl Sampler {
             overflows: 0,
             begun: false,
         };
-        let mut chip = params!(Device_GetChipName_Params { deviceIndex: device });
+        let mut chip = params!(CUpti_Device_GetChipName_Params { deviceIndex: device });
         ok(unsafe { cupti::cuptiDeviceGetChipName(&mut chip) }, "chip name")?;
-        let mut avail = params!(PmSampling_GetCounterAvailability_Params { deviceIndex: device });
+        let mut avail = params!(CUpti_PmSampling_GetCounterAvailability_Params { deviceIndex: device });
         ok(unsafe { cupti::cuptiPmSamplingGetCounterAvailability(&mut avail) }, "counter availability")?;
         s.available = vec![0u8; avail.counterAvailabilityImageSize];
         avail.pCounterAvailabilityImage = s.available.as_mut_ptr();
         ok(unsafe { cupti::cuptiPmSamplingGetCounterAvailability(&mut avail) }, "counter availability")?;
-        let mut host = params!(Profiler_Host_Initialize_Params {
+        let mut host = params!(CUpti_Profiler_Host_Initialize_Params {
             profilerType: cupti::CUpti_ProfilerType::CUPTI_PROFILER_TYPE_PM_SAMPLING,
             pChipName: chip.pChipName,
             pCounterAvailabilityImage: s.available.as_ptr(),
@@ -134,25 +124,22 @@ impl Sampler {
         ok(unsafe { cupti::cuptiProfilerHostInitialize(&mut host) }, "profiler host")?;
         s.host = host.pHostObject;
         s.config = s.configure()?;
-        let mut enable = params!(PmSampling_Enable_Params { deviceIndex: device });
+        let mut enable = params!(CUpti_PmSampling_Enable_Params { deviceIndex: device });
         ok(unsafe { cupti::cuptiPmSamplingEnable(&mut enable) }, "enable PM sampling")?;
         s.sampling = enable.pPmSamplingObject;
-        let mut set = params!(PmSampling_SetConfig_Params {
+        let mut set = params!(CUpti_PmSampling_SetConfig_Params {
             pPmSamplingObject: s.sampling,
             configSize: s.config.len(),
             pConfig: s.config.as_ptr(),
             hardwareBufferSize: HARDWARE_BUFFER,
             samplingInterval: interval.as_nanos() as u64,
             triggerMode: cupti::CUpti_PmSampling_TriggerMode::CUPTI_PM_SAMPLING_TRIGGER_MODE_GPU_TIME_INTERVAL,
+            // The default keeps the oldest, and a full buffer then fails every later decode.
             hwBufferAppendMode:
                 cupti::CUpti_PmSampling_HardwareBuffer_AppendMode::CUPTI_PM_SAMPLING_HARDWARE_BUFFER_APPEND_MODE_KEEP_LATEST,
         });
-        // cudarc's size for it ends before `hwBufferAppendMode`, which CUPTI
-        // would then read as keep-oldest: a full buffer that fails every
-        // later decode.
-        set.structSize = std::mem::size_of_val(&set);
         ok(unsafe { cupti::cuptiPmSamplingSetConfig(&mut set) }, "PM sampling config")?;
-        let mut size = params!(PmSampling_GetCounterDataSize_Params {
+        let mut size = params!(CUpti_PmSampling_GetCounterDataSize_Params {
             pPmSamplingObject: s.sampling,
             pMetricNames: s.names.as_mut_ptr(),
             numMetrics: METRICS.len(),
@@ -163,7 +150,9 @@ impl Sampler {
         s.clear()?;
         ok(
             unsafe {
-                cupti::cuptiPmSamplingStart(&mut params!(PmSampling_Start_Params { pPmSamplingObject: s.sampling }))
+                cupti::cuptiPmSamplingStart(&mut params!(CUpti_PmSampling_Start_Params {
+                    pPmSamplingObject: s.sampling
+                }))
             },
             "start PM sampling",
         )?;
@@ -173,16 +162,16 @@ impl Sampler {
 
     /// The configuration image that asks the device for [`METRICS`].
     fn configure(&mut self) -> Result<Vec<u8>> {
-        let mut add = params!(Profiler_Host_ConfigAddMetrics_Params {
+        let mut add = params!(CUpti_Profiler_Host_ConfigAddMetrics_Params {
             pHostObject: self.host,
             ppMetricNames: self.names.as_mut_ptr(),
             numMetrics: METRICS.len(),
         });
         ok(unsafe { cupti::cuptiProfilerHostConfigAddMetrics(&mut add) }, "add metrics")?;
-        let mut size = params!(Profiler_Host_GetConfigImageSize_Params { pHostObject: self.host });
+        let mut size = params!(CUpti_Profiler_Host_GetConfigImageSize_Params { pHostObject: self.host });
         ok(unsafe { cupti::cuptiProfilerHostGetConfigImageSize(&mut size) }, "config image size")?;
         let mut config = vec![0u8; size.configImageSize];
-        let mut get = params!(Profiler_Host_GetConfigImage_Params {
+        let mut get = params!(CUpti_Profiler_Host_GetConfigImage_Params {
             pHostObject: self.host,
             configImageSize: config.len(),
             pConfigImage: config.as_mut_ptr(),
@@ -192,7 +181,7 @@ impl Sampler {
     }
 
     fn clear(&mut self) -> Result<()> {
-        let mut init = params!(PmSampling_CounterDataImage_Initialize_Params {
+        let mut init = params!(CUpti_PmSampling_CounterDataImage_Initialize_Params {
             pPmSamplingObject: self.sampling,
             counterDataSize: self.image.len(),
             pCounterData: self.image.as_mut_ptr(),
@@ -203,14 +192,16 @@ impl Sampler {
     /// The samples completed since the last collect, in time order: all of
     /// them unless more than [`BACKLOG`] waited, and then the rest next time.
     pub fn collect(&mut self) -> Result<Vec<Sample>> {
-        let mut decode = params!(PmSampling_DecodeData_Params {
+        let mut decode = params!(CUpti_PmSampling_DecodeData_Params {
             pPmSamplingObject: self.sampling,
             pCounterDataImage: self.image.as_mut_ptr(),
             counterDataImageSize: self.image.len(),
         });
+        // The one struct here `size_of` pads past CUPTI's size, which it refuses.
+        decode.structSize = std::mem::offset_of!(cupti::CUpti_PmSampling_DecodeData_Params, overflow) + 1;
         ok(unsafe { cupti::cuptiPmSamplingDecodeData(&mut decode) }, "decode PM samples")?;
         self.overflows += u64::from(decode.overflow != 0);
-        let mut info = params!(PmSampling_GetCounterDataInfo_Params {
+        let mut info = params!(CUpti_PmSampling_GetCounterDataInfo_Params {
             pCounterDataImage: self.image.as_ptr(),
             counterDataImageSize: self.image.len(),
         });
@@ -223,7 +214,7 @@ impl Sampler {
     }
 
     fn sample(&mut self, index: usize) -> Result<Sample> {
-        let mut info = params!(PmSampling_CounterData_GetSampleInfo_Params {
+        let mut info = params!(CUpti_PmSampling_CounterData_GetSampleInfo_Params {
             pPmSamplingObject: self.sampling,
             pCounterDataImage: self.image.as_ptr(),
             counterDataImageSize: self.image.len(),
@@ -231,7 +222,7 @@ impl Sampler {
         });
         ok(unsafe { cupti::cuptiPmSamplingCounterDataGetSampleInfo(&mut info) }, "sample info")?;
         let mut v = [0f64; 5];
-        let mut eval = params!(Profiler_Host_EvaluateToGpuValues_Params {
+        let mut eval = params!(CUpti_Profiler_Host_EvaluateToGpuValues_Params {
             pHostObject: self.host,
             pCounterDataImage: self.image.as_ptr(),
             counterDataImageSize: self.image.len(),
@@ -265,19 +256,21 @@ impl Drop for Sampler {
         // Teardown errors have no one left to act on them.
         unsafe {
             if self.started {
-                cupti::cuptiPmSamplingStop(&mut params!(PmSampling_Stop_Params { pPmSamplingObject: self.sampling }));
+                cupti::cuptiPmSamplingStop(&mut params!(CUpti_PmSampling_Stop_Params {
+                    pPmSamplingObject: self.sampling
+                }));
             }
             if !self.sampling.is_null() {
-                cupti::cuptiPmSamplingDisable(&mut params!(PmSampling_Disable_Params {
+                cupti::cuptiPmSamplingDisable(&mut params!(CUpti_PmSampling_Disable_Params {
                     pPmSamplingObject: self.sampling
                 }));
             }
             if !self.host.is_null() {
-                cupti::cuptiProfilerHostDeinitialize(&mut params!(Profiler_Host_Deinitialize_Params {
+                cupti::cuptiProfilerHostDeinitialize(&mut params!(CUpti_Profiler_Host_Deinitialize_Params {
                     pHostObject: self.host
                 }));
             }
-            cupti::cuptiProfilerDeInitialize(&mut params!(Profiler_DeInitialize_Params {}));
+            cupti::cuptiProfilerDeInitialize(&mut params!(CUpti_Profiler_DeInitialize_Params {}));
         }
     }
 }

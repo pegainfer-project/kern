@@ -2229,7 +2229,6 @@ dependencies = [
  "kern-manifest",
  "kern-pool",
  "libc",
- "paste",
  "safetensors",
  "serde_json",
  "sha2 0.11.0",

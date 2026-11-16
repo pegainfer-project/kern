@@ -1226,16 +1226,18 @@ pair per rank, ~0.9 GB a day per rank. TTFT mean 2497.5 ms recording against 249
 quarter-hour rotations and one forced rotate lost no step: the run's steps files hold
 1134 + 140 + 714 = 1988 rows, every step issued.
 
-**Measured, counters** (2026-11-16, one GB300, Qwen3.8-27B, 82 prose prompts at concurrency 1 / 3 / 8 /
-16, `max_tokens` 96, one fresh server per arm): output 393.9 / 394.5 tok/s without counters,
-395.2 / 395.2 / 395.5 at 100 µs and 395.1 / 395.3 at 50 µs, mean request latency 1.514–1.516 s in
-all; the trace thread at 0.03 core without counters, 0.28 at 100 µs, 0.52 at 50 µs. Samples tile the
-run back to back (`dur_ns` within 18 ns of the interval, 5–6 gaps of at most 0.1 µs in ~250k
-samples) at 4.8–4.9 bytes a sample under load, ~175 MB an hour per rank at 100 µs. Per sample, the
-fraction of its window some kernel covers correlates 0.98 with `sm_active_permille`, and a window no
-kernel covers reads 0.05% active. Joined to steps: decode 81–84% SM active, 2.5% tensor, 5.1–5.4 TB/s
-DRAM read at 1960 MHz; prefill 88% SM active, 56% tensor, 1.7 TB/s read and 0.5 TB/s written at
-1785 MHz. `--trace-pm-us 20` is refused at start.
+**Measured, counters** (2026-11-16, one GB300, Qwen3.8-27B, the same 82-prompt load per arm):
+
+| | off | 100 µs | 50 µs |
+|---|---|---|---|
+| output tok/s | 393.9–394.5 | 395.2–395.5 | 395.1–395.3 |
+| trace thread | 0.03 core | 0.28 core | 0.52 core |
+| on disk, under load | | 4.9 B/sample, ~175 MB/h per rank | ~350 MB/h per rank |
+
+Windows land within 18 ns of the interval, with 5–6 sub-µs gaps in ~250k samples. A window's kernel
+coverage correlates 0.98 with `sm_active_permille`; a window no kernel covers reads 0.05% active.
+Joined to steps: decode 81–84% SM active, 2.5% tensor, 5.1–5.4 TB/s DRAM read; prefill 88% SM
+active, 56% tensor, 1.7 TB/s read.
 
 ## 没做（按需要加）
 

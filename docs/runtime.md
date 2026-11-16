@@ -287,25 +287,26 @@ sglang.md "Tracing"), both writing kern-trace's files, and `kern bench`, whose s
 replays of a program's graph, any of its calls left out (`profile::Graph`, bench.md).
 
 **Counters (`kern_runtime::counters`)**: `Sampler::start(device, interval)` turns on CUPTI's PM
-sampling for one device beside the trace (with HES on in the same process every kernel is still
-stamped in hardware): every `interval` the GPU writes its performance-monitor counters into a 512 MiB host buffer
-by itself, so no kernel is replayed and nothing is inserted between kernels. `collect()` decodes what
-the buffer holds into `Sample`s, each `[start, end)` in the clock kernels are stamped in, back to back,
-with five values averaged over the window: SM clock (`gpc__cycles_elapsed.avg.per_second`), SM active
-and tensor pipe active (`sm__cycles_active`, `sm__pipe_tensor_cycles_active_realtime`, percent of
-elapsed cycles averaged over SMs) and DRAM bytes read and written per second. A sample is the whole
-device; which step or call it belongs to is a join on time where the samples are read. The first
-sample is dropped (its start is not a timestamp). The buffer keeps the latest records when full and
-`overflows()` counts the decodes that found records overwritten: CUPTI's default, keep the oldest,
-fails every decode after the buffer fills, and cudarc's size for the config struct ends before the
-field that says otherwise. CUPTI reads the config and counter-availability images through their
-pointers for as long as it samples, so the sampler owns them. One decode takes at most 0.5 s of
-samples: a decode that fills the counter data image hands back none on the decodes after it for a
-while, and a decode costs more the larger the image (at 100 µs, 22 µs a sample with room for 0.3 s,
-36 µs with 2 s). Measured on GB300 (2026-11-16): the host spends ~24 µs decoding and evaluating a
-sample, 0.24 core at 100 µs and 0.48 at 50 µs, so `start` refuses an interval under 50 µs (`FLOOR`);
-the hardware samples no faster than ~20 µs anyway. While sampling is on the GPU draws ~35 W more at
-any interval and kernel durations do not move between 1 ms and 10 µs.
+sampling beside the trace (HES still stamps every kernel): every `interval` the GPU writes its
+performance-monitor counters into a 512 MiB host buffer itself, so no kernel is replayed or inserted.
+`collect()` decodes the buffer into back-to-back `Sample`s on the kernels' clock: SM clock, SM and
+tensor-pipe active (percent of elapsed cycles, averaged over SMs), DRAM bytes read and written per
+second. A sample is the whole device; steps and calls get theirs by a join on time where samples are
+read. CUPTI pitfalls the sampler handles:
+
+- the buffer must keep the latest records: the default keeps the oldest, and once full every decode
+  fails (`overflows()` counts decodes that found records overwritten);
+- `DecodeData`'s `size_of` includes tail padding, which CUPTI refuses; it gets CUPTI's size;
+- CUPTI reads the config and counter-availability images through their pointers while it samples, so
+  the sampler owns them;
+- a decode that fills the counter data image is followed by decodes that return nothing, and a decode
+  costs more the larger the image (at 100 µs: 22 µs a sample with room for 0.3 s, 36 µs with 2 s), so
+  the image holds 0.5 s and each collect decodes once;
+- the first sample's start is not a timestamp; it is dropped.
+
+Measured on GB300 (2026-11-16): ~24 µs of host time a sample (0.24 core at 100 µs), so `start`
+refuses intervals under 50 µs (`FLOOR`); the hardware samples no faster than ~20 µs anyway. Sampling
+draws ~35 W more at any interval and does not change kernel durations.
 
 **错误分类**（`kern_runtime::Error`，按"谁需要行动"分变体）：
 `ManifestParse`/`ManifestVerify`/`Manifest`（provider 修生成器）、

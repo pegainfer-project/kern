@@ -61,8 +61,6 @@ hex = "0.4"
 io-uring = "0.7"
 libc = "0.2"
 memmap2 = "0.9"
-# CUPTI parameter structs and their `_STRUCT_SIZE` constants, named from one ident.
-paste = "1"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 safetensors = "=0.8.0"

@@ -12,7 +12,6 @@ cudarc.workspace = true
 half.workspace = true
 hex.workspace = true
 libc.workspace = true
-paste.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
