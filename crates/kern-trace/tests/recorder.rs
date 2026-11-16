@@ -5,8 +5,9 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{Array, Int64Array, RecordBatch, StringArray, UInt16Array};
 use kern_manifest::types::Manifest;
+use kern_runtime::counters::Sample;
 use kern_runtime::trace::{Collected, Issue, Kernel, Span, Step};
 use kern_trace::{meta, Now, Recorder, Sites};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -112,5 +113,58 @@ fn a_quarter_hour_closes_into_whole_files_that_name_calls_as_the_manifest_does()
     // What the rows cannot say: the GPU stamped them, and none was lost by the close.
     assert_eq!((says(&kernels, "kern.hes"), says(&steps, "kern.dropped_records")), (some("true"), some("0")));
     assert_eq!(r.rotate().unwrap(), Vec::<std::path::PathBuf>::new());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+fn uints(rows: &[RecordBatch], column: &str) -> Vec<u16> {
+    let of = |b: &RecordBatch| {
+        b.column_by_name(column).unwrap().as_any().downcast_ref::<UInt16Array>().unwrap().values().to_vec()
+    };
+    rows.iter().flat_map(of).collect()
+}
+
+#[test]
+fn counter_samples_join_the_pair_of_their_quarter_hour_in_integer_units() {
+    let m = Manifest::from_json(PAGED).unwrap();
+    let root = std::env::temp_dir().join(format!("kern-trace-counters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mut r = Recorder::new(root.clone(), 0, meta(&m, PAGED, "1.2.3"));
+    let t0 = 1_793_797_134 * SEC;
+    let now = |unix| Now { unix, cupti: 0, hes: Some(true) };
+    let sample = |start: u64, sm_active: f64| Sample {
+        start,
+        end: start + 100_000,
+        sm_clock: 1_965_400_000.0,
+        sm_active,
+        tensor_active: 12.345,
+        dram_read: 3_310_123_456_789.0,
+        dram_write: 0.4e6,
+    };
+    r.write(&collected(1, "decode", true, ("seqs", 4), 100), &Sites::new(&m), now(t0)).unwrap();
+    r.write_counters(&[sample(0, 97.004), sample(100_000, 0.0)], now(t0)).unwrap();
+    r.write_counters(&[sample(200_000, 50.0)], now(t0 + SEC)).unwrap();
+    let paths = r.rotate().unwrap();
+    let names: Vec<String> = paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["125854.kernels.parquet", "125854.steps.parquet", "125854.counters.parquet"]);
+
+    let c = rows(&paths[2]);
+    assert_eq!(
+        (ints(&c, "start_ns"), ints(&c, "dur_ns")),
+        ([t0, t0 + 100_000, t0 + 200_000].to_vec(), [100_000; 3].to_vec())
+    );
+    let first = |column| uints(&c, column)[0];
+    let units = (
+        first("sm_mhz"),
+        first("sm_active_permille"),
+        first("tensor_active_permille"),
+        first("dram_read_gbs"),
+        first("dram_write_gbs"),
+    );
+    assert_eq!((units, uints(&c, "sm_active_permille")), ((1965, 970, 123, 3310, 0), vec![970, 0, 500]));
+    assert_eq!(says(&paths[2], "kern.clock_offset_ns"), Some(t0.to_string()));
+
+    // A quarter hour with samples and no kernels still opens a pair for them.
+    r.write_counters(&[sample(0, 1.0)], now(t0 + 900 * SEC)).unwrap();
+    assert_eq!(r.rotate().unwrap().len(), 3);
     std::fs::remove_dir_all(&root).unwrap();
 }

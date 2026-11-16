@@ -25,10 +25,12 @@
 //!
 //! [`trace`] times every kernel through CUPTI and names it by the program
 //! issue and the call that launched it; off unless a caller starts it.
+//! [`counters`] samples the device's own counters on the same clock.
 //!
 
 mod compare;
 mod compile;
+pub mod counters;
 mod cubin;
 mod cublas;
 mod derive;

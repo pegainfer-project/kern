@@ -21,6 +21,14 @@
 //! stamped the kernels (`kern.hes`), and how many kernel records the
 //! process had lost when the file closed (`kern.dropped_records`).
 //!
+//! A rank that samples its GPU's counters ([`kern_runtime::counters`])
+//! writes them beside the pair, `HHMMSS.counters.parquet`, one row per
+//! sample: its window and the SM clock, SM and tensor-pipe activity and
+//! DRAM traffic averaged over it, as integers (MHz, permille, GB/s), on the
+//! same time axis as the kernels. The file joins its pair on
+//! the first samples written in that quarter hour, so a writer that samples
+//! nothing writes pairs as before.
+//!
 //! A Parquet file is readable once closed, when its footer is written:
 //! a pair closes at the next quarter hour, or when `rotate` asks. It is
 //! written as `….parquet.part` and renamed when closed, so a reader that
@@ -38,9 +46,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, UInt64Array};
+use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, UInt16Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use kern_manifest::types::Manifest;
+use kern_runtime::counters::Sample;
 use kern_runtime::trace::{self, Collected, Step};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding, ZstdLevel};
@@ -123,7 +132,15 @@ struct Open {
     offset: i64,
     kernels: ArrowWriter<File>,
     steps: ArrowWriter<File>,
-    paths: [PathBuf; 2],
+    /// From the quarter hour's first samples.
+    counters: Option<ArrowWriter<File>>,
+    /// `<dir>/HHMMSS`, which every file of the quarter hour extends.
+    stem: PathBuf,
+    meta: Vec<KeyValue>,
+}
+
+fn named(stem: &Path, table: &str) -> PathBuf {
+    stem.with_extension(format!("{table}.parquet"))
 }
 
 pub struct Recorder {
@@ -143,6 +160,35 @@ fn kernels_schema() -> SchemaRef {
         Field::new("op", DataType::Utf8, true),
         Field::new("kernel", DataType::Utf8, false),
     ]))
+}
+
+/// A counter column and the sample's value in its unit, rounded to u16:
+/// coarser units would lose what a reader compares, finer ones cost bytes
+/// on disk that no reading needs.
+const COUNTERS: [(&str, fn(&Sample) -> f64); 5] = [
+    ("sm_mhz", |s| s.sm_clock / 1e6),
+    ("sm_active_permille", |s| s.sm_active * 10.0),
+    ("tensor_active_permille", |s| s.tensor_active * 10.0),
+    ("dram_read_gbs", |s| s.dram_read / 1e9),
+    ("dram_write_gbs", |s| s.dram_write / 1e9),
+];
+
+fn counters_schema() -> SchemaRef {
+    let window = [Field::new("start_ns", DataType::Int64, false), Field::new("dur_ns", DataType::Int64, false)];
+    let counters = COUNTERS.map(|(name, _)| Field::new(name, DataType::UInt16, false));
+    Arc::new(Schema::new([window.as_slice(), counters.as_slice()].concat()))
+}
+
+/// The samples as rows, timestamps moved by `offset`.
+fn counter_batch(samples: &[Sample], offset: i64) -> Result<RecordBatch> {
+    let window: [ArrayRef; 2] = [
+        Arc::new(samples.iter().map(|s| s.start as i64 + offset).collect::<Int64Array>()),
+        Arc::new(samples.iter().map(|s| s.end.saturating_sub(s.start) as i64).collect::<Int64Array>()),
+    ];
+    let counters = COUNTERS.map(|(_, value)| -> ArrayRef {
+        Arc::new(samples.iter().map(|s| value(s).round() as u16).collect::<UInt16Array>())
+    });
+    Ok(RecordBatch::try_new(counters_schema(), [window.as_slice(), counters.as_slice()].concat())?)
 }
 
 fn steps_schema() -> SchemaRef {
@@ -245,21 +291,53 @@ impl Recorder {
     /// Appends what was collected to the open pair, first closing it if
     /// `now` is past its quarter hour and opening one if none is.
     pub fn write(&mut self, c: &Collected, sites: &Sites, now: Now) -> Result<()> {
-        let secs = (now.unix / SEC) as u64;
-        if self.open.as_ref().is_some_and(|o| o.quarter != secs / QUARTER) {
-            self.rotate()?;
-        }
         if c.steps.is_empty() && c.unclaimed.is_empty() {
-            return Ok(());
+            return self.roll(now);
         }
-        let open = match &mut self.open {
-            Some(o) => o,
-            None => self.open.insert(self.create(now)?),
-        };
+        let open = self.current(now)?;
         let (kernels, steps) = batches(c, sites, open.offset)?;
         open.kernels.write(&kernels)?;
         open.steps.write(&steps)?;
         Ok(())
+    }
+
+    /// Appends counter samples beside the open pair, as [`Recorder::write`]
+    /// appends kernels.
+    pub fn write_counters(&mut self, samples: &[Sample], now: Now) -> Result<()> {
+        if samples.is_empty() {
+            return self.roll(now);
+        }
+        let open = self.current(now)?;
+        let batch = counter_batch(samples, open.offset)?;
+        let w = match &mut open.counters {
+            Some(w) => w,
+            None => {
+                let schema = counters_schema();
+                let every: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                open.counters.insert(writer(&named(&open.stem, "counters"), schema.clone(), open.meta.clone(), &every)?)
+            }
+        };
+        w.write(&batch)?;
+        Ok(())
+    }
+
+    /// Closes the open pair if `now` is past its quarter hour.
+    fn roll(&mut self, now: Now) -> Result<()> {
+        let quarter = (now.unix / SEC) as u64 / QUARTER;
+        match self.open.as_ref().is_some_and(|o| o.quarter != quarter) {
+            true => self.rotate().map(drop),
+            false => Ok(()),
+        }
+    }
+
+    /// The pair of `now`'s quarter hour, opened if none is.
+    fn current(&mut self, now: Now) -> Result<&mut Open> {
+        self.roll(now)?;
+        let open = match self.open.take() {
+            Some(o) => o,
+            None => self.create(now)?,
+        };
+        Ok(self.open.insert(open))
     }
 
     fn create(&self, now: Now) -> Result<Open> {
@@ -275,17 +353,20 @@ impl Recorder {
             .chain(now.hes.map(|hes| ("kern.hes".to_string(), hes.to_string())))
             .map(|(k, v)| KeyValue::new(k, v))
             .collect();
-        let paths = [dir.join(format!("{time}.kernels.parquet")), dir.join(format!("{time}.steps.parquet"))];
+        let stem = dir.join(time);
         Ok(Open {
             quarter: secs / QUARTER,
             offset: now.offset(),
-            kernels: writer(&paths[0], kernels_schema(), meta.clone(), &["seq", "start_ns", "dur_ns"])?,
-            steps: writer(&paths[1], steps_schema(), meta, &["seq", "kv", "start_ns", "end_ns"])?,
-            paths,
+            kernels: writer(&named(&stem, "kernels"), kernels_schema(), meta.clone(), &["seq", "start_ns", "dur_ns"])?,
+            steps: writer(&named(&stem, "steps"), steps_schema(), meta.clone(), &["seq", "kv", "start_ns", "end_ns"])?,
+            counters: None,
+            stem,
+            meta,
         })
     }
 
-    /// Closes the open pair, making it readable; returns its paths.
+    /// Closes the open pair, and its counters if any, making them
+    /// readable; returns their paths.
     pub fn rotate(&mut self) -> Result<Vec<PathBuf>> {
         let Some(mut o) = self.open.take() else { return Ok(Vec::new()) };
         for w in [&mut o.kernels, &mut o.steps] {
@@ -296,10 +377,15 @@ impl Recorder {
         }
         o.kernels.close()?;
         o.steps.close()?;
-        for p in &o.paths {
+        let mut paths = vec![named(&o.stem, "kernels"), named(&o.stem, "steps")];
+        if let Some(w) = o.counters {
+            w.close()?;
+            paths.push(named(&o.stem, "counters"));
+        }
+        for p in &paths {
             std::fs::rename(part(p), p).with_context(|| format!("renaming {}", part(p).display()))?;
         }
-        Ok(o.paths.to_vec())
+        Ok(paths)
     }
 }
 

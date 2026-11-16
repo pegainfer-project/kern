@@ -4,7 +4,9 @@ When `kern-serve` runs with `--trace --trace-dir <DIR>` (or a hosted manifest
 runs with `KERN_TRACE_DIR=<DIR>`), CUPTI's hardware event system (HES)
 timestamps every GPU kernel execution in hardware without inserting
 synchronization between launches. Each rank streams those records into pairs of
-Apache Parquet files.
+Apache Parquet files. `kern-serve` also samples the GPU's own performance
+counters every 100 µs by default (`--trace-pm-us`, `0` to turn off) into a third
+file beside each pair.
 
 [Trace an SGLang server](/guides/trace-sglang) records a hosted manifest step by
 step, with a sample trace to query.
@@ -20,10 +22,12 @@ directories:
 ```text
 <trace-dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.steps.parquet
 <trace-dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.kernels.parquet
+<trace-dir>/date=YYYY-MM-DD/rank=<q>/HHMMSS.counters.parquet
 ```
 
 `HHMMSS` is the UTC wall-clock time when the pair opened on its first write in
-that quarter hour. While open, both files carry a `.parquet.part` suffix; they
+that quarter hour. The counters file, when the rank samples counters, opens and
+closes with the pair. While open, the files carry a `.parquet.part` suffix; they
 are closed and atomically renamed to `.parquet` at the next quarter-hour
 boundary, on `POST /kern/trace/rotate` (served on `--trace-port`), or on clean
 process exit. Globbing `*.parquet` reads only finalized files.
@@ -87,6 +91,26 @@ Sample rows from the matching `kernels.parquet` file (note that a single manifes
 | `3` | `1794373679870704824` | `1056` | `l3.attention` | `verify_attention_flashinfer` | `quantize_q` |
 | `3` | `1794373679870706040` | `8000` | `l3.attention` | `verify_attention_flashinfer` | `prefill_fp8` |
 | `null` | `1794373680124006590` | `2592` | `null` | `null` | `flag` |
+
+### `counters.parquet`
+
+One row per counter sample on that rank, back to back in time. Each row is the
+whole GPU's counters averaged over the sample's window, read by the GPU itself
+with no kernel replayed or inserted:
+
+| Column | Arrow type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `start_ns` | `Int64` | No | Window start in Unix nanoseconds, on the same timeline as `kernels.start_ns` |
+| `dur_ns` | `Int64` | No | Window length in nanoseconds (the `--trace-pm-us` interval) |
+| `sm_mhz` | `UInt16` | No | SM clock in MHz |
+| `sm_active_permille` | `UInt16` | No | Permille of elapsed cycles an SM had a warp resident, averaged over SMs |
+| `tensor_active_permille` | `UInt16` | No | Permille of elapsed cycles the tensor pipes were busy, averaged over SMs |
+| `dram_read_gbs` | `UInt16` | No | DRAM read bandwidth in GB/s |
+| `dram_write_gbs` | `UInt16` | No | DRAM write bandwidth in GB/s |
+
+Sampling raises the GPU's power draw by about 35 W at any interval and does not
+change kernel durations. The interval cannot go below 50 µs, because the host
+spends about 20 µs decoding each sample.
 
 ### Joining tables and reading metadata
 
@@ -153,6 +177,24 @@ JOIN read_parquet('traces/date=*/rank=*/*.kernels.parquet') k
 GROUP BY s.program, s.shape, k.op
 ORDER BY gpu_ms DESC
 LIMIT 15;
+```
+
+Counters join on time instead of `seq`. A step's counters are the samples that
+fall inside it:
+
+```sql
+SELECT
+  s.program,
+  count(*) AS samples,
+  round(avg(c.sm_active_permille) / 10, 1) AS sm_active_pct,
+  round(avg(c.tensor_active_permille) / 10, 1) AS tensor_pct,
+  round(avg(c.dram_read_gbs)) AS dram_read_gbs
+FROM read_parquet('traces/date=*/rank=*/*.steps.parquet') s
+JOIN read_parquet('traces/date=*/rank=*/*.counters.parquet') c
+  ON c.rank = s.rank
+ AND c.start_ns >= s.start_ns
+ AND c.start_ns + c.dur_ns <= s.end_ns
+GROUP BY s.program;
 ```
 
 Grouping `steps` by `kv` buckets (for example `floor(kv / 32768) * 32768`) with

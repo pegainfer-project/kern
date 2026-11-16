@@ -23,7 +23,12 @@
 //! their time was settled.
 //!
 //! With `--trace-dir` every kernel is also kept on disk
-//! ([`kern_trace::Recorder`]); `POST /kern/trace/rotate` closes the files being
+//! ([`kern_trace::Recorder`]), and every `--trace-pm-us` (100 µs unless 0)
+//! the GPU's clock, SM and tensor activity and DRAM traffic beside it
+//! ([`kern_runtime::counters`]): device-wide samples a reader joins to steps
+//! and calls on time. Without `--trace-dir` nothing is sampled, since
+//! sampling costs the GPU power and nothing would read the samples.
+//! `POST /kern/trace/rotate` closes the files being
 //! written so the last minutes can be read without waiting for the
 //! quarter hour. Both endpoints are served on `--trace-port`, on every
 //! rank alike; without it a rank still traces and records.
@@ -46,6 +51,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use kern_manifest::types::{Arg, BufferKind, Call, Launch, Manifest};
+use kern_runtime::counters::{Sample, Sampler};
 use kern_runtime::trace::{self, Collected};
 use kern_trace::{shape, Now, Recorder, Sites};
 use serde_json::json;
@@ -230,6 +236,9 @@ pub struct Tracing {
     board: Mutex<Board>,
     /// `None` without `--trace-dir`, and once the last collect closed it.
     recorder: Mutex<Option<Recorder>>,
+    /// Taken under the recorder's lock; `None` unless sampling, and once
+    /// the last collect stopped it.
+    sampler: Mutex<Option<Sampler>>,
 }
 
 pub type Shared = Arc<Tracing>;
@@ -241,24 +250,63 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Writes `c` while the files are open, then folds it into the board.
-fn settle(board: &Mutex<Board>, r: &mut Option<Recorder>, c: Collected, now: Now) -> anyhow::Result<()> {
+/// Writes `c` and `samples` while the files are open, then folds `c` into
+/// the board.
+fn settle(
+    board: &Mutex<Board>,
+    r: &mut Option<Recorder>,
+    c: Collected,
+    samples: &[Sample],
+    now: Now,
+) -> anyhow::Result<()> {
     let mut board = lock(board);
     let written = match r {
-        Some(r) => r.write(&c, &board.sites, now),
+        Some(r) => r.write(&c, &board.sites, now).and_then(|()| r.write_counters(samples, now)),
         None => Ok(()),
     };
     board.fold(c, now.cupti);
     written
 }
 
+/// What the sampler holds. One that fails is stopped, since what failed
+/// (its buffer, the device) fails every collect after.
+fn samples(sampler: &mut Option<Sampler>) -> Vec<Sample> {
+    let Some(s) = sampler else { return Vec::new() };
+    let overflows = s.overflows();
+    match s.collect() {
+        Ok(samples) => {
+            if overflows == 0 && s.overflows() > 0 {
+                warn!("trace counters: the hardware buffer overwrote samples before they were read");
+            }
+            samples
+        }
+        Err(e) => {
+            warn!(error = %e, "trace counters stopped");
+            *sampler = None;
+            Vec::new()
+        }
+    }
+}
+
 /// Subscribes CUPTI (before any context) and starts the thread that folds
-/// what it collects, and writes it under `dir` when given.
-pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String, String)>) -> anyhow::Result<Shared> {
+/// what it collects, and writes it under `dir` when given, with the
+/// counters of device `pm.0` every `pm.1`.
+pub fn start(
+    m: &Manifest,
+    rank: usize,
+    dir: Option<PathBuf>,
+    meta: Vec<(String, String)>,
+    pm: Option<(usize, Duration)>,
+) -> anyhow::Result<Shared> {
     trace::start()?;
+    let sampler = match (&dir, pm) {
+        (Some(_), Some((gpu, every))) => Some(Sampler::start(gpu, every)?),
+        _ => None,
+    };
     let t = Arc::new(Tracing {
         board: Mutex::new(Board::new(m, rank)),
         recorder: Mutex::new(dir.map(|d| Recorder::new(d, rank, meta))),
+        sampler: Mutex::new(sampler),
     });
     TRACING.set(t.clone()).map_err(|_| anyhow::anyhow!("tracing started twice"))?;
     let shared = t.clone();
@@ -267,6 +315,7 @@ pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String,
         loop {
             std::thread::sleep(EVERY);
             let mut r = lock(&t.recorder);
+            let samples = samples(&mut lock(&t.sampler));
             let (c, now) = match trace::collect().and_then(|c| Ok((c, Now::read()?))) {
                 Ok(v) => v,
                 Err(e) => {
@@ -280,7 +329,7 @@ pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String,
                 info!(hes = ?trace::hes(), behind_ms, "tracing kernels");
                 told = true;
             }
-            match settle(&t.board, &mut r, c, now) {
+            match settle(&t.board, &mut r, c, &samples, now) {
                 Ok(()) => failing = false,
                 Err(e) if !failing => {
                     warn!(error = %format!("{e:#}"), "trace dir");
@@ -298,7 +347,11 @@ pub fn start(m: &Manifest, rank: usize, dir: Option<PathBuf>, meta: Vec<(String,
 pub fn finish() {
     let Some(t) = TRACING.get() else { return };
     let mut r = lock(&t.recorder);
-    let settled = trace::finish().map_err(anyhow::Error::from).and_then(|c| settle(&t.board, &mut r, c, Now::read()?));
+    let mut sampler = lock(&t.sampler).take();
+    let samples = samples(&mut sampler);
+    drop(sampler);
+    let settled =
+        trace::finish().map_err(anyhow::Error::from).and_then(|c| settle(&t.board, &mut r, c, &samples, Now::read()?));
     if let Err(e) = settled {
         warn!(error = %format!("{e:#}"), "trace finish");
     }
