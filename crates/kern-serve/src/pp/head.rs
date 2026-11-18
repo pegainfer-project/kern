@@ -1039,10 +1039,10 @@ impl PpHead {
             .collect();
         let context = self.bounds.context.min(i64::MAX as usize) as i64;
         let now = self.clock();
+        let t0 = Instant::now();
         self.meter.forget(now);
         let d = self.meter.decision(now, &seqs, flying, &self.cost, context);
         let (load, util) = (d.load, d.util);
-        let t0 = Instant::now();
         let cap = self.policy.cap(&d).min(self.bounds.rows as i64);
         let decide_us = t0.elapsed().as_micros() as u64;
         let turn = Turn::of(&seqs, self.depth);
