@@ -12,9 +12,10 @@
 //! candidate is first held to the manifest's own outputs, scenario by
 //! scenario: the tokens and counts the program hands back, and every row
 //! of every distribution over tokens it writes (a `logits*` buffer, or any
-//! float buffer as wide as the vocabulary). It holds where those are
-//! identical, or where every row is within the KL `kern test` allows a
-//! swap, so that a token that moved under it moved on a tie. Anything else
+//! float buffer as wide as the vocabulary), on every rank. It holds where
+//! those are identical, or where every row is within the KL `kern test`
+//! allows a swap and the outputs moved only where some row changed its
+//! argmax, so that a token that moved under it moved on a tie. Anything else
 //! is measured and reported and never chosen: whether a different
 //! distribution is acceptable is a decision, not a measurement. A scenario
 //! that hands nothing back holds a candidate to nothing, and nothing is
@@ -40,14 +41,14 @@ use anyhow::{bail, ensure, Context, Result};
 use kern_manifest::candidate::{splice, tile, Candidate, Piece};
 use kern_manifest::types::{DType, Dim, Op};
 use kern_manifest::{Protocol, Verified};
-use kern_runtime::{At, HostWeights, Resident, Runtime, Scratch};
+use kern_runtime::{At, HostWeights, Logit, Resident, Runtime, Scratch};
 use kern_test::compare::TOP;
 use kern_test::diff::{access, live_bytes, logits_of};
 use serde_json::{json, Value};
 
-use super::pick::{pick, Table, Tiling};
+use super::pick::{gaps, pick, Table, Tiling};
 use super::workload::{Scenario, Workload};
-use super::{output_fingerprints, preamble, say, say_timed, BenchOpts};
+use super::{output_fingerprints, preamble, say, say_timed, BenchOpts, Rank};
 use crate::{Inputs, Vars};
 
 /// How far a logits row may move and the candidate still stand for the
@@ -252,6 +253,9 @@ struct Judged {
     scenarios: usize,
     /// Scenarios whose tokens or counts are not the manifest's.
     outputs_differ: usize,
+    /// Of those, the ones in which no row changed its argmax: nothing the
+    /// distributions show moved the outputs.
+    unexplained: usize,
     rows: usize,
     rows_differ: usize,
     kl_sum: f64,
@@ -263,7 +267,19 @@ struct Judged {
     flip_margin: f64,
 }
 
-fn judge(rt: &Runtime, p: &Protocol, s: &Scenario, kept: &Kept) -> Result<Judged> {
+/// A row's KL as `kern test` reads it: infinite when it is not a number
+/// or one side has a NaN the other has not.
+fn kl(l: &Logit) -> f64 {
+    match l.cmp.nan_one_side == 0 && l.kl.is_finite() {
+        true => l.kl.max(0.),
+        false => f64::INFINITY,
+    }
+}
+
+/// One rank's outputs against what the manifest handed back on it.
+fn judge_rank(rt: &Runtime, p: &Protocol, s: &Scenario, kept: &Kept) -> Result<Judged> {
+    // The outputs first: reading them binds this rank's context for the rows.
+    let moved = output_fingerprints(rt, p, s.shape.groups)? != kept.outputs;
     let rows = kept
         .logits
         .iter()
@@ -275,14 +291,28 @@ fn judge(rt: &Runtime, p: &Protocol, s: &Scenario, kept: &Kept) -> Result<Judged
     let flips = || rows.iter().filter(|l| l.argmax_a != l.argmax_b);
     Ok(Judged {
         scenarios: (!kept.outputs.is_empty() || !rows.is_empty()) as usize,
-        outputs_differ: (output_fingerprints(rt, p, s.shape.groups)? != kept.outputs) as usize,
+        outputs_differ: moved as usize,
+        unexplained: (moved && flips().count() == 0) as usize,
         rows: rows.len(),
         rows_differ: rows.iter().filter(|l| l.cmp.n_diff > 0).count(),
-        kl_sum: rows.iter().map(|l| l.kl).sum(),
-        kl_max: rows.iter().map(|l| l.kl).fold(0., f64::max),
+        kl_sum: rows.iter().map(kl).sum(),
+        kl_max: rows.iter().map(kl).fold(0., f64::max),
         flips: flips().count(),
-        flips_beyond: flips().filter(|l| l.kl > LOGIT_KL).count(),
+        flips_beyond: flips().filter(|l| kl(l) > LOGIT_KL).count(),
         flip_margin: flips().map(|l| l.top1 - l.top2).fold(0., f64::max),
+    })
+}
+
+/// A scenario on every rank against what the manifest handed back on each:
+/// one scenario, whatever any rank moved.
+fn judge(ranks: &[Rank], p: &Protocol, s: &Scenario, kept: &[Kept]) -> Result<Judged> {
+    let each = ranks.iter().zip(kept).map(|(r, k)| judge_rank(&r.rt, p, s, k)).collect::<Result<Vec<_>>>()?;
+    let all = each.into_iter().fold(Judged::default(), Judged::and);
+    Ok(Judged {
+        scenarios: all.scenarios.min(1),
+        outputs_differ: all.outputs_differ.min(1),
+        unexplained: all.unexplained.min(1),
+        ..all
     })
 }
 
@@ -291,6 +321,7 @@ impl Judged {
         Judged {
             scenarios: self.scenarios + o.scenarios,
             outputs_differ: self.outputs_differ + o.outputs_differ,
+            unexplained: self.unexplained + o.unexplained,
             rows: self.rows + o.rows,
             rows_differ: self.rows_differ + o.rows_differ,
             kl_sum: self.kl_sum + o.kl_sum,
@@ -301,12 +332,15 @@ impl Judged {
         }
     }
 
-    /// Tokens that moved with no distribution to read them against differ.
+    /// Within the limit means every row is, and tokens or counts moved
+    /// only where some row changed its argmax: on a tie. Outputs that moved
+    /// under distributions that chose the same tokens differ, however
+    /// close the distributions are.
     fn verdict(&self) -> Verdict {
         match self {
             j if j.scenarios == 0 => Verdict::Unjudged,
             j if j.outputs_differ == 0 && j.rows_differ == 0 => Verdict::Identical,
-            j if j.rows > 0 && j.kl_max <= LOGIT_KL => Verdict::Within,
+            j if j.rows > 0 && j.kl_max <= LOGIT_KL && j.unexplained == 0 => Verdict::Within,
             _ => Verdict::Differs,
         }
     }
@@ -333,7 +367,7 @@ impl Judged {
         json!({"verdict": self.verdict().word(), "rows": self.rows, "rows_differ": self.rows_differ,
             "kl_max": self.kl_max, "kl_mean": self.kl_sum / self.rows.max(1) as f64, "flips": self.flips,
             "flips_beyond": self.flips_beyond, "flip_margin": self.flip_margin,
-            "outputs_differ": self.outputs_differ > 0})
+            "outputs_differ": self.outputs_differ > 0, "outputs_unexplained": self.unexplained > 0})
     }
 }
 
@@ -346,7 +380,8 @@ struct Session<'a> {
     corpus: Vec<i64>,
     host_weights: HostWeights,
     resident: Option<Vec<Resident>>,
-    kept: Option<Vec<Kept>>,
+    /// What the manifest's first run handed back, per scenario per rank.
+    kept: Option<Vec<Vec<Kept>>>,
     ids: Vec<String>,
     header: Value,
 }
@@ -372,13 +407,14 @@ impl Session<'_> {
             .enumerate()
             .map(|(i, s)| {
                 let (_, priced) = bench.scenario(s)?;
-                let rt = &bench.ranks[0].rt;
+                let (ranks, p) = (&bench.ranks, &bench.protocol);
                 let judged = match &self.kept {
                     None => {
-                        now.push(keep(rt, &bench.protocol, s, &priced.vars)?);
+                        let kept = ranks.iter().map(|r| keep(&r.rt, p, s, &priced.vars));
+                        now.push(kept.collect::<Result<Vec<_>>>()?);
                         None
                     }
-                    Some(kept) => Some(judge(rt, &bench.protocol, s, &kept[i])?),
+                    Some(kept) => Some(judge(ranks, p, s, &kept[i])?),
                 };
                 let ops = priced.shares.iter().map(|(op, f)| (op.clone(), priced.us * f)).collect();
                 let (id, weight) = (s.id.clone(), s.shape.weight);
@@ -527,6 +563,11 @@ impl Measured<'_> {
                     seconds(tiling.cost)
                 ),
             );
+            let unmeasured = gaps(&t, &tiling);
+            for (below, above) in &unmeasured {
+                let between = format!("{}..{}", below + 1, above - 1);
+                say("gap", format!("{op} · {over}{between} unmeasured · the boundary after {below} is a guess"));
+            }
             let ranges: Vec<Value> = tiling
                 .ranges
                 .iter()
@@ -534,7 +575,7 @@ impl Measured<'_> {
                 .collect();
             // An infinite cost, where a candidate does not hold, is written as null.
             let record = json!({"op": op, "var": var, "values": t.values, "candidates": names, "costs_us": t.costs,
-                "noise": noise, "ranges": ranges, "cost_us": tiling.cost, "floor_us": tiling.floor, "baseline_us": was});
+                "noise": noise, "ranges": ranges, "gaps": unmeasured, "cost_us": tiling.cost, "floor_us": tiling.floor, "baseline_us": was});
             picks.push((chosen, tiling.cost - was, record));
         }
         let picked = Candidate::join(picks.iter().map(|p| &p.0)).context("joining the picks")?;
