@@ -97,9 +97,9 @@ pub struct ServeOpts {
     pub pp_ahead: usize,
 
     /// On the head of a pipeline: what caps the next item's rows, in the
-    /// simulator's syntax (`fixed16384`, `depth2048/16384/24`, `time12288`,
-    /// `mpca12288/196608`, `ladder`, ...; `pp::policy`). Default: the
-    /// admitted rows spread over 24 items, within 2048 and the chunk
+    /// simulator's syntax (`fixed16384`, `depth2048/16384/24`, `dck8192/0.75`,
+    /// `headway10240/12288`, ...; `pp::policy`). Default: the admitted rows
+    /// spread over 24 items, within 2048 and the chunk
     #[arg(long)]
     pub pp_policy: Option<String>,
 
@@ -108,10 +108,10 @@ pub struct ServeOpts {
     #[arg(long)]
     pub pp_cost: Option<std::path::PathBuf>,
 
-    /// On the head of a pipeline: a third offered-load reading, the
-    /// waiting prompts' remaining work spread over this many seconds
-    /// (`pp::policy::Meter`; 0, the default, reads only admissions)
-    #[arg(long, default_value_t = 0.0)]
+    /// On the head of a pipeline: seconds the waiting prompts' remaining
+    /// work is spread over for the backlog reading of offered load
+    /// (`pp::policy::Meter`; 0 reads only admissions)
+    #[arg(long, default_value_t = 6.0)]
     pub pp_backlog: f64,
 
     /// Per-sequence state slots per rank: the running sequences' plus the

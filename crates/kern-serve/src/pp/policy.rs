@@ -3,6 +3,16 @@
 //!
 //! ```text
 //! fixed<N>               N
+//! dck<init>/<sigma>      SGLang's dynamic chunking: the rows at which the first sequence in turn, at its
+//!                        context, costs what init rows cost at context 0, moved from init toward them by
+//!                        sigma, at least init / 4
+//! hwang<slo>/<fresh>     Hwang & Ahn's predictive chunking (OSDI '26) on the prefill side: among 1024 to
+//!                        16384 rows in steps of 1024, the smallest cap whose packed item's rows per
+//!                        slowest-stage time meet the demand, within the caps whose item crosses an empty
+//!                        pipeline (stages times its slowest stage) within slo ms; demand is the new rows
+//!                        admitted per µs over the last minute plus the rows to go of the prompts waiting
+//!                        more than fresh ms over slo less their mean wait; with no cap meeting it (or no
+//!                        time left), the largest within slo, else 1024
 //! depth<lo>/<hi>/<n>     the admitted prompts' rows to go spread over n items, within [lo, hi]
 //! time<N>                the most rows whose item's slowest stage costs at most what N rows cost at
 //!                        context 0, up to 16384
@@ -19,17 +29,22 @@
 //!                        commit, u the head's utilization (at most 0.95), plus mpclb's term at weight x
 //! <policy>^<N>           the policy's cap cut to time<N>'s rows when those are fewer
 //! lad<p1>@<l1>+...+<top> the first rung p_i whose bound l_i exceeds the measured offered load, else top
-//! ladder                 lad mpclb1@0.45 + mpch10240@0.55 + time12288@0.85 + mpcp1
+//! headway<N1>/<N2>       lad mpclb1@0.45 + mpch<N1>@0.55 + time<N2>@0.85 + mpcp1: the rollout free, under
+//!                        a ceiling, replaced by equal-time items, and priced, as the load rises
 //! ```
+//!
+//! The two prior-work rules keep no state across decisions: Hwang & Ahn's
+//! online refit of the predictor is the head's own model here.
 //!
 //! The head measures two loads from its own records ([`Meter`]). Offered
 //! load is the slowest-stage time, under its model, that the admissions
 //! of the last minute need in 8192-row chunks, each prompt counted for at
-//! most 32768 new rows, per second; the larger of that over 60 s and over
-//! 15 s, so it rises fast and falls slowly. Utilization is the
-//! slowest-stage time of the items it sent in the last minute, per second.
-//! Neither needs a stage to report: the head knows what it admitted and
-//! sent, and what its model says that costs.
+//! most 32768 new rows, per second; the largest of that over 60 s, over
+//! 15 s, and the waiting prompts' remaining work spread over
+//! `--pp-backlog` seconds, so it rises fast and falls slowly. Utilization
+//! is the slowest-stage time of the items it sent in the last minute, per
+//! second. Neither needs a stage to report: the head knows what it
+//! admitted and sent, and what its model says that costs.
 //!
 //! A rollout must read the state as it is when the item goes: it runs on
 //! the head's thread, after admission and before the send. A decision is
@@ -40,8 +55,8 @@ use std::collections::VecDeque;
 
 use anyhow::{bail, Context, Result};
 
-use super::cost::Cost;
-use super::frontier::{self, Pipe, Rule, Sent, Seq, Start, Terms, Turn, CAPS, PAGE};
+use super::cost::{sum, Cost};
+use super::frontier::{self, pack, parts_of, Pipe, Rule, Sent, Seq, Start, Terms, Turn, CAPS, PAGE};
 
 /// How far back the head counts admissions and sends, µs.
 const WINDOW: f64 = 60e6;
@@ -51,12 +66,14 @@ const FAST: f64 = 15.0;
 /// prompt counts for at most.
 const LOAD_CHUNK: i64 = 8192;
 const LOAD_CAP: i64 = 32768;
-/// The §12 ladder of the simulator's results.
-const LADDER: &str = "ladmpclb1@0.45+mpch10240@0.55+time12288@0.85+mpcp1";
+/// The offered loads at which headway's rungs end.
+const RUNGS: [f64; 3] = [0.45, 0.55, 0.85];
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Policy {
     Fixed(i64),
+    Dck { init: i64, sigma: f64 },
+    Hwang { slo: f64, fresh: f64 },
     Depth { lo: i64, hi: i64, n: i64 },
     Time(i64),
     Mpc,
@@ -82,6 +99,8 @@ pub struct Decision<'a> {
     pub ahead: usize,
     /// The most context an item may hold.
     pub context: i64,
+    /// The admissions of the last minute: (time, hit, prompt).
+    pub recent: &'a VecDeque<(f64, i64, i64)>,
     /// Admissions per µs over the last minute.
     pub rate: f64,
     /// Offered load: slowest-stage time per second the recent admissions need.
@@ -92,8 +111,12 @@ pub struct Decision<'a> {
 
 impl Policy {
     pub fn parse(p: &str) -> Result<Policy> {
-        if p == "ladder" {
-            return Policy::parse(LADDER);
+        if let Some(spec) = p.strip_prefix("headway") {
+            let bound = |v: &str| v.parse::<i64>().with_context(|| format!("policy `{p}`: `{v}` is not an integer"));
+            let (n1, n2) = spec.split_once('/').with_context(|| format!("policy `{p}` is not headway<N1>/<N2>"))?;
+            let rungs = vec![Policy::Mpclb(1.0), Policy::Mpch(bound(n1)?), Policy::Time(bound(n2)?)];
+            let top = Box::new(Policy::Mpcp { k: 1.0, x: 0.0 });
+            return Ok(Policy::Ladder { rungs: RUNGS.into_iter().zip(rungs).collect(), top });
         }
         if let Some(spec) = p.strip_prefix("lad") {
             let mut parts: Vec<&str> = spec.split('+').collect();
@@ -114,11 +137,16 @@ impl Policy {
             return Ok(Policy::Cut(Box::new(Policy::parse(q)?), n));
         }
         let num = |v: &str| v.parse::<f64>().with_context(|| format!("policy `{p}`: `{v}` is not a number"));
+        if let Some(spec) = p.strip_prefix("hwang") {
+            let (slo, fresh) =
+                spec.split_once('/').with_context(|| format!("policy `{p}` is not hwang<slo>/<fresh>"))?;
+            return Ok(Policy::Hwang { slo: num(slo)? * 1e3, fresh: num(fresh)? * 1e3 });
+        }
         if let Some(spec) = p.strip_prefix("mpcp") {
             let (k, x) = spec.split_once('/').unwrap_or((spec, "0"));
             return Ok(Policy::Mpcp { k: num(k)?, x: num(x)? });
         }
-        let names = ["fixed", "depth", "time", "mpch", "mpca", "mpclb", "mpcl"];
+        let names = ["fixed", "dck", "depth", "time", "mpch", "mpca", "mpclb", "mpcl"];
         let Some(name) = names.iter().find(|n| p.starts_with(*n)) else {
             return match p {
                 "mpc" => Ok(Policy::Mpc),
@@ -137,6 +165,10 @@ impl Policy {
         };
         Ok(match *name {
             "fixed" => want(&[1]).and(int(0).map(Policy::Fixed))?,
+            "dck" => {
+                want(&[2])?;
+                Policy::Dck { init: int(0)?, sigma: num(args[1])? }
+            }
             "time" => want(&[1]).and(int(0).map(Policy::Time))?,
             "mpch" => want(&[1]).and(int(0).map(Policy::Mpch))?,
             "mpcl" => want(&[1]).and(num(args[0]).map(Policy::Mpcl))?,
@@ -183,6 +215,10 @@ impl Policy {
         }
         match *self {
             Policy::Fixed(n) => n,
+            Policy::Dck { init, sigma } => {
+                Turn::of(d.active, s).first().map_or(init, |k| dck(d.active[k].pos, init, sigma, m))
+            }
+            Policy::Hwang { slo, fresh } => hwang(d, slo, fresh),
             Policy::Depth { lo, hi, n } => {
                 let togo: i64 = d.active.iter().map(|s| (s.end - s.pos).max(0)).sum();
                 hi.min(lo.max(-(-togo).div_euclid(n * PAGE) * PAGE))
@@ -249,14 +285,46 @@ impl Policy {
     }
 }
 
+/// `Policy::Dck`'s cap for a first sequence over `l` rows of context.
+fn dck(l: i64, init: i64, sigma: f64, m: &Cost) -> i64 {
+    let rows = init as f64 - sigma * (init as f64 - m.equal(l, init));
+    init.div_euclid(4).max((rows as i64).div_euclid(PAGE) * PAGE).max(PAGE)
+}
+
+/// `Policy::Hwang`'s cap.
+fn hwang(d: &Decision, slo: f64, fresh: f64) -> i64 {
+    let turn = Turn::of(d.active, d.stages);
+    let cands: Vec<(i64, f64)> = (1..=16)
+        .map(|k| {
+            let (plan, rows) = pack(d.active, &turn, k * 1024, d.context);
+            (k * 1024, rows, d.model.slowest(&parts_of(d.active, &plan)))
+        })
+        .filter(|&(_, _, t)| d.stages as f64 * t <= slo)
+        .map(|(c, rows, t)| (c, if t > 0.0 { rows as f64 / t } else { 0.0 }))
+        .collect();
+    let arriving = sum(d.recent.iter().filter(|r| r.0 >= d.now - WINDOW).map(|r| (r.2 - r.1) as f64)) / WINDOW;
+    let stale: Vec<(f64, f64)> = (d.active.iter())
+        .map(|q| ((q.end - q.pos) as f64, d.now - q.since))
+        .filter(|&(rows, wait)| rows > 0.0 && wait > fresh)
+        .collect();
+    let need = match stale.is_empty() {
+        true => Some(arriving),
+        false => {
+            let left = slo - sum(stale.iter().map(|x| x.1)) / stale.len() as f64;
+            (left > 0.0).then(|| arriving + sum(stale.iter().map(|x| x.0)) / left)
+        }
+    };
+    need.and_then(|n| cands.iter().find(|x| x.1 >= n)).or(cands.last()).map_or(1024, |x| x.0)
+}
+
 /// The head's own records, all a policy needs of the past: the
 /// admissions and the sends of the last minute, and the sends a frontier
-/// is placed from.
+/// is placed from, each with what the head heard of it since.
 pub struct Meter {
     stages: usize,
     ahead: usize,
-    /// Seconds the waiting prompts' remaining work is spread over for a
-    /// third load reading (0: none).
+    /// Seconds the waiting prompts' remaining work is spread over for the
+    /// backlog load reading (0: none).
     backlog: f64,
     /// Admissions: (time, hit, prompt), and each one's slowest-stage time
     /// as offered load counts it.
@@ -295,16 +363,39 @@ impl Meter {
         }
     }
 
-    /// An item of `parts` (context, rows) sent at `go`.
-    pub fn sent(&mut self, go: f64, parts: &[(i64, i64)], m: &Cost) {
+    /// Item `item` of `parts` (context, rows) sent at `go`.
+    pub fn sent(&mut self, item: u64, go: f64, parts: &[(i64, i64)], m: &Cost) {
         let model = m.times(parts);
         self.busy.push_back((go, model[..self.stages].iter().fold(0.0, |a: f64, &b| a.max(b))));
         while self.busy.front().is_some_and(|x| x.0 < go - WINDOW) {
             self.busy.pop_front();
         }
-        self.sent.push_back(Sent { issued: go, model });
+        self.sent.push_back(Sent { item, issued: go, model, start: None, done: None, exit: None });
         if self.sent.len() > self.stages + self.ahead + 3 + 64 {
             self.sent.pop_front();
+        }
+    }
+
+    /// The head's own device started item `item` at `t`.
+    pub fn began(&mut self, item: u64, t: f64) {
+        self.heard(item, |s| s.start = Some(t));
+    }
+
+    /// The head's own device finished item `item` at `t`.
+    pub fn ended(&mut self, item: u64, t: f64) {
+        self.heard(item, |s| s.done = Some(t));
+    }
+
+    /// The last stage finished item `item` at `t`: its answer came back.
+    pub fn answered(&mut self, item: u64, t: f64) {
+        self.heard(item, |s| s.exit = Some(t));
+    }
+
+    /// An item the meter no longer holds, or never did (a step), is not
+    /// placed and needs no time.
+    fn heard(&mut self, item: u64, set: impl FnOnce(&mut Sent)) {
+        if let Some(s) = self.sent.iter_mut().rev().find(|s| s.item == item) {
+            set(s);
         }
     }
 
@@ -332,11 +423,18 @@ impl Meter {
     }
 
     /// What the head sees at `now` of `active`, `flying` items in flight.
-    pub fn decision<'a>(&self, now: f64, active: &'a [Seq], flying: usize, m: &'a Cost, context: i64) -> Decision<'a> {
+    pub fn decision<'a>(
+        &'a self,
+        now: f64,
+        active: &'a [Seq],
+        flying: usize,
+        m: &'a Cost,
+        context: i64,
+    ) -> Decision<'a> {
         let (frontier, answers) = match self.sent.is_empty() {
             true => (Pipe::idle(self.stages, 0.0), Vec::new()),
             false => {
-                let (view, mut seen) = frontier::frontier(&self.sent, self.stages);
+                let (view, mut seen) = frontier::frontier(&self.sent, self.stages, now);
                 seen.sort_by(|a, b| a.partial_cmp(b).expect("answer times are not NaN"));
                 let n = flying.min(seen.len());
                 (view, seen[seen.len() - n..].to_vec())
@@ -351,6 +449,7 @@ impl Meter {
             stages: self.stages,
             ahead: self.ahead,
             context,
+            recent: &self.recent,
             rate: self.recent.len() as f64 / WINDOW,
             load: self.load(now, active, m),
             util: self.util(now),

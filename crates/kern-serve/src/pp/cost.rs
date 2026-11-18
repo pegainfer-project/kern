@@ -107,6 +107,20 @@ impl Cost {
         let t = self.of(it);
         t[1..self.stages()].iter().fold(t[0], |m, &x| max(m, x))
     }
+
+    /// The rows one sequence over `l` rows of context runs in the time
+    /// `init` rows take over none, by the stages' mean row and attention
+    /// terms.
+    pub fn equal(&self, l: i64, init: i64) -> f64 {
+        let n = self.stages.len() as f64;
+        let mean = |j: usize| sum(self.stages.iter().map(|c| c[j])) / n;
+        let (b, d, i) = (mean(1), mean(3), init as f64);
+        if d == 0.0 {
+            return i;
+        }
+        let (target, x0) = (b * i + d * i * i / 2.0, b + d * l as f64);
+        ((x0 * x0 + 2.0 * d * target).sqrt() - x0) / d
+    }
 }
 
 /// An item as the model sees it, built one part at a time.
@@ -141,6 +155,20 @@ pub(super) fn max(a: f64, b: f64) -> f64 {
     } else {
         a
     }
+}
+
+/// Python's `min(a, b)`: the first wins a tie.
+pub(super) fn min(a: f64, b: f64) -> f64 {
+    if b < a {
+        b
+    } else {
+        a
+    }
+}
+
+/// Python 3.12's `sum` of floats.
+pub(super) fn sum(xs: impl IntoIterator<Item = f64>) -> f64 {
+    xs.into_iter().fold(Sum::default(), Sum::plus).value()
 }
 
 /// Python 3.12's `sum` of floats as a running state: Neumaier-compensated,

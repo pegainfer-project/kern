@@ -91,10 +91,11 @@ use tracing::{debug, error, info};
 
 use super::cache::Cache;
 use super::cost::Cost;
-use super::frontier::{goes_out, pack, parts_of, Seq, Turn, SEQS};
+use super::frontier::{goes_out, pack, parts_of, Seq, Turn, REPLY, SEQS};
 use super::policy::{Meter, Policy};
 use super::{connect, recv, send, Flow, Hello, Item, Job, Next, Report, Table};
 use crate::front::{Call, Front, Note};
+use crate::logline::now_us;
 use crate::pd::mirror::Mirrors;
 use crate::pd::{cover, shapes, Gate, Load, Out, Pools, Push, Refusal, Req, Tell, Tiers};
 use crate::pool;
@@ -152,6 +153,8 @@ struct Active {
     handoff: bool,
     /// Items gone out without it since it last had rows in one.
     passed: usize,
+    /// When it was admitted, on the policy's clock.
+    since: f64,
 }
 
 /// A leased prompt waiting on the pooled tier before it runs; its lease
@@ -266,6 +269,13 @@ enum Event {
     Call(Call),
     /// Stage 1 took an item: a wake for a head waiting on that.
     Taken,
+    /// The head's own device started (or, `done`, finished) item `item` at
+    /// `us` of the wall clock.
+    Ran {
+        item: u64,
+        done: bool,
+        us: u64,
+    },
     /// A stage's answer to a pooled act, the head's own as stage 0.
     Landed {
         stage: usize,
@@ -310,10 +320,13 @@ struct PpHead {
     policy: Policy,
     /// The policy's cost model, a free one for a policy that reads none.
     cost: Cost,
-    /// What the head admitted and sent, as its policy reads it, on the
-    /// clock of `epoch`.
+    /// What the head admitted, sent and heard, as its policy reads it, on
+    /// the clock of `epoch`: µs since the head loaded, and the wall clock
+    /// at that moment, which the stamps of its own device are on.
     meter: Meter,
-    epoch: Instant,
+    epoch: (Instant, u64),
+    /// Items answered so far: the next answer's item.
+    answered: u64,
     /// Whether anything was admitted or answered since an item last could
     /// not go: the policy decides again only then.
     fresh: bool,
@@ -490,6 +503,12 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         Report::Pushed(req) => {
             tx.send(Event::Pushed { stage: 0, req }).map_err(|_| anyhow::anyhow!("the head is gone"))
         }
+        Report::Began { item, us } => {
+            tx.send(Event::Ran { item, done: false, us }).map_err(|_| anyhow::anyhow!("the head is gone"))
+        }
+        Report::Ended { item, us } => {
+            tx.send(Event::Ran { item, done: true, us }).map_err(|_| anyhow::anyhow!("the head is gone"))
+        }
         Report::Tokens(_) => bail!("the head answers no items"),
         Report::Landed(_) => bail!("the head's own pool answers come by its client"),
     });
@@ -510,7 +529,8 @@ fn load(m: Verified, weights: &Weights, h: Head, notes: mpsc::Sender<Note>) -> R
         policy,
         cost,
         meter: Meter::new(depth, h.ahead, h.backlog),
-        epoch: Instant::now(),
+        epoch: (Instant::now(), now_us()),
+        answered: 0,
         fresh: true,
         max_seqs: h.max_seqs,
         stages,
@@ -597,6 +617,9 @@ fn listen(stage: u64, mut r: TcpStream, tx: mpsc::Sender<Event>, last: bool) {
             Ok(Some(Report::Tokens(_))) => break "a stage other than the last answered an item".to_string(),
             Ok(Some(Report::Pushed(req))) => Event::Pushed { stage: stage as usize, req },
             Ok(Some(Report::Landed(l))) => Event::Landed { stage: stage as usize, l },
+            Ok(Some(Report::Began { .. } | Report::Ended { .. })) => {
+                break "a stage other than the head timed an item for the policy".to_string()
+            }
             Ok(None) => break "stage closed its connection; the pipeline is gone".to_string(),
             Err(e) => break format!("stage connection: {e:#}"),
         };
@@ -733,8 +756,9 @@ impl PpHead {
         let stop = q.request.stop_policy.clone();
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
-        let a = Active { id, lease, ids, pos: start, stop, sampling, stops, keep, parts, handoff, passed: 0 };
         let now = self.clock();
+        let a =
+            Active { id, lease, ids, pos: start, stop, sampling, stops, keep, parts, handoff, passed: 0, since: now };
         self.meter.admit(now, start as i64, self.chunked(&a) as i64, &self.cost);
         self.active.push_back(a);
         self.fresh = true;
@@ -743,7 +767,12 @@ impl PpHead {
 
     /// µs since the head loaded: the clock its policy reads.
     fn clock(&self) -> f64 {
-        self.epoch.elapsed().as_nanos() as f64 / 1e3
+        self.epoch.0.elapsed().as_nanos() as f64 / 1e3
+    }
+
+    /// A wall-clock stamp on the policy's clock.
+    fn clocked(&self, us: u64) -> f64 {
+        us as f64 - self.epoch.1 as f64
     }
 
     /// A prompt done waiting on the pooled tier starts, unless its client
@@ -1005,7 +1034,7 @@ impl PpHead {
         let seqs: Vec<Seq> = (self.active.iter().enumerate())
             .map(|(i, a)| {
                 let (pos, end, stop) = (a.pos as i64, self.chunked(a) as i64, self.upto(a) as i64);
-                Seq::at(i, a.lease.prefix() as i64, pos, end, stop, a.passed as u32, 0)
+                Seq::new(i, a.lease.prefix() as i64, end, a.since).at(pos, stop, a.passed as u32)
             })
             .collect();
         let context = self.bounds.context.min(i64::MAX as usize) as i64;
@@ -1035,7 +1064,7 @@ impl PpHead {
         let togo: i64 = seqs.iter().map(|s| s.end - s.pos).sum();
         let plan: Vec<(usize, usize)> = plan.iter().map(|&(k, n)| (k, n as usize)).collect();
         self.send_chunk(&plan)?;
-        self.meter.sent(go, &parts, &self.cost);
+        self.meter.sent(item, go, &parts, &self.cost);
         info!(item, cap, rows, seqs = plan.len(), waiting, togo, flying, load, util, rung = self.policy.rung(load),
               decide_us, parts = ?&parts[..], "pp plan");
         Ok(())
@@ -1304,9 +1333,19 @@ impl PpHead {
                 return self.apply(vec![out]);
             }
             Event::Taken => return Ok(()),
+            Event::Ran { item, done, us } => {
+                let t = self.clocked(us);
+                match done {
+                    false => self.meter.began(item, t),
+                    true => self.meter.ended(item, t),
+                }
+                return Ok(());
+            }
             Event::Landed { stage, l } => return self.landed(stage, l),
         };
         let Some(completions) = self.in_flight_items.pop_front() else { bail!("an answer came back for no item") };
+        self.meter.answered(self.answered, self.clock() - REPLY);
+        self.answered += 1;
         self.fresh = true;
         for r in completions {
             let Some(&tok) = t.get(r.at) else {

@@ -23,20 +23,25 @@
 //! fewer than the stages ([`goes_out`]): packing waits for rows only when
 //! the stages have work.
 //!
-//! The head hears no stage but its answers, so it places every item it
-//! sent with its cost model from the moment it sent it ([`Sent`],
-//! [`frontier`]): stage s starts item k once it finished k-1, stage s-1
-//! finished k ([`HOP`] later) and stage s+1 started k-2, and the last
-//! stage's finish plus [`REPLY`] is the answer. Which of those answers are
-//! still out is counted by the replies, not modelled. A rollout runs every
-//! waiting prompt to its end from that frontier under one row rule and
-//! sums when each is answered ([`plan_cost`]); it is the simulator's
-//! (`ppsim`, `head.rs`), expression for expression, so a decision replayed
-//! from the same events is the same bits.
+//! The head hears two ends of the pipeline: when its own device starts
+//! and finishes an item, and, by the item's answer, when the last stage
+//! finished it. Everything between it places with its cost model
+//! ([`Sent`], [`frontier`]): stage s starts item k once it finished k-1,
+//! stage s-1 finished k ([`HOP`] later) and stage s+1 started k-2, and the
+//! last stage's finish plus [`REPLY`] is the answer. A time it heard
+//! replaces the model's, the items behind are placed again from it, and an
+//! answered item's middle stages are pulled back to fit the finish it
+//! heard, so the model's error on one item does not carry into the next.
+//! Which answers are still out is counted by the replies, not modelled. A
+//! rollout runs every waiting prompt to its end from that frontier under
+//! one row rule and sums when each is answered ([`plan_cost`]); it is the
+//! simulator's (`ppsim`, `head.rs`, `view=ends`), expression for
+//! expression, so a decision replayed from the same events is the same
+//! bits.
 
 use std::collections::VecDeque;
 
-use super::cost::{max, Cost, Item, Times, MAX_STAGES};
+use super::cost::{max, min, Cost, Item, Times, MAX_STAGES};
 
 /// µs from one stage's finish to the next stage's start, as the rollout
 /// believes.
@@ -50,9 +55,9 @@ pub const SEQS: usize = 16;
 /// The row caps a rollout chooses among.
 pub const CAPS: [i64; 4] = [2048, 4096, 8192, 16384];
 
-/// A waiting prompt: rows `[start, end)` of request `req`, done up to
-/// `pos`, its rows stopping at `stop` and then on a snapshot grid of
-/// `grid` rows (0: only at its end), skipped by `passed` items.
+/// A waiting prompt: rows `[start, end)` of request `req`, admitted at
+/// `since`, done up to `pos`, its rows stopping at `stop` and then at its
+/// end, skipped by `passed` items.
 #[derive(Clone, Copy, Debug)]
 pub struct Seq {
     pub req: usize,
@@ -60,45 +65,25 @@ pub struct Seq {
     pub pos: i64,
     pub end: i64,
     pub passed: u32,
+    pub since: f64,
     stop: i64,
-    grid: i64,
 }
 
 impl Seq {
-    /// A prompt just admitted with `hit` rows kept.
-    pub fn new(req: usize, hit: i64, prompt: i64, grid: i64) -> Seq {
-        let mut s = Seq { req, start: hit, pos: hit, end: prompt, passed: 0, stop: 0, grid };
-        s.stop = s.next_stop();
-        s
+    /// A prompt admitted at `since` with `hit` rows kept.
+    pub fn new(req: usize, hit: i64, prompt: i64, since: f64) -> Seq {
+        Seq { req, start: hit, pos: hit, end: prompt, passed: 0, since, stop: prompt }
     }
 
-    /// A prompt as the head holds it: at `pos`, its rows stopping next at
-    /// `stop` (a checkpoint, or its end).
-    pub fn at(req: usize, start: i64, pos: i64, end: i64, stop: i64, passed: u32, grid: i64) -> Seq {
-        Seq { req, start, pos, end, passed, stop, grid }
-    }
-
-    /// The next snapshot past `pos`: the grid past the start, then the last
-    /// page boundary, then the end.
-    fn next_stop(&self) -> i64 {
-        if self.grid == 0 {
-            return self.end;
-        }
-        let tail = self.end.div_euclid(PAGE) * PAGE;
-        if self.pos >= tail {
-            return self.end;
-        }
-        let g = (self.pos.div_euclid(self.grid) + 1) * self.grid;
-        if g < tail {
-            g
-        } else {
-            tail
-        }
+    /// The prompt at `pos`, its rows stopping next at `stop` (a
+    /// checkpoint, or its end), skipped by `passed` items.
+    pub fn at(self, pos: i64, stop: i64, passed: u32) -> Seq {
+        Seq { pos, stop, passed, ..self }
     }
 
     fn advance(&mut self, n: i64) {
         self.pos += n;
-        self.stop = self.next_stop();
+        self.stop = self.end;
     }
 
     /// Rows to its next stop.
@@ -173,6 +158,11 @@ impl Turn {
         }
         self.sorted = self.keys.len().min(SORTED);
         self.keys[..self.sorted].sort_unstable();
+    }
+
+    /// The first sequence in turn.
+    pub fn first(&self) -> Option<usize> {
+        self.keys.first().map(|&k| index(k))
     }
 
     /// Every waiting sequence in turn.
@@ -308,34 +298,59 @@ pub fn place(pipe: &Pipe, now: f64, ds: &Times) -> (Pipe, f64) {
     (out, prev)
 }
 
-/// An item the head sent: when, and its model times.
+/// An item the head sent: when, its model times, and what the head has
+/// heard of it since: its own device's start and finish, and the last
+/// stage's finish.
 #[derive(Clone, Copy, Debug)]
 pub struct Sent {
+    pub item: u64,
     pub issued: f64,
     pub model: Times,
+    pub start: Option<f64>,
+    pub done: Option<f64>,
+    pub exit: Option<f64>,
 }
 
 /// The frontier and the answer times of every item in `sent` as the head
-/// places them: no stage heard, each item from its send with its model
-/// times behind the items before it.
-pub fn frontier(sent: &VecDeque<Sent>, stages: usize) -> (Pipe, Vec<f64>) {
-    let m = sent.len();
+/// places them at `now`: each time it heard stands, the rest come from the
+/// model behind the items before, a stage it hears of never earlier than
+/// `now`, and an item whose exit it heard is pulled back through the
+/// stages it did not hear to fit that exit.
+pub fn frontier(sent: &VecDeque<Sent>, stages: usize, now: f64) -> (Pipe, Vec<f64>) {
+    let (m, last) = (sent.len(), stages - 1);
     let mut es = vec![[0.0; MAX_STAGES]; m];
     let mut ed = vec![[0.0; MAX_STAGES]; m];
     for (k, h) in sent.iter().enumerate() {
+        let heard = |s: usize| match s {
+            _ if s == last => (if s == 0 { h.start } else { None }, h.exit, now - REPLY),
+            0 => (h.start, h.done, now),
+            _ => (None, None, f64::NEG_INFINITY),
+        };
         for s in 0..stages {
-            let mut c = if s == 0 { max(f64::NEG_INFINITY, h.issued) } else { f64::NEG_INFINITY };
-            if k > 0 {
-                c = max(c, ed[k - 1][s]);
+            let (start, done, upto) = heard(s);
+            (es[k][s], ed[k][s]) = match (start, done) {
+                (start, Some(d)) => (start.unwrap_or(d - h.model[s]), d),
+                (Some(t), None) => (t, max(upto, t + h.model[s])),
+                (None, None) => {
+                    let mut c = if s == 0 { max(now, h.issued) } else { f64::NEG_INFINITY };
+                    if k > 0 {
+                        c = max(c, ed[k - 1][s]);
+                    }
+                    if s > 0 {
+                        c = max(c, ed[k][s - 1] + HOP);
+                    }
+                    if s + 1 < stages && k >= 2 {
+                        c = max(c, es[k - 2][s + 1]);
+                    }
+                    (c, max(c + h.model[s], upto))
+                }
+            };
+        }
+        if h.exit.is_some() {
+            for s in (0..last).rev().filter(|&s| heard(s).1.is_none()) {
+                ed[k][s] = min(ed[k][s], es[k][s + 1] - HOP);
+                es[k][s] = min(es[k][s], ed[k][s] - h.model[s]);
             }
-            if s > 0 {
-                c = max(c, ed[k][s - 1] + HOP);
-            }
-            if s + 1 < stages && k >= 2 {
-                c = max(c, es[k - 2][s + 1]);
-            }
-            es[k][s] = c;
-            ed[k][s] = max(c + h.model[s], f64::NEG_INFINITY);
         }
     }
     let mut view = Pipe::idle(stages, 0.0);

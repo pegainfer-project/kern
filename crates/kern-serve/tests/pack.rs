@@ -69,7 +69,7 @@ fn a_full_item_runs_ahead_of_the_stages_and_a_partial_one_does_not() {
 
 /// The cap `depth2048/16384/24` sets for `togo` rows waiting in one prompt.
 fn depth(togo: i64) -> i64 {
-    let seqs: Vec<Seq> = (togo > 0).then(|| Seq::new(0, 0, togo, 0)).into_iter().collect();
+    let seqs: Vec<Seq> = (togo > 0).then(|| Seq::new(0, 0, togo, 0.0)).into_iter().collect();
     let cost = Cost::free(4);
     Policy::parse("depth2048/16384/24").unwrap().cap(&Meter::new(4, 4, 0.0).decision(0.0, &seqs, 0, &cost, 1 << 20))
 }
@@ -107,7 +107,7 @@ fn the_head_packs_as_the_scheduler_does() {
         let seqs: Vec<Seq> = (w.iter().enumerate())
             .map(|(i, s)| {
                 let end = (s.pos + s.left) as i64;
-                Seq::at(i, 0, s.pos as i64, end, end, s.passed as u32, 0)
+                Seq::new(i, 0, end, 0.0).at(s.pos as i64, end, s.passed as u32)
             })
             .collect();
         let (plan, _) = frontier::pack(&seqs, &Turn::of(&seqs, patience), cap, context);

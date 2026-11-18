@@ -1,15 +1,19 @@
 //! The pipeline head's item-size policies against the simulator they
-//! were designed in (`ppsim`, `events=`): every admission, answer and
-//! decision of a simulated run replayed through the head's own policy
-//! core, each decision's cap and whether its item went out the same.
+//! were designed in (`ppsim`, `view=ends`, `events=`): every admission,
+//! answer and decision of a simulated run replayed through the head's own
+//! policy core, each decision's cap and whether its item went out the
+//! same. The head is told what the simulated one hears, no sooner: when
+//! stage 0 started and finished each item, and when the last stage
+//! finished it, once its answer has had time to come back.
 //!
-//! The fixture is the first 400 requests of a K3 admit trace made replayable on
-//! DeepSeek V4.1 Flash, compressed nine times, under the four-rung ladder
-//! and DSV4.1 PP4's cost model. `PP_PARITY` names longer logs to check the
-//! same way, `;`-separated `<events>,<costfit>,<policy>[,<backlog s>]`.
+//! The fixtures are the first 400 requests of a K3 admit trace made
+//! replayable on DeepSeek V4.1 Flash, compressed nine times, under
+//! DSV4.1 PP4's cost model (under SGLang's rule, the first 3000 events of
+//! them). `PP_PARITY` names longer logs to check the same way,
+//! `;`-separated `<events>,<costfit>,<policy>[,<backlog s>]`.
 
 use kern_serve::cost::Cost;
-use kern_serve::frontier::{apply, goes_out, pack, Seq, Turn};
+use kern_serve::frontier::{apply, goes_out, pack, Seq, Turn, REPLY};
 use kern_serve::policy::{Meter, Policy};
 
 const STAGES: usize = 4;
@@ -17,9 +21,12 @@ const AHEAD: usize = 4;
 const CONTEXT: i64 = 1 << 20;
 
 /// Replays `events` under `policy`; the decisions matched by the ladder
-/// rung each took, or the first that did not match.
+/// rung each took (all under rung 0 without a ladder), or the first that
+/// did not match.
 fn replay(events: &str, policy: &Policy, cost: &Cost, backlog: f64) -> Result<Vec<usize>, String> {
     let (mut seqs, mut meter, mut flying, mut req) = (Vec::<Seq>::new(), Meter::new(STAGES, AHEAD, backlog), 0, 0);
+    // Each sent item's stage-0 start, stage-0 finish and exit, and how many of each the head has heard.
+    let (mut ran, mut heard) = (Vec::<[f64; 3]>::new(), [0usize; 3]);
     let mut decided = Vec::new();
     for (n, line) in events.lines().enumerate() {
         let f: Vec<&str> = line.split(' ').collect();
@@ -28,7 +35,7 @@ fn replay(events: &str, policy: &Policy, cost: &Cost, backlog: f64) -> Result<Ve
         match f[0] {
             "a" => {
                 let (t, hit, prompt) = (num(1)?, int(2)?, int(3)?);
-                seqs.push(Seq::new(req, hit, prompt, 0));
+                seqs.push(Seq::new(req, hit, prompt, t));
                 meter.admit(t, hit, prompt, cost);
                 req += 1;
             }
@@ -36,8 +43,20 @@ fn replay(events: &str, policy: &Policy, cost: &Cost, backlog: f64) -> Result<Ve
                 flying -= 1;
                 meter.forget(num(1)?);
             }
+            "s" => ran.push([num(1)?, num(2)?, num(3)?]),
             "d" => {
                 let (t, want, sent) = (num(1)?, int(2)?, int(3)? == 1);
+                for (what, upto) in [t, t, t - REPLY].into_iter().enumerate() {
+                    while ran.get(heard[what]).is_some_and(|x| x[what] <= upto) {
+                        let (item, at) = (heard[what] as u64, ran[heard[what]][what]);
+                        match what {
+                            0 => meter.began(item, at),
+                            1 => meter.ended(item, at),
+                            _ => meter.answered(item, at),
+                        }
+                        heard[what] += 1;
+                    }
+                }
                 meter.forget(t);
                 let d = meter.decision(t, &seqs, flying, cost, CONTEXT);
                 let (cap, rung) = (policy.cap(&d), policy.rung(d.load).unwrap_or(0));
@@ -53,7 +72,7 @@ fn replay(events: &str, policy: &Policy, cost: &Cost, backlog: f64) -> Result<Ve
                 }
                 if goes {
                     let (parts, _) = apply(&mut seqs, &plan, &turn.left);
-                    meter.sent(t, &parts, cost);
+                    meter.sent(ran.len() as u64, t, &parts, cost);
                     flying += 1;
                 }
                 decided.resize(decided.len().max(rung + 1), 0);
@@ -65,20 +84,27 @@ fn replay(events: &str, policy: &Policy, cost: &Cost, backlog: f64) -> Result<Ve
     Ok(decided)
 }
 
-#[test]
-fn the_ladder_decides_as_the_simulator_does() {
+fn fixture(events: &str, policy: &str, backlog: f64) -> Vec<usize> {
     let cost = Cost::parse(include_str!("fixtures/pp/dsv41-pp4-cost.json")).unwrap();
-    let policy = Policy::parse("ladder").unwrap();
-    let rungs = replay(include_str!("fixtures/pp/ladder-load9.events"), &policy, &cost, 0.0).unwrap();
-    assert_eq!((rungs.iter().sum::<usize>(), rungs.iter().filter(|&&n| n > 0).count()), (1807, 4), "{rungs:?}");
+    replay(events, &Policy::parse(policy).unwrap(), &cost, backlog).unwrap()
 }
 
 #[test]
-fn the_ladder_reading_its_backlog_decides_as_the_simulator_does() {
-    let cost = Cost::parse(include_str!("fixtures/pp/dsv41-pp4-cost.json")).unwrap();
-    let policy = Policy::parse("ladder").unwrap();
-    let rungs = replay(include_str!("fixtures/pp/ladder-backlog2-load9.events"), &policy, &cost, 2.0).unwrap();
-    assert_eq!(rungs, [111, 15, 59, 1255], "{rungs:?}");
+fn headway_decides_as_the_simulator_does() {
+    let rungs = fixture(include_str!("fixtures/pp/headway-load9.events"), "headway10240/12288", 6.0);
+    assert_eq!(rungs, [404, 107, 357, 821], "{rungs:?}");
+}
+
+#[test]
+fn sglang_dynamic_chunking_decides_as_the_simulator_does() {
+    let n = fixture(include_str!("fixtures/pp/dck-load9.events"), "dck8192/0.75", 0.0);
+    assert_eq!(n, [979], "{n:?}");
+}
+
+#[test]
+fn hwang_and_ahn_decide_as_the_simulator_does() {
+    let n = fixture(include_str!("fixtures/pp/hwang-load9.events"), "hwang1500/0", 0.0);
+    assert_eq!(n, [1284], "{n:?}");
 }
 
 #[test]

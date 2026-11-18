@@ -123,6 +123,16 @@ pub enum Report {
     Tokens(Vec<i64>),
     Pushed(Req),
     Landed(Landed),
+    /// The head's own device reached item `item` at `us` of the wall clock.
+    Began {
+        item: u64,
+        us: u64,
+    },
+    /// The head's own device left item `item` at `us` of the wall clock.
+    Ended {
+        item: u64,
+        us: u64,
+    },
 }
 
 /// Where a stage's watch thread reports.
@@ -398,12 +408,13 @@ impl Flow {
 /// by a thread that waits on the item's [`Mark`]s so the issuing thread
 /// never does, and tells the neighbours: the next stage that the item
 /// arrived, the previous that it was taken. On the last stage it also
-/// answers the head with the item's tokens; on every stage it reports each
-/// push to a decode tier once its mark lands. A stage's period is done to
-/// done; `done - start` is the stage's own time on the item, the rest of
-/// the period its pipeline bubble (with the acts and row writes before the
-/// hold). A fault on the device surfaces at its item's mark and ends the
-/// process.
+/// answers the head with the item's tokens, and on the head it tells the
+/// head's policy when its own device started and finished the item; on
+/// every stage it reports each push to a decode tier once its mark lands.
+/// A stage's period is done to done; `done - start` is the stage's own
+/// time on the item, the rest of the period its pipeline bubble (with the
+/// acts and row writes before the hold). A fault on the device surfaces at
+/// its item's mark and ends the process.
 struct Watch {
     issued: Option<mpsc::Sender<Landing>>,
 }
@@ -448,21 +459,26 @@ impl Watch {
                             crate::kernels::exit(1);
                         }
                         start_us = now_us();
-                        prev.as_mut().map_or(Ok(()), |w| tell(w, item)).with_context(|| format!("item {item} taken"))
+                        let began = if stage == 0 { report(Report::Began { item, us: start_us }) } else { Ok(()) };
+                        began
+                            .and(prev.as_mut().map_or(Ok(()), |w| tell(w, item)))
+                            .with_context(|| format!("item {item} taken"))
                     }
                     Landing::Item(Issued { item, rows, issued_us, mark, answer }) => {
                         if let Err(e) = mark.wait() {
                             tracing::error!(stage, item, "device: {e:#}");
                             crate::kernels::exit(1);
                         }
-                        tracing::info!(stage, item, rows, issued_us, start_us, done_us = now_us(), "pp item");
+                        let done_us = now_us();
+                        tracing::info!(stage, item, rows, issued_us, start_us, done_us, "pp item");
+                        let ended = if stage == 0 { report(Report::Ended { item, us: done_us }) } else { Ok(()) };
                         let tokens = answer.map_or(Vec::new(), |a| {
                             let mut v = a.fill.decode(a.fetch.bytes());
                             v.truncate(a.keep);
                             v
                         });
-                        next.as_mut()
-                            .map_or(Ok(()), |w| tell(w, item))
+                        ended
+                            .and(next.as_mut().map_or(Ok(()), |w| tell(w, item)))
                             .and(if answers { report(Report::Tokens(tokens)) } else { Ok(()) })
                             .with_context(|| format!("item {item}"))
                     }
