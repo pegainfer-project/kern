@@ -31,5 +31,9 @@ tracing-subscriber.workspace = true
 vllm-chat.workspace = true
 vllm-tokenizer = { workspace = true, features = ["test-utils"] }
 
+[[bench]]
+name = "pp_decide"
+harness = false
+
 [lints]
 workspace = true
