@@ -7,20 +7,22 @@
 //! inserted between kernels.
 //!
 //! Nothing here names a program, a buffer or a model. A workload gives
-//! shapes ([`workload`]), written by hand or read off a server's trace
-//! ([`served`]), `Protocol` turns a shape into a program, and the fill
-//! table says what to stage. Samples are kept verbatim, slow tails
+//! shapes ([`workload`]), written by hand, read off a server's trace
+//! ([`served`]) or taken from the manifest's own bounds ([`envelope`]),
+//! `Protocol` turns a shape into a program, and the fill table says what
+//! to stage. Samples are kept verbatim, slow tails
 //! included; no minimum-only or outlier filtering.
 //!
 //! A manifest with a topology runs as its ranks, every rank fed the same
 //! shape with its own sequences, in lockstep: a call that reads its peers
 //! finds them issuing. Attribution is per rank.
 
+pub mod envelope;
 pub mod served;
 pub mod workload;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
@@ -285,6 +287,31 @@ fn replays(r: &Rank, pre: &PreImage, g: &Graph, samples: usize) -> Result<Vec<u6
 /// One line, one fact, in the shape `kern test` reports in.
 fn say(key: &str, body: String) {
     println!("{}", row(key, body, None));
+}
+
+/// Says what `kern bench` will make of a workload file on `m`, then writes it.
+fn save(text: &str, out: &Path, m: &Verified, p: &Protocol) -> Result<()> {
+    let unit = kern_pool::page_unit(m);
+    let plan = Plan::check(&Workload::parse(text)?, p, unit as usize, kern_pool::row_tokens(m, unit))?;
+    say(
+        "plan",
+        format!(
+            "{} scenarios · {} dropped · {} tokens of state · {} seqs",
+            plan.scenarios.len(),
+            plan.dropped.len(),
+            plan.tokens,
+            plan.seqs
+        ),
+    );
+    for d in &plan.dropped {
+        say("drop", format!("{} · {}", d.shape, d.why));
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(out, text).with_context(|| out.display().to_string())?;
+    say("out", out.display().to_string());
+    Ok(())
 }
 
 fn say_timed(key: &str, body: String, since: Instant) {

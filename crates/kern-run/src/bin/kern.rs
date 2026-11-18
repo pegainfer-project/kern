@@ -45,15 +45,21 @@ enum Cmd {
         #[command(flatten)]
         opts: RunOpts,
     },
-    /// Turn a server's traced steps into the workload `kern bench` prices
+    /// Write the workload `kern bench` prices: a server's traced steps, or the manifest's envelope
     Workload {
-        /// Target in kern.toml whose manifest served the trace
+        /// Target in kern.toml whose manifest served the trace, or whose envelope to sweep
         target: Option<String>,
-        /// Manifest JSON the trace was served on, in place of a target's
+        /// Manifest JSON, in place of a target's
         #[arg(long, conflicts_with = "target")]
         manifest: Option<PathBuf>,
+        /// Steps files a server wrote under --trace-dir, or directories of them
+        #[arg(long, num_args = 1..)]
+        trace: Vec<PathBuf>,
         #[command(flatten)]
-        opts: kern_run::bench::served::ServedOpts,
+        envelope: kern_run::bench::envelope::EnvelopeOpts,
+        /// The workload to write (TOML)
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Serve a target through the separately installed kern-serve binary
     Server {
@@ -132,14 +138,17 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Bench { target, opts } => kern_run::bench::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
         Cmd::Run { target, opts } => kern_run::run::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
-        Cmd::Workload { target, manifest, opts } => {
+        Cmd::Workload { target, manifest, trace, envelope, out } => {
             let manifest = match manifest {
                 Some(m) => m,
                 None => target_of(cfg.as_ref(), target)?
                     .map(|t| t.manifest.clone())
                     .context("no --manifest, and no kern.toml target to take one from")?,
             };
-            kern_run::bench::served::run(opts, &manifest)
+            match trace.is_empty() {
+                true => kern_run::bench::envelope::run(envelope, &out, &manifest),
+                false => kern_run::bench::served::run(&trace, &out, &manifest),
+            }
         }
         Cmd::Server { target, args } => {
             let cfg = cfg.as_ref().context("kern server needs a kern.toml with targets")?;
