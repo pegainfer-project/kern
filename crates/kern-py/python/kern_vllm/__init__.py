@@ -9,7 +9,7 @@ are host states, bound to the pages vLLM allocated for each layer.
     KERN_MANIFEST=<manifest.json> KERN_KERNELS=<cubin dir> \\
       vllm serve <checkpoint> --hf-overrides '{"architectures": ["KernForCausalLM"]}' ...
 
-The manifest (`tools/qwen38_vllm.py` writes one) follows a small contract,
+The manifest (kern-qwen38's `qwen38_vllm.py` writes one) follows a small contract,
 see `model.py`: host states `kv.l<i>` / `gdn.l<i>` per layer, programs
 `prefill` (one sequence), `decode` (one row per sequence) and `head`.
 """

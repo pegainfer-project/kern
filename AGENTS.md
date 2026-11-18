@@ -67,21 +67,22 @@ the schema golden, lints) belongs in CI, not here.
   cdylib built by maturin), and the `kern_vllm` / `kern_sglang` plugins that
   run a manifest as vLLM's or SGLang's model; shipped as the `kern-llm`
   wheel. Outside `default-members`.
-- `tools/` — where model knowledge lives: kernel capture and lifting
-  (`kernel-capture/`, `capture_*`), the registry's tooling (`kernels/`),
-  hand-written kernel sources (`kernels-src/`), manifest generators
-  (`gen_*.py`), and gates that are not models (`toy/`, manifests
-  with an exact oracle; `e2e/`, the whole serving path per tray). A
-  model's manifest work, its kernels and its records live in a repo of its
-  own, listed in the README's Supported models (K3 in `kern-k3-pp-prefill`,
-  DeepSeek V4.1 Flash in `kern-dsv41-flash`).
+- `tools/` — what every model's generator shares: kernel capture and
+  lifting (`kernel-capture/`, `capture_*`), the registry's tooling
+  (`kernels/`), hand-written kernel sources (`kernels-src/`), the pieces a
+  generator is built from (`kern_manifest.py`, `once.py`, `sampling.py`),
+  and gates that are not models (`toy/`, manifests with an exact oracle;
+  `e2e/`, the whole serving path per tray). A model's generator, its
+  manifests, its `kern.toml` targets, its kernels and its records live in
+  a repo of its own, listed in the README's Supported models (K3 in
+  `kern-k3-pp-prefill`, DeepSeek V4.1 Flash in `kern-dsv41-flash`,
+  Qwen3.8 in `kern-qwen38`).
 - `kernel_index/` — the kernel registry's facts, one TOML per family
   (`docs/registry.md`); the bytes live in the HF blob store.
 - Dense Qwen3 manifests and kernels live in
   [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3).
-- `examples/` and `kern.toml` — the fixture manifests and the targets that
-  name them with their kernels and weights; `kern test qwen3.8-27b` runs from
-  here. `schema/` holds the manifest schema golden.
+- `examples/minimal.json` is the smallest manifest that verifies; `schema/`
+  holds the manifest schema golden.
 - GPU tests need a free GPU on a shared tray: `nvidia-smi` before `kern test`.
 
 ## What we prefer

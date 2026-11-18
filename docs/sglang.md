@@ -157,12 +157,13 @@ they join vLLM's. Its prefill graph captures only a submodule with
 No change to the runtime or the manifest schema. Everything is a manifest
 transform, a plugin, and layout builds of existing kernels.
 
-### The manifest transform: `tools/qwen38_sglang.py`
+### The manifest transform: `qwen38_sglang.py`
 
-Like `tools/qwen38_vllm.py`, it is a pure function of a base manifest, and
+The transform lives with the model (kern-qwen38, `sm103/tools/`). Like
+`qwen38_vllm.py`, it is a pure function of a base manifest, and
 it shares the vLLM transform's program changes (programs stop at the hidden
 states, `decode` runs at SGLang's width, logits come from a separate
-`head` program). It takes either base: `examples/qwen3.8-27b.json`, or the
+`head` program). It takes either base: the model's `qwen3.8-27b.json`, or the
 manifest the vLLM loop ended with. The memory changes:
 
 - **States.** Four host states per layer instead of one: `k.l<L>` and

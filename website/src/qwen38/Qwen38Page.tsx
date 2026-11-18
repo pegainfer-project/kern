@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { DIVERGE, MARGINS } from "./margins";
 
 const REPO = "https://github.com/pegainfer-project/kern";
-const DOC = `${REPO}/blob/master/docs/qwen38-bringup.md`;
+// the last revision that carried the record, its manifests and its generator
+const TREE = `${REPO}/blob/a0101a6e9df2e0f4f670231fca885f7ea3333ddb`;
+const DOC = `${TREE}/docs/qwen38-bringup.md`;
 
 // ---------------------------------------------------------------- timeline
 const T0 = 12 * 60 + 2; // 12:02Z
@@ -394,8 +396,8 @@ export default function Qwen38Page() {
         </ul>
         <div className="q-links">
           <a href={DOC} target="_blank" rel="noreferrer">FULL TIMELINE, UTC ↗</a>
-          <a href={`${REPO}/blob/master/examples/qwen3.8-27b-dflash2.json`} target="_blank" rel="noreferrer">THE SPECULATIVE MANIFEST ↗</a>
-          <a href={`${REPO}/blob/master/tools/gen_qwen35.py`} target="_blank" rel="noreferrer">THE GENERATOR ↗</a>
+          <a href={`${TREE}/examples/qwen3.8-27b-dflash2.json`} target="_blank" rel="noreferrer">THE SPECULATIVE MANIFEST ↗</a>
+          <a href={`${TREE}/tools/gen_qwen35.py`} target="_blank" rel="noreferrer">THE GENERATOR ↗</a>
           <a href="/">← KERN</a>
         </div>
       </section>

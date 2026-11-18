@@ -393,7 +393,7 @@ checkpoint 里没有的东西——Gemma norm 的 `weight + 1`、A_log 的 f32�
 cos / sin 表、全 1 的 kv scale、chunk 索引表——不是权重，是 `carry` buffer，
 由 manifest 自己的 `once` program（`load`）在 load 之后算出来（
 `tools/kernels-src/weight_prep.cu` 的几个 elementwise 核）。拼接方式与派生
-表都是模型知识，住在生成器（`tools/qwen_weights.py`），不住在 runtime。
+表都是模型知识，住在模型仓库的生成器里，不住在 runtime。
 
 checkpoint 张量要先变换才能用（K3 的 mxfp4 专家按 GEMM 布局 shuffle），而原样
 那份没人再读时，原样的张量声明成 `source`，变换写成 `derive` program：

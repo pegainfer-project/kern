@@ -1269,7 +1269,7 @@ $ kern server --manifest candidate.json --port 8000`}</pre>
                     </div>
                   </td>
                   <td>
-                    <a href="/qwen38/">examples/qwen3.8-27b ↗</a>
+                    <a href="/qwen38/">bring-up log ↗</a>
                   </td>
                 </tr>
                 <tr>

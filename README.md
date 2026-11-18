@@ -21,7 +21,7 @@
 
 - [**One night, 17% more requests than vLLM.**](docs/vllm-rsi-example.md) Agents optimized Qwen3.8-27B on live Claude Code traffic, three rounds, no human in between.
 - [**The same engine in SGLang, 10.5% more requests.**](docs/sglang.md) The overnight manifest, rewritten for SGLang's memory layout.
-- [**A new model family in one session.**](docs/qwen38-bringup.md) Qwen3.8-27B plus its speculative draft in under 2.5 hours, one human intervention.
+- [**A new model family in one session.**](https://kern-baa.pages.dev/qwen38/) Qwen3.8-27B plus its speculative draft in under 2.5 hours, one human intervention.
 - [**A kernel set from six agents in parallel.**](https://github.com/pegainfer-project/kern-k3-pp-prefill/blob/main/docs/k3-kernel-abi.md) K3 decode kernels against a written ABI, step time 37.2 → 29.3 ms.
 - [**An engine per GPU.**](docs/registry.md) DeepSeek-V4.1-Flash ships separate manifests for GB300 and HGX B300.
 - [**Full-size models across GPUs and trays.**](docs/serve.md) DeepSeek-V4.1-Flash at EP4, full-size K3 prefill across eight pipeline stages.
@@ -251,8 +251,9 @@ Dense Qwen3 (including Qwen3-4B) lives in
 [**kern-qwen3**](https://github.com/pegainfer-project/kern-qwen3), with its own
 kernel builds, manifest generator, and sampling checks.
 
-From source, with the Qwen3.8 fixture targets in `kern.toml` and their
-kernels and checkpoints installed:
+From source, with a `kern.toml` that names the target's manifest, kernels and
+checkpoint ([Run a model](https://kern-baa.pages.dev/docs/guides/run-a-model)
+writes one for the published Qwen3.8 package):
 
 ```bash
 cargo build --release
@@ -289,7 +290,7 @@ against. kern stays model-agnostic.
 | Kimi-K3.1 Pro | [kern-k31](https://github.com/pegainfer-project/kern-k31) | P/D on `kern-serve` as K3, with DeepSeek-V3.2-style sparse attention on its 24 MLA layers; decode at TP8 / DCP8, experts EP2 x TP4. Its decode also runs as the model inside an unmodified SGLang |
 | GLM-5.3 | [kern-glm53](https://github.com/pegainfer-project/kern-glm53) | Packed prefill (up to 16 sequences and 16k rows a call, 1M context) as four pipeline stages, one GPU each |
 | DeepSeek V4.1 Flash | [kern-dsv41-flash](https://github.com/pegainfer-project/kern-dsv41-flash) | One GB300 tray as DP4 attention + EP4 MoE on `kern-serve`: `prefill`, `decode_batch` and a five-draft/six-verify `round`; every kernel builds from a clone to its pinned hash |
-| Qwen3.8-27B, with its DFlash2 draft | this repository (`tools/gen_qwen35.py`), published as [Pegainfer/kern-qwen38-sm103](https://huggingface.co/Pegainfer/kern-qwen38-sm103) | One GPU on `kern-serve`, or as the model inside vLLM or SGLang |
+| Qwen3.8-27B, with its DFlash2 draft | kern-qwen38, published as [Pegainfer/kern-qwen38-sm103](https://huggingface.co/Pegainfer/kern-qwen38-sm103) | One GPU on `kern-serve`, or as the model inside vLLM or SGLang |
 
 ## Inside
 

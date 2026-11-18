@@ -44,8 +44,8 @@ cargo build --release
 
 Needs Rust and a C++ compiler. The CUDA API the runtime binds is fixed by
 the pinned `cudarc` feature, so no CUDA toolkit is involved in the build.
-The repository's `kern.toml` names fixture targets; with their kernels and
-checkpoints in place, `./target/release/kern run qwen3.8-27b` works as-is.
+With a `kern.toml` that names a target ([Run a model](/guides/run-a-model)),
+`./target/release/kern run <target>` works as the released binary does.
 
 Dense Qwen3 models are maintained in
 [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3). Follow that
