@@ -1,1 +1,3 @@
 /install.sh https://github.com/pegainfer-project/kern/releases/latest/download/install.sh 302
+/docs /docs/getting-started/ 302
+/docs/ /docs/getting-started/ 302
