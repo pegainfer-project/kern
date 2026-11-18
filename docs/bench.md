@@ -282,6 +282,15 @@ of the op it stands in for.
 }
 ```
 
+What this replaces is the microbenchmark a kernel's author writes to
+tune it: a launcher for that kernel's parameter layout, inputs of the
+right shapes, enough distinct weights that the cache does not flatter
+it, a reference to check the output against. Each of those is code, each
+is written again for the next kernel, and each can be wrong in a way that
+only shows in the served graph. Here the launcher is the runtime, the
+inputs and the cache are the program's own, the reference is the
+manifest, and a candidate is a file with no code in it.
+
 A kernel written in another language, the same cubin at another grid, and
 the same grid over another cubin are all candidates, and nothing tells
 them apart. Tuning launch geometry needs no syntax of its own: the kernel's
@@ -321,7 +330,14 @@ out       results/round-dsl-tiles.json   813.9s
 A `candidate` line is the whole workload under that candidate against
 the baseline, then what its own ops cost before and after, then what the
 gate found. `pick` is one op's tiling of its var and what the op costs
-under it; `confirm` and `cost` are the picked manifest measured.
+under it; `confirm` and `cost` are the picked manifest measured. A `gap`
+line follows a pick whose boundary falls between two measured values more
+than a doubling apart: the values between ran in no scenario and take the
+larger side's implementation on no evidence.
+
+```
+gap       verify_linear_16384_5120 · `tokens` 33..255 unmeasured · the boundary after 32 is a guess
+```
 
 **Every run is the whole manifest over the whole workload.** Each
 candidate is spliced in (`kern_manifest::candidate::splice`: the interface
@@ -337,9 +353,13 @@ choose a fast kernel that computes something else. After every scenario
 the run's outputs are held against the first run's: the tokens and counts
 the program hands back, and every row of every distribution over tokens
 it writes (a `logits*` buffer, or any float buffer as wide as the token
-domain). A scenario is `identical`; or `within`, every row's KL(manifest ‖
-candidate) at most 0.01 nat, `kern test`'s default, so that a token that
-moved under it moved on a tie; or it `differs`. A program that hands
+domain), on every rank. A scenario is `identical`; or `within`, every
+row's KL(manifest ‖ candidate) at most 0.01 nat, `kern test`'s default,
+and tokens or counts moved only where some row changed its argmax, so
+that what moved, moved on a tie; or it `differs`. A row with a NaN on one
+side is infinitely far, and outputs that moved under distributions that
+chose the same tokens differ however close the distributions are: the
+candidate changed what is done with them. A program that hands
 nothing back leaves a scenario `unjudged`. A candidate is chosen from at
 a value of the var only if every scenario there is identical or within.
 A candidate that differs is still measured and reported, never chosen:
@@ -399,10 +419,10 @@ trace, five W8A16 GEMM ops (`bench_results/2026-11-18-bench-candidates`):
   32-row tile where it had 16, on three ops, 2038.2 s measured against
   2038.5 predicted.
 - Against the served manifest (Triton GEMM): the same DSL kernel costs
-  2042.3 s to its 2753.0 (-25.8%) and is within the limit in 53 of 57
-  scenarios; a hand-written tcgen05 kernel costs 3098.7 s and holds in
+  2042.3 s to its 2752.8 (-25.8%) and is within the limit in 53 of 57
+  scenarios; a hand-written tcgen05 kernel costs 3099.4 s and holds in
   52. The pick takes the DSL kernel at the two ranges of `seqs` where it
-  held everywhere, 2753.0 → 2391.1 s measured against 2392.7 predicted,
+  held everywhere, 2752.8 → 2391.4 s measured against 2392.3 predicted,
   within the limit in every scenario (KL at most 7e-3, 11 ties).
 - Two controls: a candidate whose launches run at `seqs` 3..4 only holds
   in exactly the 12 scenarios there and is not chosen from elsewhere; a
@@ -411,7 +431,26 @@ trace, five W8A16 GEMM ops (`bench_results/2026-11-18-bench-candidates`):
   run goes on.
 - The manifest's two runs are bit-identical in every scenario and under
   0.01% apart in cost; the noise a pick is held to, the worst value of an
-  op, came out between 0.05% and 0.4%.
+  op, came out between 0.05% and 0.6%.
+- Against a careful microbenchmark. The DSL kernel's author had written
+  one (some 330 lines: a launcher for its TMA descriptors, weights
+  rotated through 512 MiB so that none is warm) and timed both kernels
+  per op and row count. Per call, the graph's time over that standalone
+  time is 0.96 to 1.01 for the Triton kernel and 0.98 to 1.06 for the DSL
+  one over the 25 op and row-count pairs, and the two disagree on the
+  ratio between the kernels by at most 0.03. So for a GEMM the graph says
+  what a well-made microbenchmark says, and nobody wrote it. Within one
+  row count an op's time moves 0.2% to 1.2% across the scenarios'
+  contexts.
+- What was not exercised. These tiles differ by 10% to 40% a step, far
+  above the noise: raising the noise fivefold leaves all 22 ranges of the
+  first pick, and only at tenfold do two merge. Whether the rule removes
+  boundaries that encode noise wants an op whose candidates are close.
+- What a missing value costs. With one measured row count left out of
+  the first pick and the value given to whatever covers it, an op costs 6%
+  to 82% more there than its best candidate (at most 2% at the smallest
+  count, whose neighbour's tile is as good). A workload decides which
+  values exist, and the `gap` line says where one is missing.
 
 The report has the header of a plain run, then `baseline`, `candidates`
 and `baseline_again` (each scenario's vars, program time, per-op times
@@ -441,9 +480,10 @@ fails naming the program and how many records CUPTI dropped.
 - `--candidate` chooses along one var. An op whose candidates are
   conditioned on two vars, or whose grids read two and are conditioned on
   none, gets one implementation for every shape.
-- A candidate's value between two measured ones runs what the larger one
-  runs. A workload from a served trace measures the values the service
-  sees; a hand-written one should name every value that matters.
+- Nothing is interpolated: a value between two measured ones runs what
+  the larger one runs. A workload from a served trace measures the values
+  the service sees; a hand-written one should name every value that
+  matters, and a `gap` line says where it did not.
 - The manifest's distributions of every scenario stay on the device for
   the whole run, to be compared there: a few hundred MiB a scenario for a
   250k vocabulary at 256 rows.

@@ -14,6 +14,10 @@
 //! A candidate that may not run at a value costs infinity there, so it is
 //! never chosen across it and still chosen beside it.
 //!
+//! Nothing is interpolated. Where a boundary falls between two measured
+//! values more than a doubling apart, the values between them take the
+//! larger side's candidate on no evidence, and [`gaps`] names them.
+//!
 //! A range ends at the last value measured in it and the next begins one
 //! above, so a value between two measured ones runs what the larger one
 //! runs, and the first and last ranges are open: every value has a
@@ -95,4 +99,16 @@ pub fn pick(t: &Table, noise: f64) -> Option<Tiling> {
         })
         .collect();
     Some(Tiling { ranges, cost: cheapest[k][n].0, floor })
+}
+
+/// The boundaries of `tiling` drawn across more than a doubling of the
+/// var: the measured value each side of one, `(below, above)`.
+pub fn gaps(t: &Table, tiling: &Tiling) -> Vec<(u64, u64)> {
+    tiling
+        .ranges
+        .iter()
+        .filter_map(|r| r.max)
+        .filter_map(|below| Some((below, *t.values.iter().find(|&&v| v > below)?)))
+        .filter(|&(below, above)| above > 2 * below)
+        .collect()
 }

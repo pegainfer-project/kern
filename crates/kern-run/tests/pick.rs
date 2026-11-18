@@ -2,7 +2,7 @@
 //! the fewest ranges any tiling within the noise has, costs the least of
 //! those, and covers every value.
 
-use kern_run::bench::pick::{pick, Range, Table, Tiling};
+use kern_run::bench::pick::{gaps, pick, Range, Table, Tiling};
 
 struct Rand(u64);
 
@@ -104,4 +104,18 @@ fn nothing_measured_or_a_value_nothing_may_run_at_is_no_pick() {
     assert_eq!(pick(&Table { values: vec![], costs: vec![vec![]] }, 0.), None);
     assert_eq!(pick(&Table { values: vec![1, 2], costs: vec![vec![1., f64::INFINITY]] }, 0.), None);
     assert_eq!(pick(&Table { values: vec![1], costs: vec![] }, 0.), None);
+}
+
+#[test]
+fn a_boundary_across_more_than_a_doubling_is_a_gap() {
+    let t = Table { values: vec![16, 32, 256], costs: vec![vec![1., 1., 9.], vec![9., 9., 1.]] };
+    let across = pick(&t, 0.).unwrap();
+    assert_eq!((across.ranges.len(), gaps(&t, &across)), (2, vec![(32, 256)]));
+
+    let t = Table { values: vec![16, 32, 64], costs: vec![vec![1., 9., 9.], vec![9., 1., 1.]] };
+    let within = pick(&t, 0.).unwrap();
+    assert_eq!((within.ranges.len(), gaps(&t, &within)), (2, vec![]));
+
+    let whole = pick(&Table { values: vec![1, 100], costs: vec![vec![1., 1.]] }, 0.).unwrap();
+    assert_eq!(gaps(&t, &whole), vec![]);
 }
