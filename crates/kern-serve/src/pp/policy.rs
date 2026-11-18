@@ -1,8 +1,11 @@
 //! Item-size policies: the most rows the next item may hold, from what the
-//! head sees when it sizes it (`--pp-policy`, the simulator's syntax).
+//! head sees when it sizes it (`--pp-policy`).
 //!
 //! ```text
 //! fixed<N>               N
+//! depth<lo>/<hi>/<n>     the admitted prompts' rows to go spread over n items, within [lo, hi]
+//! time<N>                the most rows whose item's slowest stage costs at most what N rows cost at
+//!                        context 0, up to 16384
 //! dck<init>/<sigma>      SGLang's dynamic chunking: the rows at which the first sequence in turn, at its
 //!                        context, costs what init rows cost at context 0, moved from init toward them by
 //!                        sigma, at least init / 4
@@ -13,24 +16,15 @@
 //!                        admitted per µs over the last minute plus the rows to go of the prompts waiting
 //!                        more than fresh ms over slo less their mean wait; with no cap meeting it (or no
 //!                        time left), the largest within slo, else 1024
-//! depth<lo>/<hi>/<n>     the admitted prompts' rows to go spread over n items, within [lo, hi]
-//! time<N>                the most rows whose item's slowest stage costs at most what N rows cost at
-//!                        context 0, up to 16384
-//! mpc                    for each cap in 2048 / 4096 / 8192 / 16384, roll every waiting prompt out to its
-//!                        end from the frontier, take the cap finishing them soonest in sum
-//! mpcb                   mpc whose candidates are those caps' time budgets
-//! mpch<N>                mpc, cut to time<N>'s rows when those are fewer
-//! mpca<N>/<K>[/<W>]      mpch<N> unless the waiting prompts but the longest have more than K rows to go:
-//!                        then mpch<W>, or mpc without W
-//! mpcl<x>                mpc whose rollout also charges x times the admission rate of the last minute for
-//!                        each µs an arrival would ride behind the items it sends
-//! mpclb<x>               mpcl<x> over mpcb's candidates
-//! mpcp<k>[/<x>]          mpcb whose rollout also pays k u / (1 - u) per µs of slowest-stage time its items
-//!                        commit, u the head's utilization (at most 0.95), plus mpclb's term at weight x
-//! <policy>^<N>           the policy's cap cut to time<N>'s rows when those are fewer
-//! lad<p1>@<l1>+...+<top> the first rung p_i whose bound l_i exceeds the measured offered load, else top
-//! headway<N1>/<N2>       lad mpclb1@0.45 + mpch<N1>@0.55 + time<N2>@0.85 + mpcp1: the rollout free, under
-//!                        a ceiling, replaced by equal-time items, and priced, as the load rises
+//! rollout                for each of time2048, time4096, time8192 and time16384, roll every waiting
+//!                        prompt out to its end from the frontier under that budget, and take the budget
+//!                        answering them soonest in sum, an arrival at the last minute's rate counted for
+//!                        each µs it would ride behind the items sent
+//! headway<N1>/<N2>       a ladder over the measured offered load: below 0.45, rollout; below 0.55, a
+//!                        rollout over the row caps 2048 to 16384, cut to time<N1>'s rows when those are
+//!                        fewer; below 0.85, time<N2>; above, a rollout that counts no arrival and pays
+//!                        u / (1 - u) per µs of slowest-stage time its items commit, u the head's
+//!                        utilization (at most 0.95)
 //! ```
 //!
 //! The two prior-work rules keep no state across decisions: Hwang & Ahn's
@@ -53,7 +47,7 @@
 
 use std::collections::VecDeque;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{ensure, Context, Result};
 
 use super::cost::{sum, Cost};
 use super::frontier::{self, pack, parts_of, Pipe, Rule, Sent, Seq, Start, Terms, Turn, CAPS, PAGE};
@@ -72,19 +66,12 @@ const RUNGS: [f64; 3] = [0.45, 0.55, 0.85];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Policy {
     Fixed(i64),
-    Dck { init: i64, sigma: f64 },
-    Hwang { slo: f64, fresh: f64 },
     Depth { lo: i64, hi: i64, n: i64 },
     Time(i64),
-    Mpc,
-    Mpcb,
-    Mpch(i64),
-    Mpca { n: i64, backlog: i64, w: Option<i64> },
-    Mpcl(f64),
-    Mpclb(f64),
-    Mpcp { k: f64, x: f64 },
-    Cut(Box<Policy>, i64),
-    Ladder { rungs: Vec<(f64, Policy)>, top: Box<Policy> },
+    Dck { init: i64, sigma: f64 },
+    Hwang { slo: f64, fresh: f64 },
+    Rollout,
+    Headway { ceiling: i64, equal: i64 },
 }
 
 /// What the head sees when it sizes the next item.
@@ -110,76 +97,48 @@ pub struct Decision<'a> {
 }
 
 impl Policy {
+    /// A policy by its name and `/`-separated arguments; one whose
+    /// arguments could never size an item is refused here, not at its
+    /// first decision.
     pub fn parse(p: &str) -> Result<Policy> {
-        if let Some(spec) = p.strip_prefix("headway") {
-            let bound = |v: &str| v.parse::<i64>().with_context(|| format!("policy `{p}`: `{v}` is not an integer"));
-            let (n1, n2) = spec.split_once('/').with_context(|| format!("policy `{p}` is not headway<N1>/<N2>"))?;
-            let rungs = vec![Policy::Mpclb(1.0), Policy::Mpch(bound(n1)?), Policy::Time(bound(n2)?)];
-            let top = Box::new(Policy::Mpcp { k: 1.0, x: 0.0 });
-            return Ok(Policy::Ladder { rungs: RUNGS.into_iter().zip(rungs).collect(), top });
-        }
-        if let Some(spec) = p.strip_prefix("lad") {
-            let mut parts: Vec<&str> = spec.split('+').collect();
-            let top = Box::new(Policy::parse(parts.pop().unwrap_or_default())?);
-            let rungs = parts
-                .iter()
-                .map(|r| {
-                    let (q, l) =
-                        r.rsplit_once('@').with_context(|| format!("policy `{p}`: rung `{r}` has no `@<load>`"))?;
-                    let l = l.parse().with_context(|| format!("policy `{p}`: rung `{r}`: `{l}` is not a number"))?;
-                    Ok((l, Policy::parse(q)?))
-                })
-                .collect::<Result<_>>()?;
-            return Ok(Policy::Ladder { rungs, top });
-        }
-        if let Some((q, n)) = p.rsplit_once('^') {
-            let n = n.parse().with_context(|| format!("policy `{p}`: cut `{n}` is not an integer"))?;
-            return Ok(Policy::Cut(Box::new(Policy::parse(q)?), n));
-        }
-        let num = |v: &str| v.parse::<f64>().with_context(|| format!("policy `{p}`: `{v}` is not a number"));
-        if let Some(spec) = p.strip_prefix("hwang") {
-            let (slo, fresh) =
-                spec.split_once('/').with_context(|| format!("policy `{p}` is not hwang<slo>/<fresh>"))?;
-            return Ok(Policy::Hwang { slo: num(slo)? * 1e3, fresh: num(fresh)? * 1e3 });
-        }
-        if let Some(spec) = p.strip_prefix("mpcp") {
-            let (k, x) = spec.split_once('/').unwrap_or((spec, "0"));
-            return Ok(Policy::Mpcp { k: num(k)?, x: num(x)? });
-        }
-        let names = ["fixed", "dck", "depth", "time", "mpch", "mpca", "mpclb", "mpcl"];
-        let Some(name) = names.iter().find(|n| p.starts_with(*n)) else {
-            return match p {
-                "mpc" => Ok(Policy::Mpc),
-                "mpcb" => Ok(Policy::Mpcb),
-                _ => bail!("unknown policy `{p}`"),
-            };
+        let names = ["fixed", "depth", "time", "dck", "hwang", "rollout", "headway"];
+        let name = names.iter().find(|n| p.starts_with(**n)).with_context(|| format!("unknown policy `{p}`"))?;
+        let args: Vec<&str> = p[name.len()..].split('/').filter(|a| !a.is_empty()).collect();
+        let takes = |n: usize| {
+            ensure!(args.len() == n, "policy `{p}`: `{name}` takes {n} argument(s), got {}", args.len());
+            Ok(())
         };
-        let args: Vec<&str> = p[name.len()..].split('/').collect();
-        let int = |i: usize| -> Result<i64> {
-            let x = args.get(i).with_context(|| format!("policy `{p}` needs {} argument(s)", i + 1))?;
-            x.parse().with_context(|| format!("policy `{p}`: argument `{x}` is not an integer"))
+        let rows = |i: usize| -> Result<i64> {
+            let n: i64 = args[i].parse().with_context(|| format!("policy `{p}`: `{}` is not an integer", args[i]))?;
+            ensure!(n > 0, "policy `{p}`: `{n}` is not a positive count");
+            Ok(n)
         };
-        let want = |n: &[usize]| match n.contains(&args.len()) {
-            true => Ok(()),
-            false => Err(anyhow::anyhow!("policy `{p}` takes {n:?} argument(s), got {}", args.len())),
+        let num = |i: usize, lo: f64, hi: f64| -> Result<f64> {
+            let x: f64 = args[i].parse().with_context(|| format!("policy `{p}`: `{}` is not a number", args[i]))?;
+            ensure!((lo..=hi).contains(&x), "policy `{p}`: `{x}` is outside [{lo}, {hi}]");
+            Ok(x)
         };
         Ok(match *name {
-            "fixed" => want(&[1]).and(int(0).map(Policy::Fixed))?,
+            "fixed" => takes(1).and(rows(0).map(Policy::Fixed))?,
+            "time" => takes(1).and(rows(0).map(Policy::Time))?,
+            "depth" => {
+                takes(3)?;
+                let (lo, hi, n) = (rows(0)?, rows(1)?, rows(2)?);
+                ensure!(lo <= hi, "policy `{p}`: the floor {lo} is above the ceiling {hi}");
+                Policy::Depth { lo, hi, n }
+            }
             "dck" => {
-                want(&[2])?;
-                Policy::Dck { init: int(0)?, sigma: num(args[1])? }
+                takes(2)?;
+                Policy::Dck { init: rows(0)?, sigma: num(1, 0.0, 1.0)? }
             }
-            "time" => want(&[1]).and(int(0).map(Policy::Time))?,
-            "mpch" => want(&[1]).and(int(0).map(Policy::Mpch))?,
-            "mpcl" => want(&[1]).and(num(args[0]).map(Policy::Mpcl))?,
-            "mpclb" => want(&[1]).and(num(args[0]).map(Policy::Mpclb))?,
-            "mpca" => {
-                want(&[2, 3])?;
-                Policy::Mpca { n: int(0)?, backlog: int(1)?, w: if args.len() == 3 { Some(int(2)?) } else { None } }
+            "hwang" => {
+                takes(2)?;
+                Policy::Hwang { slo: num(0, f64::MIN_POSITIVE, f64::MAX)? * 1e3, fresh: num(1, 0.0, f64::MAX)? * 1e3 }
             }
+            "rollout" => takes(0).map(|()| Policy::Rollout)?,
             _ => {
-                want(&[3])?;
-                Policy::Depth { lo: int(0)?, hi: int(1)?, n: int(2)? }
+                takes(2)?;
+                Policy::Headway { ceiling: rows(0)?, equal: rows(1)? }
             }
         })
     }
@@ -187,102 +146,65 @@ impl Policy {
     /// Whether the policy reads the cost model; one that does not runs
     /// with none.
     pub fn needs_cost(&self) -> bool {
-        match self {
-            Policy::Fixed(_) | Policy::Depth { .. } => false,
-            Policy::Cut(..) => true,
-            Policy::Ladder { rungs, top } => top.needs_cost() || rungs.iter().any(|r| r.1.needs_cost()),
-            _ => true,
-        }
+        !matches!(self, Policy::Fixed(_) | Policy::Depth { .. })
     }
 
-    /// The ladder rung a load picks (`rungs.len()` for the top), none for
-    /// a policy that is no ladder.
+    /// The rung of headway's ladder a load picks, none for another policy.
     pub fn rung(&self, load: f64) -> Option<usize> {
-        match self {
-            Policy::Ladder { rungs, .. } => Some(rungs.iter().position(|r| load < r.0).unwrap_or(rungs.len())),
-            _ => None,
-        }
+        matches!(self, Policy::Headway { .. }).then(|| RUNGS.iter().position(|&l| load < l).unwrap_or(RUNGS.len()))
     }
 
     pub fn cap(&self, d: &Decision) -> i64 {
         let (m, s) = (d.model, d.stages);
-        match self {
-            Policy::Ladder { rungs, top } => {
-                return rungs.iter().find(|r| d.load < r.0).map_or(&**top, |r| &r.1).cap(d);
-            }
-            Policy::Cut(q, n) => return q.cap(d).min(Policy::Time(*n).cap(d)),
-            _ => {}
-        }
+        let time = |n: i64| {
+            frontier::fill(d.active, &Turn::of(d.active, s), m.slowest(&[(0, n)]), m, CAPS[CAPS.len() - 1], d.context)
+        };
+        let free = || rollout(d, true, Terms { lam: d.rate, price: 0.0 });
         match *self {
             Policy::Fixed(n) => n,
-            Policy::Dck { init, sigma } => {
-                Turn::of(d.active, s).first().map_or(init, |k| dck(d.active[k].pos, init, sigma, m))
-            }
-            Policy::Hwang { slo, fresh } => hwang(d, slo, fresh),
             Policy::Depth { lo, hi, n } => {
                 let togo: i64 = d.active.iter().map(|s| (s.end - s.pos).max(0)).sum();
                 hi.min(lo.max(-(-togo).div_euclid(n * PAGE) * PAGE))
             }
-            Policy::Time(n) => frontier::fill(
-                d.active,
-                &Turn::of(d.active, s),
-                m.slowest(&[(0, n)]),
-                m,
-                CAPS[CAPS.len() - 1],
-                d.context,
-            ),
-            Policy::Mpc | Policy::Mpcb | Policy::Mpcl(_) | Policy::Mpclb(_) | Policy::Mpcp { .. } => self.mpc(d),
-            Policy::Mpch(n) => self.mpc(d).min(Policy::Time(n).cap(d)),
-            Policy::Mpca { n, backlog, w } => {
-                let cap = self.mpc(d);
-                let lefts = d.active.iter().map(|x| (x.end - x.pos).max(0));
-                let longest = lefts.clone().max().unwrap_or(0);
-                let lim = if lefts.sum::<i64>() - longest <= backlog { n } else { w.unwrap_or(0) };
-                // A zero limit means no cut.
-                if lim != 0 {
-                    cap.min(Policy::Time(lim).cap(d))
-                } else {
-                    cap
-                }
+            Policy::Time(n) => time(n),
+            Policy::Dck { init, sigma } => {
+                Turn::of(d.active, s).first().map_or(init, |k| dck(d.active[k].pos, init, sigma, m))
             }
-            Policy::Ladder { .. } | Policy::Cut(..) => unreachable!("dispatched above"),
+            Policy::Hwang { slo, fresh } => hwang(d, slo, fresh),
+            Policy::Rollout => free(),
+            Policy::Headway { ceiling, equal } => match self.rung(d.load) {
+                Some(0) => free(),
+                Some(1) => rollout(d, false, Terms::default()).min(time(ceiling)),
+                Some(2) => time(equal),
+                _ => {
+                    let u = d.util.min(0.95);
+                    rollout(d, true, Terms { lam: 0.0, price: u / (1.0 - u) })
+                }
+            },
         }
     }
+}
 
-    fn mpc(&self, d: &Decision) -> i64 {
-        let m = d.model;
-        let cands: Vec<Rule> = match self {
-            Policy::Mpcb | Policy::Mpclb(_) | Policy::Mpcp { .. } => {
-                CAPS.iter().map(|&c| Rule::Budget(m.slowest(&[(0, c)]))).collect()
-            }
-            _ => CAPS.iter().map(|&c| Rule::Rows(c)).collect(),
-        };
-        let lam = match *self {
-            Policy::Mpcl(x) | Policy::Mpclb(x) | Policy::Mpcp { x, .. } => x * d.rate,
-            _ => 0.0,
-        };
-        let price = match *self {
-            Policy::Mpcp { k, .. } => {
-                let u = d.util.min(0.95);
-                k * u / (1.0 - u)
-            }
-            _ => 0.0,
-        };
-        let at = Start {
-            seqs: d.active,
-            pipe: &d.frontier,
-            now: d.now,
-            answers: &d.answers,
-            ahead: d.ahead,
-            context: d.context,
-        };
-        let (best, _) = cands
-            .iter()
-            .map(|&r| (r, frontier::plan_cost(at, r, m, Terms { lam, price })))
-            .reduce(|b, x| if x.1 < b.1 { x } else { b })
-            .expect("there is a candidate");
-        best.cap(d.active, &Turn::of(d.active, d.stages), m, d.context)
-    }
+/// The cap, of [`CAPS`] or (`budgets`) of their time budgets, whose
+/// rollout from what the head sees costs least under `terms`, as rows of
+/// the next item.
+fn rollout(d: &Decision, budgets: bool, terms: Terms) -> i64 {
+    let m = d.model;
+    let rule = |c: i64| if budgets { Rule::Budget(m.slowest(&[(0, c)])) } else { Rule::Rows(c) };
+    let at = Start {
+        seqs: d.active,
+        pipe: &d.frontier,
+        now: d.now,
+        answers: &d.answers,
+        ahead: d.ahead,
+        context: d.context,
+    };
+    let (best, _) = CAPS
+        .iter()
+        .map(|&c| (rule(c), frontier::plan_cost(at, rule(c), m, terms)))
+        .reduce(|b, x| if x.1 < b.1 { x } else { b })
+        .expect("there is a candidate");
+    best.cap(d.active, &Turn::of(d.active, d.stages), m, d.context)
 }
 
 /// `Policy::Dck`'s cap for a first sequence over `l` rows of context.

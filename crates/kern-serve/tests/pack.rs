@@ -179,3 +179,13 @@ fn drain(arrivals: &[(usize, usize, usize)], patience: usize) {
     let drained = seqs.iter().all(|s| s.left == 0);
     assert_eq!((sent, seqs.len(), drained), (total, arrivals.len(), true), "{arrivals:?} p{patience}");
 }
+
+#[test]
+fn a_policy_that_could_never_size_an_item_is_refused_when_parsed() {
+    let good = ["fixed16384", "depth2048/16384/24", "time12288", "dck8192/0.75", "hwang1500/0", "rollout"];
+    let bad = ["fixed0", "fixed-5", "depth2048/16384/0", "depth4096/2048/24", "dck8192/1.5", "hwang0/0", "rollout1"];
+    let parsed = |p: &&str| Policy::parse(p).is_ok();
+    assert_eq!((good.iter().all(parsed), bad.iter().any(parsed)), (true, false));
+    assert!(Policy::parse("headway10240/12288").is_ok() && Policy::parse("headway10240").is_err());
+    assert!(Policy::parse("ladder").unwrap_err().to_string().contains("unknown policy `ladder`"));
+}

@@ -96,10 +96,11 @@ pub struct ServeOpts {
     #[arg(long, default_value_t = 4)]
     pub pp_ahead: usize,
 
-    /// On the head of a pipeline: what caps the next item's rows, in the
-    /// simulator's syntax (`fixed16384`, `depth2048/16384/24`, `dck8192/0.75`,
-    /// `headway10240/12288`, ...; `pp::policy`). Default: the admitted rows
-    /// spread over 24 items, within 2048 and the chunk
+    /// On the head of a pipeline: what caps the next item's rows
+    /// (`fixed16384`, `depth2048/16384/24`, `time12288`, `dck8192/0.75`,
+    /// `hwang1500/0`, `rollout`, `headway10240/12288`; `pp::policy`).
+    /// Default: the admitted rows spread over 24 items, within 2048 and
+    /// the chunk
     #[arg(long)]
     pub pp_policy: Option<String>,
 
