@@ -1151,6 +1151,14 @@ impl Launch {
         own.as_deref().unwrap_or(&op.params)
     }
 
+    /// The launch's own wiring, when it does not just forward the op's params.
+    pub(crate) fn own_args_mut(&mut self) -> Option<&mut Vec<LaunchArg>> {
+        match self {
+            Launch::Kernel(k) => k.args.as_mut(),
+            Launch::Extern(e) => e.args.as_mut(),
+        }
+    }
+
     /// The wiring, defaulting to forwarding the op's params in order.
     pub fn args_of(&self, op: &Op) -> Cow<'_, [LaunchArg]> {
         let own = match self {
@@ -1541,6 +1549,18 @@ pub enum EvalError {
 }
 
 impl Expr {
+    /// The vars the expression reads, in the order written.
+    pub fn vars(&self) -> Vec<&str> {
+        match self {
+            Expr::Const(_) => Vec::new(),
+            Expr::Var(v) => vec![v],
+            Expr::CeilDiv { ceil_div: (e, _) } | Expr::Mul { mul: (e, _) } | Expr::Clamp { clamp: (e, _, _) } => {
+                e.vars()
+            }
+            Expr::Add { add: (a, b) } => [a.vars(), b.vars()].concat(),
+        }
+    }
+
     pub fn eval(&self, vars: &BTreeMap<String, u64>) -> Result<u64, EvalError> {
         match self {
             Expr::Const(c) => Ok(*c),

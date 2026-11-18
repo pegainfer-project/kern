@@ -25,8 +25,9 @@ the schema golden, lints) belongs in CI, not here.
 
 - `crates/kern-manifest` — the manifest as types and schema (`types`), the
   load-time `verify`, which collects every diagnostic and never stops at the
-  first, the serving `protocol` a driver reads off a manifest, and `cut`,
-  which splits a manifest into pipeline stages. Pure host code.
+  first, the serving `protocol` a driver reads off a manifest, `cut`,
+  which splits a manifest into pipeline stages, and `candidate`, which
+  puts another implementation of an op into a manifest. Pure host code.
 - `crates/kern-pool` — the states' accounting: token and sequence slots
   handed out as leases (`pages`), frozen page chains (`store`), the prefix
   radix index (`prefix`), positions dealt over a group (`deal`). Pure host

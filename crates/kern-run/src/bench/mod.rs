@@ -16,6 +16,8 @@
 //! shape with its own sequences, in lockstep: a call that reads its peers
 //! finds them issuing. Attribution is per rank.
 
+mod candidates;
+pub mod pick;
 pub mod served;
 pub mod workload;
 
@@ -29,7 +31,7 @@ use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::profile::{Graph, PreImage, Probe};
 use kern_runtime::trace::{self, Step};
-use kern_runtime::{Capacity, HostWeights, Runtime};
+use kern_runtime::{Capacity, HostWeights, Resident, Runtime};
 use kern_test::report::row;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -74,6 +76,12 @@ pub struct BenchOpts {
     /// the next ranks-1 after it
     #[arg(long)]
     gpu: Option<usize>,
+    /// Other implementations of some of the manifest's ops: a candidate
+    /// JSON (`modules` and `ops`), or a directory of them. Given any, every
+    /// one is measured beside the manifest and the cheapest tiling of
+    /// those that leave its outputs standing is written out
+    #[arg(long)]
+    candidate: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Debug)]
@@ -143,6 +151,7 @@ fn mix(calls: &[(String, f64)]) -> Vec<(String, f64)> {
 /// of it each op was attributed.
 struct Priced {
     shape: Shape,
+    vars: Vars,
     us: f64,
     shares: Vec<(String, f64)>,
 }
@@ -425,42 +434,26 @@ struct Bench {
     protocol: Protocol,
     corpus: Vec<i64>,
     samples: usize,
+    /// Say nothing per scenario: the caller reports the run as a whole.
+    quiet: bool,
 }
 
 impl Bench {
-    /// Every rank on its GPU, peers connected, what the manifest runs once
-    /// run, a probe over each.
-    fn load(m: &Verified, inputs: &crate::Inputs, protocol: Protocol, plan: &Plan) -> Result<Bench> {
+    /// Every rank on its GPU, its weights bound over what `resident` left
+    /// there, peers connected, what the manifest runs once run, a probe
+    /// over each.
+    fn load(
+        m: &Verified,
+        inputs: &crate::Inputs,
+        protocol: Protocol,
+        plan: &Plan,
+        host_weights: &HostWeights,
+        resident: Option<Vec<Resident>>,
+    ) -> Result<Bench> {
         let n = crate::ranks_of(m)?;
         let gpus: Vec<usize> = (inputs.gpu..inputs.gpu + n).collect();
-        let host_weights = HostWeights::new();
         let capacity = Capacity { tokens: Some(plan.tokens), slots: plan.seqs, landings: 0 };
-        let loaded: Vec<Result<crate::Sent<Runtime>>> = std::thread::scope(|s| {
-            let handles: Vec<_> = gpus
-                .iter()
-                .enumerate()
-                .map(|(q, &gpu)| {
-                    let (topo, host_weights) = (crate::topology_of(m, q), &host_weights);
-                    s.spawn(move || -> Result<crate::Sent<Runtime>> {
-                        let topology = m.topology.is_some().then_some(&topo);
-                        let mut rt = Runtime::load_with_host_weights(
-                            m,
-                            inputs.kernels.as_deref(),
-                            gpu,
-                            Some(capacity),
-                            topology,
-                            host_weights,
-                        )
-                        .with_context(|| format!("rank {q} on gpu {gpu}"))?;
-                        inputs.weights.bind(&mut rt).with_context(|| format!("rank {q}: binding weights"))?;
-                        Ok(crate::Sent(rt))
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().expect("a rank's load thread panicked")).collect()
-        });
-        let mut rts: Vec<Runtime> = loaded.into_iter().map(|r| r.map(|s| s.0)).collect::<Result<_>>()?;
-        crate::connect_peers(m, &mut rts)?;
+        let mut rts = crate::load_ranks(m, inputs, &gpus, capacity, host_weights, resident)?;
         let probes = crate::each(&mut rts, "running what the manifest runs once", |rt| {
             crate::run_once(rt, &protocol)?;
             Ok(Probe::new(rt)?)
@@ -472,7 +465,12 @@ impl Bench {
             .enumerate()
             .map(|(rank, ((rt, probe), gpu))| Rank { rt, probe, gpu, rank, source: None })
             .collect();
-        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0 })
+        Ok(Bench { ranks, protocol, corpus: Vec::new(), samples: 0, quiet: false })
+    }
+
+    /// Every rank's weights, left on its GPU for the next manifest.
+    fn into_resident(self) -> Vec<Resident> {
+        self.ranks.into_iter().map(|r| r.rt.into_resident()).collect()
     }
 
     /// Build every rank's source prefix, the longest context any scenario
@@ -491,7 +489,12 @@ impl Bench {
     /// the report keeps every rank.
     fn scenario(&mut self, s: &Scenario) -> Result<(Vec<Value>, Priced)> {
         let started = Instant::now();
-        say("scenario", s.id.clone());
+        let say = |key: &str, body: String, at: Option<Instant>| match (self.quiet, at) {
+            (true, _) => {}
+            (false, Some(at)) => say_timed(key, body, at),
+            (false, None) => say(key, body),
+        };
+        say("scenario", s.id.clone(), None);
         let (p, corpus, samples) = (&self.protocol, &self.corpus, self.samples);
         let measured = crate::each(&mut self.ranks, &s.id, |r| measure(r, p, s, corpus, samples))?;
         let m = &self.ranks[0].rt.manifest;
@@ -504,45 +507,19 @@ impl Bench {
             1 => String::new(),
             n => format!(" · rank {q} slowest of {n}"),
         };
-        say_timed("program", program_line(&stats(&slow.graph_us), calls.len()) + ranks.as_str(), started);
+        say("program", program_line(&stats(&slow.graph_us), calls.len()) + ranks.as_str(), Some(started));
         let attributed: Vec<(String, f64)> =
             calls.iter().zip(&slow.calls_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
         let shares = mix(&attributed);
-        say("mix", mix_line(&shares));
+        say("mix", mix_line(&shares), None);
         let elapsed_s = started.elapsed().as_secs_f64();
-        let priced = Priced { shape: s.shape.clone(), us: p50(slow), shares };
+        let priced = Priced { shape: s.shape.clone(), vars: slow.vars.clone(), us: p50(slow), shares };
         Ok((timed.into_iter().enumerate().map(|(q, x)| record(m, s, q, x, elapsed_s)).collect(), priced))
     }
 }
 
-pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Result<()> {
-    let given = crate::Given {
-        manifest: o.manifest.clone(),
-        kernels: o.kernels.clone(),
-        weights: o.weights.clone(),
-        tokenizer: o.tokenizer.clone(),
-        gpu: o.gpu,
-        ..Default::default()
-    };
-    let inputs = crate::Inputs::resolve(given, cfg, target)?;
-    let w = Workload::read(&o.workload)?;
-    // Before any runtime loads: CUPTI picks its timestamps once per process.
-    trace::start()?;
-    let json_bytes = std::fs::read(&inputs.manifest)?;
-    // A vLLM manifest runs as vLLM runs it: bench is its host, and hands
-    // the host states to the runtime in their declared layouts.
-    let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?.self_hosted()?;
-    let protocol = Protocol::check_unsampled(&m)?;
-    let unit = kern_pool::page_unit(&m);
-    let plan = Plan::check(&w, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
-    let mut bench = Bench::load(&m, &inputs, protocol, &plan)?;
-    bench.corpus = corpus(inputs.tokenizer()?, w.seed)?;
-    bench.samples = w.samples;
-    let at = Instant::now();
-    bench.prime(plan.source)?;
-    say_timed("source", format!("{} tokens of real prefix per rank", plan.source), at);
-
-    let started = Instant::now();
+/// The device the samples come from and what the workload asks of it.
+fn say_setup(bench: &Bench, plan: &Plan) {
     let probe = &bench.ranks[0].probe;
     let ranks = match bench.ranks.len() {
         1 => String::new(),
@@ -566,6 +543,56 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     for d in &plan.dropped {
         say("drop", format!("{} · {}", d.shape, d.why));
     }
+}
+
+/// `m` loaded for the workload: its plan checked and every rank up over
+/// what `resident` left on its GPU. The source prefix is still to build.
+fn open(
+    m: &Verified,
+    inputs: &crate::Inputs,
+    w: &Workload,
+    corpus: &[i64],
+    host_weights: &HostWeights,
+    resident: Option<Vec<Resident>>,
+) -> Result<(Bench, Plan)> {
+    let protocol = Protocol::check_unsampled(m)?;
+    let unit = kern_pool::page_unit(m);
+    let plan = Plan::check(w, &protocol, unit as usize, kern_pool::row_tokens(m, unit))?;
+    let mut bench = Bench::load(m, inputs, protocol, &plan, host_weights, resident)?;
+    bench.corpus = corpus.to_vec();
+    bench.samples = w.samples;
+    Ok((bench, plan))
+}
+
+pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Result<()> {
+    let given = crate::Given {
+        manifest: o.manifest.clone(),
+        kernels: o.kernels.clone(),
+        weights: o.weights.clone(),
+        tokenizer: o.tokenizer.clone(),
+        gpu: o.gpu,
+        ..Default::default()
+    };
+    let inputs = crate::Inputs::resolve(given, cfg, target)?;
+    let w = Workload::read(&o.workload)?;
+    // Before any runtime loads: CUPTI picks its timestamps once per process.
+    trace::start()?;
+    let json_bytes = std::fs::read(&inputs.manifest)?;
+    // A vLLM manifest runs as vLLM runs it: bench is its host, and hands
+    // the host states to the runtime in their declared layouts.
+    let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?.self_hosted()?;
+    if !o.candidate.is_empty() {
+        return candidates::run(&o, &inputs, &w, &m, &json_bytes);
+    }
+    let corpus = corpus(inputs.tokenizer()?, w.seed)?;
+    let (mut bench, plan) = open(&m, &inputs, &w, &corpus, &HostWeights::new(), None)?;
+    let at = Instant::now();
+    bench.prime(plan.source)?;
+    say_timed("source", format!("{} tokens of real prefix per rank", plan.source), at);
+
+    let started = Instant::now();
+    say_setup(&bench, &plan);
+    let probe = &bench.ranks[0].probe;
 
     let mut report = preamble(&m, &json_bytes, &w, &plan, probe, bench.ranks.len())?;
     write(&o.out, &report)?;
@@ -604,7 +631,7 @@ mod tests {
     use super::*;
 
     fn priced(shape: Shape, us: f64, shares: Vec<(String, f64)>) -> Priced {
-        Priced { shape, us, shares }
+        Priced { shape, vars: Vars::new(), us, shares }
     }
 
     #[test]
