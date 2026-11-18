@@ -48,21 +48,10 @@ use kern_manifest::protocol::Rows;
 use kern_manifest::{Protocol, Verified};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use super::workload::{Plan, Workload};
 use super::{digest, say};
 
 /// Measured steps a bucket's price is the median of, before ties.
 const NEAR: usize = 25;
-
-#[derive(clap::Args, Debug)]
-pub struct ServedOpts {
-    /// Steps files a server wrote under --trace-dir, or directories of them
-    #[arg(long, required = true, num_args = 1..)]
-    trace: Vec<PathBuf>,
-    /// The workload to write (TOML)
-    #[arg(long)]
-    out: PathBuf,
-}
 
 /// One traced step, as a steps file records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,14 +389,14 @@ pub fn read(paths: &[PathBuf]) -> Result<Trace> {
     Ok(trace)
 }
 
-/// Writes the workload the traces in `o` are on the manifest at `path`,
-/// saying what it read and how well the workload stands for it.
-pub fn run(o: ServedOpts, path: &Path) -> Result<()> {
+/// Writes the workload the steps files in `traces` are on the manifest at
+/// `path`, saying what it read and how well the workload stands for it.
+pub fn run(traces: &[PathBuf], out: &Path, path: &Path) -> Result<()> {
     let json = std::fs::read(path).with_context(|| format!("manifest {}", path.display()))?;
     // As bench loads it, so the plan below is the plan bench will make.
     let m = Verified::from_json(std::str::from_utf8(&json)?)?.self_hosted()?;
     let protocol = Protocol::check_unsampled(&m)?;
-    let trace = read(&o.trace)?;
+    let trace = read(traces)?;
     let sha = digest(&json);
     ensure!(
         trace.manifests.iter().all(|s| *s == sha),
@@ -431,26 +420,5 @@ pub fn run(o: ServedOpts, path: &Path) -> Result<()> {
     let (err, worst) = served.fidelity();
     let worst = worst.map(|(what, e)| format!(" · worst {what} {:+.2}%", 100. * e)).unwrap_or_default();
     say("fidelity", format!("{:+.2}% priced at the trace's own nearest steps{worst}", 100. * err));
-    let text = served.toml();
-    let unit = kern_pool::page_unit(&m);
-    let plan = Plan::check(&Workload::parse(&text)?, &protocol, unit as usize, kern_pool::row_tokens(&m, unit))?;
-    say(
-        "plan",
-        format!(
-            "{} scenarios · {} dropped · {} tokens of state · {} seqs",
-            plan.scenarios.len(),
-            plan.dropped.len(),
-            plan.tokens,
-            plan.seqs
-        ),
-    );
-    for d in &plan.dropped {
-        say("drop", format!("{} · {}", d.shape, d.why));
-    }
-    if let Some(parent) = o.out.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&o.out, text).with_context(|| o.out.display().to_string())?;
-    say("out", o.out.display().to_string());
-    Ok(())
+    super::save(&served.toml(), out, &m, &protocol)
 }

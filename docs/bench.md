@@ -177,6 +177,104 @@ drop the sweeps of the tail, or merge a shape's context buckets into one
 sweep (weights summed, context their weighted mean). The same goes for
 `samples`, `seed`, and a sweep the plan dropped.
 
+## A workload from the manifest alone
+
+Before there is a trace, the manifest still says which shapes can be made
+at all: its protocol bounds a chunk's rows and a step's sequences, its
+page tables bound a context. Without `--trace`, `kern workload` writes the
+sweep that covers those bounds, for whoever needs a call's time as a
+function of its shape (a capacity estimate, a simulated server) and has no
+traffic to read:
+
+```bash
+kern workload qwen3.8-27b --chunk 4096 --groups 1,2,4,8,16,24,32,48,64,96,128 --state-gib 128 --out envelope.toml
+```
+
+```
+envelope  chunks of up to 4096 rows · steps of 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128 sequences · 2097152 tokens of state in 128 GiB · a sequence holds 262144
+plan      194 scenarios · 0 dropped · 2363392 tokens of state · 129 seqs
+out       envelope.toml
+```
+
+The three flags are what no manifest says. `--chunk` is the largest chunk
+to price, the server's prefill chunk. `--groups` are the batch sizes the
+server pads its steps to. `--state-gib` is the paged state a scenario may
+hold on a rank: bench sizes one allocation for its largest scenario, and
+with the page-table row it decides the deepest context a sequence is
+measured at. A size or a chunk the manifest has no program for is a `drop`
+line, as in any workload.
+
+What it sweeps:
+
+- **Every step size over two contexts**: one page, and the deepest the
+  row and its share of the state leave it.
+- **Chunks over an empty sequence, every 32 rows** up to `--chunk` (powers
+  of two below 32, and `--chunk` itself whatever the spacing).
+- **Chunks over the deepest context, every 128 rows**: what a context adds.
+
+A call's price is then two numbers a size, its time over the shallowest
+context and the slope to the deepest. A step of `g` sequences is its
+`g`'s time plus the slope for every token its sequences sit past a page;
+a chunk of `c` rows over `x` tokens is the empty-sequence time at `c`
+(linear between the measured rows) plus `x` times the slope of the next
+measured chunk at or above `c`.
+
+Why this sweep and not a denser, a sparser or an adaptive one was
+measured on Qwen3.8-27B (bf16, one GB300, 2026-11-18,
+`bench_results/2026-11-18-kern-price-collect`, on the manifest that still
+carried a one-sequence `decode` beside `decode_batch`); every error below
+is predicted over measured on shapes the fit never saw:
+
+- **Two contexts are enough.** A context adds to a call linearly. With
+  three more contexts between the ends the errors did not move: chunks
+  p90 6.59% with 28 scenarios and with 70, steps at most 1.93% with 22 and
+  2.17% with 127.
+- **A formula in rows and context does not price a chunk.**
+  `a + b·rows + d·rows·context`, fitted to 130 measured chunks, is off by
+  15% at the median and 62% at worst. What a context adds does not grow
+  with the rows: over 262k tokens it is 39 ms for any chunk of 64 to 498
+  rows, 76 ms from 777 and 117 ms from 1,552, a step each time the
+  attention's blocks outnumber the GPU's 152 SMs. Hence the slope of the
+  measured chunk above, not an interpolated one: at a 128-row spacing it
+  takes the worst error on chunks near those steps from 19.5% to 6.1%.
+- **A chunk over an empty sequence is not smooth in its rows.** 512 rows
+  take 23.4 ms and 513 take 25.1; 640 rows are 6% faster than 622 or 645.
+  On 96 random chunks of up to 4,096 rows over 1k to 262k tokens:
+
+  | empty-sequence spacing | scenarios | p50 | p90 | worst |
+  | --- | ---: | ---: | ---: | ---: |
+  | every 32 rows | 172 | 0.57% | 2.23% | 5.32% |
+  | every 64 rows | 108 | 0.52% | 3.11% | 6.22% |
+  | every 128 rows | 76 | 1.04% | 3.97% | 7.60% |
+  | every 256 rows | 60 | 1.50% | 5.87% | 10.53% |
+
+  Halving the spacing buys about a point of the worst error, and the
+  errors that remain are chunks of 256 to 1,024 rows (p50 2.06%).
+- **Sampling where the points mispredict each other was not worth its
+  rounds.** An adaptive sampler bisecting to a 1% tolerance priced steps
+  worse with 30 scenarios (5.02% at worst) than every size at two contexts
+  does with 22. On chunks it reached 2.49% at worst with 127 scenarios,
+  in six bench runs, chasing a tolerance below the 0.8% two runs of the
+  same chunk differ by.
+- **Twelve samples after four warmups are what a chunk needs.** A step's
+  first replay is 0.4 to 1.8% slow and every later one within 0.1%. A
+  chunk's replays each scatter by 2 to 5%, and the median of twelve is
+  within 0.56% of the settled value, of eight within 1.03%; two runs of
+  the same workload differ by up to 0.81%.
+
+The file above, benched as written (194 scenarios, six minutes on one
+GB300, 2026-11-18), prices 48 random steps whose sequences sit at mixed
+depths to within 1.39% (p90 1.08%, their total +0.21%), and 96 random
+chunks of up to 4,096 rows over 1k to 262k tokens to within 4.47% (p90
+2.22%, their total −0.54%).
+
+What it does not say: every row of a measured step is real, so a batch
+padded up to its size is priced as if full; host time between steps and
+the pool's copies are no program's; and a large chunk's time moves with
+the GPU's clock, which a 4,096-row chunk over 131k tokens left at 1,582 MHz
+from 2,070, so a server under sustained load may run it slower than its
+price. One manifest on one GPU is all that was measured.
+
 ## What the terminal says
 
 One line per fact, in the house style: the section name first, ` · `
