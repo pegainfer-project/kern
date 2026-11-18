@@ -108,7 +108,29 @@ impl Cost {
         t[1..self.stages()].iter().fold(t[0], |m, &x| max(m, x))
     }
 
-    /// The rows one sequence over `l` rows of context runs in the time
+    /// Whether no stage gets faster as a part of an item of at most
+    /// `context` grows.
+    pub fn rises(&self, context: i64) -> bool {
+        self.stages.iter().all(|&[_, b, _, d, _]| b >= 0.0 && b + d * context as f64 >= 0.0)
+    }
+
+    /// The rows one more part over `p` rows of context may add to `it`
+    /// before a stage costs more than `budget`, to the float's precision:
+    /// the least over the stages of the root of each one's time in the
+    /// part's rows.
+    pub fn room(&self, it: &Item, p: i64, budget: f64) -> f64 {
+        let (rows, ctx, att, parts) = (it.rows as f64, (it.ctx + p) as f64, it.att.value(), (it.parts + 1) as f64);
+        let rows_within = |&[a, b, c, d, e]: &[f64; 5]| {
+            let (slack, slope) = (budget - (a + b * rows + c * ctx + d * att + e * parts), b + d * p as f64);
+            if slack > 0.0 {
+                2.0 * slack / (slope + (slope * slope + 2.0 * d * slack).sqrt())
+            } else {
+                0.0
+            }
+        };
+        self.stages.iter().map(rows_within).fold(f64::INFINITY, min)
+    }
+
     /// `init` rows take over none, by the stages' mean row and attention
     /// terms.
     pub fn equal(&self, l: i64, init: i64) -> f64 {

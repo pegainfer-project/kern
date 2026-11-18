@@ -34,10 +34,16 @@
 //! heard, so the model's error on one item does not carry into the next.
 //! Which answers are still out is counted by the replies, not modelled. A
 //! rollout runs every waiting prompt to its end from that frontier under
-//! one row rule and sums when each is answered ([`plan_cost`]); it is the
-//! simulator's (`ppsim`, `head.rs`, `view=ends`), expression for
-//! expression, so a decision replayed from the same events is the same
-//! bits.
+//! one row rule and sums when each is answered ([`plan_cost`]); its
+//! arithmetic is the simulator's (`ppsim`, `head.rs`, `view=ends`),
+//! expression for expression, so a decision replayed from the same events
+//! is the same bits.
+//!
+//! A rollout sends as many items as the waiting rows fill, and the head
+//! runs several before each item it sends, so an item of one costs little:
+//! the turn is sorted once and kept ([`Turn`]), and a budget's rows start
+//! from a root of the cost model and are checked as a bisection would
+//! check them ([`fill`]). `benches/pp_decide.rs` times a decision.
 
 use std::collections::VecDeque;
 
@@ -121,63 +127,112 @@ impl<T: Copy + Default> std::ops::Deref for Few<T> {
 }
 
 /// The order in which sequences are served, and each one's rows to its
-/// next stop. An item takes at most [`SEQS`] sequences, so only a short
-/// prefix of the order is sorted up front; [`Turn::walk`] sorts the rest
-/// only if a caller gets that far.
-#[derive(Default, Clone)]
+/// next stop. [`Turn::send`] keeps both as items go, so a rollout sorts
+/// its queue once: an item moves the few sequences it packs and the few
+/// its passing puts out of patience, and no other.
+#[derive(Clone)]
 pub struct Turn {
-    /// The order as sort keys, each sequence's index in its low bits.
-    keys: Vec<u64>,
+    /// The sequences out of patience, most passed over first.
+    starved: VecDeque<usize>,
+    /// The patient ones behind them as sort keys, fewest rows left first,
+    /// each one's index in the low bits.
+    patient: Vec<u64>,
     pub left: Vec<i64>,
-    sorted: usize,
+    /// The items sent when each sequence was last passed over by none.
+    fresh: Vec<i64>,
+    /// The patient sequences and the items sent when each stops being
+    /// one, in that order.
+    due: VecDeque<(i64, usize)>,
+    sent: i64,
+    patience: i64,
 }
 
-const SORTED: usize = 2 * SEQS;
 const INDEX_BITS: u32 = 22;
+
+fn key(left: i64, k: usize) -> u64 {
+    (left as u64) << INDEX_BITS | k as u64
+}
 
 impl Turn {
     pub fn of(seqs: &[Seq], stages: usize) -> Turn {
-        let mut t = Turn::default();
-        t.fill(seqs, stages);
-        t
-    }
-
-    fn fill(&mut self, seqs: &[Seq], stages: usize) {
         assert!(seqs.len() < 1 << INDEX_BITS, "{} waiting prompts, at most 2^{INDEX_BITS}", seqs.len());
-        self.left.clear();
-        self.left.extend(seqs.iter().map(Seq::left));
-        self.keys.clear();
-        let s = stages as u32;
-        self.keys.extend(seqs.iter().zip(&self.left).enumerate().filter(|(_, (_, l))| **l > 0).map(|(k, (q, &l))| {
-            // Past patience ranks below 2^32 by most skipped; the rest above, by rows left (< 2^41).
-            let rank = if q.passed >= s { u64::from(u32::MAX - q.passed) } else { 1 << 41 | l as u64 };
-            rank << INDEX_BITS | k as u64
-        }));
-        if self.keys.len() > SORTED {
-            self.keys.select_nth_unstable(SORTED);
+        let patience = stages as i64;
+        let fresh = |q: &Seq| -i64::from(q.passed);
+        let live =
+            |out: bool| seqs.iter().enumerate().filter(move |(_, q)| q.left() > 0 && (fresh(q) + patience <= 0) == out);
+        let mut starved: Vec<(i64, usize)> = live(true).map(|(k, q)| (fresh(q), k)).collect();
+        let mut patient: Vec<u64> = live(false).map(|(k, q)| key(q.left(), k)).collect();
+        let mut due: Vec<(i64, usize)> = live(false).map(|(k, q)| (fresh(q) + patience, k)).collect();
+        starved.sort_unstable();
+        patient.sort_unstable();
+        due.sort_unstable();
+        Turn {
+            starved: starved.into_iter().map(|(_, k)| k).collect(),
+            patient,
+            left: seqs.iter().map(Seq::left).collect(),
+            fresh: seqs.iter().map(fresh).collect(),
+            due: due.into(),
+            sent: 0,
+            patience,
         }
-        self.sorted = self.keys.len().min(SORTED);
-        self.keys[..self.sorted].sort_unstable();
     }
 
     /// The first sequence in turn.
     pub fn first(&self) -> Option<usize> {
-        self.keys.first().map(|&k| index(k))
+        self.walk().next()
     }
 
     /// Every waiting sequence in turn.
     pub fn walk(&self) -> impl Iterator<Item = usize> + '_ {
-        let rest = std::iter::once(()).flat_map(move |_| {
-            let mut t = self.keys[self.sorted..].to_vec();
-            t.sort_unstable();
-            t.into_iter().map(index)
-        });
-        self.keys[..self.sorted].iter().map(|&k| index(k)).chain(rest)
+        self.starved.iter().copied().chain(self.patient.iter().map(|&k| (k & ((1 << INDEX_BITS) - 1)) as usize))
     }
-}
 
-fn index(key: u64) -> usize {
-    (key & ((1 << INDEX_BITS) - 1)) as usize
+    /// Sends `plan` as [`apply`] does, the finished sequences staying in
+    /// `seqs` out of turn: the packed ones advance and are patient again,
+    /// and a sequence this item is the last to pass in patience goes
+    /// behind those already out of it. Returns the item and how many
+    /// requests it finishes.
+    fn send(&mut self, seqs: &mut [Seq], plan: &[(usize, i64)]) -> (Item, usize) {
+        let (mut item, mut finished) = (Item::default(), 0);
+        for &(k, n) in plan {
+            if self.sent - self.fresh[k] >= self.patience {
+                let at = self.starved.iter().position(|&x| x == k).expect("a sequence out of patience is in turn");
+                self.starved.remove(at);
+            } else {
+                self.wait(key(self.left[k], k), false);
+            }
+            item = item.with(seqs[k].pos, n);
+            seqs[k].advance(n);
+            (self.left[k], self.fresh[k]) = (seqs[k].left(), self.sent + 1);
+            if self.left[k] > 0 {
+                self.wait(key(self.left[k], k), true);
+                self.due.push_back((self.sent + 1 + self.patience, k));
+            } else {
+                finished += 1;
+            }
+        }
+        self.sent += 1;
+        while let Some(&(at, k)) = self.due.front().filter(|d| d.0 <= self.sent) {
+            self.due.pop_front();
+            if self.left[k] > 0 && self.fresh[k] + self.patience == at {
+                self.wait(key(self.left[k], k), false);
+                let later = |&&x: &&usize| self.fresh[x] == self.fresh[k] && x > k;
+                let behind = self.starved.iter().rev().take_while(later).count();
+                self.starved.insert(self.starved.len() - behind, k);
+            }
+        }
+        (item, finished)
+    }
+
+    /// Puts `key` among the patient, or takes it from them.
+    fn wait(&mut self, key: u64, put: bool) {
+        let at = self.patient.partition_point(|&x| x < key);
+        if put {
+            self.patient.insert(at, key);
+        } else {
+            assert_eq!(self.patient.remove(at), key, "a patient sequence has its key");
+        }
+    }
 }
 
 /// The next item under `cap` rows and `context`: (sequence index, rows) in
@@ -269,6 +324,28 @@ impl Pipe {
         Pipe { stage: [Stage { v: [t, 0.0, 0.0], len: 1 }; MAX_STAGES], len: stages }
     }
 
+    /// Takes an item at `now` with stage times `ds`; when the last stage
+    /// finishes it.
+    fn enter(&mut self, now: f64, ds: &Times) -> f64 {
+        let n = self.len;
+        let mut prev = 0.0;
+        for s in 0..n {
+            let st = self.stage[s];
+            let ready = if s == 0 { now } else { prev + HOP };
+            let mut t = max(st.v[0], ready);
+            if s + 1 < n && self.stage[s + 1].len == 3 {
+                t = max(t, self.stage[s + 1].v[1]);
+            }
+            prev = t + ds[s];
+            self.stage[s] = match st.len {
+                3 => Stage { v: [prev, st.v[2], t], len: 3 },
+                2 => Stage { v: [prev, st.v[1], t], len: 3 },
+                _ => Stage { v: [prev, t, 0.0], len: 2 },
+            };
+        }
+        prev
+    }
+
     /// Each stage's last finish.
     pub fn dones(&self) -> Vec<f64> {
         self.stage[..self.len].iter().map(|s| s.v[0]).collect()
@@ -278,24 +355,9 @@ impl Pipe {
 /// An item entering the frontier at `now` with stage times `ds`: the new
 /// frontier, and when the last stage finishes it.
 pub fn place(pipe: &Pipe, now: f64, ds: &Times) -> (Pipe, f64) {
-    let n = pipe.len;
     let mut out = *pipe;
-    let mut prev = 0.0;
-    for s in 0..n {
-        let st = &pipe.stage[s];
-        let ready = if s == 0 { now } else { prev + HOP };
-        let mut t = max(st.v[0], ready);
-        if s + 1 < n && pipe.stage[s + 1].len == 3 {
-            t = max(t, pipe.stage[s + 1].v[1]);
-        }
-        prev = t + ds[s];
-        out.stage[s] = match st.len {
-            3 => Stage { v: [prev, st.v[2], t], len: 3 },
-            2 => Stage { v: [prev, st.v[1], t], len: 3 },
-            _ => Stage { v: [prev, t, 0.0], len: 2 },
-        };
-    }
-    (out, prev)
+    let end = out.enter(now, ds);
+    (out, end)
 }
 
 /// An item the head sent: when, its model times, and what the head has
@@ -381,16 +443,14 @@ pub fn fill(seqs: &[Seq], turn: &Turn, budget: f64, m: &Cost, hi: i64, context: 
         let over = |it: &Item| m.slowest_of(it) > budget;
         let with = item.with(p, n);
         if over(&with) {
-            let (mut lo, mut top) = (0, n.div_euclid(PAGE));
-            while lo < top {
-                let mid = (lo + top + 1).div_euclid(2);
-                if over(&item.with(p, mid * PAGE)) {
-                    top = mid - 1
+            let top = n.div_euclid(PAGE);
+            let fits = |pages: i64| pages == 0 || !over(&item.with(p, pages * PAGE));
+            rows += PAGE
+                * if m.rises(context) {
+                    from(guess(m.room(&item, p, budget), top), top, fits)
                 } else {
-                    lo = mid
-                }
-            }
-            rows += lo * PAGE;
+                    bisect(top, fits)
+                };
             break;
         }
         item = with;
@@ -399,6 +459,31 @@ pub fn fill(seqs: &[Seq], turn: &Turn, budget: f64, m: &Cost, hi: i64, context: 
         ctx += p + n;
     }
     rows.max(PAGE)
+}
+
+/// The most pages of `0..=top` that fit, where no more fit past the first
+/// that does not, found from `guess`.
+fn from(guess: i64, top: i64, fits: impl Fn(i64) -> bool) -> i64 {
+    let up = (guess..top).find(|&g| !fits(g + 1)).unwrap_or(top);
+    (0..=up).rev().find(|&g| fits(g)).expect("no pages fit")
+}
+
+fn guess(rows: f64, top: i64) -> i64 {
+    ((rows / PAGE as f64) as i64).clamp(0, top)
+}
+
+/// The most pages of `0..=top` that fit, as a bisection finds them.
+fn bisect(top: i64, fits: impl Fn(i64) -> bool) -> i64 {
+    let (mut lo, mut hi) = (0, top);
+    while lo < hi {
+        let mid = (lo + hi + 1).div_euclid(2);
+        if fits(mid) {
+            lo = mid
+        } else {
+            hi = mid - 1
+        }
+    }
+    lo
 }
 
 /// How a rollout sizes each item: a row cap, or the most rows within a
@@ -449,27 +534,25 @@ pub fn plan_cost(at: Start, rule: Rule, m: &Cost, terms: Terms) -> f64 {
     let mut seqs = seqs.to_vec();
     answers.sort_by(|a, b| a.partial_cmp(b).expect("answer times are not NaN"));
     let (mut total, window) = (0.0, stages + ahead);
-    let mut turn = Turn::default();
+    let mut turn = Turn::of(&seqs, stages);
     let (mut ride, mut last, mut busy) = (0.0, None::<(f64, f64)>, 0.0);
-    while !seqs.is_empty() {
-        turn.fill(&seqs, stages);
+    loop {
         let c = rule.cap(&seqs, &turn, m, context);
         let (plan, _) = pack(&seqs, &turn, c, context);
         if plan.is_empty() {
             break;
         }
         let go = if answers.len() < window { now } else { max(now, answers[answers.len() - window]) };
-        let (parts, fin) = apply(&mut seqs, &plan, &turn.left);
-        let ds = m.times(&parts);
+        let (item, finished) = turn.send(&mut seqs, &plan);
+        let ds = m.of(&item);
         busy += ds[..stages].iter().fold(0.0, |a: f64, &b| a.max(b));
-        let (next, end) = place(&pipe, go, &ds);
-        pipe = next;
+        let end = pipe.enter(go, &ds);
         if let Some((g, e)) = last {
             ride += (go - g) * (e - g) - (go - g) * (go - g) / 2.0;
         }
         last = Some((go, end));
         answers.push(end + REPLY);
-        total += (end + REPLY - now) * fin.len() as f64;
+        total += (end + REPLY - now) * finished as f64;
     }
     if let Some((g, e)) = last {
         ride += (e - g) * (e - g) / 2.0;
