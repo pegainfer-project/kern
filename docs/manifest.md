@@ -439,7 +439,10 @@ program 接受几组几行、跑完从哪读 token。v3 把这层写在 caller �
   `"context": var 名`（K13）：这个 program 里有按上下文而不是按本次调用
   定尺寸的 kernel（prefill 把序列缓存的 latent 行全部展开），driver 把这次
   调用最长序列**含本次行**的长度写进该 var——它本来就从自己 stage 的
-  `seq_len` 里知道；全 manifest 一个 context var。没有
+  `seq_len` 里知道；全 manifest 一个 context var。一种行形状只有一个
+  program，`groups` 以内的调用都走它：单序列和成批不是两个 program，随
+  batch 换的核是同一个 op 里各带 `when` 区间的 launch（`{"var": "seqs",
+  "max": 1}` 走 split-KV，`{"var": "seqs", "min": 2}` 走 2D）。没有
   `batch` 的 program 不被循环驱动（kern test 按段切的材料、k3 的单层 MoE
   测试）。
 - **program 上的 `once`**：装载后跑一次、不再驱动（k3 的 `tp_init` 预填
@@ -465,10 +468,10 @@ caller 认得的。读这层的是 `kern_manifest::Protocol::check(&Manifest)`
 （纯函数，不碰 GPU，verify 之后的第二遍）：有 `batch` 就得有 rows 与
 groups 两根轴的 var、每个 fill 至多一个 buffer、形状与角色相符、
 `[seqs, r]` 的 `tokens` 的 r 是某个 `batch` 的 `rows`、`count` 只在有它时
-合法、两个 program 不得同形状、`groups × rows ≤ tokens.max`、`context`
+合法、两个 program 不得同行形状、`groups × rows ≤ tokens.max`、`context`
 不得是行 / 组的 var 且全 manifest 一个、至少一个
 `batch` program。得到的 `Protocol` 是只读投影：`forward(groups, rows)`
-选形状包含 `(b, r)` 的 program 里 `groups` 上界最紧的那个，`chunk()` 是
+是行形状为 `r` 的那个 program（`b` 超过它的 `groups` 上界就没有），`chunk()` 是
 接受 `(1, var)` 的那个，
 `vars(b, per, t, longest)` 是一次调用的 var 表（`longest` 落进 context
 var），每个

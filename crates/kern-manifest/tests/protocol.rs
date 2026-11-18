@@ -9,7 +9,7 @@ use kern_manifest::protocol::{
 use kern_manifest::types::{Batch, Buffer, Call, Dim, Fill, Op};
 use kern_manifest::{verify, Manifest, Protocol};
 /// A single-rank contract: a prefill chunk that only fills state, a
-/// bs=1 decode and a batched one, a page table and a line table. The
+/// decode of up to four sequences, a page table and a line table. The
 /// fixture verifies, so every buffer and state is consumed by a call.
 fn plain() -> Manifest {
     Manifest::from_json(include_str!("fixtures/plain.json")).unwrap()
@@ -42,7 +42,7 @@ fn speculative() -> Manifest {
 }
 
 /// The same plus a sampler: the five sampling fills, one per sequence,
-/// read by the decode steps.
+/// read by the decode step.
 fn sampled() -> Manifest {
     let mut m = plain();
     let buf = |s: &str| serde_json::from_str::<Buffer>(s).unwrap();
@@ -60,9 +60,7 @@ fn sampled() -> Manifest {
         r#"{"op": "sample", "args": [{"buf": "temp"}, {"buf": "k"}, {"buf": "p"}, {"buf": "minp"}, {"buf": "seed"}]}"#,
     )
     .unwrap();
-    for name in ["decode", "decode_batch"] {
-        m.programs.get_mut(name).unwrap().calls.push(call.clone());
-    }
+    m.programs.get_mut("decode").unwrap().calls.push(call);
     m
 }
 
@@ -125,18 +123,12 @@ fn plain_contract() {
     assert_eq!(p.line_tables, vec![LineTable { name: "line_index".into(), lines: 3, width: 1, axis: Axis::Groups }]);
     let names: Vec<(&str, u64, Rows, bool)> =
         p.forwards.iter().map(|f| (f.name.as_str(), f.groups, f.rows, f.emits.is_some())).collect();
-    assert_eq!(
-        names,
-        [
-            ("decode", 1, Rows::Const(1), true),
-            ("decode_batch", 4, Rows::Const(1), true),
-            ("prefill", 1, Rows::Var, false)
-        ]
-    );
-    // The tightest bound wins; a prefill chunk is the var-rows call.
+    assert_eq!(names, [("decode", 4, Rows::Const(1), true), ("prefill", 1, Rows::Var, false)]);
+    // A row shape names its program up to the bound; a prefill chunk is the var-rows call.
     assert_eq!(p.forward(1, Rows::Const(1)).map(|f| f.name.as_str()), Some("decode"));
-    assert_eq!(p.forward(3, Rows::Const(1)).map(|f| f.name.as_str()), Some("decode_batch"));
+    assert_eq!(p.forward(4, Rows::Const(1)).map(|f| f.name.as_str()), Some("decode"));
     assert_eq!(p.forward(5, Rows::Const(1)), None);
+    assert_eq!(p.forward(2, Rows::Var), None);
     assert_eq!(p.chunk().map(|f| f.name.as_str()), Some("prefill"));
     assert_eq!((p.row_shapes(), p.max_groups(Rows::Const(1))), (vec![1], 4));
     assert_eq!(p.vars(3, 6, 6, 6), BTreeMap::from([("tokens".into(), 6), ("seqs".into(), 3)]));
@@ -308,10 +300,10 @@ fn shape_rules() {
 #[test]
 fn batch_rules() {
     let mut m = plain();
-    m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 5, rows: Dim::Const(1), context: None });
+    m.programs.get_mut("decode").unwrap().batch = Some(Batch { groups: 5, rows: Dim::Const(1), context: None });
     rejects(&m, "5 groups exceed the 4");
     let mut m = plain();
-    m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 4, rows: Dim::Const(3), context: None });
+    m.programs.get_mut("decode").unwrap().batch = Some(Batch { groups: 4, rows: Dim::Const(3), context: None });
     rejects(&m, "4 sequences of 3 rows exceed the 8");
     let mut m = plain();
     m.programs.get_mut("prefill").unwrap().batch =
@@ -325,9 +317,12 @@ fn batch_rules() {
     m.programs.get_mut("prefill").unwrap().batch =
         Some(Batch { groups: 1, rows: Dim::Var("seqs".into()), context: None });
     rejects(&m, "the rows of a call go in `tokens`");
+    // A second program for one sequence of the same rows: the batch picks a launch, not a program.
     let mut m = plain();
-    m.programs.get_mut("decode_batch").unwrap().batch = Some(Batch { groups: 1, rows: Dim::Const(1), context: None });
-    rejects(&m, "accept the same call shape");
+    let mut one = m.programs["decode"].clone();
+    one.batch = Some(Batch { groups: 1, rows: Dim::Const(1), context: None });
+    m.programs.insert("decode_one".into(), one);
+    rejects(&m, "program `decode_one` and `decode` take the same rows per sequence");
     let mut m = plain();
     for p in m.programs.values_mut() {
         p.batch = None;
@@ -337,9 +332,7 @@ fn batch_rules() {
     m.buffers.remove("next_token");
     m.ops.remove("head");
     let write = m.programs["prefill"].calls[0].clone();
-    for p in ["decode", "decode_batch"] {
-        m.programs.get_mut(p).unwrap().calls = vec![write.clone()];
-    }
+    m.programs.get_mut("decode").unwrap().calls = vec![write];
     rejects(&m, "no call hands a token back");
 }
 
@@ -356,8 +349,11 @@ fn what_a_forward_hands_back_is_dataflow() {
     );
     rejects(&m, "writes 2 `tokens` outputs");
     let mut m = speculative();
-    m.programs.get_mut("decode").unwrap().calls =
-        vec![serde_json::from_str(r#"{"op": "accept", "args": [{"buf": "next_token"}, {"buf": "nacc"}]}"#).unwrap()];
+    m.programs
+        .get_mut("decode")
+        .unwrap()
+        .calls
+        .push(serde_json::from_str(r#"{"op": "accept", "args": [{"buf": "next_token"}, {"buf": "nacc"}]}"#).unwrap());
     rejects(&m, "no `tokens` output of several per sequence to count");
     // Two counts written by one call are the manifest's error, not a panic.
     let mut m = speculative();

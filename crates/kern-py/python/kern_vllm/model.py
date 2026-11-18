@@ -13,16 +13,16 @@ The manifest contract, read from the manifest and nothing else:
   `cu_seqlens_q`, `block_table` (`[seqs, W]` kernel blocks), and the line
   table indexing the state pages (`[state layers, seqs]`, rows in layer
   order); output `hidden`; `head_in` -> `head` -> `logits`.
-- programs `decode_batch` (`seqs` sequences of one row), `head` (`seqs`
+- programs `decode` (`seqs` sequences of one row), `head` (`seqs`
   rows of logits), and `once` programs to run after binding; optionally
   `prefill` (`seqs` sequences of any lengths, `tokens` rows in all, split
   by `cu_seqlens_q`). Without it the manifest only decodes, and a prompt
   reaches the cache another way (a KV connector).
 
 A step is split into runs the programs accept: consecutive one-token rows go
-through `decode_batch` together, consecutive longer rows through one
+through `decode` together, consecutive longer rows through one
 `prefill`, so the step's prefill rows share every weight read.
-A pure decode step is one `decode_batch` over vLLM's padded batch, so vLLM
+A pure decode step is one `decode` over vLLM's padded batch, so vLLM
 can capture it; padded rows have no slot and the null state page, which
 the kernels skip. A sequence's first chunk finds its state pages zeroed
 here, a one-token prompt's too: vLLM hands out pages without clearing them
@@ -204,7 +204,7 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         self.out = torch.zeros(tokens, width, dtype=torch.bfloat16, device="cuda")
         self.vocab = vllm_config.model_config.get_vocab_size()
         self.vocab_slice = self.b["logits"].shape[1]
-        self.decode_rows = resolve(m, m["programs"]["decode_batch"]["batch"]["groups"])
+        self.decode_rows = resolve(m, m["programs"]["decode"]["batch"]["groups"])
         self.prefill_seqs = resolve(m, m["vars"]["seqs"]["max"])
         self.cache_config = vllm_config.cache_config
         self.bound = None
@@ -268,7 +268,7 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
             if not torch.cuda.is_current_stream_capturing():
                 self.zero_fresh(attn, states)
             for r0, r1 in chunks(0, attn.num_reqs, self.decode_rows):
-                self.run(stream, "decode_batch", input_ids, positions, attn, lines, r0, r1, r0, r1)
+                self.run(stream, "decode", input_ids, positions, attn, lines, r0, r1, r0, r1)
             return self.out[:n]
         if "prefill" not in self.m["programs"]:
             raise NotImplementedError(
@@ -277,7 +277,7 @@ class KernForCausalLM(nn.Module, IsHybrid, SupportsMRoPE):
         self.zero_fresh(attn, states)
         qsl = attn.query_start_loc_cpu.numpy()
         for r0, r1 in runs(np.diff(qsl[: attn.num_reqs + 1]), self.decode_rows, self.prefill_seqs, self.tokens):
-            program = "prefill" if qsl[r1] - qsl[r0] > r1 - r0 else "decode_batch"
+            program = "prefill" if qsl[r1] - qsl[r0] > r1 - r0 else "decode"
             self.run(stream, program, input_ids, positions, attn, lines, r0, r1, int(qsl[r0]), int(qsl[r1]))
         return self.out[:n]
 

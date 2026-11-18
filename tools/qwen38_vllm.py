@@ -284,11 +284,11 @@ def hosted(m):
         calls = [conv_call(c) if c["op"] == "conv_fwd" else c for c in map(rebind, headless(p["calls"]))]
         return {**p, "calls": calls}
 
-    decode = step(m["programs"]["decode_batch"])
+    decode = step(m["programs"]["decode"])
     m["programs"] = {
         "load": m["programs"]["load"],
         "prefill": step(m["programs"]["prefill"]),
-        "decode_batch": {**decode, "calls": one_in_proj(decode["calls"])},
+        "decode": {**decode, "calls": one_in_proj(decode["calls"])},
         "head": {"calls": [{"label": "lm_head", "op": "gemm", "args": [
             {"buf": "head_in"}, {"buf": "lm_head.weight"}, {"buf": "logits"},
             {"var": "seqs"}, {"i32": 248320}, {"i32": 5120}]}]},
@@ -316,7 +316,7 @@ def sampled(m, base):
         return [{**c, "args": [{"buf": "hidden"} if a == {"buf": "x"} else a for a in c["args"]]}
                 for c in calls[end + 1:]]
     programs = {p: {**m["programs"][p], "calls": m["programs"][p]["calls"] + tail(p)}
-                for p in ("prefill", "decode_batch")}
+                for p in ("prefill", "decode")}
     return {**m, "programs": {**m["programs"], **programs},
             "buffers": m["buffers"] | {k: base["buffers"][k] for k in ("next_token", "final_x")}}
 

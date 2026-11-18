@@ -107,7 +107,7 @@ variants pass at 1.00 times the noise and W8A8 decode fails at 2.92). Open:
 - A verdict that reads the tail as well (any flip of regret ≥ 1 nat fails) waits for a
   sample where it and the mean disagree.
 
-`decode_batch` 换成 cuBLASLt 之后，HF `Pegainfer/kern-qwen38-sm103` 上发布的 manifest 若还带 `gemm16_*`（17 条序列起最后一条全错），照 `examples/qwen3.8-27b.json` 重新生成发布。
+HF `Pegainfer/kern-qwen38-sm103` 上发布的 manifest 照 `examples/qwen3.8-27b.json` 重新生成发布：2026-11-18 起一种行形状只允许一个 program，带 `decode` + `decode_batch` 两个的 manifest 过不了 `Protocol::check`；更早的若还带 `gemm16_*`（17 条序列起最后一条全错）同样要换。同一条规则下 kern-qwen3、kern-qwen38 的生成器删掉 `groups: 1` 的那个 `decode`；hosted 的 program 名从 `decode_batch` 改成 `decode`，kern-k31 的 `k3_hosted.py` 跟着改。
 
 ## K5 规划（2026-09-03）
 

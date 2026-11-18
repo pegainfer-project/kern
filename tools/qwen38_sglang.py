@@ -2,7 +2,7 @@
 
 Rewrites `examples/qwen3.8-27b.json`, or a manifest derived from it (the
 vLLM optimization loop's), into a manifest an SGLang model runner drives (`kern_sglang`), as `qwen38_vllm.py` does for vLLM:
-the same programs (prefill, decode_batch, head, stopping at the hidden
+the same programs (prefill, decode, head, stopping at the hidden
 states), over SGLang's pools instead of vLLM's pages.
 
 SGLang allocates every tensor of a layer on its own (`MHATokenToKVPool`,
@@ -191,8 +191,8 @@ def hosted(m):
     m["programs"] = {
         "load": m["programs"]["load"],
         "prefill": step(m["programs"]["prefill"]),
-        "decode_batch": {**step(m["programs"]["decode_batch"]), "calls": [
-            c for call in step(m["programs"]["decode_batch"])["calls"] for c in wide(call)]},
+        "decode": {**step(m["programs"]["decode"]), "calls": [
+            c for call in step(m["programs"]["decode"])["calls"] for c in wide(call)]},
         "head": {"calls": [{"label": "lm_head", "op": "gemm", "args": [
             {"buf": "head_in"}, {"buf": "lm_head.weight"}, {"buf": "logits"},
             {"var": "seqs"}, {"i32": 248320}, {"i32": 5120}]}]},

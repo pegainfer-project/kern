@@ -72,7 +72,7 @@ What the files hold:
 - **A prefill** is one `prefill` step per request, each kernel under the
   manifest call that launched it.
 - **A decode step** is SGLang's CUDA graph, which SGLang replays without
-  calling the model. Each replay is one `decode_batch` step and one `head`
+  calling the model. Each replay is one `decode` step and one `head`
   step with `graph` true, holding the kernels and call names the same
   programs have when they run eagerly.
 - **SGLang's own kernels** (sampling, the metadata it updates per step) are
@@ -119,17 +119,17 @@ GROUP BY ALL ORDER BY gpu_ms DESC LIMIT 6;
 | program | op | kernels | gpu_ms |
 | --- | --- | ---: | ---: |
 | prefill | gemm | 117696 | 22259.1 |
-| decode_batch | gemm_gate_up_silu | 396544 | 13464.9 |
-| decode_batch | gemm_n5120_norm | 1187328 | 12925.9 |
-| decode_batch | gdn_step | 149184 | 5306.5 |
-| decode_batch | gemm_in_proj | 149184 | 4476.9 |
-| decode_batch | attn_batch | 49728 | 3438.9 |
+| decode | gemm_gate_up_silu | 396544 | 13464.9 |
+| decode | gemm_n5120_norm | 1187328 | 12925.9 |
+| decode | gdn_step | 149184 | 5306.5 |
+| decode | gemm_in_proj | 149184 | 4476.9 |
+| decode | attn | 49728 | 3438.9 |
 
 What a decode step costs at each batch SGLang ran:
 
 ```sql
 SELECT shape, count(*) AS steps, round(avg(end_ns - start_ns) / 1e6, 2) AS ms
-FROM steps WHERE program = 'decode_batch' AND graph
+FROM steps WHERE program = 'decode' AND graph
 GROUP BY shape ORDER BY steps DESC LIMIT 5;
 ```
 

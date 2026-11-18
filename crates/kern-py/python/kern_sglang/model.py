@@ -18,16 +18,16 @@ adapter binds them, so the contract is:
   (`[seqs, W]` page ids), and the line tables (`[state layers, seqs]` slot
   ids, any input whose domain indexes a `conv` or `ssm` state); output
   `hidden`; `head_in` -> `head` -> `logits`.
-- programs `decode_batch` (`seqs` sequences of one row), `head` (`seqs`
+- programs `decode` (`seqs` sequences of one row), `head` (`seqs`
   rows of logits), `once` programs to run after binding, and optionally
   `prefill` (one sequence, `tokens` rows). Without `prefill` the manifest
   only decodes: an extend step may then hold one-token rows only, and a
   longer prompt reaches the cache through SGLang's P/D.
 
-A decode step is `decode_batch` over SGLang's padded batch, which SGLang
+A decode step is `decode` over SGLang's padded batch, which SGLang
 captures; everything it reads is on the device, padded rows map to slot -1,
 which the kernels skip. An extend step is split on the host's lengths: runs
-of one-token rows through `decode_batch`, every longer row through
+of one-token rows through `decode`, every longer row through
 `prefill` alone.
 
 A manifest with a topology runs one rank per SGLang tensor-parallel rank:
@@ -166,7 +166,7 @@ class KernForCausalLM(nn.Module):
         self.b = {n: region(self.rt, m, n) for n in (*inputs, "hidden", "head_in", "logits")}
         self.errors = {n: region(self.rt, m, n) for n, b in m["buffers"].items() if b.get("fill") == "error"}
         self.check = bool(os.environ.get("KERN_CHECK_ERRORS"))
-        self.decode_rows = resolve(m, m["programs"]["decode_batch"]["batch"]["groups"])
+        self.decode_rows = resolve(m, m["programs"]["decode"]["batch"]["groups"])
         if "block_table" in self.b:
             self.width = self.b["block_table"].shape[1]
             self.page = resolve(m, m["buffers"]["block_table"]["domain"]["stride"])
@@ -239,7 +239,7 @@ class KernForCausalLM(nn.Module):
         if fb.forward_mode.is_decode():
             for r0 in range(0, n, self.decode_rows):
                 r1 = min(r0 + self.decode_rows, n)
-                step("decode_batch", r0, r1, r0, r1, 0)
+                step("decode", r0, r1, r0, r1, 0)
             if fb.mamba_track_mask is not None:
                 self.track(lines, fb.mamba_track_mask, meta.mamba_track_indices, n)
             return self.logits_processor(input_ids, hidden, self.lm_head, fb)
@@ -254,7 +254,7 @@ class KernForCausalLM(nn.Module):
         starts = [0, *itertools.accumulate(lens)]
         for r0, r1 in runs(lens, self.decode_rows):
             if lens[r0] == 1:
-                step("decode_batch", r0, r1, starts[r0], starts[r1], 0)
+                step("decode", r0, r1, starts[r0], starts[r1], 0)
                 continue
             ends, snap = cuts(lens[r0], prefix[r0], tracks[r0], mamba_cache_chunk_size())
             for a, e in zip([0, *ends], ends):

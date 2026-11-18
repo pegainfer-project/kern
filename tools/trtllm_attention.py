@@ -108,9 +108,9 @@ def convert(manifest, cache, *, splits=38):
     m['buffers']['block_table']['shape'][-1]=width
     m['buffers']['block_table']['domain']['stride']=PAGE
     max_rows=m['vars']['tokens']['max'];max_seqs=m['vars']['seqs']['max']
-    wanted={'attn','attn_batch','attn_prefill','attn_verify'} & m['ops'].keys()
+    wanted={'attn','attn_prefill','attn_verify'} & m['ops'].keys()
     for name in wanted:
-        m['ops'][name]=op('decode' if name in ('attn','attn_batch') else 'prefill',
+        m['ops'][name]=op('decode' if name=='attn' else 'prefill',
                           max_rows=max_rows,max_seqs=max_seqs,max_context=max_context,splits=splits)
     for p in m['programs'].values():
         for call in p['calls']:

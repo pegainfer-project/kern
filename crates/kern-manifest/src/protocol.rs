@@ -36,7 +36,10 @@
 //! caller takes. A decode step, a prefill chunk and a speculative round
 //! are the same call to the driver — stage `rows` rows per sequence, run,
 //! read `tokens` and `count` — which is why there is no role: the shape
-//! is the role.
+//! is the role. A row shape therefore names one program, which takes every
+//! call up to its `groups` bound; kernels that differ with the batch are an
+//! op's launches, each run over its range of a var (`when`), never a second
+//! program for the same rows.
 //!
 //! A kernel sized by the context rather than by the call (a prefill that
 //! expands every cached row of its sequence) runs over a var the program's
@@ -644,8 +647,11 @@ impl Protocol {
                     None => context_var = Some(Bound { var: v.clone(), max }),
                 }
             }
-            if let Some(same) = forwards.iter().find(|f| f.groups == batch.groups && f.rows == rows_of) {
-                errs.push(format!("{ctx} and `{}` accept the same call shape; a shape names one program", same.name));
+            if let Some(same) = forwards.iter().find(|f| f.rows == rows_of) {
+                errs.push(format!(
+                    "{ctx} and `{}` take the same rows per sequence; a row shape names one program, and what differs with the batch is a launch's `when`",
+                    same.name
+                ));
             }
             forwards.push(Forward { name: pname.clone(), groups: batch.groups, rows: rows_of, emits, count });
         }
@@ -674,10 +680,10 @@ impl Protocol {
         }
     }
 
-    /// The program for a call of `groups` sequences of `rows`: the one with
-    /// the tightest bound that accepts it.
+    /// The program for a call of `groups` sequences of `rows`: the one its
+    /// row shape names, when the call fits its bound.
     pub fn forward(&self, groups: u64, rows: Rows) -> Option<&Forward> {
-        self.forwards.iter().filter(|f| f.accepts(groups, rows)).min_by_key(|f| f.groups)
+        self.forwards.iter().find(|f| f.accepts(groups, rows))
     }
 
     /// The program that takes one sequence's rows as fed (a prefill chunk).
@@ -690,13 +696,12 @@ impl Protocol {
         let mut v: Vec<u64> =
             self.forwards.iter().filter_map(|f| if let Rows::Const(r) = f.rows { Some(r) } else { None }).collect();
         v.sort_unstable();
-        v.dedup();
         v
     }
 
-    /// Most sequences any program accepts at `rows` per sequence.
+    /// Most sequences a call of `rows` per sequence takes.
     pub fn max_groups(&self, rows: Rows) -> u64 {
-        self.forwards.iter().filter(|f| f.rows == rows).map(|f| f.groups).max().unwrap_or(0)
+        self.forwards.iter().find(|f| f.rows == rows).map_or(0, |f| f.groups)
     }
 
     /// The var vars of a call: `b` sequences of `rows` rows in all on this

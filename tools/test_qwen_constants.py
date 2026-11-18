@@ -11,7 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Canonical hashes guard the retained Qwen3.8 execution contracts.
 BASELINES = {
     "qwen3.8-27b-dflash2.json": "9dd8b22e982da794cef190170a81e8c5be5713bedf8d83669e9701064ce95b25",
-    "qwen3.8-27b.json": "0e0f09754b5e97db53b680f33bae671ff03938faaf8b2ec410458a25dc5bb45a"
+    "qwen3.8-27b.json": "bb2886e58bfc201820ea6afddbaa4ceb7c7d72950509bb32fb49ed15fd87e8e2"
 }
 
 
