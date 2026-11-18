@@ -18,6 +18,7 @@ mod host;
 mod lanes;
 pub use constants::json_schema;
 
+pub mod candidate;
 pub mod cut;
 pub mod protocol;
 pub mod types;

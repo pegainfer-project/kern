@@ -255,6 +255,212 @@ program   9.070 ms · p10–p90 9.062–9.095 · cv 0.2% · 672 calls · rank 2 
 
 `hardware` is rank 0's.
 
+## Candidates: choosing an op's implementation
+
+An op is an interface and an implementation, and a call binds only the
+interface. So "which kernel, at which launch geometry, for which batch
+size" is a question about one op at a time, and every answer to it is a
+manifest that differs from the served one in that op's `impl`. A
+candidate is such an answer as a file: the `modules` and `ops` sections of
+a manifest and nothing else, each op under the name and with the `params`
+of the op it stands in for.
+
+```json
+{
+ "modules": {
+  "vl_64": {"source": "vl_64.cubin", "sha256": "5b0c…"}
+ },
+ "ops": {
+  "verify_linear_16384_5120": {
+   "params": ["in buffer<bf16>", "in buffer<fp8e4m3>", "in buffer<bf16>", "out buffer<bf16>", "i32", "i32", "i32"],
+   "impl": {"launches": [
+    {"module": "vl_64", "entry": "gemm", "block": [448, 1, 1],
+     "grid": [{"ceil_div": ["tokens", 64]}, 152, 1], "shared_mem": 220160}
+   ]}
+  }
+ }
+}
+```
+
+What this replaces is the microbenchmark a kernel's author writes to
+tune it: a launcher for that kernel's parameter layout, inputs of the
+right shapes, enough distinct weights that the cache does not flatter
+it, a reference to check the output against. Each of those is code, each
+is written again for the next kernel, and each can be wrong in a way that
+only shows in the served graph. Here the launcher is the runtime, the
+inputs and the cache are the program's own, the reference is the
+manifest, and a candidate is a file with no code in it.
+
+A kernel written in another language, the same cubin at another grid, and
+the same grid over another cubin are all candidates, and nothing tells
+them apart. Tuning launch geometry needs no syntax of its own: the kernel's
+author writes one file per geometry from the script that already knows the
+kernel's parameters (a loop over tile sizes that emits the `grid`,
+`block` and `shared_mem` each one needs), and a directory of them is the
+sweep. A candidate carries no `when` unless there are shapes it does not
+implement: where each one runs is what is being asked.
+
+```bash
+kern bench qwen38 --workload served.toml --out pick.json --candidate candidates/
+```
+
+`--candidate` takes a file or a directory of `.json` files, and may be
+given more than once; a candidate is named after its file. Its cubins are
+found in the target's kernels directory by hash, like any module's.
+
+```
+ops       5 with candidates · verify_linear_14336_5120 · verify_linear_16384_5120 · …
+device    NVIDIA GB300 · 152 SMs · L2 129 MiB · software timestamps
+plan      57 scenarios · 0 dropped · 718272 tokens of state · 17 seqs
+baseline  2039.7 s · 73227 calls   96.6s
+candidate dsl-016 · 3475.9 s · +70.4% · its ops 704.0 → 2138.1 s · identical · 57 scenarios · 9610 logits rows   126.2s
+candidate dsl-032 · 2558.5 s · +25.4% · its ops 704.0 → 1222.5 s · identical · 57 scenarios · 9610 logits rows   105.3s
+…
+candidate dsl-256 · 2729.7 s · +33.8% · its ops 704.0 → 1394.0 s · identical · 57 scenarios · 9610 logits rows   104.1s
+baseline  2039.6 s · -0.0% · identical · 57 scenarios · 9610 logits rows   93.9s
+pick      verify_linear_14336_5120 · `seqs` ..1 dsl-032 · 2.. baseline · 28.0 → 27.8 s
+pick      verify_linear_16384_5120 · `seqs` ..2 dsl-032 · 3.. baseline · 91.3 → 90.8 s
+…
+pick      verify_linear_5120_6144 · `seqs` baseline · 97.6 → 97.6 s
+confirm   2038.2 s measured · 2038.5 s predicted · identical · 57 scenarios · 9610 logits rows   94.4s
+cost      2039.7 → 2038.2 s · -0.1% · 24 launches of 17 modules over 5 ops
+out       results/round-dsl-tiles.json   813.9s
+```
+
+A `candidate` line is the whole workload under that candidate against
+the baseline, then what its own ops cost before and after, then what the
+gate found. `pick` is one op's tiling of its var and what the op costs
+under it; `confirm` and `cost` are the picked manifest measured. A `gap`
+line follows a pick whose boundary falls between two measured values more
+than a doubling apart: the values between ran in no scenario and take the
+larger side's implementation on no evidence.
+
+```
+gap       verify_linear_16384_5120 · `tokens` 33..255 unmeasured · the boundary after 32 is a guess
+```
+
+**Every run is the whole manifest over the whole workload.** Each
+candidate is spliced in (`kern_manifest::candidate::splice`: the interface
+is checked, its modules come along, the manifest is verified again) and
+benched exactly as above, in the same process, the weights left on the
+device from one manifest to the next. The manifest itself runs first and
+last. An op's time is read off the kernel records of the real graph, so a
+candidate is priced where it will run: behind the kernel that precedes
+it, on the cache that kernel left.
+
+**A candidate is chosen from only where it holds.** Time alone would
+choose a fast kernel that computes something else. After every scenario
+the run's outputs are held against the first run's: the tokens and counts
+the program hands back, and every row of every distribution over tokens
+it writes (a `logits*` buffer, or any float buffer as wide as the token
+domain), on every rank. A scenario is `identical`; or `within`, every
+row's KL(manifest ‖ candidate) at most 0.01 nat, `kern test`'s default,
+and tokens or counts moved only where some row changed its argmax, so
+that what moved, moved on a tie; or it `differs`. A row with a NaN on one
+side is infinitely far, and outputs that moved under distributions that
+chose the same tokens differ however close the distributions are: the
+candidate changed what is done with them. A program that hands
+nothing back leaves a scenario `unjudged`. A candidate is chosen from at
+a value of the var only if every scenario there is identical or within.
+A candidate that differs is still measured and reported, never chosen:
+whether a different distribution is acceptable is `kern test
+e2e-logits`'s question, and a candidate that passes it becomes the
+manifest, against which its own variants are then identical.
+A candidate whose replay does not reproduce its own tokens fails the gate
+below and is reported as `failed`; the run goes on without it.
+
+**The choice is a tiling of one var, with as few ranges as the noise
+allows.** A manifest chooses with `when`, a range of one var, so an op's
+choice is a candidate per range of the var its launches turn on: the one
+they are already conditioned on, else the one their grids read. The
+workload's scenarios give the values of that var and, per candidate, what
+the op cost at each (weight × the graph's p50 × the op's share). Choosing
+per value is the cheapest tiling and the one with the most ranges, and
+every range is a launch the manifest carries and a cubin the runtime
+loads. So the pick is the tiling of fewest ranges whose cost is within
+the noise of that cheapest one, where the noise is the largest relative
+difference the manifest's own two runs showed for the op at any value. A
+boundary that buys less than the measurement can resolve is not drawn. A
+range ends at the last value measured in it, the first and last are open,
+so every value has an implementation.
+
+**The pick is run before it is written.** Ops are chosen separately and
+may come from different candidates, which makes the result a manifest
+nobody measured. `confirm` is that manifest over the same workload, held
+to the same outputs, its cost beside the sum the choice predicted.
+Identical implementations combine into an identical manifest; ones merely
+within the limit need not. If their combination does not hold, the choice
+is made once more from the identical alone and confirmed again; if that
+does not hold either the command fails, the report still written.
+
+**What the gate cannot see.** A scenario is one call of a program, and a
+program that drafts its own tokens feeds each row what the last one
+chose. One tie that flips changes the input of every row after it, and
+those rows then differ by far more than the kernel moved anything. A
+candidate that is not bit-identical therefore seldom holds in every
+scenario of such a program, and where it holds is partly where no tie
+happened to flip. That is the gate working as intended: it proves a
+choice or declines to make it, and what it declines is `kern test
+e2e-logits`'s to judge, along forced tokens and against a measured
+noise.
+
+Measured on one GB300 (tray06, 2026-11-18, software timestamps), the
+served Qwen3.8-27B FP8 manifest over the 57 `round` scenarios of its
+trace, five W8A16 GEMM ops (`bench_results/2026-11-18-bench-candidates`):
+
+- Against the manifest with a CuTe DSL GEMM in place at one tile (64
+  rows) for every batch: the kernel's five row tiles as five candidates
+  with no `when`. All are bit-identical to it in all 57 scenarios, and
+  the pick tiles `tokens` in four ranges on three ops and five on two
+  (`..32 dsl-032 · 33..64 baseline · 65..128 dsl-128 · 129.. dsl-256`),
+  2220.7 → 2037.6 s measured against 2039.9 predicted.
+- Against the same kernel as its author had tiled it by hand, five ranges
+  of `seqs` per op (2039.7 s): the pick keeps the hand tiling but for a
+  32-row tile where it had 16, on three ops, 2038.2 s measured against
+  2038.5 predicted.
+- Against the served manifest (Triton GEMM): the same DSL kernel costs
+  2042.3 s to its 2752.8 (-25.8%) and is within the limit in 53 of 57
+  scenarios; a hand-written tcgen05 kernel costs 3099.4 s and holds in
+  52. The pick takes the DSL kernel at the two ranges of `seqs` where it
+  held everywhere, 2752.8 → 2391.4 s measured against 2392.3 predicted,
+  within the limit in every scenario (KL at most 7e-3, 11 ties).
+- Two controls: a candidate whose launches run at `seqs` 3..4 only holds
+  in exactly the 12 scenarios there and is not chosen from elsewhere; a
+  build of the DSL kernel missing a fence between its TMA writes and its
+  reads does not reproduce its own tokens, is reported `failed`, and the
+  run goes on.
+- The manifest's two runs are bit-identical in every scenario and under
+  0.01% apart in cost; the noise a pick is held to, the worst value of an
+  op, came out between 0.05% and 0.6%.
+- Against a careful microbenchmark. The DSL kernel's author had written
+  one (some 330 lines: a launcher for its TMA descriptors, weights
+  rotated through 512 MiB so that none is warm) and timed both kernels
+  per op and row count. Per call, the graph's time over that standalone
+  time is 0.96 to 1.01 for the Triton kernel and 0.98 to 1.06 for the DSL
+  one over the 25 op and row-count pairs, and the two disagree on the
+  ratio between the kernels by at most 0.03. So for a GEMM the graph says
+  what a well-made microbenchmark says, and nobody wrote it. Within one
+  row count an op's time moves 0.2% to 1.2% across the scenarios'
+  contexts.
+- What was not exercised. These tiles differ by 10% to 40% a step, far
+  above the noise: raising the noise fivefold leaves all 22 ranges of the
+  first pick, and only at tenfold do two merge. Whether the rule removes
+  boundaries that encode noise wants an op whose candidates are close.
+- What a missing value costs. With one measured row count left out of
+  the first pick and the value given to whatever covers it, an op costs 6%
+  to 82% more there than its best candidate (at most 2% at the smallest
+  count, whose neighbour's tile is as good). A workload decides which
+  values exist, and the `gap` line says where one is missing.
+
+The report has the header of a plain run, then `baseline`, `candidates`
+and `baseline_again` (each scenario's vars, program time, per-op times
+and gate evidence: verdict, max and mean KL, flips, flips beyond the
+limit, the widest margin that flipped), `choices` (per op the table the
+pick was made from, its noise, the ranges and why they cost what they
+do, and the confirming run) and `picked`: the choice as a candidate file,
+tiled with `when`, ready to be spliced into the generator's output. Fed
+back as the only candidate it is chosen again.
+
 ## The gate
 
 After the samples, one more replay from the restored pre-image must emit
@@ -271,3 +477,13 @@ fails naming the program and how many records CUPTI dropped.
 - One plan, one allocation. Capacity is sized for the largest scenario in
   the workload, so a sweep's cheap scenarios carry its expensive one's
   state. Split a sweep in two if that matters.
+- `--candidate` chooses along one var. An op whose candidates are
+  conditioned on two vars, or whose grids read two and are conditioned on
+  none, gets one implementation for every shape.
+- Nothing is interpolated: a value between two measured ones runs what
+  the larger one runs. A workload from a served trace measures the values
+  the service sees; a hand-written one should name every value that
+  matters, and a `gap` line says where it did not.
+- The manifest's distributions of every scenario stay on the device for
+  the whole run, to be compared there: a few hundred MiB a scenario for a
+  250k vocabulary at 256 rows.
