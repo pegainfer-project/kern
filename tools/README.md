@@ -1,18 +1,16 @@
 # Manifest and kernel tools
 
-Dense Qwen3 models live in [kern-qwen3](https://github.com/pegainfer-project/kern-qwen3).
-The old Qwen3-4B and DSpark capture scripts and fixtures remain in Git history;
-the standalone repository implements dense Qwen3, without the legacy DSpark path.
-Qwen3.8 and its DFlash2 draft remain here.
+What every model's generator shares. A model's own generator, manifests and
+records live in its repository: dense Qwen3 in
+[kern-qwen3](https://github.com/pegainfer-project/kern-qwen3) (the old
+Qwen3-4B and DSpark capture scripts remain in Git history), Qwen3.8 and its
+DFlash2 draft in kern-qwen38 (`sm103/`).
 Use [`kern bench`](../docs/bench.md) for per-kernel measurements.
 
 | Tool | Contract |
 |---|---|
-| `capture_qwen38.sh`, `capture_qwen38_spec.sh` | Capture target and draft launches through `kernel-capture/`. |
-| `gen_qwen35.py` | Generate the Qwen3.8 target and DFlash2 manifests from captured kernel ABIs. |
 | `mine_capture.py` | Analyze launch records, pointer lifetimes, and launch geometry. |
 | `kern_manifest.py` | Pin captured modules by content and normalize manifest interfaces. |
-| `qwen_weights.py`, `qwen_constants.py` | Bind Qwen3.8 checkpoint tensors, derive missing tables, and name dimensions. |
 | `once.py`, `kernels-src/weight_prep.cu` | Build load programs for derived tables and weight transforms. |
 | `sampling.py`, `flashinfer-sampling/`, `kernels-src/sample_glue.cu` | Shared sampling chain and kernel sources: temperature, top-k, top-p, min-p, and seeded sampling. See `flashinfer-sampling/PROVENANCE.md` for the captured launch geometry and seed contract. |
 | `kernels/`, `../kernel_index/` | Import, check, and select content-addressed kernel variants; see [registry.md](../docs/registry.md). |

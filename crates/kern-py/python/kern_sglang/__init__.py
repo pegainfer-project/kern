@@ -18,7 +18,7 @@ defaults). Without it the plugin does nothing. Kernels come from
 flag that gives SGLang pools of another layout than the manifest's (page
 size, KV backend, state dtype) fails when kern binds them, naming the state.
 The manifest
-(`tools/qwen38_sglang.py` writes one; K3's comes from kern-k3-pp-prefill's
+(kern-qwen38's `qwen38_sglang.py` writes one; K3's comes from kern-k3-pp-prefill's
 `k3_sglang.py`) follows a small contract, see `model.py`.
 
 With `KERN_TRACE_DIR=<dir>` every kernel the model's process runs is kept

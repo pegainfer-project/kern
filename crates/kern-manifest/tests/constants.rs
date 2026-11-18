@@ -1,4 +1,4 @@
-use kern_manifest::{verify, Manifest, Protocol};
+use kern_manifest::{verify, Manifest};
 use serde_json::{json, Value};
 
 fn minimal() -> Value {
@@ -91,15 +91,4 @@ fn duplicate_and_unknown_fields_remain_errors() {
     m["constants"] = json!({"n": 64});
     m["buffers"]["x"]["typo"] = json!("n");
     assert!(serde_json::from_value::<Manifest>(m).is_err());
-}
-
-#[test]
-fn hybrid_and_dflash_examples_verify_and_roundtrip() {
-    for text in
-        [include_str!("../../../examples/qwen3.8-27b.json"), include_str!("../../../examples/qwen3.8-27b-dflash2.json")]
-    {
-        let m = verify(Manifest::from_json(text).unwrap()).unwrap();
-        Protocol::check(&m).unwrap();
-        assert_eq!(m.to_json(), Manifest::from_json(&m.to_json()).unwrap().to_json());
-    }
 }

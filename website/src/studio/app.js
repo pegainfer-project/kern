@@ -3906,7 +3906,7 @@
   }
 
   const EXAMPLE_NAME = "qwen3.8-27b-dflash2.json";
-  const EXAMPLE_URL = "/studio/qwen3.8-27b-dflash2.json";
+  const EXAMPLE_URL = "https://huggingface.co/Pegainfer/kern-qwen38-sm103/resolve/main/manifests/qwen3.8-27b-dflash2.json";
 
   function parseAndLoadManifestText(rawText, name, isCustom) {
     const data = JSON.parse(rawText);

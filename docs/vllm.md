@@ -313,10 +313,11 @@ into a peer's Lamport stage, and if that peer poisons the stage afterwards
 the data is lost and the reader times out. `kern.host` holds the helpers
 every adapter shares (`region`, `host_region`, `resolve`, `once`).
 
-### The manifest transform: `tools/qwen38_vllm.py`
+### The manifest transform: `qwen38_vllm.py`
 
 kern's manifests are written against kern's own memory plan, so the model
-needs a hosted variant. The generator derives it from the base manifest as a
+needs a hosted variant. The generator, which lives with the model (kern-qwen38,
+`sm103/tools/`), derives it from the base manifest as a
 pure function; nothing is edited by hand. It makes three kinds of change:
 
 - **Memory.** The pooled KV and GDN states become per-layer host states in
@@ -332,7 +333,7 @@ hosted one is regenerated. The generated manifest and the one kernel it adds
 are published with the model's other artifacts in the HF repo
 `Pegainfer/kern-qwen38-sm103`, not checked in. The concrete rewrites (offsets,
 strides, the conv kernel, the fused in_proj) are in
-[qwen38-vllm.md](qwen38-vllm.md).
+[qwen38-vllm.md](https://github.com/pegainfer-project/kern/blob/a0101a6e9df2e0f4f670231fca885f7ea3333ddb/docs/qwen38-vllm.md).
 
 ### The vLLM plugin: `kern_vllm`
 
@@ -438,7 +439,7 @@ Reading these, not yet profiled:
 
 2026-10-06, one GB300. `prefill` takes `seqs` sequences of any lengths, so
 the plugin packs a step's prefill rows into one call (see
-`docs/qwen38-vllm.md`). Calling it once per sequence is bit-identical to the
+`qwen38-vllm.md`, linked above). Calling it once per sequence is bit-identical to the
 previous manifest (`kern test` PASS at every span); packed and per-sequence
 calls agree up to bf16 noise from the GEMM's row count, and greedy output
 inside vLLM diverges only at margins ≤ 0.125.

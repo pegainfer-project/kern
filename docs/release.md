@@ -87,7 +87,7 @@ GitHub runner 没有 GPU，流水线只能证明 binary 起得来。release 发�
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 kern --version                  # commit 与 tag 一致，cuda 13.3
 hf download Pegainfer/kern-qwen38-sm103 --local-dir kern-qwen38
-kern test --reference kern-qwen38/manifests/qwen3.8-27b.json --manifest <kern checkout>/examples/qwen3.8-27b.json \
+kern test --reference kern-qwen38/manifests/qwen3.8-27b.json --manifest <kern-qwen38 checkout>/sm103/examples/qwen3.8-27b.json \
   --kernels <两边 cubin 都在的目录> --weights <Qwen3.8-27B checkpoint>   # 最后一行 PASS
 pip install kern-llm==0.3.0 && python -c 'import kern; print(kern.__version__)'   # 引擎的 venv 里
 ```

@@ -1,8 +1,0 @@
-kern-attest   A examples/qwen3.8-27b.json   B examples/qwen3.8-27b.json
-
-DIFF
-  kernels   no interface or implementation differs
-  decode    identical                                742 dispatches
-  prefill   identical                                1079 dispatches
-
-nothing to attest: the programs are identical.
