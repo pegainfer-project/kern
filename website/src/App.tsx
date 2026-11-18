@@ -1,4 +1,9 @@
 import { useEffect, useState } from "react";
+import liveDark from "./assets/live-status-dark.png";
+import liveLight from "./assets/live-status-light.png";
+import BenchPlan from "./BenchPlan";
+import TestPlan from "./TestPlan";
+import VerifyPlan from "./VerifyPlan";
 
 type Theme = "light" | "dusk" | "ink";
 type CliMode = "serve" | "vllm" | "sglang";
@@ -49,7 +54,7 @@ const MANIFEST_TABS: Record<
   structure: {
     tab: "1. Four-Part Manifest",
     title: "Forward is a verified static dataflow graph",
-    desc: "Every weight, workspace tensor, persistent state, kernel binary, and launch step is declared up front. Load-time verification checks every shape, stride, write-set, and cubin hash in milliseconds before touching a GPU.",
+    desc: "Every weight, workspace tensor, state, kernel binary and launch step is declared up front and verified at load, before touching a GPU.",
     code: `{
   "schema_version": 9,
   "model": { "vocab_size": 151936, "eos_token_ids": [151645] },
@@ -68,22 +73,22 @@ const MANIFEST_TABS: Record<
     points: [
       {
         key: "buffers",
-        body: "Weights, derived tensors, and scratch buffers sized by symbolic axes (T, S); the allocator colors non-overlapping lifetimes.",
+        body: "Weights, derived tensors and scratch buffers, sized by symbolic axes.",
       },
       {
         key: "kernels",
-        body: "Compiled cubins pinned by SHA-256 with explicit typed scalar and pointer signature contracts.",
+        body: "Compiled cubins pinned by SHA-256, with typed signatures.",
       },
       {
         key: "programs",
-        body: "Named DAGs lowered once at load into flat device-pointer launch lists. Zero Python or shape math per step.",
+        body: "Named DAGs lowered once at load into flat launch lists.",
       },
     ],
   },
   states: {
     tab: "2. Hybrid States & Pool",
     title: "Paged KV + recurrent state in one pure-host pool",
-    desc: "Hybrid architectures mix full-attention layers (growing per token) and linear-attention / recurrent layers like GDN or KDA (fixed per sequence). The manifest declares bytes; kern-pool manages leases, prefix radix checkpoints, and DRAM/NVMe spill.",
+    desc: "Hybrid architectures mix attention layers (state grows per token) with recurrent layers like GDN or KDA (fixed per sequence). The manifest declares bytes; kern-pool manages the rest.",
     code: `"states": {
   "layer_0_gdn": {
     "kind": "recurrent",
@@ -98,22 +103,22 @@ const MANIFEST_TABS: Record<
     points: [
       {
         key: "bytes_per_token",
-        body: "Paged KV blocks shared across matching prompts through a lock-free radix prefix index.",
+        body: "Paged KV blocks, shared across matching prompts through a radix prefix index.",
       },
       {
         key: "bytes_per_seq",
-        body: "Recurrent state slots snapshotted at page boundaries so hybrid models get prefix cache hits too.",
+        body: "Recurrent state, snapshotted at page boundaries so hybrid models hit the prefix cache too.",
       },
       {
         key: "evictable",
-        body: "Cold pages spill to pinned host DRAM and local NVMe via io_uring without blocking GPU streams.",
+        body: "Cold pages spill to host DRAM and local NVMe.",
       },
     ],
   },
   parallel: {
     tab: "3. Parallelism as Data",
     title: "TP, EP, DCP, and pipeline stages without engine branches",
-    desc: "Tensor, expert, and decode-context parallelism are shard rules on weights and collective ops in the graph. Pipeline parallelism cuts one verified manifest into per-stage manifests with kern cut.",
+    desc: "Tensor, expert and decode-context parallelism are shard rules on weights and collective ops in the graph. kern cut splits a manifest into pipeline stages.",
     code: `"parallel": { "world_size": 8 },
 
 // Sharded weight slice per rank:
@@ -128,22 +133,22 @@ const MANIFEST_TABS: Record<
     points: [
       {
         key: "shard",
-        body: "Each rank loads only its weight slice; replication and axis splits are verified statically.",
+        body: "Each rank loads only its weight slice.",
       },
       {
         key: "all_reduce / peer",
-        body: "NCCL collectives and IPC peer-mapped buffers are ordinary graph steps — visible to profilers and agents.",
+        body: "NCCL collectives and peer-mapped buffers are ordinary graph steps.",
       },
       {
         key: "kern cut",
-        body: "Splits a manifest across pipeline stages and underpins prefill/decode disaggregation in kern-serve.",
+        body: "Per-stage manifests; the basis of prefill/decode disaggregation.",
       },
     ],
   },
   routing: {
     tab: "4. Shape Routing (when)",
     title: "Different batch shapes dispatch specialized kernels",
-    desc: "A kernel tuned for T=1 decode often regresses at T=64 or 32k context. Steps carry predicate guards on runtime axes so agents specialize hot shapes without touching any other regime.",
+    desc: "A kernel tuned for T=1 decode often regresses at T=64 or 32k context. Steps carry guards on runtime axes, so one shape is specialized without touching the others.",
     code: `"steps": [
   {
     "id": "mlp_gate_up_small_t",
@@ -162,15 +167,15 @@ const MANIFEST_TABS: Record<
     points: [
       {
         key: "when",
-        body: "Evaluated once at step launch with zero host-side tensor inspection or graph recompilation.",
+        body: "Evaluated once at step launch; no graph recompilation.",
       },
       {
         key: "Safe specialization",
-        body: "Agents optimize T <= 16 decode without risking regressions on large-chunk prefill.",
+        body: "Tune T <= 16 decode without risking large-chunk prefill.",
       },
       {
         key: "Verified coverage",
-        body: "Both branches undergo full static buffer, dtype, and write-set verification at load time.",
+        body: "Both branches are verified at load.",
       },
     ],
   },
@@ -189,7 +194,7 @@ const QUICKSTART_TABS: Record<
   serve: {
     label: "1 · kern-serve & CLI",
     title: "Native Rust serving & multi-node P/D disaggregation",
-    desc: "Download the prebuilt kern + kern-serve release. Fetch compiled cubins from the registry, verify and smoke-test on GPU, then launch an OpenAI-compatible HTTP server — from one GPU to multi-node prefill/decode clusters.",
+    desc: "Install the prebuilt release, fetch kernels from the registry, and launch an OpenAI-compatible server — from one GPU to multi-node prefill/decode clusters.",
     code: `# Install kern + kern-serve binaries (CUDA 12.9+ / 13.0)
 curl -fsSL https://kern-baa.pages.dev/install.sh | sh
 
@@ -199,32 +204,44 @@ kern run qwen3.8-27b --prompt "Explain speculative decoding in three sentences."
 
 # Launch OpenAI-compatible serving (/v1/chat/completions, tool calls, prefix cache)
 kern server --manifest examples/qwen3.8-27b/manifest.json --port 8000`,
-    note: "Includes pure-host radix prefix caching, hybrid KV + recurrent slot scheduling, pipeline prefill, and multi-node P/D disaggregation.",
+    note: "Prefix caching, hybrid KV + recurrent slots, pipeline prefill and P/D disaggregation included.",
   },
   vllm: {
     label: "2 · Inside vLLM",
     title: "Drop-in C-ABI model backend for vLLM",
-    desc: "Keep your existing vLLM HTTP frontend, tokenizer, guided decoding, and scheduler. Replace the PyTorch model forward with a verified kern package via one flag.",
+    desc: "Keep vLLM's frontend, tokenizer, guided decoding and scheduler; replace the model forward with a kern package via one flag.",
     code: `uv pip install kern-llm
 
 # Resolve a package from kern.toml or Hugging Face Hub
 KERN_TARGET=qwen3.8-27b \\
   vllm serve Qwen/Qwen3.5-27B -O.model_impl=kern`,
-    note: "Runs inside vLLM's CUDA graph capture on vLLM's KV cache tensor and stream — zero extra buffer copies.",
+    note: "Runs inside vLLM's CUDA graph capture, on vLLM's own KV cache tensor and stream.",
   },
   sglang: {
     label: "3 · Inside SGLang",
     title: "RadixAttention + custom manifests in SGLang",
-    desc: "Register kern as SGLang's model runner to pair SGLang's RadixCache and TP/EP/DCP orchestration with agent-tuned kernel packages.",
+    desc: "Register kern as SGLang's model runner: SGLang's RadixCache and orchestration, with agent-tuned kernel packages.",
     code: `uv pip install kern-llm
 
 KERN_MANIFEST=/path/to/manifest.json \\
   python -m kern_sglang.launch_server \\
   --model-path Qwen/Qwen3-4B \\
   --attention-backend flashinfer`,
-    note: "Used in production benchmarks to cut Kimi-K3 TP8/DCP8/EP8 decode step time from 37.2 ms to 29.3 ms.",
+    note: "Cut Kimi-K3 TP8/DCP8/EP8 decode step time from 37.2 ms to 29.3 ms.",
   },
 };
+
+// Two buckets of a served.toml that `kern workload` wrote from a Qwen3.8-27B trace.
+const SERVED_TOML = [
+  {
+    bucket: "# prefill · seqs<=1,tokens<=1024 · kv<=64k · 3314 steps · 1274.0 s",
+    sweep: "[[sweep]]\ngroups = [1]\nchunk = [1024]\ncontext = [46502]\nweight = 3314",
+  },
+  {
+    bucket: "# round · seqs=16,tokens=256 · kv<=512k · 6024 steps · 1187.9 s",
+    sweep: "[[sweep]]\ngroups = [16]\nrows = [16]\ncontext = [24818]\nweight = 6024",
+  },
+];
 
 const SCH_FOOTNOTES: Record<SchFocus, string> = {
   all: "Continual loop · Hover any stage · Observe → Analyze → Optimize → Redeploy",
@@ -447,7 +464,7 @@ function HeroSchematic() {
             y="117"
             textAnchor="middle"
             fill="#cbd5e1"
-            fontFamily="JetBrains Mono, monospace"
+            fontFamily="IBM Plex Mono, monospace"
             fontSize="9.8"
             fontWeight="600"
           >
@@ -666,10 +683,9 @@ export default function App() {
             </h1>
             <p className="k-hero-lead">
               <strong>kern</strong> takes the model out of the inference engine.
-              Each model ships as a self-contained package — manifest, kernels,
-              and weights — that agents can verify and tune in seconds. Run
-              native clusters on <strong>kern-serve</strong>, or plug into{" "}
-              <strong>vLLM</strong> and <strong>SGLang</strong>.
+              Each model ships as a package — manifest, kernels, weights — that
+              agents verify and tune in seconds, on <strong>kern-serve</strong>{" "}
+              or inside <strong>vLLM</strong> and <strong>SGLang</strong>.
             </p>
 
             <div className="k-hero-ctas">
@@ -728,8 +744,7 @@ export default function App() {
               <h3>Full 896-expert Kimi-K3 disaggregated at SLA</h3>
               <p>
                 Two 8-stage pipeline-parallel prefill pods feed an EP8 decode
-                tier on <code>kern-serve</code>, holding strict latency targets
-                under sustained agent load.
+                tier on <code>kern-serve</code>.
               </p>
               <div className="k-story-metrics">
                 <div className="k-story-metric">
@@ -747,8 +762,8 @@ export default function App() {
               <span className="k-story-tag">KERN-SERVE · DAY-0 BRING-UP</span>
               <h3>Frontier models serving hours after weight release</h3>
               <p>
-                Agents assemble a standalone model repo — manifest, kernels, and
-                oracle tests — without waiting on upstream framework releases.
+                Agents assemble a standalone model repo without waiting on
+                upstream framework releases.
               </p>
               <div className="k-story-metrics">
                 <div className="k-story-metric">
@@ -767,8 +782,7 @@ export default function App() {
               <h3>One overnight loop lifts every host engine</h3>
               <p>
                 Three agents tuned Qwen3.8-27B against 154,849 traced steps on
-                GB300, cutting graph launches from 534 to 355 (
-                <a href="/rsi/">report ↗</a>).
+                GB300 (<a href="/rsi/">report ↗</a>).
               </p>
               <div className="k-story-metrics">
                 <div className="k-story-metric">
@@ -795,81 +809,15 @@ export default function App() {
               complexity.
             </h2>
             <p>
-              Cramming 300 models across{" "}
+              Covering{" "}
               <code>
                 models × precisions × GPUs × parallelism × decoding × workloads
               </code>{" "}
-              into one repository turns popular engines into 1.4M–2M lines of
-              tangled Python. When you tune a frontier model on your own GPUs,
-              that one-size-fits-all design forces a losing choice: upstream PRs
-              stall in review queues, private forks break on every rebase, and
-              coding agents get lost in nested <code>if/else</code> dispatch.
+              in one repository turns popular engines into 1.4M–2M lines of
+              Python. Tuning one model there means upstream PRs that stall,
+              forks that break on every rebase, and coding agents lost in
+              nested <code>if/else</code> dispatch.
             </p>
-          </div>
-
-          <div className="k-shape-card">
-            <div className="k-shape-head">
-              <h3>
-                Why workload shape matters: same Qwen3-4B manifest on RTX 5080,
-                three shapes
-              </h3>
-              <div className="k-shape-legend">
-                <span>
-                  <i style={{ background: "var(--cat-gemm)" }} /> GEMM
-                </span>
-                <span>
-                  <i style={{ background: "var(--cat-attn)" }} /> Attention
-                </span>
-                <span>
-                  <i style={{ background: "var(--bg-surface-3)" }} /> Norms /
-                  Elementwise
-                </span>
-              </div>
-            </div>
-
-            <div className="k-shape-rows">
-              <div className="k-shape-row">
-                <div className="k-shape-label">
-                  <strong>Decode</strong> · 1 seq × 1k ctx
-                </div>
-                <div className="k-stacked-bar" aria-hidden="true">
-                  <div className="k-seg-gemm" style={{ width: "48%" }} />
-                  <div className="k-seg-attn" style={{ width: "12%" }} />
-                  <div className="k-seg-other" style={{ width: "40%" }} />
-                </div>
-                <div className="k-shape-nums">
-                  <b>48%</b> GEMM · 12% Attn
-                </div>
-              </div>
-
-              <div className="k-shape-row">
-                <div className="k-shape-label">
-                  <strong>Prefill</strong> · 2,048 rows, empty KV
-                </div>
-                <div className="k-stacked-bar" aria-hidden="true">
-                  <div className="k-seg-gemm" style={{ width: "31%" }} />
-                  <div className="k-seg-attn" style={{ width: "51%" }} />
-                  <div className="k-seg-other" style={{ width: "18%" }} />
-                </div>
-                <div className="k-shape-nums">
-                  31% GEMM · <b>51%</b> Attn
-                </div>
-              </div>
-
-              <div className="k-shape-row">
-                <div className="k-shape-label">
-                  <strong>Cached Prefill</strong> · 512 rows @ 32k
-                </div>
-                <div className="k-stacked-bar" aria-hidden="true">
-                  <div className="k-seg-gemm" style={{ width: "2%" }} />
-                  <div className="k-seg-attn" style={{ width: "97%" }} />
-                  <div className="k-seg-other" style={{ width: "1%" }} />
-                </div>
-                <div className="k-shape-nums">
-                  2% GEMM · <b>97%</b> Attn
-                </div>
-              </div>
-            </div>
           </div>
 
           <div className="k-compare-grid">
@@ -883,22 +831,21 @@ export default function App() {
                   <span className="k-li-mark k-li-bad">×</span>
                   <span>
                     <b>Fork &amp; PR gridlock:</b> 4 in 5 upstream PRs go
-                    unreviewed, while private forks suffer merge conflicts and
-                    untested regressions on every rebase.
+                    unreviewed; private forks conflict on every rebase.
                   </span>
                 </li>
                 <li>
                   <span className="k-li-mark k-li-bad">×</span>
                   <span>
-                    <b>Opaque to agents:</b> Kernel dispatch hides behind flags,
-                    monkey-patches, and runtime Python branches.
+                    <b>Opaque to agents:</b> kernel dispatch hides behind flags
+                    and runtime Python branches.
                   </span>
                 </li>
                 <li>
                   <span className="k-li-mark k-li-bad">×</span>
                   <span>
-                    <b>Hours to validate:</b> Silent precision drift only shows
-                    up after slow end-to-end benchmark suites.
+                    <b>Hours to validate:</b> precision drift shows up only
+                    after slow end-to-end suites.
                   </span>
                 </li>
               </ul>
@@ -919,28 +866,28 @@ elif tp_size > 1 and env.ENABLE_CUSTOM_ALLREDUCE:
                 <li>
                   <span className="k-li-mark k-li-good">✓</span>
                   <span>
-                    <b>Zero rebase tax:</b> Your Kimi-K3 or Qwen package is an
-                    independent Git repo of JSON + cubins you own.
+                    <b>Zero rebase tax:</b> your model package is its own Git
+                    repo of JSON + cubins.
                   </span>
                 </li>
                 <li>
                   <span className="k-li-mark k-li-good">✓</span>
                   <span>
-                    <b>Explicit static graph:</b> Every buffer, state, and
-                    launch order is readable data with zero hidden control flow.
+                    <b>Explicit static graph:</b> every buffer, state and
+                    launch is readable data.
                   </span>
                 </li>
                 <li>
                   <span className="k-li-mark k-li-good">✓</span>
                   <span>
-                    <b>Deploy anywhere:</b> Run the exact same package on{" "}
-                    <code>kern-serve</code>, inside vLLM, or inside SGLang.
+                    <b>Deploy anywhere:</b> the same package runs on{" "}
+                    <code>kern-serve</code>, vLLM, or SGLang.
                   </span>
                 </li>
               </ul>
               <pre className="k-mini-code">{`# Verified in ms · Oracle-tested in 7s · Served natively
 $ kern verify manifest.json
-$ kern test qwen3.8-27b --candidate candidate.json
+$ kern test --reference manifest.json --manifest candidate.json
 $ kern server --manifest candidate.json --port 8000`}</pre>
             </div>
           </div>
@@ -954,16 +901,16 @@ $ kern server --manifest candidate.json --port 8000`}</pre>
             <div className="k-eyebrow">02 · The Manifest</div>
             <h2>The runtime contains zero model code — and never will.</h2>
             <p>
-              Architecture tricks, hybrid recurrent states, multi-GPU
-              collectives, and shape predicates live in a declarative{" "}
+              Architecture tricks, hybrid states, multi-GPU collectives and
+              shape predicates live in a declarative{" "}
               <a
                 href="/schema/"
                 style={{ color: "var(--brand)", fontWeight: 600 }}
               >
                 JSON Schema ↗
               </a>
-              . <code>kern-runtime</code> verifies the contract at load, then
-              executes flat launch lists blindly.
+              . <code>kern-runtime</code> verifies it at load, then executes
+              flat launch lists blindly.
             </p>
           </div>
 
@@ -1009,8 +956,8 @@ $ kern server --manifest candidate.json --port 8000`}</pre>
                 Inspect real production graphs in Manifest Studio
               </strong>
               <span>
-                Browse buffers, hybrid KV/GDN state budgets, folded layer loops,
-                and kernel launch signatures interactively in your browser.
+                Browse buffers, state budgets, folded layer loops and launch
+                signatures in your browser.
               </span>
             </div>
             <a href="/studio/" className="k-btn-primary">
@@ -1020,159 +967,198 @@ $ kern server --manifest candidate.json --port 8000`}</pre>
         </div>
       </section>
 
-      {/* 03 · BUILT FOR AGENTS */}
+      {/* 03 · CONTINUAL LOOP */}
       <section id="harness" className="k-band">
         <div className="container">
           <div className="k-section-head">
             <div className="k-eyebrow">03 · Continual Loop</div>
             <h2>Observe, analyze, optimize, redeploy — closed in minutes.</h2>
-            <p>
-              Every serving rank streams zero-sync CUPTI hardware timestamps
-              into Parquet{" "}
-              <a
-                href="/docs/reference/traces.html"
-                style={{ color: "var(--brand)", fontWeight: 600 }}
-              >
-                (Trace format ↗)
-              </a>
-              . <code>kern workload</code> folds live traffic into weighted{" "}
-              <code>shape × KV</code> buckets, giving coding agents fast,
-              deterministic gates before redeploying.
-            </p>
+            <p>Four steps. Each is one command, and each hands the next a file.</p>
           </div>
 
-          <div className="k-gates-grid">
-            <div className="k-gate-card">
-              <div className="k-gate-top">
-                <span className="k-gate-step">GATE 01 · STATIC</span>
-                <span className="k-gate-speed">~5 ms · No GPU</span>
+          <div className="k-loop">
+            <div className="k-loop-stage">
+              <div className="k-loop-rail">
+                <div className="k-loop-n">01</div>
+                <div className="k-loop-verb">Observe</div>
+                <span className="k-loop-cmd">kern-serve --trace</span>
               </div>
-              <h3>kern verify</h3>
-              <p>
-                Collects every shape, stride, axis-bound, write-set, and cubin
-                signature diagnostic in a single pass before touching CUDA.
-              </p>
-              <div className="k-gate-foot">
-                Catches bad wiring &amp; buffer overruns instantly
+              <div className="k-loop-body">
+                <p className="k-loop-lead">
+                  <strong>Always on, on live traffic.</strong> The GPU timestamps
+                  every kernel of every served step in hardware, with nothing
+                  synchronized between launches, and each rank streams the
+                  records to Parquet as it serves. Prompts, token IDs and
+                  completions are never written.{" "}
+                  <a href="/docs/reference/traces.html">Trace format ↗</a>
+                </p>
+                <div className="k-loop-facts">
+                  <div className="k-loop-fact">
+                    <strong>+0.06%</strong>
+                    <span>TTFT with every kernel recorded, against tracing off</span>
+                  </div>
+                  <div className="k-loop-fact">
+                    <strong>0.28 core</strong>
+                    <span>of CPU for the trace thread; output tok/s unchanged</span>
+                  </div>
+                  <div className="k-loop-fact">
+                    <strong>100 µs</strong>
+                    <span>between samples of the GPU's own counters</span>
+                  </div>
+                </div>
+                <pre className="k-loop-code">
+                  {"traces/date=2026-11-11/rank=0/\n"}
+                  {"  101500.steps.parquet     "}
+                  <span className="c"># program, shape, vars, kv, start_ns, end_ns{"\n"}</span>
+                  {"  101500.kernels.parquet   "}
+                  <span className="c"># every kernel execution of every step{"\n"}</span>
+                  {"  101500.counters.parquet  "}
+                  <span className="c"># the GPU's own counters, every 100 µs</span>
+                </pre>
+                <a className="k-live" href="https://api.kern-llm.org/status/" target="_blank" rel="noreferrer">
+                  <div className="vp-plan-bar">
+                    <span>Qwen3.8-27B-FP8 on kern-serve · its trace, published as it serves</span>
+                    <span>snapshot 2026-11-18 07:46 UTC</span>
+                  </div>
+                  {[
+                    ["light", liveLight],
+                    ["dark", liveDark],
+                  ].map(([theme, src]) => (
+                    <img
+                      key={theme}
+                      className={`k-live-${theme}`}
+                      src={src}
+                      width={1656}
+                      height={534}
+                      loading="lazy"
+                      alt="329 ms of a serving GPU: prefill and decode steps split into stages and kernels, above its memory bandwidth and tensor-pipe utilization sampled every 100 µs"
+                    />
+                  ))}
+                  <span className="k-live-open">Open the live status ↗</span>
+                </a>
               </div>
             </div>
 
-            <div className="k-gate-card">
-              <div className="k-gate-top">
-                <span className="k-gate-step">GATE 02 · NUMERICS</span>
-                <span className="k-gate-speed">4–7 s · 1 GPU</span>
+            <div className="k-loop-stage">
+              <div className="k-loop-rail">
+                <div className="k-loop-n">02</div>
+                <div className="k-loop-verb">Analyze</div>
+                <span className="k-loop-cmd">kern workload</span>
               </div>
-              <h3>kern test</h3>
-              <p>
-                Records the baseline noise floor span-by-span, replays the
-                candidate against exact inputs, checks out-of-bounds canary
-                bytes, and pinpoints the first diverging op.
-              </p>
-              <div className="k-gate-foot">
-                + kern test e2e-logits teacher-forced KL gate
-              </div>
-            </div>
-
-            <div className="k-gate-card">
-              <div className="k-gate-top">
-                <span className="k-gate-step">GATE 03 · PRICING</span>
-                <span className="k-gate-speed">Minutes · Trace-weighted</span>
-              </div>
-              <h3>kern bench</h3>
-              <p>
-                Sweeps real <code>(T, cached_tokens)</code> shapes distilled
-                from production traces. An op that looks −24% faster in a microbenchmark
-                is rejected if it saves only −0.3% on live traffic.
-              </p>
-              <div className="k-gate-foot">
-                CUDA-graph replay attributed via CUPTI
-              </div>
-            </div>
-          </div>
-
-          <div className="k-test-split">
-            <div className="k-terminal">
-              <div className="k-term-bar">
-                <span>$ kern test kvslip</span>
-                <span>span-isolated fault localization</span>
-              </div>
-              <div className="k-term-body">
-                <span className="t-p">$</span> kern test kvslip{"\n"}
-                <span className="t-k">static diff</span>{"   "}1 span changed (layer0.attn_qkv){"\n"}
-                <span className="t-k">noise floor</span>{"   "}bf16 jitter calibrated across 6 shapes{"\n"}
-                <span className="t-k">canary guard</span>{"  "}0 bytes overrun outside declared writes{"\n"}
-                <span className="t-bad">span 04 FAIL</span>{"  "}decode · T=1, past=64 · max|Δ| = 0.418 (19× noise){"\n"}
-                {"              "}first diverged op: <strong>kv_write_rope</strong> (head 3, rope offset){"\n"}
-                <div className="t-verdict">
-                  VERDICT: FAIL — localized to 1 kernel in 4.6 s
+              <div className="k-loop-body">
+                <p className="k-loop-lead">
+                  <code>kern workload</code> folds live traffic into weighted{" "}
+                  <code>shape × KV</code> buckets on the CPU.
+                </p>
+                <div className="k-loop-pair">
+                  <div>
+                    <pre className="k-loop-code">
+                      {"kern workload --manifest manifest.json \\\n"}
+                      {"  --trace traces/date=2026-11-11/rank=0 \\\n"}
+                      {"  --out served.toml\n\n"}
+                      {"kern bench demo --workload served.toml --out bench.json"}
+                    </pre>
+                    <div className="k-loop-facts">
+                      <div className="k-loop-fact">
+                        <strong>261,672 → 157</strong>
+                        <span>online steps folded into buckets</span>
+                      </div>
+                      <div className="k-loop-fact">
+                        <strong>6 min</strong>
+                        <span>of replay for 7.3 hours of traffic</span>
+                      </div>
+                      <div className="k-loop-fact">
+                        <strong>0.90%</strong>
+                        <span>between replayed and traced GPU cost</span>
+                      </div>
+                    </div>
+                  </div>
+                  <pre className="k-loop-code">
+                    <span className="k-loop-file">served.toml · one sweep a bucket{"\n\n"}</span>
+                    {SERVED_TOML.map((b) => (
+                      <span key={b.bucket}>
+                        <span className="c">{b.bucket}</span>
+                        {`\n${b.sweep}\n\n`}
+                      </span>
+                    ))}
+                    <span className="c"># …</span>
+                  </pre>
                 </div>
               </div>
-              <div className="k-term-caption">
-                Instead of debugging degraded accuracy hours later, the agent
-                gets the exact span, shape, and buffer that broke.
+            </div>
+
+            <div className="k-loop-stage">
+              <div className="k-loop-rail">
+                <div className="k-loop-n">03</div>
+                <div className="k-loop-verb">Optimize</div>
+                <span className="k-loop-cmd">verify · test · bench</span>
+              </div>
+              <div className="k-loop-body">
+                <p className="k-loop-lead">
+                  A coding agent changes a kernel or a launch. Three gates
+                  answer, cheapest first.
+                </p>
+
+                <div className="k-gate">
+                  <div className="k-gate-head">
+                    <span className="k-gate-step">GATE 01 · STATIC</span>
+                    <h3>kern verify</h3>
+                    <span className="k-gate-speed">~5 ms · No GPU</span>
+                    <p>
+                      Four kernels, seven checks. Pick a check to see what it
+                      reads and what <code>kern verify</code> prints when it
+                      refuses.
+                    </p>
+                  </div>
+                  <VerifyPlan />
+                </div>
+
+                <div className="k-gate">
+                  <div className="k-gate-head">
+                    <span className="k-gate-step">GATE 02 · NUMERICS</span>
+                    <h3>kern test</h3>
+                    <span className="k-gate-speed">~10 s · 1 GPU</span>
+                    <p>
+                      B is the reference A with one argument of call #16
+                      changed. Every type still fits, so{" "}
+                      <code>kern verify</code> passes it;{" "}
+                      <code>kern test</code> finds the call and fails it on the
+                      logits.
+                    </p>
+                  </div>
+                  <TestPlan />
+                  <p className="k-gate-foot">
+                    An overnight run of this loop, change by change:{" "}
+                    <a href="/rsi/">Overnight RSI Report ↗</a>
+                  </p>
+                </div>
+
+                <div className="k-gate">
+                  <div className="k-gate-head">
+                    <span className="k-gate-step">GATE 03 · PRICING</span>
+                    <h3>kern bench</h3>
+                    <span className="k-gate-speed">Minutes · Trace-weighted</span>
+                    <p>
+                      What a faster kernel is worth depends on the shape it is
+                      priced at. The same decode step, measured at six shapes:
+                    </p>
+                  </div>
+                  <BenchPlan />
+                </div>
               </div>
             </div>
 
-            <div className="k-verdict-card">
-              <h4>Four corrupted candidates, four automatic catches</h4>
-              <div className="k-table-wrap">
-                <table className="k-table">
-                  <thead>
-                    <tr>
-                      <th>Candidate</th>
-                      <th>Injected Defect</th>
-                      <th>Gate Verdict</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>
-                        <code>fused-add-norm</code>
-                      </td>
-                      <td>Valid residual + RMSNorm fusion</td>
-                      <td>
-                        <span className="k-badge-pass">PASS · −8.4%</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <code>kvslip</code>
-                      </td>
-                      <td>Off-by-one RoPE cache slot write</td>
-                      <td>
-                        <span className="k-badge-fail">FAIL · Span 04</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <code>overrun</code>
-                      </td>
-                      <td>Writes 16 bytes past scratch buffer</td>
-                      <td>
-                        <span className="k-badge-fail">FAIL · Canary</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <code>nan-tail</code>
-                      </td>
-                      <td>Uninitialized padding lane at T=3</td>
-                      <td>
-                        <span className="k-badge-fail">FAIL · Fuzz T=3</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+            <div className="k-loop-stage">
+              <div className="k-loop-rail">
+                <div className="k-loop-n">04</div>
+                <div className="k-loop-verb">Redeploy</div>
+                <span className="k-loop-cmd">kern server</span>
               </div>
-              <div className="k-verdict-note">
-                Read the full autonomous optimization breakdown in the{" "}
-                <a
-                  href="/rsi/"
-                  style={{ color: "var(--brand)", fontWeight: 600 }}
-                >
-                  Overnight RSI Report ↗
-                </a>
-                .
+              <div className="k-loop-body">
+                <p className="k-loop-lead">
+                  The manifest that clears the gates is the next one served,
+                  and its traffic is the next trace.
+                </p>
               </div>
             </div>
           </div>
@@ -1186,10 +1172,8 @@ $ kern server --manifest candidate.json --port 8000`}</pre>
             <div className="k-eyebrow">04 · Ecosystem &amp; Quick Start</div>
             <h2>Production model packages, ready to serve or fork.</h2>
             <p>
-              Each model family lives in its own repository with hardware-tuned
-              manifests, kernel registries, and oracle baselines. Run them
-              directly on <code>kern-serve</code>, or load them inside vLLM and
-              SGLang.
+              Each model family lives in its own repository. Run it on{" "}
+              <code>kern-serve</code>, or load it inside vLLM and SGLang.
             </p>
           </div>
 

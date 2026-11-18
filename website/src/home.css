@@ -1,6 +1,6 @@
 /* kern Homepage — Clean Tactile Blueprint System */
 
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@600;700&display=swap");
 
 :root,
 [data-theme="light"] {
@@ -166,7 +166,7 @@ h3 {
 code,
 pre,
 .mono {
-  font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 a {
@@ -352,7 +352,7 @@ button:focus-visible {
   border-radius: 999px;
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -458,7 +458,7 @@ button:focus-visible {
 }
 
 .k-cli-label {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-3);
@@ -473,7 +473,7 @@ button:focus-visible {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-3);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
@@ -509,7 +509,7 @@ button:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   color: #f8fafc;
   overflow-x: auto;
@@ -532,7 +532,7 @@ button:focus-visible {
   border: 1px solid #334155;
   background: rgba(255, 255, 255, 0.06);
   color: #e2e8f0;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   font-weight: 600;
   padding: 4px 9px;
@@ -682,7 +682,7 @@ button:focus-visible {
 
 .k-sch-serve-txt {
   fill: var(--brand-ink);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 12.5px;
   font-weight: 700;
 }
@@ -703,21 +703,21 @@ button:focus-visible {
 
 .k-sch-label {
   fill: var(--text-1);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   font-weight: 700;
 }
 
 .k-sch-sub {
   fill: var(--text-3);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 9.8px;
   font-weight: 500;
 }
 
 .k-sch-cap {
   fill: var(--text-4);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -725,7 +725,7 @@ button:focus-visible {
 
 .k-sch-step-num {
   fill: var(--text-4);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 9px;
   font-weight: 700;
 }
@@ -739,7 +739,7 @@ button:focus-visible {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-sm);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   color: var(--text-2);
   max-width: 100%;
@@ -795,7 +795,7 @@ button:focus-visible {
   width: fit-content;
   padding: 3px 8px;
   border-radius: 4px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -844,7 +844,7 @@ button:focus-visible {
 .k-story-metric span {
   display: block;
   margin-top: 4px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 10.5px;
   color: var(--text-3);
 }
@@ -866,7 +866,7 @@ button:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -906,107 +906,8 @@ button:focus-visible {
 }
 
 /* ==================== 01 · WHY KERN ==================== */
-.k-shape-card {
-  background: var(--bg-surface);
-  border: 1.5px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 20px 24px;
-  margin-bottom: 22px;
-}
-
-.k-shape-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.k-shape-head h3 {
-  margin: 0;
-  font-size: 15.5px;
-  font-weight: 700;
-}
-
-.k-shape-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
-  color: var(--text-2);
-}
-
-.k-shape-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.k-shape-legend i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  display: inline-block;
-}
-
-.k-shape-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
 
 /* Zero text inside bar segments so labels never clip or overflow */
-.k-shape-row {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 170px;
-  align-items: center;
-  gap: 16px;
-}
-
-.k-shape-label {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
-  color: var(--text-2);
-}
-
-.k-shape-label strong {
-  color: var(--text-1);
-}
-
-.k-stacked-bar {
-  display: flex;
-  height: 16px;
-  border-radius: 5px;
-  overflow: hidden;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-subtle);
-}
-
-.k-seg-gemm {
-  background: var(--cat-gemm);
-}
-
-.k-seg-attn {
-  background: var(--cat-attn);
-}
-
-.k-seg-other {
-  background: var(--bg-surface-3);
-}
-
-.k-shape-nums {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11.5px;
-  color: var(--text-2);
-  text-align: right;
-  white-space: nowrap;
-}
-
-.k-shape-nums b {
-  color: var(--text-1);
-}
 
 .k-compare-grid {
   display: grid;
@@ -1035,7 +936,7 @@ button:focus-visible {
   width: fit-content;
   padding: 3px 9px;
   border-radius: 5px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 10.5px;
   font-weight: 700;
 }
@@ -1080,7 +981,7 @@ button:focus-visible {
 }
 
 .k-li-mark {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-weight: 700;
 }
 
@@ -1099,7 +1000,7 @@ button:focus-visible {
   border: 1px solid var(--border-code);
   border-radius: 8px;
   padding: 12px 14px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11.5px;
   line-height: 1.55;
   color: #cbd5e1;
@@ -1247,221 +1148,6 @@ button:focus-visible {
   color: var(--text-2);
 }
 
-/* ==================== 03 · THREE-GATE HARNESS ==================== */
-.k-gates-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 22px;
-}
-
-.k-gate-card {
-  min-width: 0;
-  background: var(--bg-surface);
-  border: 1.5px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.k-gate-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.k-gate-step {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--text-3);
-}
-
-.k-gate-speed {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand);
-  white-space: nowrap;
-}
-
-.k-gate-card h3 {
-  margin: 0;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 17.5px;
-  font-weight: 700;
-}
-
-.k-gate-card p {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--text-2);
-}
-
-.k-gate-foot {
-  margin-top: auto;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.k-test-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-  gap: 20px;
-}
-
-.k-terminal {
-  min-width: 0;
-  background: var(--bg-code);
-  border: 1.5px solid var(--border-code);
-  border-radius: 12px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--shadow-tactile);
-}
-
-.k-term-bar {
-  padding: 8px 14px;
-  background: var(--bg-code-2);
-  border-bottom: 1px solid var(--border-code);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10.5px;
-  color: #94a3b8;
-}
-
-.k-term-body {
-  padding: 15px 18px;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11.5px;
-  line-height: 1.65;
-  color: #e2e8f0;
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.k-term-body .t-p {
-  color: #b8ff2e;
-}
-
-.k-term-body .t-k {
-  color: #64748b;
-}
-
-.k-term-body .t-bad {
-  color: #ff7b72;
-}
-
-.k-term-body .t-verdict {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid #232c3d;
-  color: #ff7b72;
-  font-weight: 700;
-}
-
-.k-term-caption {
-  margin-top: auto;
-  padding: 10px 16px;
-  background: rgba(255, 255, 255, 0.03);
-  border-top: 1px solid var(--border-code);
-  font-size: 12.5px;
-  color: #94a3b8;
-}
-
-.k-verdict-card {
-  min-width: 0;
-  background: var(--bg-surface);
-  border: 1.5px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-}
-
-.k-verdict-card h4 {
-  margin: 0 0 10px;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.k-table-wrap {
-  overflow-x: auto;
-}
-
-.k-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.k-table th {
-  text-align: left;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-3);
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border-subtle);
-  white-space: nowrap;
-}
-
-.k-table td {
-  padding: 9px 8px;
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-2);
-  vertical-align: top;
-}
-
-.k-table tr:last-child td {
-  border-bottom: none;
-}
-
-.k-badge-pass {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10.5px;
-  font-weight: 700;
-  background: var(--cat-good-soft);
-  color: var(--cat-good);
-}
-
-.k-badge-fail {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10.5px;
-  font-weight: 700;
-  background: var(--cat-bad-soft);
-  color: var(--cat-bad);
-}
-
-.k-verdict-note {
-  margin-top: auto;
-  padding-top: 12px;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
 /* ==================== 04 · MODELS & QUICK START ==================== */
 .k-models-wrap {
   background: var(--bg-surface);
@@ -1482,7 +1168,7 @@ button:focus-visible {
   padding: 12px 16px;
   background: var(--bg-surface-2);
   border-bottom: 1px solid var(--border-subtle);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1504,7 +1190,7 @@ button:focus-visible {
 
 .k-models-table a {
   color: var(--brand);
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -1521,7 +1207,7 @@ button:focus-visible {
 }
 
 .k-host-pills span {
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 4px;
@@ -1653,7 +1339,7 @@ button:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 20px;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
@@ -1669,8 +1355,6 @@ button:focus-visible {
   .k-story-grid,
   .k-compare-grid,
   .k-manifest-explorer,
-  .k-gates-grid,
-  .k-test-split,
   .k-qs-body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1679,15 +1363,6 @@ button:focus-visible {
   .k-qs-side {
     border-left: none;
     border-top: 1px solid var(--border-subtle);
-  }
-
-  .k-shape-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-
-  .k-shape-nums {
-    text-align: left;
   }
 }
 
