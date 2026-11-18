@@ -27,10 +27,7 @@
     "prefill": {"batch": {"groups": 1, "rows": "tokens"}, "calls": [
       {"op": "write", "args": [{"buf": "token_ids"}, {"buf": "positions"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"buf": "cu_seqlens_q"}, {"buf": "block_table"}, {"buf": "line_index"}, {"state": "kv"}, {"state": "gdn"}]}
     ]},
-    "decode": {"batch": {"groups": 1, "rows": 1}, "calls": [
-      {"op": "head", "args": [{"buf": "token_ids"}, {"buf": "positions"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"buf": "cu_seqlens_q"}, {"buf": "block_table"}, {"buf": "line_index"}, {"state": "kv"}, {"state": "gdn"}, {"buf": "next_token"}]}
-    ]},
-    "decode_batch": {"batch": {"groups": 4, "rows": 1}, "calls": [
+    "decode": {"batch": {"groups": 4, "rows": 1}, "calls": [
       {"op": "head", "args": [{"buf": "token_ids"}, {"buf": "positions"}, {"buf": "slot_mapping"}, {"buf": "seq_lens"}, {"buf": "cu_seqlens_q"}, {"buf": "block_table"}, {"buf": "line_index"}, {"state": "kv"}, {"state": "gdn"}, {"buf": "next_token"}]}
     ]}
   }

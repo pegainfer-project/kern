@@ -249,7 +249,7 @@ the rank a step waits for.
 ```
 device    NVIDIA GB300 · 152 SMs · L2 129 MiB · HES · rank 0 of 4
 plan      9 scenarios · 0 dropped · 33920 tokens of state · 8 seqs
-scenario  decode_batch-g8-r1-kv4096
+scenario  decode-g8-r1-kv4096
 program   9.070 ms · p10–p90 9.062–9.095 · cv 0.2% · 672 calls · rank 2 slowest of 4   3.1s
 ```
 

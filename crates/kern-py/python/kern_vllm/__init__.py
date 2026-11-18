@@ -11,7 +11,7 @@ are host states, bound to the pages vLLM allocated for each layer.
 
 The manifest (`tools/qwen38_vllm.py` writes one) follows a small contract,
 see `model.py`: host states `kv.l<i>` / `gdn.l<i>` per layer, programs
-`prefill` (one sequence), `decode_batch` (one row per sequence) and `head`.
+`prefill` (one sequence), `decode` (one row per sequence) and `head`.
 """
 
 

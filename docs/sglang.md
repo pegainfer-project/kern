@@ -161,7 +161,7 @@ transform, a plugin, and layout builds of existing kernels.
 
 Like `tools/qwen38_vllm.py`, it is a pure function of a base manifest, and
 it shares the vLLM transform's program changes (programs stop at the hidden
-states, `decode_batch` runs at SGLang's width, logits come from a separate
+states, `decode` runs at SGLang's width, logits come from a separate
 `head` program). It takes either base: `examples/qwen3.8-27b.json`, or the
 manifest the vLLM loop ended with. The memory changes:
 
@@ -198,13 +198,13 @@ The model class does five things:
    pools move: each host state gets its tensor from the runner's pools, then
    the manifest's `once` programs run. The hook runs outside any forward
    context, so the pools are read off the runner, not the context.
-3. **Runs a decode step** as one `decode_batch` over SGLang's padded batch.
+3. **Runs a decode step** as one `decode` over SGLang's padded batch.
    The page table is `req_to_token[:, ::64] / 64`; the slot ids come from
    the GDN backend's metadata, with padded rows at -1, which the kernels
    skip. After it, `track_mamba_states_all_layers` saves the decode
    snapshots, inside the graph.
 4. **Splits an extend step** on the host's lengths: one-token rows go
-   through `decode_batch`, every longer row through its own `prefill`. A row
+   through `decode`, every longer row through its own `prefill`. A row
    with a snapshot position is two `prefill` calls cut there, with the copy
    to the track slot in between.
 5. **Computes logits** through SGLang's `LogitsProcessor`, with kern's `head`
@@ -300,7 +300,7 @@ minutes).
   every error word 0. Each rank's `head` writes its slice of the vocab, and
   SGLang's logits processor gathers the slices over the TP group.
 - **Agreement.** On a unified server (one-token prompts are a one-row
-  extend, which runs as `decode_batch` into a slot SGLang hands out zeroed),
+  extend, which runs as `decode` into a slot SGLang hands out zeroed),
   the vLLM gate's 64 prompts × 32 greedy tokens, twice per mode. Reruns
   agree on 20–21 of 64 requests and eager against graph on 18, every split
   at a top-1/top-2 margin ≤ 0.87 (median 0.07–0.15); 149 of the 256
@@ -346,7 +346,7 @@ touch /var/kern-trace/rotate    # close the files being written, to read them no
 - **A decode step** is SGLang's CUDA graph, which SGLang replays without
   calling the model. While SGLang captures, the runtime keeps which call
   added each kernel node; torch's graph hooks tell it when a graph is
-  launched (`kern.trace`). Every replay is then one `decode_batch` step and
+  launched (`kern.trace`). Every replay is then one `decode` step and
   one `head` step, numbered in a row, `graph` true, with the kernels and
   labels of the same programs run eagerly.
 - **SGLang's own kernels** are rows with a null `seq`: sampling, the
@@ -387,7 +387,7 @@ second time; a fresh server per arm, off / on / off / on, the same libcupti
 A traced server kept 5.22 million kernels in 196 s (26.7 thousand a second)
 in 22.5–23.1 MB (4.3–4.4 bytes a kernel), with HES on and no record
 dropped. 99.0% of the kernel time is in a step: 768 `prefill` steps, and
-6,153 launches of the decode graph, each one `decode_batch` step and one
+6,153 launches of the decode graph, each one `decode` step and one
 `head` step, whose 4,144,242 kernels all carry the label they have when the
 same program runs eagerly at the same var values, in the same order. The
 1.0% no step claims (260 thousand kernels, 1.43 s) is SGLang's own. One of
@@ -413,7 +413,7 @@ throughput:
   rank rotating at the quarter hour on its own.
 - **A graph step has its eager kernels under every call, not in eager
   order.** Each rank traced 3,153 launches of the decode graph as one
-  `decode_batch` step (1,286 to 1,446 kernels, by batch) and one `head`
+  `decode` step (1,286 to 1,446 kernels, by batch) and one `head`
   step. In all 50,448 of them every call has the kernels it has when the
   program runs eagerly at the same var values, and none is unnamed. K3.1's
   D runs its indexer beside its attention, and a replayed graph interleaves
@@ -422,7 +422,7 @@ throughput:
   the kernel time is in a step; the rest is SGLang's (the logits' gather
   over NCCL, the attention metadata, sampling).
 - **An eager step pays per call, a graph step per launch.** The step that
-  admits a request on a unified server is `decode_batch` issued eagerly,
+  admits a request on a unified server is `decode` issued eagerly,
   1,354 calls each tagged by itself: 16.9 ms untraced, 18.2 to 18.4 ms
   traced (200 requests one at a time, twice per arm), about 1 µs a call.
   Output tokens were the same in every pair of arms wherever SGLang

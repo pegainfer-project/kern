@@ -102,6 +102,10 @@ fixture 的期望随之更新。更早的 #56260 仍在：DSV4/V4.1 历史 tool 
   - 哪个 bs 走哪个核是 manifest 的选择（两个 program），caller 按 bucket
     选，runtime 不知情。以后补 bs 2–16 的 split-KV = 再捕一次 bs=2 的
     decode 拿未特化的 reduce，多加一个 program。
+  - 2026-11-18 起两个 program 并成一个 `decode`（`groups` = `seqs` 上界），
+    bs=1 是它在 `seqs = 1` 时的调用；换核写成 attention 这个 op 里带 `when`
+    的 launch（`seqs ≤ 1` 走 split-KV + reduce，`seqs ≥ 2` 走 2D），协议里一种
+    行形状只允许一个 program（manifest.md）。下文各节的 `decode_batch` 是当时的名字。
 - **runtime** 只改一处：CUDA graph 按 `(program, var 值)` 键控（原来一个
   program 一张图），加 `is_captured`。
 
@@ -373,7 +377,7 @@ page_table 是 256 × 8192 i32 = 8 MiB，每步每卡整块 DMA。改成只拷�
   `Item`，`emitted` 从 `Answer` 里取各行的输出。manifest 有 `error` fill 的输出时每步读一次，非零即该步失败。
 - **prompt 只走 chunk program**：manifest 必须有一个接受"1 组、行数随喂"的 program，没有就拒绝
   启动（2026-10-12 之前没有它的 decode-only manifest 逐 token 走 step，或走 span，K3 迁出后删了）。
-  b>1 走形状包含 `(b, rows)` 的 program 里 `groups` 上界最紧的那个。
+  一步的 `b` 组走行形状为 `rows` 的那个 program，bs=1 也是它。
 - 权重不分 rank 文件：每个 rank 打开同一份 checkpoint（目录 = 全部分片），manifest 的
   bind 按 rank 选行 / 列 / 张量（manifest.md"权重"）。
   `--capacity` / `--host-gib` / `--max-seqs` 都是 per rank。

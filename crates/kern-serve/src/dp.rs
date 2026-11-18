@@ -55,7 +55,7 @@ use anyhow::{bail, ensure, Result};
 use infront_engine::{
     FinishReason, QueuedRequest, RejectReason, RequestId, RequestLedger, Scheduler, SchedulerMetrics,
 };
-use kern_manifest::protocol::{Axis, Forward, Rows, Sampling, Values};
+use kern_manifest::protocol::{Axis, Forward, Sampling, Values};
 use kern_manifest::types::Fill;
 use kern_manifest::Protocol;
 use kern_pool::{landed, objects, Chain, Checkpoint, Denied, Keys, Lease, Pool, Prefix, Probe};
@@ -271,13 +271,13 @@ impl Dp {
             p.shards.positions.is_none(),
             "a prefill tier owns its rows; this manifest deals positions over a group"
         );
-        let Some(chunk) = p.chunk().cloned() else {
+        let Some(forward) = p.chunk().cloned() else {
             bail!("no program takes one sequence of as many rows as fed: nothing to feed a prompt through")
         };
         ensure!(
-            chunk.emits.is_some(),
+            forward.emits.is_some(),
             "`{}` hands no token back; a prefill tier's call answers the first token",
-            chunk.name
+            forward.name
         );
         let max = p.rows.max as usize;
         let rows = match policy.chunk {
@@ -286,9 +286,12 @@ impl Dp {
             Some(c) => bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
         };
         let seqs = policy.max_seqs.clamp(1, p.groups.max as usize);
-        let Some(forward) = p.forward(seqs as u64, Rows::Var).cloned() else {
-            bail!("no program takes {seqs} sequences of rows as fed; `{}` takes {}", chunk.name, chunk.groups)
-        };
+        ensure!(
+            seqs as u64 <= forward.groups,
+            "no program takes {seqs} sequences of rows as fed; `{}` takes {}",
+            forward.name,
+            forward.groups
+        );
         let unit = pools.first().map_or(0, |pl| pl.unit() as usize);
         let ranks = pools
             .into_iter()

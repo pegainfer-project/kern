@@ -303,21 +303,12 @@ impl Device {
         let p = Protocol::check(&m).with_context(|| format!("{} does not fit the serving protocol", path.display()))?;
         let chunk =
             p.chunk().cloned().context("no program takes one sequence's rows as fed: nothing feeds a prompt")?;
-        let decodes: Vec<&Forward> = p.forwards.iter().filter(|f| f.rows == Rows::Const(1)).collect();
-        ensure!(!decodes.is_empty(), "no program takes sequences of one row: nothing decodes");
+        let decode = p.forward(1, Rows::Const(1)).context("no program takes sequences of one row: nothing decodes")?;
         let writes = |f: &Forward| logits_of(&m, &f.name);
-        let logits = writes(decodes[0])
+        let logits = writes(decode)
             .into_iter()
             .min_by_key(|b| b.len())
-            .with_context(|| format!("`{}` writes no `logits*` buffer: nothing to score", decodes[0].name))?;
-        for f in &decodes {
-            ensure!(
-                writes(f).contains(&logits),
-                "`{}` writes no `{logits}`, `{}` does: one buffer is read after every decode",
-                f.name,
-                decodes[0].name
-            );
-        }
+            .with_context(|| format!("`{}` writes no `logits*` buffer: nothing to score", decode.name))?;
         let chunk_scores = writes(&chunk).contains(&logits);
         let vocab = match m.buffers[&logits].shape[..] {
             [_, Dim::Const(v)] => v as usize,

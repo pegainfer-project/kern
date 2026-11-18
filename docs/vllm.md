@@ -294,7 +294,7 @@ any model. That belongs in the adapter.
 rt = kern.Runtime(manifest, kernels_dir, [checkpoint_dir], gpu)
 rt.bind_host({"kv.l3": (ptr, "bf16", [B, 4, 64, 512], [131072, 512, 2048, 1]), ...})
 ptr, nbytes = rt.region("token_ids")
-rt.enqueue_after("decode_batch", {"tokens": n, "seqs": n}, torch.cuda.current_stream().cuda_stream)
+rt.enqueue_after("decode", {"tokens": n, "seqs": n}, torch.cuda.current_stream().cuda_stream)
 ```
 
 A manifest with a topology loads as one rank of it, and its ranks meet over
@@ -324,7 +324,7 @@ pure function; nothing is edited by hand. It makes three kinds of change:
   strides, or replaced where the stride is compiled in.
 - **Boundary.** Programs stop at the hidden states because vLLM samples. A
   separate `head` program computes logits for the rows vLLM picks.
-- **Batch width.** `decode_batch` runs at the width vLLM schedules (up to 128
+- **Batch width.** `decode` runs at the width vLLM schedules (up to 128
   sequences), not the width kern-serve happened to exercise.
 
 The base manifest stays the source of truth: optimizations go there and the
@@ -357,8 +357,8 @@ four things:
    manifest with a topology joined its peers when the model was built:
    `kern.group.connect` over that group).
 3. **Splits each step into program calls.** A pure decode step is one
-   `decode_batch`, which is what vLLM captures. In a mixed step, consecutive
-   single-token rows go through `decode_batch` together and each prefill row
+   `decode`, which is what vLLM captures. In a mixed step, consecutive
+   single-token rows go through `decode` together and each prefill row
    through its own `prefill` call. Each call copies the inputs the manifest
    declares from vLLM's metadata into kern's regions (`seq_lens` from the
    DCP-local lengths when vLLM shards the KV), calls `enqueue_after`, and
@@ -527,7 +527,7 @@ Scripts, logs and both tables: `~/bench_results/2026-10-13-kern-vllm-k3-ab`.
 ## Limits
 
 - **Mixed steps.** A step's consecutive prefill rows share one `prefill` call
-  and its decode rows one `decode_batch`; a mixed step is still two calls or
+  and its decode rows one `decode`; a mixed step is still two calls or
   more, run eagerly.
 - **Prefix caching** runs in vLLM's align mode at vLLM's block size (832
   tokens here), so up to one block of a cached prefix is recomputed. The
@@ -542,6 +542,6 @@ Scripts, logs and both tables: `~/bench_results/2026-10-13-kern-vllm-k3-ab`.
 - **Named contract.** The adapter finds inputs by name (`token_ids`,
   `positions`, `slot_mapping`, `seq_lens`, `cu_seqlens_q`, `block_table`,
   `hidden`, `head_in`, `logits`; the line table by its domain) and programs
-  likewise (`prefill`, `decode_batch`, `head`), as documented at the top of
+  likewise (`prefill`, `decode`, `head`), as documented at the top of
   `crates/kern-py/python/kern_vllm/model.py`. Another model needs a transform that
   produces the same contract.

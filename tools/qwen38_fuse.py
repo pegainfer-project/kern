@@ -1,7 +1,7 @@
 """Fused decode kernels for the Qwen3.8-27B manifest.
 
 Rewrites `examples/qwen3.8-27b.json` in place: each pass below swaps a
-run of captured vLLM ops in the decode programs for one handwritten kernel
+run of captured vLLM ops in the decode program for one handwritten kernel
 (tools/kernels-src/*.cu, pinned by sha256 through `kernel_index/`). The
 prefill program is left as captured. Every pass is a pure function of the
 manifest; the numerics it must reproduce are written at the top of the
@@ -66,35 +66,34 @@ def gdn_ops():
 def fuse_gdn(m):
     """conv_update + recurrent (+ z copy) + gated_norm -> gdn_conv + gdn_step."""
     m["ops"].update(gdn_ops())
-    for name in ("decode", "decode_batch"):
-        calls = m["programs"][name]["calls"]
-        out = []
-        i = 0
-        while i < len(calls):
-            c = calls[i]
-            if c["op"] != "conv_update":
-                out.append(c)
-                i += 1
-                continue
-            layer = c["label"].split(".")[0]
-            run = {}
-            while i < len(calls) and calls[i]["label"].startswith(layer + ".") and \
-                    calls[i]["op"] in ("conv_update", "recurrent", "copy_rows", "gated_norm_decode"):
-                run[calls[i]["op"]] = calls[i]
-                i += 1
-            assert {"conv_update", "recurrent", "gated_norm_decode"} <= run.keys(), (name, layer, run.keys())
-            cu, rec, gn = run["conv_update"], run["recurrent"], run["gated_norm_decode"]
-            qkvz, w, state, line = cu["args"][0], cu["args"][1], cu["args"][2], cu["args"][3]
-            assert cu["args"][4] == qkvz, "conv update is in place"
-            a, b, a_log, dt_bias, core = rec["args"][1], rec["args"][2], rec["args"][3], rec["args"][4], rec["args"][5]
-            assert a["buf"] == b["buf"] == "ba" and a.get("offset", 0) == BA_WIDTH and not b.get("offset")
-            assert rec["args"][6] == rec["args"][7] == {**state, "offset": GDN_REC_OFFSET}
-            assert gn["args"][0] == gn["args"][1] == core
-            out.append(dict(label=layer + ".gdn_conv", op="gdn_conv", args=[qkvz, w, state, line]))
-            out.append(dict(label=layer + ".gdn_step", op="gdn_step",
-                            args=[qkvz, {"buf": "ba"}, a_log, dt_bias, gn["args"][2], core,
-                                  {**state, "offset": GDN_REC_OFFSET}, line]))
-        m["programs"][name]["calls"] = out
+    calls = m["programs"]["decode"]["calls"]
+    out = []
+    i = 0
+    while i < len(calls):
+        c = calls[i]
+        if c["op"] != "conv_update":
+            out.append(c)
+            i += 1
+            continue
+        layer = c["label"].split(".")[0]
+        run = {}
+        while i < len(calls) and calls[i]["label"].startswith(layer + ".") and \
+                calls[i]["op"] in ("conv_update", "recurrent", "copy_rows", "gated_norm_decode"):
+            run[calls[i]["op"]] = calls[i]
+            i += 1
+        assert {"conv_update", "recurrent", "copy_rows", "gated_norm_decode"} == run.keys(), (layer, run.keys())
+        cu, rec, gn = run["conv_update"], run["recurrent"], run["gated_norm_decode"]
+        qkvz, w, state, line = cu["args"][0], cu["args"][1], cu["args"][2], cu["args"][3]
+        assert cu["args"][4] == qkvz, "conv update is in place"
+        a, b, a_log, dt_bias, core = rec["args"][1], rec["args"][2], rec["args"][3], rec["args"][4], rec["args"][5]
+        assert a["buf"] == b["buf"] == "ba" and a.get("offset", 0) == BA_WIDTH and not b.get("offset")
+        assert rec["args"][6] == rec["args"][7] == {**state, "offset": GDN_REC_OFFSET}
+        assert gn["args"][0] == gn["args"][1] == core
+        out.append(dict(label=layer + ".gdn_conv", op="gdn_conv", args=[qkvz, w, state, line]))
+        out.append(dict(label=layer + ".gdn_step", op="gdn_step",
+                        args=[qkvz, {"buf": "ba"}, a_log, dt_bias, gn["args"][2], core,
+                              {**state, "offset": GDN_REC_OFFSET}, line]))
+    m["programs"]["decode"]["calls"] = out
     return m
 
 
@@ -123,7 +122,7 @@ def attn_ops():
 
 
 # Programs whose q_norm + k_norm + rope + kv_write become attn_prep.
-ATTN_PROGRAMS = ("prefill", "decode", "decode_batch")
+ATTN_PROGRAMS = ("prefill", "decode")
 
 
 def fuse_attn(m):
@@ -197,13 +196,11 @@ ATTN_SPLITS = 16
 
 
 def attn_splits(m):
-    """Regenerate the decode attention ops with ATTN_SPLITS split-KV CTAs."""
+    """Regenerate the decode attention op with ATTN_SPLITS split-KV CTAs."""
     import trtllm_attention
-    for name in ("attn", "attn_batch"):
-        if name in m["ops"]:
-            m["ops"][name] = trtllm_attention.op("decode", max_rows=m["vars"]["tokens"]["max"],
-                                                 max_seqs=m["vars"]["seqs"]["max"], max_context=262144,
-                                                 splits=ATTN_SPLITS)
+    m["ops"]["attn"] = trtllm_attention.op("decode", max_rows=m["vars"]["tokens"]["max"],
+                                           max_seqs=m["vars"]["seqs"]["max"], max_context=262144,
+                                           splits=ATTN_SPLITS)
     return m
 
 
@@ -213,8 +210,7 @@ def attn_splits(m):
 # runtime may launch them programmatically early and they skip the launch
 # gap. cuBLAS externs and the captured embedding / argmax stay plain
 # launches.
-PDL_OPS = ("gemma_norm", "gemma_fused_norm", "silu_mul", "sigmoid_mul", "gdn_conv", "gdn_step", "attn_prep",
-           "attn_batch")
+PDL_OPS = ("gemma_norm", "gemma_fused_norm", "silu_mul", "sigmoid_mul", "gdn_conv", "gdn_step", "attn_prep", "attn")
 
 
 def pdl(m):

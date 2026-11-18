@@ -527,7 +527,6 @@ impl<E: Run> KernScheduler<E> {
             buckets = ?BUCKETS.iter().filter(|&&b| b <= policy.max_seqs).collect::<Vec<_>>(),
             rows = plan.rows,
             step = %plan.step.name,
-            steps = ?ranks.protocol().forwards.iter().filter(|f| f.rows == plan.step.rows).map(|f| (f.name.as_str(), f.groups)).collect::<Vec<_>>(),
             prefill = match plan.chunk.emits {
                 Some(_) => format!("`{}`, emits the first token", plan.chunk.name),
                 None => format!("`{}`, state only", plan.chunk.name),
@@ -1261,7 +1260,6 @@ mod tests {
         let head = m.programs["decode"].calls[0].clone();
         m.programs.get_mut("prefill").unwrap().calls.push(head);
         m.programs.remove("decode");
-        m.programs.remove("decode_batch");
         rejects(&m, 16, None, "no program takes a fixed number of rows");
     }
 }

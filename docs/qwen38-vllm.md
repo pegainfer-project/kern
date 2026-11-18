@@ -50,7 +50,7 @@ runs as two launches: the conv over the chunk, then the conv state update.
 
 ## Programs
 
-- `prefill` and `decode_batch` end at the final norm, which writes
+- `prefill` and `decode` end at the final norm, which writes
   `hidden` instead of feeding the lm_head and argmax. `next_token` is dropped.
 - `head` is one gemm: `head_in` `[seqs, 5120]` × `lm_head.weight` →
   `logits` `[seqs, 248320]`.
@@ -94,10 +94,10 @@ sha in the generator, sources in the HF repo):
 
 One sequence per call stays bit-identical to the previous manifest.
 
-## `decode_batch` GEMMs
+## `decode` GEMMs
 
-`decode_batch` runs every GEMM on cuBLASLt, like `decode`. Until 2026-10-19
-it ran the handwritten `gemm16_*` kernels, which compute at most 16 rows,
+`decode` runs every GEMM on cuBLASLt. Until 2026-10-19 its batched form
+(then a program of its own, `decode_batch`) ran the handwritten `gemm16_*` kernels, which compute at most 16 rows,
 under a program that declares 128 sequences: rows from 17 on came out wrong
 (under vLLM a 32-request batch produced garbage from row 17; e2e_logits
 found the same in the base at 17 sequences). The hosted generator only fuses

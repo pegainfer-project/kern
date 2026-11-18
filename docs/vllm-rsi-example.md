@@ -141,7 +141,7 @@ real prefix, so a 131k-token bucket is 131k tokens of real KV:
 ```
 source    256371 tokens of real prefix per rank   16.5s
 plan      206 scenarios · 0 dropped · 3222976 tokens of state · 17 seqs
-cost      4169.656 s · 167843 calls · attn_batch 43.3% · gemm_gate_up_silu 14.4% · gemm_n5120_norm 12.9% · gemm 9.3% · ...
+cost      4169.656 s · 167843 calls · attn 43.3% · gemm_gate_up_silu 14.4% · gemm_n5120_norm 12.9% · gemm 9.3% · ...
 ```
 
 That `cost` line is the round's number: GPU seconds for the traced hour, on
@@ -154,13 +154,13 @@ overhead. `kern bench --ablate` times each program once more with one op left
 out, so `free` is what removing that op would save:
 
 ```
-scenario  decode_batch-g16-r1-kv131072
-mix       attn_batch 62.6% · gemm_gate_up_silu 13.7% · gemm_n5120_norm 12.4% · gemm_in_proj 5.0% · gdn_step 3.8% · ...
-free      attn_batch 67.6% · gemm_gate_up_silu 11.8% · gemm_n5120_norm 10.0% · gdn_step 4.1% · gemm_in_proj 3.9% · ...
+scenario  decode-g16-r1-kv131072
+mix       attn 62.6% · gemm_gate_up_silu 13.7% · gemm_n5120_norm 12.4% · gemm_in_proj 5.0% · gdn_step 3.8% · ...
+free      attn 67.6% · gemm_gate_up_silu 11.8% · gemm_n5120_norm 10.0% · gdn_step 4.1% · gemm_in_proj 3.9% · ...
 ```
 
 The orchestrator then checks each candidate against its roofline (bytes per
-call over 7.04 TB/s for decode), skips what is already there (attn_batch sat at
+call over 7.04 TB/s for decode), skips what is already there (attn sat at
 ~98% of its KV bytes from the start), and splits the rest along kernel
 boundaries. Each run gets:
 

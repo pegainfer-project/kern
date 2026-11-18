@@ -101,14 +101,15 @@ verify / precompute / advance / round），逐个去掉后发现：
 `programs.<name>` 从 `Vec<Call>` 变成 `{"batch"?: {...}, "calls": [...]}`：
 
 ```json
-"prefill":      {"batch": {"groups": 1,   "rows": "tokens"}, "calls": [...]},
-"decode":       {"batch": {"groups": 1,   "rows": 1},        "calls": [...]},
-"decode_batch": {"batch": {"groups": 256, "rows": 1},        "calls": [...]},
-"round":        {"batch": {"groups": 128, "rows": 8},        "calls": [...]}
+"prefill": {"batch": {"groups": 1,   "rows": "tokens"}, "calls": [...]},
+"decode":  {"batch": {"groups": 256, "rows": 1},        "calls": [...]},
+"round":   {"batch": {"groups": 128, "rows": 8},        "calls": [...]}
 ```
 
-- `groups`：上界，总 ≤ `seqs.max`。bs=1 的 decode 靠它比 `decode_batch`
-  紧。
+- `groups`：上界，总 ≤ `seqs.max`。一种行形状一个 program：bs=1 的
+  decode 就是 `decode` 在 `seqs = 1` 时的调用（2026-11-18 之前允许再给一个
+  `groups: 1` 的 program，按上界最紧的选；没有一份 manifest 用它表达过真实
+  的差别，删了）。
 - `rows`：每组行数，**精确值**（round 的 8 行是 mask 布局，调 3 行就是
   错的），或字面 `"tokens"`：一组、行数就是这次调用的 tokens（prefill 的
   chunk 随末块变短）。
@@ -165,7 +166,7 @@ Protocol 的检查项（从 `SpecPlan::check` / `Contract::check` 搬来，
   program 的 `rows`；`count` 形如 `[seqs]`，且只在存在 `[seqs, r]` 的
   `tokens` 时合法；
 - batch program：`groups ≤ seqs.max`，`groups × rows ≤ tokens.max`
-  （`rows = "tokens"` 时 `groups = 1`）；两个 program 同形状是错误；
+  （`rows = "tokens"` 时 `groups = 1`）；两个 program 同行形状是错误；
 - 至少一个 batch program（否则不是 serve 的 manifest，报的是这句话）。
 
 ## 5. scheduler 的一步
@@ -180,11 +181,11 @@ run 接受 (b, r) 的 program
 每组 emit tokens[g][..count[g]]，pos += count[g]
 ```
 
-- **选 program**：形状包含 `(b, r)` 的 program 里 `groups` 上界最紧的
-  那个。`if b == 1 { "decode" } else { "decode_batch" }` 消失。provider
-  只给 `decode_batch`，bs=1 自动走它；多给一个 `groups: 1` 的自动被选中；
-  serve.md 提过的"bs 2–16 补一个 split-KV"就是再加一个 `groups: 16` 的
-  program，不改代码。
+- **选 program**：行形状为 `r` 的那一个，`b` 不超过它的 `groups` 上界。
+  `if b == 1 { "decode" } else { "decode_batch" }` 消失：bs=1 是同一个
+  program 在 `seqs = 1` 时的调用。随 batch 换核写在 op 里，每个 launch 带
+  自己的 `when` 区间；serve.md 提过的"bs 2–16 补一个 split-KV"就是再加一段
+  `{"var": "seqs", "min": 2, "max": 16}` 的 launch，不改代码。
 - **admission**：要一次 `(1, c)` 的调用，走同一个选择函数，命中
   `rows: "tokens"` 的 program。跑完有 `tokens` output 就读第一个 token
   （GDN 模型的 prefill），没有就不读（纯 KV）。`prefill_emits` 嗅探消失。
@@ -228,7 +229,7 @@ manifest 里给 kern test 按段切，只是没有 `batch`。要做的活：
   个 token 从 prefill 来，`first_token()` 消失。
 
 **为什么 round 不能和 1 行的 decode 合成一个 program**：program 是写死的
-launch 列表，没有"只喂 1 行就别跑 draft"这种分支。round 比 decode_batch
+launch 列表，没有"只喂 1 行就别跑 draft"这种分支。round 比 decode
 多出三百来个 launch，在 1 行输入下没有意义但照样会跑。工作量不同就是两个
 program，这是 manifest.md 拒绝 `repeat` / `if` 的直接推论，不是投机解码
 的特殊情况。两个 program 里 ~900 个 target forward 的 call 是重复的，和

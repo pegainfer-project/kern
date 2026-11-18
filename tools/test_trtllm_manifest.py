@@ -26,7 +26,7 @@ class TrtllmManifestTests(unittest.TestCase):
                 self.assertEqual(new['buffers']['block_table']['domain']['stride'], 64)
                 self.assertEqual(new['buffers']['block_table']['shape'][-1], 4096)
                 self.assertEqual(new['states'], old['states'])
-                replaced = {'attn', 'attn_batch', 'attn_prefill', 'attn_verify', 'reshape_and_cache'}
+                replaced = {'attn', 'attn_prefill', 'attn_verify', 'reshape_and_cache'}
                 for name, value in old['ops'].items():
                     if name not in replaced:
                         self.assertEqual(new['ops'][name], value)

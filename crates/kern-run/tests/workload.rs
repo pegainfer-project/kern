@@ -1,8 +1,8 @@
 //! What a sweep expands to, and what a manifest makes of it.
 //!
-//! The fixture is a synthetic paged manifest: a `decode` for one sequence of
-//! one row, a `decode_batch` for up to 256 of one row, and a `prefill` for
-//! one sequence of rows as fed, up to 2,048 rows in all.
+//! The fixture is a synthetic paged manifest: a `decode` for up to 256
+//! sequences of one row, and a `prefill` for one sequence of rows as fed,
+//! up to 2,048 rows in all.
 
 use kern_manifest::{Protocol, Verified};
 use kern_run::bench::workload::{Plan, Workload};
@@ -80,7 +80,7 @@ fn one_row_is_a_step_or_a_chunk_as_the_sweep_says() {
 #[test]
 fn the_program_follows_from_the_shape_and_nothing_else() {
     let p = plan("[[sweep]]\ngroups = [4]\nrows = [1]\ncontext = [512]\n");
-    assert_eq!(ids(&p), ["decode_batch-g4-r1-kv512"]);
+    assert_eq!(ids(&p), ["decode-g4-r1-kv512"]);
     let p = plan("[[sweep]]\nchunk = [2048]\ncontext = [0]\n");
     assert_eq!(ids(&p), ["prefill-g1-c2048-kv0"]);
     let p = plan("[[sweep]]\nrows = [1]\ncontext = [0]\n[[sweep]]\nrows = [2048]\ncontext = [0]\n");
@@ -94,7 +94,7 @@ fn the_program_follows_from_the_shape_and_nothing_else() {
 #[test]
 fn a_shape_no_program_takes_is_dropped_with_its_reason() {
     let p = plan("[[sweep]]\ngroups = [4]\nrows = [1, 2048]\ncontext = [0]\n");
-    assert_eq!(ids(&p), ["decode_batch-g4-r1-kv0"]);
+    assert_eq!(ids(&p), ["decode-g4-r1-kv0"]);
     assert_eq!(p.dropped.len(), 1);
     assert_eq!(p.dropped[0].shape, "g4-r2048-kv0");
     assert!(p.dropped[0].why.contains("8192 rows exceeds the manifest's 2048"), "{}", p.dropped[0].why);

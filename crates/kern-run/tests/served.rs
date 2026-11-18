@@ -1,8 +1,8 @@
 //! A server's traced steps as a workload.
 //!
-//! The fixture is the synthetic paged manifest of `workload.rs`: a
-//! `decode_batch` for up to 256 sequences of one row, and a `prefill` for
-//! one sequence of rows as fed, up to 2,048. Steps are written as the
+//! The fixture is the synthetic paged manifest of `workload.rs`: a `decode`
+//! for up to 256 sequences of one row, and a `prefill` for one sequence of
+//! rows as fed, up to 2,048. Steps are written as the
 //! server labels them: a decode step by its exact var values, a chunk by
 //! its vars rounded up to powers of two.
 
@@ -34,7 +34,7 @@ fn vars(seqs: u64, tokens: u64) -> BTreeMap<String, u64> {
 /// A decode step of `seqs` sequences, each `context` deep before its row.
 fn decode(seqs: u64, context: u64, ns: u64) -> Step {
     Step {
-        program: "decode_batch".into(),
+        program: "decode".into(),
         shape: format!("seqs={seqs},tokens={seqs}"),
         vars: vars(seqs, seqs),
         kv: Some(seqs * (context + 1)),
@@ -65,7 +65,7 @@ fn calls(s: &Served) -> Vec<(&str, bool, u64, u64, u64, u64)> {
 #[test]
 fn a_step_is_read_back_into_the_call_its_program_declares() {
     let s = served(&[decode(4, 100, 10), chunk(512, 1000, 30)]);
-    assert_eq!(calls(&s), [("prefill", true, 1, 512, 1000, 1), ("decode_batch", false, 4, 1, 100, 1)]);
+    assert_eq!(calls(&s), [("prefill", true, 1, 512, 1000, 1), ("decode", false, 4, 1, 100, 1)]);
 
     // Rows fed unevenly to several sequences: an even split to the nearest row, none of them context.
     let ragged = |rows| Step { shape: "seqs<=4,tokens<=32".into(), vars: vars(4, rows), ..chunk(rows, 400, 5) };
@@ -118,7 +118,7 @@ fn a_bucket_is_priced_at_what_the_trace_measured_nearest_its_call() {
     let steps: Vec<Step> = (0..11).map(|i| decode(2, 1100 + 10 * i, 2100 + 10 * i)).collect();
     let s = served(&steps);
     assert_eq!((s.buckets.len(), s.buckets[0].context, s.buckets[0].priced_ns), (1, 1150, 11. * 2150.));
-    assert_eq!(s.fidelity(), (0., Some(("decode_batch seqs=2,tokens=2".into(), 0.))));
+    assert_eq!(s.fidelity(), (0., Some(("decode seqs=2,tokens=2".into(), 0.))));
 
     // Equally near steps all count, however many: not the fastest of them.
     let tied: Vec<Step> = (1..=100).map(|ns| decode(2, 1150, ns)).collect();
@@ -198,11 +198,11 @@ fn the_workload_file_says_what_each_sweep_stands_for() {
         "# 3 steps, 3.5 s of traced step time in 3 buckets\n\
          # priced at the trace's own nearest steps: +0.00%\n\
          samples = 16\nseed = 0\n\
-         \n# decode_batch · seqs=16,tokens=16 · kv<=32k · 1 steps · 3.0 s\n\
+         \n# decode · seqs=16,tokens=16 · kv<=32k · 1 steps · 3.0 s\n\
          [[sweep]]\ngroups = [16]\nrows = [1]\ncontext = [2000]\nweight = 1\n\
          \n# prefill · seqs<=1,tokens<=1024 · kv<=1k · 1 steps · 0.5 s\n\
          [[sweep]]\ngroups = [1]\nchunk = [1024]\ncontext = [0]\nweight = 1\n\
-         \n# decode_batch · seqs=1,tokens=1 · kv<=8 · 1 steps · 0.0 s\n\
+         \n# decode · seqs=1,tokens=1 · kv<=8 · 1 steps · 0.0 s\n\
          [[sweep]]\ngroups = [1]\nrows = [1]\ncontext = [5]\nweight = 1\n"
     );
 }
