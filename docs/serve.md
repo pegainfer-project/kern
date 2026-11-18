@@ -1243,6 +1243,65 @@ coverage correlates 0.98 with `sm_active_permille`; a window no kernel covers re
 Joined to steps: decode 81–84% SM active, 2.5% tensor, 5.1–5.4 TB/s DRAM read; prefill 88% SM
 active, 56% tensor, 1.7 TB/s read.
 
+## Serving without a device (`--prices`, 2026-11-18, GB300, one GPU)
+
+`kern server <target> --prices <report.json> --capacity <tokens>` loads no GPU. The frontend,
+`KernScheduler` and the rank's pool are the server's own; the rank that runs each order is replaced
+by one that waits what a `kern bench` report measured for the call's shape and hands back one fixed
+token for every row (`priced.rs`, whose module doc is the design). It starts in about three seconds,
+and several run beside each other on a machine with no device. The report is the one measured on the
+workload `kern workload` writes from the manifest's bounds (`bench.md`, "A workload from the manifest
+alone"); a report of another manifest is refused by its sha256, and so are a second rank, a
+speculative round and the pooled tier.
+
+The same requests at the same times to the real server and to the priced one: Qwen3.8-27B, `--chunk
+4096 --max-seqs 128`, Poisson arrivals, 200 tokens out, prompts of 30% to 100% of the length named,
+`vllm-bench`. The report: 194 scenarios, 372 s on the same GPU. `b` is the real server run again in
+a new process, with the per-order debug lines on.
+
+| load | metric | real | real b | priced | b / real | priced / real |
+|---|---|---|---|---|---|---|
+| ≤1500 in, 2.5 req/s, 150 requests | TTFT p50 ms | 75.44 | 75.60 | 76.62 | +0.22% | +1.56% |
+| | TPOT p50 ms | 11.95 | 11.95 | 11.96 | −0.00% | +0.13% |
+| | E2E p50 ms | 1588.30 | 1555.64 | 1550.07 | −2.06% | −2.41% |
+| | E2E p99 ms | 2716.83 | 2634.87 | 2632.66 | −3.02% | −3.10% |
+| ≤1500 in, 5 req/s, 300 requests | TTFT p50 ms | 79.80 | 79.75 | 81.47 | −0.07% | +2.09% |
+| | TPOT p50 ms | 15.20 | 15.22 | 15.24 | +0.16% | +0.26% |
+| | E2E p50 ms | 2126.83 | 2129.27 | 2155.52 | +0.11% | +1.35% |
+| | E2E p99 ms | 3473.30 | 3485.45 | 3475.63 | +0.35% | +0.07% |
+| ≤12000 in, 1.2 req/s, 90 requests | TTFT p50 ms | 364.18 | 363.57 | 369.41 | −0.17% | +1.44% |
+| | TPOT p50 ms | 15.45 | 15.48 | 15.50 | +0.19% | +0.32% |
+| | E2E p50 ms | 2525.04 | 2521.09 | 2544.74 | −0.16% | +0.78% |
+| | E2E p99 ms | 5799.86 | 5800.31 | 5856.17 | +0.01% | +0.97% |
+
+Where the difference is, order by order. Both servers log every order at `kern_serve=debug` (`rank
+item`: its program, its sequences × tokens, the clock at issue and at done; the real rank adds the
+clock once its inputs are written and the tokens its sequences hold), so every real order is priced
+off the report as the priced server would have priced it. As shares of a load's summed prices:
+
+| load | writing inputs | launch to done, less the price | a new shape's graph capture | between two orders, p50 (real / priced) |
+|---|---|---|---|---|
+| ≤1500 in, 2.5 req/s | +0.35% | −0.26% | +0.26% (8 orders, 150 ms) | 47 / 68 µs |
+| ≤1500 in, 5 req/s | +0.46% | −0.48% | +0.01% | 80 / 91 µs |
+| ≤12000 in, 1.2 req/s | +0.23% | −0.63% | 0 | 45 / 44 µs |
+
+- The host needs no price of its own. The time between two orders is the scheduler's and is the same
+  on both; a priced rank answers within 1–2 µs of its price; writing inputs (30 µs a step, 80–115 µs
+  a chunk) is what only the real rank pays.
+- What remains is in the prices, in two directions. A whole chunk over an empty sequence is priced
+  2.3% high at 2048 to 4096 rows (155.2 ms priced, about 151.4 ms served at 4096), which is the
+  time to first token above. A short last chunk (≤128 rows) over the context its prompt already
+  wrote is priced 6–8% low, 0.7–1.1 ms each: what a token of context adds is read off the measured
+  chunk above it, and that is too little for a small one. Steps of 16 sequences and more are priced
+  about 1% high.
+- The real server needs its cores. Under `srun --gres=gpu:1` with no `-c`, the server, the frontend
+  and the load generator shared one core: the time between two orders rose to 220–370 µs and the
+  real server ran 2–4% slower on TPOT and E2E than the priced one, which had a whole machine. The
+  numbers above are with 32 cores.
+- A closed loop of fixed-length prompts does not settle this: its requests arrive in waves, and the
+  real server's TTFT and TPOT medians moved by 30–40% between two seeds (measured on one core).
+  Total time, throughput and E2E p50 agreed within 4% there.
+
 ## 没做（按需要加）
 
 span 长的预算 policy（K5 D2：按稠密 / attention 预算定 c，现在是 `--chunk` 上限）、抢占 / 动态页分配、
