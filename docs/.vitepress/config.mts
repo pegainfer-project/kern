@@ -21,6 +21,7 @@ export default defineConfig({
   },
   themeConfig: {
     siteTitle: "KERN■",
+    logoLink: "/docs/getting-started/",
     nav: [
       { text: "Guide", link: "/getting-started/" },
       { text: "Concepts", link: "/concepts/artifact" },
