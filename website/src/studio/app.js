@@ -3885,12 +3885,12 @@
   function toggleTheme() {
     const html = document.documentElement;
     const order = ["light", "dusk", "ink"];
-    const names = { light: "Paper", dusk: "Dusk", ink: "Ink" };
+    const names = { light: "Light", dusk: "Dim", ink: "Dark" };
     const cur = html.dataset.theme || "light";
     const next = order[(order.indexOf(cur) + 1) % order.length];
     html.dataset.theme = next;
     const lbl = document.getElementById("theme-label");
-    if (lbl) lbl.textContent = names[next] || "Paper";
+    if (lbl) lbl.textContent = names[next] || "Light";
   }
 
   function resolveClientConstants(obj, constants) {

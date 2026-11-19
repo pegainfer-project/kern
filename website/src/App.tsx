@@ -21,9 +21,9 @@ type SchFocus =
 
 const THEME_ORDER: Theme[] = ["light", "dusk", "ink"];
 const THEME_LABELS: Record<Theme, string> = {
-  light: "Paper",
-  dusk: "Dusk",
-  ink: "Ink",
+  light: "Light",
+  dusk: "Dim",
+  ink: "Dark",
 };
 
 const HERO_CLI: Record<CliMode, { label: string; cmd: string }> = {
