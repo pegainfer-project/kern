@@ -3,8 +3,7 @@
 //! The runtime knows nothing about models. It loads a verified manifest,
 //! resolves each declared kernel against the cubins in a directory, allocates
 //! every buffer/state, assembles weight buffers out of a checkpoint's
-//! tensors (a [`Tensors`]: safetensors blobs, or a weight cache's buckets
-//! mapped from another process), and replays the program's call list. The only kernels it understands
+//! [`Safetensors`] shards, and replays the program's call list. The only kernels it understands
 //! natively are `extern:` ops (currently `extern:cublaslt_bf16_tn`).
 //!
 //! Names stop at load time: device pointers are static once buffers, states
@@ -74,7 +73,7 @@ use nccl::NcclId;
 use peers::PeerSlot;
 pub use peers::{connect_local, Offer};
 pub use push::{MappedPool, PoolHandle, Rows, Span, Split};
-pub use weights::{dtype_named, Blob, Safetensors, Tensor, Tensors};
+pub use weights::{Blob, Safetensors, Tensor};
 
 /// The CUDA API this binary binds (`13000` is 13.0): fixed by the `cudarc`
 /// feature at build time, so a driver older than it fails to load the

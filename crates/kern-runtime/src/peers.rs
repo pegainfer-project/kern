@@ -166,8 +166,7 @@ impl Runtime {
         self.ranks.get(group).copied()
     }
 
-    /// Map another process's allocation into this context: a weight
-    /// cache's bucket, whose fabric handle the daemon published. The
+    /// Map another process's exported allocation into this context. The
     /// mapping lives as long as the [`Mapped`] does.
     pub fn map(&self, handle: &PeerHandle, what: &str) -> Result<Mapped> {
         self.ctx.bind_to_thread()?;
@@ -239,7 +238,7 @@ impl Runtime {
     }
 
     /// The `peer` buffers not yet filled, by name.
-    pub fn pending_peers(&self) -> Vec<&str> {
+    fn pending_peers(&self) -> Vec<&str> {
         self.peers.iter().filter(|(_, p)| !p.filled).map(|(n, _)| n.as_str()).collect()
     }
 

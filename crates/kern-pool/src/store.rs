@@ -17,6 +17,8 @@
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use serde::{Deserialize, Serialize};
+
 use crate::pages::Pool;
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -147,7 +149,7 @@ impl fmt::Debug for Checkpoint {
 /// per-sequence state. Empty when nothing moves. A plan is executed by
 /// the shell that asked for it, right away, while the handles it was made
 /// with are alive.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Copies {
     pub pages: Vec<(i32, i32)>,
     pub slot: Option<(i32, i32)>,

@@ -107,18 +107,6 @@ impl Runtime {
         Ok((lease, copies))
     }
 
-    /// A sequence branched off the first `len` tokens of `parent`, which
-    /// keeps running: the whole pages shared, the page `len` ends inside
-    /// copied, the parent's state copied into a fresh slot. With a
-    /// recurrent state `len` is the parent's position — the state is the
-    /// parent's as of now. The lease names positions from `len` on.
-    pub fn fork(&mut self, parent: &mut Lease, len: usize, tokens: usize) -> Result<Lease> {
-        self.ctx.bind_to_thread()?;
-        let (lease, copies) = self.pool.fork(parent, len, tokens)?;
-        self.run_copies(&copies.pages, copies.slot.as_slice())?;
-        Ok(lease)
-    }
-
     /// Fill the first `len` positions of `dst`, a fresh lease, with a copy
     /// of `src`'s: pages and state slot copied on the stream, nothing
     /// shared. A bench reaches a long context at copy speed this way, and

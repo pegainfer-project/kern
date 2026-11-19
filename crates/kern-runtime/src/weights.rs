@@ -1,12 +1,9 @@
 //! Assembling weight buffers out of checkpoint tensors. A weight buffer's
 //! `bind` lists the tensors (or rectangles of them) that make it up, laid
-//! end to end. Where the tensors are is a [`Tensors`]: the model's own
-//! safetensors shards, as files or as bytes in this process's memory
-//! ([`Safetensors`]), or memory another process holds that this device
-//! can read (a weight cache's buckets mapped into the context). [`plan`]
-//! is the pure part: it turns one buffer's segments into byte copies and
-//! checks that they tile the buffer exactly, so the shell that runs them
-//! has nothing left to decide.
+//! end to end. The tensors come from [`Safetensors`] shards, as files or
+//! as bytes in this process's memory. [`plan`] is the pure part: it turns
+//! one buffer's segments into byte copies and checks that they tile the
+//! buffer exactly, so the shell that runs them has nothing left to decide.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -17,10 +14,8 @@ use kern_manifest::types::{Buffer, DType, Ranges, TensorSource};
 
 use crate::error::{bail, Error, Result};
 
-/// Bytes a copy can read: a slice of this process's memory, a span of a
-/// file, or a span of memory this context addresses on the device side
-/// (a mapped allocation of another process, on this tray or across the
-/// fabric). A file's bytes are read as they are copied, not mapped: a
+/// Bytes a copy can read: a slice of this process's memory or a span of a
+/// file. A file's bytes are read as they are copied, not mapped: a
 /// `pread` is the page cache's own copy and scales with readers, where
 /// memcpy out of a mapping pays a page fault per page on one lock (a
 /// GB300 reading a checkpoint on Ceph: 32 readers 109 GiB/s against 27).
@@ -28,7 +23,6 @@ use crate::error::{bail, Error, Result};
 pub enum Blob<'a> {
     Host(&'a [u8]),
     File { file: &'a File, at: u64, bytes: u64 },
-    Device { ptr: u64, bytes: u64 },
 }
 
 impl PartialEq for Blob<'_> {
@@ -39,7 +33,6 @@ impl PartialEq for Blob<'_> {
             (Self::File { file: f, at, bytes }, Self::File { file: g, at: at2, bytes: bytes2 }) => {
                 (f.as_raw_fd(), at, bytes) == (g.as_raw_fd(), at2, bytes2)
             }
-            (Self::Device { ptr, bytes }, Self::Device { ptr: p, bytes: b }) => (ptr, bytes) == (p, b),
             _ => false,
         }
     }
@@ -51,7 +44,7 @@ impl<'a> Blob<'a> {
     pub fn bytes(&self) -> u64 {
         match self {
             Self::Host(s) => s.len() as u64,
-            Self::File { bytes, .. } | Self::Device { bytes, .. } => *bytes,
+            Self::File { bytes, .. } => *bytes,
         }
     }
 
@@ -63,7 +56,6 @@ impl<'a> Blob<'a> {
         Some(match *self {
             Self::Host(s) => Self::Host(&s[at as usize..(at + len) as usize]),
             Self::File { file, at: from, .. } => Self::File { file, at: from + at, bytes: len },
-            Self::Device { ptr, .. } => Self::Device { ptr: ptr + at, bytes: len },
         })
     }
 
@@ -74,7 +66,6 @@ impl<'a> Blob<'a> {
             Self::File { file, at, .. } => file
                 .read_exact_at(out, at + from)
                 .map_err(|e| Error::WeightArtifact(format!("reading checkpoint bytes: {e}")))?,
-            Self::Device { .. } => unreachable!("device bytes are copied by the device"),
         }
         Ok(())
     }
@@ -86,13 +77,6 @@ pub struct Tensor<'a> {
     pub dtype: DType,
     pub shape: Vec<u64>,
     pub data: Blob<'a>,
-}
-
-/// A checkpoint: tensors by name. `find` fails, naming the tensor, for a
-/// name the checkpoint does not have or a dtype the manifest has no word
-/// for; the bytes it hands out are the whole tensor, row-major.
-pub trait Tensors {
-    fn find(&self, name: &str) -> Result<Tensor<'_>>;
 }
 
 /// Safetensors artifacts (a model's shards, a draft's next to them) with
@@ -228,8 +212,11 @@ fn header(read: impl Fn(usize, &mut [u8]) -> Option<()>, len: usize) -> Result<(
     Ok((data, tensors))
 }
 
-impl Tensors for Safetensors<'_> {
-    fn find(&self, name: &str) -> Result<Tensor<'_>> {
+impl Safetensors<'_> {
+    /// Look up one tensor by name. Fails, naming the tensor, if it is
+    /// missing or its dtype has no manifest equivalent; the bytes are
+    /// the whole tensor, row-major.
+    pub fn find(&self, name: &str) -> Result<Tensor<'_>> {
         let Some((i, t)) = self.tensors.get(name) else {
             bail!(WeightArtifact, "tensor `{name}` is in none of the {} artifact(s)", self.sources.len());
         };
@@ -247,7 +234,7 @@ impl Tensors for Safetensors<'_> {
 
 /// The manifest dtype a safetensors dtype name (`BF16`, `F8_E4M3`, …)
 /// stands for; `None` for one the manifest has no word for.
-pub fn dtype_named(name: &str) -> Option<DType> {
+fn dtype_named(name: &str) -> Option<DType> {
     Some(match name {
         "BF16" => DType::Bf16,
         "F16" => DType::F16,

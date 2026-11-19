@@ -24,7 +24,7 @@ use crate::derive::Derivation;
 use crate::device::{alloc, alloc_host, alloc_uninit, alloc_vmm, copy_1d, copy_2d, record, DeviceBuf, Pinned, Space};
 use crate::error::{bail, cuda_check};
 use crate::peers::PeerSlot;
-use crate::weights::{Blob, Tensors};
+use crate::weights::Safetensors;
 use crate::{compile, cubin, derive, weights, Budget, Capacity, Error, Result, Runtime, Topology, HEADROOM};
 use kern_pool::{page_unit, Pool};
 
@@ -327,15 +327,13 @@ impl Runtime {
     }
 
     /// Assemble every `weight` buffer from the checkpoint tensors its
-    /// `bind` names, each segment one copy straight out of the tensor's
-    /// bytes, wherever [`Tensors`] says they are: this process's memory
-    /// (safetensors blobs) or memory this device reads from another
-    /// process (a weight cache's buckets, mapped with [`Runtime::map`]).
+    /// `bind` names, each segment one copy straight out of the
+    /// [`Safetensors`] shards.
     ///
     /// Then the derive programs run, call by call, over the `source`
     /// tensors (see `derive`): a runtime with derive programs loads its
     /// weights once, since the sources are gone after.
-    pub fn load_weights(&mut self, tensors: &dyn Tensors) -> Result<()> {
+    pub fn load_weights(&mut self, tensors: &Safetensors<'_>) -> Result<()> {
         if self.host_weights_ready && self.buffers.values().any(|b| b.host_weight().is_some()) {
             bail!(Api, "host weights are an immutable snapshot; use a new runtime and scope to reload");
         }
@@ -345,8 +343,6 @@ impl Runtime {
         }
         self.ctx.bind_to_thread()?;
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
-        // Copies of a few MiB each are launch-latency bound on one stream.
-        let lanes = (0..LOAD_LANES).map(|_| self.ctx.new_stream()).collect::<std::result::Result<Vec<_>, _>>()?;
         let stage = Lanes::new(&self.ctx, self.gpu as i32)?;
         let mut planned = Vec::new();
         for (name, b) in &self.manifest.buffers {
@@ -358,17 +354,12 @@ impl Runtime {
                 weights::plan(name, b, dst.bytes, |t| tensors.find(t), |group| self.ranks.get(group).copied())?;
             planned.push((dst, copies));
         }
-        // Device-to-device copies go out first and run while the host
-        // bytes are staged up and a host weight is filled.
         let t0 = std::time::Instant::now();
         let (mut device, mut host, mut filled) = ((0u64, 0usize), (0u64, 0usize, 0f64), (0u64, 0f64));
         let mut staged = Vec::new();
         for (dst, copies) in planned.iter().filter(|(d, _)| d.host_weight().is_none()) {
             for c in copies {
-                match c.src {
-                    Blob::Host(_) | Blob::File { .. } => staged.push((dst.ptr, c)),
-                    Blob::Device { ptr, .. } => copy_device(&lanes[device.1 % LOAD_LANES], dst, c, ptr)?,
-                }
+                staged.push((dst.ptr, c));
                 device.1 += 1;
             }
             device.0 += dst.bytes;
@@ -378,15 +369,13 @@ impl Runtime {
         for (dst, copies) in planned.iter() {
             let Some(h) = dst.host_weight() else { continue };
             let t = std::time::Instant::now();
-            let mine = h.initialize(|bytes| copy_to_host(&self.stream, bytes, copies))?;
+            let mine = h.initialize(|bytes| copy_to_host(bytes, copies))?;
             let secs = t.elapsed().as_secs_f64();
             host = (host.0 + dst.bytes, host.1 + copies.len(), host.2 + secs);
             if mine {
                 filled = (filled.0 + dst.bytes, filled.1 + secs);
             }
         }
-        lanes.iter().try_for_each(|s| s.synchronize())?;
-        self.stream.synchronize()?;
         let t = std::time::Instant::now();
         let derived = derivation.map(|d| self.derive(d, tensors, &stage)).transpose()?;
         let sources = (derived.unwrap_or(0), t.elapsed().as_secs_f64());
@@ -479,8 +468,6 @@ impl Identity {
         }
     }
 }
-
-const LOAD_LANES: usize = 8;
 
 /// Bytes of one staging block, so one piece of a copy.
 const STAGE: u64 = 16 << 20;
@@ -589,7 +576,7 @@ fn gather(c: &weights::Copy, lo: u64, hi: u64, out: &mut [u8]) -> Result<()> {
 impl Runtime {
     /// Sources' tensors into their staging windows, landed when this
     /// returns. Returns their bytes.
-    pub(crate) fn fill_sources(&self, names: &[String], tensors: &dyn Tensors, stage: &Lanes) -> Result<u64> {
+    pub(crate) fn fill_sources(&self, names: &[String], tensors: &Safetensors<'_>, stage: &Lanes) -> Result<u64> {
         let mut planned = Vec::new();
         for n in names {
             let dst = &self.buffers[n];
@@ -597,56 +584,20 @@ impl Runtime {
             let copies = weights::plan(n, &self.manifest.buffers[n], dst.bytes, plan, |g| self.ranks.get(g).copied())?;
             planned.push((dst, copies));
         }
-        let mut staged = Vec::new();
-        for (dst, copies) in &planned {
-            for c in copies {
-                match c.src {
-                    Blob::Host(_) | Blob::File { .. } => staged.push((dst.ptr, c)),
-                    Blob::Device { ptr, .. } => copy_device(&self.stream, dst, c, ptr)?,
-                }
-            }
-        }
+        let staged: Vec<_> =
+            planned.iter().flat_map(|(dst, copies)| copies.iter().map(move |c| (dst.ptr, c))).collect();
         upload(&self.ctx, stage, &staged)?;
-        self.stream.synchronize()?;
         Ok(planned.iter().map(|(d, _)| d.bytes).sum())
     }
 }
 
-/// One planned copy of device bytes at `ptr` (another process's
-/// allocation mapped here): one device-to-device copy, 2D when the rows
-/// are strided.
-fn copy_device(stream: &Arc<CudaStream>, dst: &DeviceBuf, c: &weights::Copy, ptr: u64) -> Result<()> {
-    if c.rows == 1 || (c.pitch == c.width && c.dst_pitch == c.width) {
-        return copy_1d(stream.cu_stream(), dst.ptr + c.dst, ptr, c.width * c.rows);
-    }
-    copy_2d(
-        stream.cu_stream(),
-        (dst.ptr + c.dst, c.dst_pitch, Space::Device),
-        (ptr, c.pitch, Space::Device),
-        c.width,
-        c.rows,
-    )
-}
-
 /// The planned copies into a host weight (registered host memory every
-/// rank maps). Host and file bytes are copied by the CPU; device bytes
-/// come down over the stream, which is drained before the initializer
-/// returns.
-fn copy_to_host(stream: &Arc<CudaStream>, dst: &mut [u8], copies: &[weights::Copy]) -> Result<()> {
-    let base = dst.as_mut_ptr() as u64;
+/// rank maps), copied by the CPU.
+fn copy_to_host(dst: &mut [u8], copies: &[weights::Copy]) -> Result<()> {
     for c in copies {
-        match c.src {
-            Blob::Host(_) | Blob::File { .. } => copy_rows(dst, c)?,
-            Blob::Device { ptr, .. } => copy_2d(
-                stream.cu_stream(),
-                (base + c.dst, c.width, Space::Host),
-                (ptr, c.pitch, Space::Device),
-                c.width,
-                c.rows,
-            )?,
-        }
+        copy_rows(dst, c)?;
     }
-    Ok(stream.synchronize()?)
+    Ok(())
 }
 
 /// One copy of host or file bytes into a host buffer.
@@ -708,6 +659,7 @@ fn fit_budget(ctx: &CudaContext, fixed: u64, page_bytes: u64) -> Result<u64> {
 #[cfg(test)]
 mod host_copy_tests {
     use super::*;
+    use crate::weights::Blob;
 
     fn copy(dst: &mut [u8], c: &weights::Copy) {
         copy_rows(dst, c).unwrap();
@@ -752,6 +704,7 @@ mod host_copy_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::weights::Blob;
 
     /// Every way of cutting a strided copy into pieces gathers the same
     /// bytes as reading its rows in order, out of memory or out of a file.

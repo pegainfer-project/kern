@@ -37,9 +37,10 @@ use crate::verify::{verify, Verified};
 #[serde(deny_unknown_fields)]
 pub struct Candidate {
     /// The modules these implementations launch; a launch may also name one the manifest pins.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::types::unique_map")]
     pub modules: BTreeMap<String, Module>,
     /// The ops, each under the name and with the params of the op it replaces.
+    #[serde(deserialize_with = "crate::types::unique_map")]
     pub ops: BTreeMap<String, Op>,
 }
 

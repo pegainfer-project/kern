@@ -776,7 +776,7 @@ impl PpHead {
     /// stages: a fetch that failed left who knows what in its pages.
     fn restore(&mut self, lease: &Lease, hit: Option<&Checkpoint>) -> Result<()> {
         let act = match hit {
-            Some(h) => Act::Copy(lease.copies_from(h).into()),
+            Some(h) => Act::Copy(lease.copies_from(h)),
             None => match lease.seq_slot() {
                 Some(s) => Act::Zero(s),
                 None => return Ok(()),

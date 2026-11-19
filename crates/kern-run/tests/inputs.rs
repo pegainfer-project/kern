@@ -42,7 +42,10 @@ fn the_target_gives_what_no_flag_did() {
     let root = fixture("target");
     let i = resolve(&root, Given::default());
     assert_eq!((&i.manifest, &i.reference), (&root.join("b.json"), &Some(root.join("a.json"))));
-    assert_eq!((&i.kernels, &i.weights), (&Some(root.join("cubins")), &Weights::Files(vec![root.join("ckpt")])));
+    assert_eq!(
+        (&i.kernels, &i.weights),
+        (&Some(root.join("cubins")), &Weights::parse(&[root.join("ckpt").display().to_string()]).unwrap())
+    );
     // nothing named a tokenizer or a stop token: the checkpoint's own
     assert_eq!((i.tokenizer.clone(), i.stop_tokens.clone()), (Some(root.join("ckpt/tokenizer.json")), vec![11, 13]));
     assert_eq!(i.gpu, 3);

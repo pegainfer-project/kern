@@ -70,7 +70,7 @@ pub fn replay<S: Side>(
                 }
             }
         }
-        b.run(p, e, ib..b.calls(p)?)?;
+        b.run(p, e, ib..mb.programs[p].calls.len())?;
         b.advance(run.advance);
     }
     // B free-runs the same workload from zero state, nothing injected: what
@@ -284,7 +284,7 @@ pub fn replay<S: Side>(
         for st in &pf.steps {
             let p = st.program.as_str();
             let e = b.stage(&vec![st.token; st.rows as usize])?;
-            let tb = b.time(p, &e, 0..b.calls(p)?, o.iters)?;
+            let tb = b.time(p, &e, 0..mb.programs[p].calls.len(), o.iters)?;
             let graph_ms = match st.graph_ms {
                 Some(ga) => Some([ga, b.time_graph(p, &e, 100)?]),
                 None => None,
@@ -305,7 +305,7 @@ pub fn replay<S: Side>(
         for sw in &pf.sweep {
             b.reset();
             let e = b.stage(&sw.tokens)?;
-            let tb = b.time(chunk_name, &e, 0..b.calls(chunk_name)?, sw.iters)?;
+            let tb = b.time(chunk_name, &e, 0..mb.programs[chunk_name].calls.len(), sw.iters)?;
             let (a, bb) =
                 (attribute(0, chunk_name, &sw.times, &e, sw.tapped), attribute(1, chunk_name, &tb, &e, sw.tapped));
             if sw.tapped {

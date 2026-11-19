@@ -98,8 +98,6 @@ pub trait Side {
     fn provision(&self) -> Provision;
     /// The page unit the paged states are laid out in, in tokens.
     fn page(&self) -> u64;
-    /// Vocabulary size as the token fill's domain declares it.
-    fn vocab(&self) -> u64;
     /// Ranks this side runs as; 1 without a topology.
     fn ranks(&self) -> usize;
 
@@ -111,7 +109,6 @@ pub trait Side {
     fn reset(&mut self);
     fn advance(&mut self, n: u64);
 
-    fn calls(&self, program: &str) -> Result<usize>;
     /// Run calls `calls` of a program eagerly on every rank; returns when
     /// the last rank is done. A rank that fails or never returns is an
     /// error naming it.

@@ -6,29 +6,25 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use kern_runtime::{Runtime, Safetensors};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Weights {
-    Files(Vec<PathBuf>),
-}
+pub struct Weights(Vec<PathBuf>);
 
 impl Weights {
     pub fn parse(entries: &[String]) -> Result<Weights> {
         if entries.is_empty() {
             bail!("no weights");
         }
-        Ok(Weights::Files(entries.iter().map(PathBuf::from).collect()))
+        Ok(Weights(entries.iter().map(PathBuf::from).collect()))
     }
 
     /// The checkpoint directories, where the tokenizer and the model's
     /// config live: each entry's (the directory itself, or the one holding
     /// the file).
     pub fn dirs(&self) -> Vec<PathBuf> {
-        match self {
-            Weights::Files(paths) => paths.iter().map(|p| checkpoint_dir(p)).collect(),
-        }
+        self.0.iter().map(|p| checkpoint_dir(p)).collect()
     }
 
     /// What identifies these weights to a pooled KV tier: a digest of
@@ -39,9 +35,8 @@ impl Weights {
     pub fn digest(&self) -> Result<[u8; 32]> {
         use sha2::{Digest, Sha256};
         use std::io::Read;
-        let Weights::Files(paths) = self;
         let mut h = Sha256::new();
-        for path in crate::shard_files(paths)? {
+        for path in shard_files(&self.0)? {
             let mut f = std::fs::File::open(&path).with_context(|| path.display().to_string())?;
             let len = f.metadata()?.len();
             let mut n = [0u8; 8];
@@ -56,20 +51,35 @@ impl Weights {
     }
 
     pub fn bind(&self, rt: &mut Runtime) -> Result<()> {
-        match self {
-            Weights::Files(paths) => Ok(rt.load_weights(&Safetensors::open(&crate::shard_files(paths)?)?)?),
-        }
+        Ok(rt.load_weights(&Safetensors::open(&shard_files(&self.0)?)?)?)
     }
 }
 
 impl std::fmt::Display for Weights {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Weights::Files(paths) => {
-                write!(f, "{}", paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" + "))
-            }
+        write!(f, "{}", self.0.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" + "))
+    }
+}
+
+/// The safetensors files the entries name: a file itself, or every
+/// `*.safetensors` under a directory, in name order.
+fn shard_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            let mut shards: Vec<_> = std::fs::read_dir(p)
+                .with_context(|| format!("weights dir {}", p.display()))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|f| f.extension().is_some_and(|x| x == "safetensors"))
+                .collect();
+            ensure!(!shards.is_empty(), "weights dir {}: no .safetensors in it", p.display());
+            shards.sort();
+            files.extend(shards);
+        } else {
+            files.push(p.clone());
         }
     }
+    Ok(files)
 }
 
 fn checkpoint_dir(w: &Path) -> PathBuf {
@@ -93,7 +103,7 @@ mod tests {
     fn entries_are_files() {
         assert_eq!(
             Weights::parse(&entries(&["a", "b/c.safetensors"])).unwrap(),
-            Weights::Files(vec!["a".into(), "b/c.safetensors".into()])
+            Weights(vec!["a".into(), "b/c.safetensors".into()])
         );
         assert!(Weights::parse(&[]).unwrap_err().to_string().contains("no weights"));
         assert_eq!(Weights::parse(&entries(&["a", "b"])).unwrap().to_string(), "a + b");

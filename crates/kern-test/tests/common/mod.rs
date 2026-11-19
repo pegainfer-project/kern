@@ -13,7 +13,7 @@ use std::ops::Range;
 
 use anyhow::{bail, Result};
 use kern_manifest::protocol::{Axis, Values};
-use kern_manifest::types::{Arg, DType, Dim, Fill, Provision};
+use kern_manifest::types::{Arg, DType, Fill, Provision};
 use kern_manifest::values;
 use kern_manifest::{verify, Manifest, Protocol, Verified};
 use kern_test::compare::{changed_blocks, compare, logit_stats, Cmp, LogitStats};
@@ -499,9 +499,6 @@ impl Side for Fake {
     fn page(&self) -> u64 {
         4
     }
-    fn vocab(&self) -> u64 {
-        VOCAB as u64
-    }
     fn ranks(&self) -> usize {
         self.ranks.len()
     }
@@ -529,9 +526,6 @@ impl Side for Fake {
     }
     fn advance(&mut self, n: u64) {
         self.pos += n as i64;
-    }
-    fn calls(&self, program: &str) -> Result<usize> {
-        Ok(self.m.programs[program].calls.len())
     }
     fn run(&mut self, program: &str, vars: &Vars, calls: Range<usize>) -> Result<()> {
         let cs = self.m.programs[program].calls[calls].to_vec();
@@ -646,11 +640,4 @@ pub fn test(a: &Fixture, b: &Fixture, o: &Options) -> Result<(kern_test::Report,
 pub fn verdict(r: &kern_test::Report) -> (i32, String) {
     let v = &r.summary.verdict;
     (v.code, v.summary.split(':').next().unwrap_or("").to_string())
-}
-
-pub fn dim(d: &Dim) -> u64 {
-    match d {
-        Dim::Const(c) => *c,
-        Dim::Var(_) => 0,
-    }
 }

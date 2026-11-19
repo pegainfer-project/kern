@@ -417,7 +417,7 @@ impl Dp {
             };
             let hit = match hit {
                 Some((c, found)) => {
-                    r.acts.push(Act::Copy(c.into()));
+                    r.acts.push(Act::Copy(c));
                     Some(found)
                 }
                 None => {
@@ -564,7 +564,7 @@ impl Dp {
                         debug!(request = %p.q.id, device_hit = device, asked = len, "pool fetch did not land");
                         let r = &mut self.ranks[q];
                         match &p.hit {
-                            Some(h) => r.acts.push(Act::Copy(p.lease.copies_from(h).into())),
+                            Some(h) => r.acts.push(Act::Copy(p.lease.copies_from(h))),
                             None => r.acts.extend(p.lease.seq_slot().map(Act::Zero)),
                         }
                     }
@@ -715,7 +715,7 @@ impl Dp {
                     };
                     match got {
                         Ok((cp, copies)) => {
-                            r.acts.push(Act::Copy(copies.into()));
+                            r.acts.push(Act::Copy(copies));
                             r.prefix.insert(&s.ids[..s.pos], cp.clone());
                             s.kept = true;
                             if self.pool.is_some() {

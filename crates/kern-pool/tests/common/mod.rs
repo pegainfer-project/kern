@@ -96,11 +96,6 @@ pub fn pool4() -> Arc<Pool> {
     pool_of(&paged4(), 8, 0)
 }
 
-/// `hybrid4` with 3 slots and 6 pages.
-pub fn hybrid_pool4() -> Arc<Pool> {
-    pool_of(&hybrid4(), 6, 3)
-}
-
 /// A deterministic xorshift source, `next(n)` in `0..n`.
 pub struct Rand(u64);
 

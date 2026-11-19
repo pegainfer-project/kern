@@ -78,8 +78,7 @@ fn main() -> anyhow::Result<()> {
     let kernels = std::env::temp_dir().join(format!("kern-program-io-{}", std::process::id()));
     stage_cubins(&cubins, &kernels);
     let mut rt = Runtime::load(&m, Some(&kernels), gpu, None, Some(&Topology::default()))?;
-    let maps = kern_run::map_weights(&weights)?;
-    rt.load_weights(&kern_runtime::Safetensors::parse(&maps.iter().map(|m| &m[..]).collect::<Vec<_>>())?)?;
+    rt.load_weights(&kern_runtime::Safetensors::open(&weights)?)?;
     for (name, path) in &ins {
         rt.write_input(name, &std::fs::read(path)?)?;
     }

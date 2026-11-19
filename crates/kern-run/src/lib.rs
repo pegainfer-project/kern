@@ -15,7 +15,7 @@ pub mod chat;
 pub mod config;
 pub mod e2e;
 pub mod inputs;
-pub mod probe;
+mod probe;
 pub mod run;
 pub mod server;
 pub mod test;
@@ -50,7 +50,7 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| {
 /// directories ([`Weights::dirs`]) the first tokenizer wins and the eos
 /// ids are the union in order.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Checkpoint {
+struct Checkpoint {
     tokenizer: Option<std::path::PathBuf>,
     stop_tokens: Vec<i64>,
 }
@@ -73,7 +73,7 @@ fn checkpoint(dirs: &[std::path::PathBuf]) -> Checkpoint {
 
 /// The eos ids one HF directory declares: `generation_config.json`'s,
 /// else `config.json`'s, else none.
-pub fn eos_ids(dir: &std::path::Path) -> Vec<i64> {
+fn eos_ids(dir: &std::path::Path) -> Vec<i64> {
     let read = |f: &str| -> Option<serde_json::Value> {
         serde_json::from_str(&std::fs::read_to_string(dir.join(f)).ok()?).ok()
     };
@@ -94,49 +94,12 @@ fn eos_of(v: &serde_json::Value) -> Vec<i64> {
     }
 }
 
-pub fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
+fn le_bytes_i32(v: &[i32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
 /// The var values of one call.
 pub type Vars = BTreeMap<String, u64>;
-
-/// The safetensors a `--weights` entry stands for: the file itself, or
-/// every `*.safetensors` under a directory (a checkpoint's shards) in
-/// name order, mapped read-only. Nothing is read up front: the runtime
-/// parses headers and copies each bound segment straight out of the map.
-pub fn map_weights(paths: &[std::path::PathBuf]) -> Result<Vec<memmap2::Mmap>> {
-    shard_files(paths)?.iter().map(|f| map_file(f)).collect()
-}
-
-/// The safetensors files the entries name: a file itself, or every
-/// `*.safetensors` under a directory, in name order.
-pub fn shard_files(paths: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
-    let mut files = Vec::new();
-    for p in paths {
-        if p.is_dir() {
-            let mut shards: Vec<_> = std::fs::read_dir(p)
-                .with_context(|| format!("weights dir {}", p.display()))?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|f| f.extension().is_some_and(|x| x == "safetensors"))
-                .collect();
-            ensure!(!shards.is_empty(), "weights dir {}: no .safetensors in it", p.display());
-            shards.sort();
-            files.extend(shards);
-        } else {
-            files.push(p.clone());
-        }
-    }
-    Ok(files)
-}
-
-#[allow(unsafe_code)]
-fn map_file(f: &std::path::Path) -> Result<memmap2::Mmap> {
-    let file = std::fs::File::open(f).with_context(|| format!("weights {}", f.display()))?;
-    // Mapped, not read: a 50 GB checkpoint costs no DRAM of its own and
-    // two runtimes on one host share the page cache.
-    unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("mapping weights {}", f.display()))
-}
 
 /// What one call writes into each fill: `lens[i]` rows for lease `i`, at
 /// that sequence's position, `ids` in row order (the sequences back to
@@ -568,17 +531,6 @@ impl Caller {
             i += c;
         }
         Ok(last)
-    }
-
-    /// Vocabulary size as declared by the token fill's domain (1000 if none).
-    fn vocab(&self) -> u64 {
-        let m = &self.rt.manifest;
-        self.protocol
-            .token_rows()
-            .and_then(|t| m.buffers[&t.name].domain.as_ref())
-            .and_then(|d| d.resolve(m, &self.protocol.vars(1, 1, 1, 1), &self.rt.provision()).ok())
-            .and_then(|r| r.hi)
-            .map_or(1000, |hi| hi as u64 + 1)
     }
 
     /// What the last run of `f` handed back for this sequence: its `tokens`

@@ -131,7 +131,7 @@ pub(crate) fn err(e: result::NcclError) -> Error {
 impl Runtime {
     /// The groups the manifest's `extern:nccl_*` launches name; each needs
     /// a communicator before the first issue.
-    pub fn nccl_groups(&self) -> BTreeSet<String> {
+    pub(crate) fn nccl_groups(&self) -> BTreeSet<String> {
         self.programs
             .values()
             .flat_map(|p| &p.launches)

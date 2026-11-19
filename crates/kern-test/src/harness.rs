@@ -382,7 +382,8 @@ pub(crate) fn free_run<S: Side>(
     let mut out = Vec::new();
     for run in runs {
         let e = c.stage(&run.tokens)?;
-        c.run(&run.program, &e, 0..c.calls(&run.program)?)?;
+        let n = c.manifest().programs[&run.program].calls.len();
+        c.run(&run.program, &e, 0..n)?;
         out.extend(read_logits(c, ma, mb, &run.program, &e, "")?);
         c.advance(run.advance);
     }
@@ -694,7 +695,7 @@ pub fn record<S: Side>(
                     }
                 }
             }
-            a.run(p, &e, ia..a.calls(p)?)?;
+            a.run(p, &e, ia..ma.programs[p].calls.len())?;
             a.advance(run.advance);
         }
         let (shown, omitted) = cap(findings.clone(), Finding::severity);
@@ -721,7 +722,7 @@ pub fn record<S: Side>(
                 continue;
             }
             let e = a.stage(&vec![last_tok; rows_of(f) as usize])?;
-            let times = a.time(p, &e, 0..a.calls(p)?, o.iters)?;
+            let times = a.time(p, &e, 0..ma.programs[p].calls.len(), o.iters)?;
             let graph_ms = if o.graph_step { Some(a.time_graph(p, &e, 100)?) } else { None };
             steps.push(StepRec { program: p.into(), rows: rows_of(f), token: last_tok, times, graph_ms });
         }
@@ -734,14 +735,14 @@ pub fn record<S: Side>(
             if o.sweep {
                 points.extend([1u64, 16, 128, 512, 2048, 4096, max].into_iter().filter(|&t| t <= max));
             }
-            let vocab = a.vocab();
+            let vocab = wl.vocab;
             let mut rng = Rng(o.seed);
             for &t in &points {
                 let tokens: Vec<i64> = (0..t).map(|_| rng.below(vocab) as i64).collect();
                 a.reset();
                 let e = a.stage(&tokens)?;
                 let iters = if t == tap_len { o.iters } else { o.iters.min(10) };
-                let times = a.time(chunk_name, &e, 0..a.calls(chunk_name)?, iters)?;
+                let times = a.time(chunk_name, &e, 0..ma.programs[chunk_name].calls.len(), iters)?;
                 sweep.push(SweepRec { rows: t, tokens, iters, times, tapped: t == tap_len });
             }
         }
@@ -903,7 +904,7 @@ fn record_run<S: Side>(
         }
         spans.push(SpanRec { span: span.clone(), inputs, ref_out, pre, post });
     }
-    a.run(pname, &e, ia..a.calls(pname)?)?;
+    a.run(pname, &e, ia..ma.programs[pname].calls.len())?;
     let logits_label = if label.starts_with("chunk") { format!("prefill {label}") } else { label.clone() };
     rec.logits.extend(read_logits(a, ma, mb, pname, &e, &logits_label)?);
     let r = rec.runs.len();

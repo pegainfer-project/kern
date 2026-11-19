@@ -1,9 +1,9 @@
 //! A checkpoint as the runtime sees it: safetensors artifacts, in memory
-//! or on disk, parsed into a `Tensors`, tensors found by name with their
+//! or on disk, parsed into a `Safetensors`, tensors found by name with their
 //! bytes still where they were.
 
 use kern_manifest::types::DType;
-use kern_runtime::{Blob, Safetensors, Tensors};
+use kern_runtime::{Blob, Safetensors};
 
 fn blob(tensors: &[(&str, &str, &[u64], &[u8])]) -> Vec<u8> {
     let mut header = serde_json::Map::new();

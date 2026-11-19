@@ -475,9 +475,6 @@ impl Protocol {
                 Sampling::FILLS.iter().filter(|f| !sampling.contains(f)).map(|f| format!("`{f}`")).collect();
             errs.push(format!("the sampling fills come together, all or none; missing {}", missing.join(", ")));
         }
-        if fills.iter().any(|f| f.fill == Fill::Token && f.axis == Axis::Ranks) && ranks.is_none() {
-            errs.push("a `token` fill spans the ranks but no var names the rows of every rank".into());
-        }
         if one(Fill::Blocks).is_some() && ranks.is_none() {
             errs.push("fill `blocks` without a var naming the rows of every rank".into());
         }

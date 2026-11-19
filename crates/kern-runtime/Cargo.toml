@@ -18,8 +18,5 @@ thiserror.workspace = true
 tracing.workspace = true
 ureq.workspace = true
 
-[dev-dependencies]
-safetensors.workspace = true
-
 [lints]
 workspace = true

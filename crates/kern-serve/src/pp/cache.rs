@@ -148,9 +148,9 @@ impl Cache {
         loop {
             // Room made last time may have dropped the entry hit then.
             let got = match self.prefix.lookup(ids) {
-                Some(h) => rt
-                    .lease_from(&h.found, h.len, ids.len())
-                    .map(|(l, c)| (l, Some(Act::Copy(c.into())), Some(h.found))),
+                Some(h) => {
+                    rt.lease_from(&h.found, h.len, ids.len()).map(|(l, c)| (l, Some(Act::Copy(c)), Some(h.found)))
+                }
                 None => rt.lease(ids.len()).map(|l| {
                     let zero = l.seq_slot().map(Act::Zero);
                     (l, zero, None)
@@ -183,7 +183,7 @@ impl Cache {
         let kept = loop {
             match rt.checkpoint(lease, key.len()) {
                 Ok((cp, copies)) => {
-                    self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
+                    self.acts.extend(Some(Act::Copy(copies)).filter(|a| !idle(a)));
                     self.prefix.insert(key, cp.clone());
                     break Some(cp);
                 }
@@ -213,7 +213,7 @@ impl Cache {
         let taken = loop {
             match rt.checkpoint(lease, len) {
                 Ok((cp, copies)) => {
-                    self.acts.extend(Some(Act::Copy(copies.into())).filter(|a| !idle(a)));
+                    self.acts.extend(Some(Act::Copy(copies)).filter(|a| !idle(a)));
                     break Some(cp);
                 }
                 Err(Error::Denied(Denied::Busy)) if self.evict() => {}

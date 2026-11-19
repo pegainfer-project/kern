@@ -163,15 +163,6 @@ impl Ring {
         e.begin >= self.tail()
     }
 
-    /// Objects written and being written.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     fn evict(&mut self) {
         let tail = self.tail();
         while let Some((begin, _)) = self.order.front() {

@@ -220,9 +220,6 @@ impl Side for Ranks {
     fn page(&self) -> u64 {
         self.rt(0).page()
     }
-    fn vocab(&self) -> u64 {
-        self.ranks[0].vocab()
-    }
     fn ranks(&self) -> usize {
         self.ranks.len()
     }
@@ -235,9 +232,6 @@ impl Side for Ranks {
     }
     fn advance(&mut self, n: u64) {
         self.ranks.iter_mut().for_each(|c| c.advance(n))
-    }
-    fn calls(&self, program: &str) -> Result<usize> {
-        Ok(self.rt(0).call_count(program)?)
     }
     fn run(&mut self, program: &str, vars: &Vars, calls: Range<usize>) -> Result<()> {
         let what = format!("`{program}` calls {}..{}", calls.start, calls.end);

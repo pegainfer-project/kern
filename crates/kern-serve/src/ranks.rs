@@ -148,32 +148,13 @@ impl Groups {
     }
 }
 
-/// [`Copies`] on the wire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Moves {
-    pub pages: Vec<(i32, i32)>,
-    pub slot: Option<(i32, i32)>,
-}
-
-impl From<Copies> for Moves {
-    fn from(c: Copies) -> Moves {
-        Moves { pages: c.pages, slot: c.slot }
-    }
-}
-
-impl From<Moves> for Copies {
-    fn from(m: Moves) -> Copies {
-        Copies { pages: m.pages, slot: m.slot }
-    }
-}
-
 /// One decision of a rank's pool, as the rank runs it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Act {
     /// Zero a fresh lease's slot in every per-sequence state.
     Zero(i32),
     /// Pages and a slot within the device pool.
-    Copy(Moves),
+    Copy(Copies),
     /// Ask the pooled tier whether each key exists; answered as `id`.
     Probe { id: u64, keys: Vec<String> },
     /// Store each object in the pooled tier once the acts before it have
@@ -550,7 +531,7 @@ impl Ranks {
             x
         });
         let mut copies = copies.into_iter();
-        self.queue(&got, |_, _| copies.next().map(|c| Act::Copy(c.into())));
+        self.queue(&got, |_, _| copies.next().map(Act::Copy));
         got
     }
 
@@ -617,7 +598,7 @@ impl Ranks {
     /// or its slots zeroed again.
     pub fn restore(&mut self, row: &Row, hit: Option<&Snapshot>) {
         match hit {
-            Some(h) => self.queue(row, |m, l| Some(Act::Copy(l.copies_from(&h.parts[m]).into()))),
+            Some(h) => self.queue(row, |m, l| Some(Act::Copy(l.copies_from(&h.parts[m])))),
             None => self.queue(row, |_, l| l.seq_slot().map(Act::Zero)),
         }
     }

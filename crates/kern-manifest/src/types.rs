@@ -32,7 +32,7 @@ pub(crate) const SCHEMA_VERSION: u32 = 7;
 
 /// Deserialize a JSON object into a map, rejecting duplicate keys (plain
 /// serde silently keeps the last one).
-fn unique_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+pub(crate) fn unique_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
 where
     D: Deserializer<'de>,
     V: Deserialize<'de>,
@@ -81,22 +81,18 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<Chat>,
     /// Per-call scalars the caller supplies, e.g. `{"tokens": {"max": 2048}}`.
-    #[serde(default, deserialize_with = "unique_map", skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub vars: BTreeMap<String, Var>,
     /// Opaque persistent memory the runtime provisions by size, e.g. a paged KV cache.
-    #[serde(default, deserialize_with = "unique_map", skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub states: BTreeMap<String, State>,
     /// Typed tensors: inputs, outputs, weights, workspace and carries.
-    #[serde(deserialize_with = "unique_map")]
     pub buffers: BTreeMap<String, Buffer>,
     /// Code artifacts the launches pin, by name, e.g. `{"argmax": {"source": "argmax.cubin", "sha256": "2537…"}}`.
-    #[serde(deserialize_with = "unique_map")]
     pub modules: BTreeMap<String, Module>,
     /// Operators: a typed interface plus the launches that implement it.
-    #[serde(deserialize_with = "unique_map")]
     pub ops: BTreeMap<String, Op>,
     /// Named straight-line programs, e.g. `"decode": {"batch": {"groups": 256, "rows": 1}, "calls": [...]}`.
-    #[serde(deserialize_with = "unique_map")]
     pub programs: BTreeMap<String, Program>,
 }
 

@@ -27,7 +27,7 @@ use crate::compile::{CompiledProgram, Dense};
 use crate::device::DeviceBuf;
 use crate::error::Error;
 use crate::load::Lanes;
-use crate::weights::Tensors;
+use crate::weights::Safetensors;
 use crate::{Result, Runtime};
 
 /// Alignment of every source in the staging allocation.
@@ -56,7 +56,7 @@ impl Runtime {
     /// before its first reader, then free the staging and forget the
     /// sources. The stream is drained before a source lands, so no call
     /// still reads the bytes it takes over.
-    pub(crate) fn derive(&mut self, d: Derivation, tensors: &dyn Tensors, stage: &Lanes) -> Result<u64> {
+    pub(crate) fn derive(&mut self, d: Derivation, tensors: &Safetensors<'_>, stage: &Lanes) -> Result<u64> {
         let vars = Dense::check(&self.manifest, &BTreeMap::new(), &vec![false; self.manifest.vars.len()])?;
         let calls = d.programs.iter().flat_map(|p| p.call_ranges.iter().map(move |&(lo, hi)| &p.launches[lo..hi]));
         let mut uploaded = 0;
