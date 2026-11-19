@@ -487,6 +487,56 @@ impl Lanes {
     }
 }
 
+/// One staging-sized piece of a copy: row-major source byte range `lo..hi`
+/// (always `<= stage` bytes), landing at `dst_offset` from `dst + copy.dst`,
+/// either as a contiguous 1D transfer (`rows_2d == None`) or a strided 2D
+/// transfer of `rows` rows of `copy.width` bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Piece {
+    copy: usize,
+    lo: u64,
+    hi: u64,
+    dst_offset: u64,
+    rows_2d: Option<u64>,
+}
+
+/// Slice planned copies into pieces of at most `stage` bytes: contiguous
+/// copies in `stage`-byte 1D chunks, strided copies with `width <= stage`
+/// in row-aligned 2D batches, and strided copies with `width > stage` in
+/// intra-row 1D chunks so no piece ever overflows the staging block.
+fn slice_pieces(copies: &[(u64, &weights::Copy)], stage: u64) -> Vec<Piece> {
+    let mut out = Vec::new();
+    for (copy, (_, c)) in copies.iter().enumerate() {
+        let total = c.width * c.rows;
+        if total == 0 {
+            continue;
+        }
+        if c.dst_pitch == c.width {
+            for lo in (0..total).step_by(stage as usize) {
+                let hi = (lo + stage).min(total);
+                out.push(Piece { copy, lo, hi, dst_offset: lo, rows_2d: None });
+            }
+        } else if c.width <= stage {
+            let step = (stage / c.width) * c.width;
+            for lo in (0..total).step_by(step as usize) {
+                let hi = (lo + step).min(total);
+                let dst_offset = lo / c.width * c.dst_pitch;
+                out.push(Piece { copy, lo, hi, dst_offset, rows_2d: Some((hi - lo) / c.width) });
+            }
+        } else {
+            for row in 0..c.rows {
+                for col in (0..c.width).step_by(stage as usize) {
+                    let lo = row * c.width + col;
+                    let hi = row * c.width + (col + stage).min(c.width);
+                    let dst_offset = row * c.dst_pitch + col;
+                    out.push(Piece { copy, lo, hi, dst_offset, rows_2d: None });
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Host and file bytes go up through the [`Lanes`]: one thread per lane
 /// gathers a piece of a copy into one block while the DMA out of the
 /// other is in flight, and the threads share the pieces through a
@@ -494,17 +544,7 @@ impl Lanes {
 /// driver, on the calling thread alone. Returns the bytes uploaded, all
 /// landed.
 fn upload(ctx: &Arc<CudaContext>, lanes: &Lanes, copies: &[(u64, &weights::Copy)]) -> Result<u64> {
-    // A copy landing with a stride goes up row by row, so its pieces end
-    // on row boundaries.
-    let pieces: Vec<(usize, u64, u64)> = copies
-        .iter()
-        .enumerate()
-        .flat_map(|(k, (_, c))| {
-            let total = c.width * c.rows;
-            let step = if c.dst_pitch == c.width { STAGE } else { (STAGE / c.width).max(1) * c.width };
-            (0..total).step_by(step as usize).map(move |lo| (k, lo, (lo + step).min(total)))
-        })
-        .collect();
+    let pieces = slice_pieces(copies, STAGE);
     let next = AtomicUsize::new(0);
     let lane = |(stream, blocks): &(Arc<CudaStream>, [Pinned; 2])| -> Result<()> {
         ctx.bind_to_thread()?;
@@ -513,27 +553,21 @@ fn upload(ctx: &Arc<CudaContext>, lanes: &Lanes, copies: &[(u64, &weights::Copy)
         let mut run = || -> Result<()> {
             loop {
                 let k = next.fetch_add(1, Ordering::Relaxed);
-                let Some(&(c, lo, hi)) = pieces.get(k) else { break };
+                let Some(&p) = pieces.get(k) else { break };
                 if let Some(ev) = landed[i].take() {
                     let r = cuda_check(unsafe { sys::cuEventSynchronize(ev) }, "cuEventSynchronize");
                     unsafe { sys::cuEventDestroy_v2(ev) };
                     r?;
                 }
-                let (dst, copy) = copies[c];
+                let (dst, copy) = copies[p.copy];
                 let block = unsafe { std::slice::from_raw_parts_mut(blocks[i].ptr() as *mut u8, STAGE as usize) };
-                gather(copy, lo, hi, block)?;
-                if copy.dst_pitch == copy.width {
-                    copy_1d(stream.cu_stream(), dst + copy.dst + lo, blocks[i].ptr(), hi - lo)?;
-                } else {
-                    let at = dst + copy.dst + lo / copy.width * copy.dst_pitch;
+                gather(copy, p.lo, p.hi, block)?;
+                let at = dst + copy.dst + p.dst_offset;
+                if let Some(rows) = p.rows_2d {
                     let src = (blocks[i].ptr(), copy.width, Space::Host);
-                    copy_2d(
-                        stream.cu_stream(),
-                        (at, copy.dst_pitch, Space::Device),
-                        src,
-                        copy.width,
-                        (hi - lo) / copy.width,
-                    )?;
+                    copy_2d(stream.cu_stream(), (at, copy.dst_pitch, Space::Device), src, copy.width, rows)?;
+                } else {
+                    copy_1d(stream.cu_stream(), at, blocks[i].ptr(), p.hi - p.lo)?;
                 }
                 landed[i] = Some(record(stream)?);
                 i ^= 1;
@@ -736,5 +770,46 @@ mod tests {
             }
         }
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn slice_pieces_bounds_every_piece_and_lands_exact_bytes() {
+        let stage = 8u64;
+        let cases = [
+            // Contiguous 1D (dst_pitch == width)
+            (5u64, 4u64, 7u64, 5u64, false),
+            // Strided 2D with width <= stage
+            (3, 5, 4, 6, true),
+            // Strided with width > stage: must chunk intra-row as 1D <= stage
+            (11, 3, 13, 16, false),
+        ];
+        for (width, rows, pitch, dst_pitch, expect_2d) in cases {
+            let src: Vec<u8> = (1..=(rows * pitch) as u8).collect();
+            let c = weights::Copy { dst: 4, src: Blob::Host(&src), width, rows, pitch, dst_pitch };
+            let pieces = slice_pieces(&[(0, &c)], stage);
+            assert!(!pieces.is_empty());
+            let mut got = vec![0u8; (c.dst + rows * dst_pitch) as usize];
+            let mut block = vec![0u8; stage as usize];
+            for p in &pieces {
+                let len = p.hi - p.lo;
+                assert!((1..=stage).contains(&len), "piece {p:?} exceeds stage {stage}");
+                assert_eq!(p.rows_2d.is_some(), expect_2d, "piece {p:?}");
+                gather(&c, p.lo, p.hi, &mut block[..len as usize]).unwrap();
+                let base = (c.dst + p.dst_offset) as usize;
+                if let Some(r) = p.rows_2d {
+                    assert_eq!(r * width, len);
+                    for row in 0..r as usize {
+                        let d = base + row * dst_pitch as usize;
+                        let s = row * width as usize;
+                        got[d..d + width as usize].copy_from_slice(&block[s..s + width as usize]);
+                    }
+                } else {
+                    got[base..base + len as usize].copy_from_slice(&block[..len as usize]);
+                }
+            }
+            let mut expected = vec![0u8; got.len()];
+            copy_rows(&mut expected, &c).unwrap();
+            assert_eq!(got, expected, "width={width} rows={rows} pitch={pitch} dst_pitch={dst_pitch}");
+        }
     }
 }
