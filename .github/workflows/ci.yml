@@ -66,6 +66,12 @@ jobs:
       - name: toy reference
         run: python3 -m unittest discover -s tools/toy -p test_model.py
 
+      - name: Python manifest and protocol
+        run: python3 -m unittest discover -s examples/python -p test_manifest.py
+
+      - name: C++20 manifest and protocol
+        run: make -C examples/cpp test
+
       - name: Protocol names stay in the manifest
         run: |
           # kern-run, kern-test and kern-serve drive the runtime through `Protocol`; a
