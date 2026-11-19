@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 420" width="940" height="420" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#0647ff"/>
+    </marker>
+  </defs>
+
+  <!-- Opaque card background (safe in light & dark VitePress themes) -->
+  <rect x="1" y="1" width="938" height="418" rx="12" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <text x="32" y="37" font-size="15" font-weight="700" fill="#111827" letter-spacing="-0.2">Host engine boundary</text>
+  <text x="908" y="37" font-size="11" font-weight="500" fill="#65707b" text-anchor="end">shared GPU memory · zero copy · host CUDA stream</text>
+  <line x1="32" y1="53" x2="908" y2="53" stroke="#e5e9f0" stroke-width="1"/>
+
+  <!-- Left Panel: Host Engine (vLLM / SGLang) -->
+  <rect x="32" y="74" width="286" height="316" rx="10" fill="#f8f9fb" stroke="#d8dee9" stroke-width="1.5"/>
+  <text x="48" y="97" font-size="10.5" font-weight="700" fill="#65707b" letter-spacing="1">HOST ENGINE OWNS</text>
+  <text x="48" y="118" font-size="15" font-weight="700" fill="#111827">vLLM / SGLang</text>
+
+  <rect x="48" y="134" width="254" height="52" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="64" y="156" font-size="13" font-weight="600" fill="#111827">Scheduler</text>
+  <text x="64" y="174" font-size="11" fill="#4b5563">batching, preemption, prefix routing</text>
+
+  <rect x="48" y="196" width="254" height="52" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="64" y="218" font-size="13" font-weight="600" fill="#111827">KV &amp; state pools</text>
+  <text x="64" y="236" font-size="11" fill="#4b5563">paged GPU memory owned by host</text>
+
+  <rect x="48" y="258" width="254" height="52" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="64" y="280" font-size="13" font-weight="600" fill="#111827">CUDA graph capture</text>
+  <text x="64" y="298" font-size="11" fill="#4b5563">captures host + kern on one stream</text>
+
+  <rect x="48" y="320" width="254" height="52" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="64" y="342" font-size="13" font-weight="600" fill="#111827">Sampler &amp; OpenAI API</text>
+  <text x="64" y="360" font-size="11" fill="#4b5563">logits sampling, HTTP streaming</text>
+
+  <!-- Center: Dashed Boundary & Labeled Arrows -->
+  <line x1="470" y1="74" x2="470" y2="390" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <rect x="418" y="84" width="104" height="22" rx="11" fill="#ffffff" stroke="#d8dee9" stroke-width="1"/>
+  <text x="470" y="99" font-size="10" font-weight="700" fill="#65707b" text-anchor="middle" letter-spacing="0.8">BOUNDARY</text>
+
+  <!-- Arrow 1: bind_host -->
+  <rect x="336" y="158" width="268" height="44" rx="6" fill="#ffffff" stroke="#b8ccff" stroke-width="1.25"/>
+  <text x="470" y="177" font-size="11" font-weight="700" fill="#0647ff" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">bind_host(ptr, shape, strides)</text>
+  <text x="470" y="193" font-size="11" fill="#4b5563" text-anchor="middle">pass host device buffers without copying</text>
+  <line x1="318" y1="214" x2="618" y2="214" stroke="#0647ff" stroke-width="1.75" marker-end="url(#arrow-accent)"/>
+
+  <!-- Arrow 2: enqueue_after -->
+  <rect x="330" y="254" width="280" height="44" rx="6" fill="#ffffff" stroke="#b8ccff" stroke-width="1.25"/>
+  <text x="470" y="273" font-size="11" font-weight="700" fill="#0647ff" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">enqueue_after(program, vars, stream)</text>
+  <text x="470" y="289" font-size="11" fill="#4b5563" text-anchor="middle">enqueue forward step on host stream</text>
+  <line x1="318" y1="310" x2="618" y2="310" stroke="#0647ff" stroke-width="1.75" marker-end="url(#arrow-accent)"/>
+
+  <!-- Right Panel: kern.Runtime -->
+  <rect x="622" y="74" width="286" height="316" rx="10" fill="#eef3ff" stroke="#0647ff" stroke-width="1.5"/>
+  <text x="638" y="97" font-size="10.5" font-weight="700" fill="#0647ff" letter-spacing="1">KERN RUNTIME OWNS</text>
+  <text x="638" y="118" font-size="15" font-weight="700" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">kern.Runtime</text>
+
+  <rect x="638" y="134" width="254" height="52" rx="8" fill="#ffffff" stroke="#c7d7ff" stroke-width="1.25"/>
+  <text x="654" y="156" font-size="13" font-weight="600" fill="#111827"><tspan font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">bind_host</tspan> zero-copy pointers</text>
+  <text x="654" y="174" font-size="11" fill="#4b5563">direct views into host KV &amp; activations</text>
+
+  <rect x="638" y="196" width="254" height="52" rx="8" fill="#ffffff" stroke="#c7d7ff" stroke-width="1.25"/>
+  <text x="654" y="218" font-size="13" font-weight="600" fill="#111827"><tspan font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">enqueue_after</tspan> on host stream</text>
+  <text x="654" y="236" font-size="11" fill="#4b5563">lowers &amp; replays flat launch list</text>
+
+  <rect x="638" y="258" width="254" height="52" rx="8" fill="#ffffff" stroke="#c7d7ff" stroke-width="1.25"/>
+  <text x="654" y="280" font-size="13" font-weight="600" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">sha256 cubins</text>
+  <text x="654" y="298" font-size="11" fill="#4b5563">verified compiled kernel modules</text>
+
+  <rect x="638" y="320" width="254" height="52" rx="8" fill="#ffffff" stroke="#c7d7ff" stroke-width="1.25"/>
+  <text x="654" y="342" font-size="13" font-weight="600" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">weights</text>
+  <text x="654" y="360" font-size="11" fill="#4b5563">safetensors bound to manifest slots</text>
+</svg>

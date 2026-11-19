@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 404" width="920" height="404" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#65707b"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#0647ff"/>
+    </marker>
+  </defs>
+
+  <!-- Opaque card background (safe in light & dark VitePress themes) -->
+  <rect x="1" y="1" width="918" height="402" rx="12" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <text x="32" y="37" font-size="15" font-weight="700" fill="#111827" letter-spacing="-0.2">Verification gates</text>
+  <text x="888" y="37" font-size="11" font-weight="500" fill="#65707b" text-anchor="end">kernel swap isolation vs. end-to-end numerics</text>
+  <line x1="32" y1="53" x2="888" y2="53" stroke="#e5e9f0" stroke-width="1"/>
+
+  <!-- Tier 1: kern test <target> -->
+  <rect x="32" y="72" width="856" height="144" rx="10" fill="#f8f9fb" stroke="#d8dee9" stroke-width="1.5"/>
+  <text x="48" y="97" font-size="13" font-weight="700" fill="#0647ff" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">kern test &lt;target&gt;</text>
+  <text x="872" y="97" font-size="11" font-weight="500" fill="#65707b" text-anchor="end">op / kernel swap gate · span-level</text>
+
+  <!-- Tier 1 Stage 1 -->
+  <rect x="48" y="112" width="244" height="86" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="170" y="140" font-size="13" font-weight="600" fill="#111827" text-anchor="middle">Reference (A)</text>
+  <text x="170" y="160" font-size="11" fill="#4b5563" text-anchor="middle">span recording across shapes</text>
+  <text x="170" y="177" font-size="11" fill="#4b5563" text-anchor="middle">+ self-replay noise floor</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="292" y1="155" x2="338" y2="155" stroke="#65707b" stroke-width="1.75" marker-end="url(#arrow-slate)"/>
+
+  <!-- Tier 1 Stage 2 -->
+  <rect x="342" y="112" width="244" height="86" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="464" y="140" font-size="13" font-weight="600" fill="#111827" text-anchor="middle">Candidate (B)</text>
+  <text x="464" y="160" font-size="11" fill="#4b5563" text-anchor="middle">span replay &amp; input fuzz</text>
+  <text x="464" y="177" font-size="11" fill="#4b5563" text-anchor="middle">checked against A floor &amp; perf</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="586" y1="155" x2="632" y2="155" stroke="#0647ff" stroke-width="1.75" marker-end="url(#arrow-accent)"/>
+
+  <!-- Tier 1 Stage 3: Verdict -->
+  <rect x="636" y="112" width="236" height="86" rx="8" fill="#ffffff" stroke="#0647ff" stroke-width="1.5"/>
+  <text x="754" y="132" font-size="10.5" font-weight="700" fill="#65707b" text-anchor="middle" letter-spacing="1">VERDICT</text>
+  <!-- Status pills -->
+  <rect x="650" y="142" width="46" height="22" rx="4" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="1"/>
+  <text x="673" y="157" font-size="10.5" font-weight="700" fill="#065f46" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">PASS</text>
+  <rect x="702" y="142" width="44" height="22" rx="4" fill="#fef2f2" stroke="#fecaca" stroke-width="1"/>
+  <text x="724" y="157" font-size="10.5" font-weight="700" fill="#991b1b" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">FAIL</text>
+  <rect x="752" y="142" width="106" height="22" rx="4" fill="#fffbeb" stroke="#fde68a" stroke-width="1"/>
+  <text x="805" y="157" font-size="10.5" font-weight="700" fill="#92400e" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">INCONCLUSIVE</text>
+  <text x="754" y="184" font-size="11" fill="#4b5563" text-anchor="middle">accuracy + timing in one report</text>
+
+  <!-- Tier 2: kern test e2e-logits -->
+  <rect x="32" y="232" width="856" height="144" rx="10" fill="#f8f9fb" stroke="#d8dee9" stroke-width="1.5"/>
+  <text x="48" y="257" font-size="13" font-weight="700" fill="#0647ff" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">kern test e2e-logits</text>
+  <text x="872" y="257" font-size="11" font-weight="500" fill="#65707b" text-anchor="end">full serving path · end-to-end numerics</text>
+
+  <!-- Tier 2 Stage 1 -->
+  <rect x="48" y="272" width="244" height="86" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="170" y="300" font-size="13" font-weight="600" fill="#111827" text-anchor="middle">Baseline <tspan font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace" font-weight="600">record</tspan></text>
+  <text x="170" y="320" font-size="11" fill="#4b5563" text-anchor="middle">sample tokens on prompt split</text>
+  <text x="170" y="337" font-size="11" fill="#4b5563" text-anchor="middle">+ batch self-noise calibration</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="292" y1="315" x2="338" y2="315" stroke="#65707b" stroke-width="1.75" marker-end="url(#arrow-slate)"/>
+
+  <!-- Tier 2 Stage 2 -->
+  <rect x="342" y="272" width="244" height="86" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="464" y="300" font-size="13" font-weight="600" fill="#111827" text-anchor="middle">Candidate decode</text>
+  <text x="464" y="320" font-size="11" fill="#4b5563" text-anchor="middle">teacher-forced batch decode</text>
+  <text x="464" y="337" font-size="11" fill="#4b5563" text-anchor="middle">along baseline token sequences</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="586" y1="315" x2="632" y2="315" stroke="#0647ff" stroke-width="1.75" marker-end="url(#arrow-accent)"/>
+
+  <!-- Tier 2 Stage 3: KL Gate -->
+  <rect x="636" y="272" width="236" height="86" rx="8" fill="#eef3ff" stroke="#0647ff" stroke-width="1.5"/>
+  <text x="754" y="294" font-size="10.5" font-weight="700" fill="#0647ff" text-anchor="middle" letter-spacing="1">NOISE GATE</text>
+  <text x="754" y="321" font-size="13" font-weight="700" fill="#111827" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">mean KL(A ‖ B) ≤ noise</text>
+  <text x="754" y="343" font-size="11" fill="#374151" text-anchor="middle">passes within baseline noise</text>
+</svg>

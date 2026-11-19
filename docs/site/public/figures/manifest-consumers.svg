@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 390" width="920" height="390" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#0647ff"/>
+    </marker>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#65707b"/>
+    </marker>
+  </defs>
+
+  <!-- Opaque card background (safe in light & dark VitePress themes) -->
+  <rect x="1" y="1" width="918" height="388" rx="12" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <text x="32" y="37" font-size="15" font-weight="700" fill="#111827" letter-spacing="-0.2">One verified artifact, four independent consumers</text>
+  <text x="888" y="37" font-size="11" font-weight="500" fill="#65707b" text-anchor="end">zero model-specific runtime code</text>
+  <line x1="32" y1="53" x2="888" y2="53" stroke="#e5e9f0" stroke-width="1"/>
+
+  <!-- Left: Verified Artifact -->
+  <rect x="32" y="74" width="236" height="284" rx="10" fill="#f8f9fb" stroke="#d8dee9" stroke-width="1.5"/>
+  <text x="48" y="97" font-size="10.5" font-weight="700" fill="#65707b" letter-spacing="1">VERIFIED ARTIFACT</text>
+
+  <rect x="48" y="112" width="204" height="68" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="150" y="140" font-size="13" font-weight="600" fill="#111827" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">manifest.json</text>
+  <text x="150" y="160" font-size="11" fill="#4b5563" text-anchor="middle">buffers, states, ops, programs</text>
+
+  <rect x="48" y="192" width="204" height="68" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="150" y="220" font-size="13" font-weight="600" fill="#111827" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">sha256 cubins</text>
+  <text x="150" y="240" font-size="11" fill="#4b5563" text-anchor="middle">compiled kernels, hash-pinned</text>
+
+  <rect x="48" y="272" width="204" height="68" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.25"/>
+  <text x="150" y="300" font-size="13" font-weight="600" fill="#111827" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">safetensors</text>
+  <text x="150" y="320" font-size="11" fill="#4b5563" text-anchor="middle">weights bound tensor by tensor</text>
+
+  <!-- Arrow: Artifact -> Protocol -->
+  <line x1="268" y1="216" x2="338" y2="216" stroke="#0647ff" stroke-width="1.75" marker-end="url(#arrow-accent)"/>
+  <text x="303" y="205" font-size="11" font-weight="600" fill="#0647ff" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">verify</text>
+
+  <!-- Center: Protocol -->
+  <rect x="342" y="148" width="184" height="136" rx="10" fill="#eef3ff" stroke="#0647ff" stroke-width="1.75"/>
+  <text x="434" y="173" font-size="10.5" font-weight="700" fill="#0647ff" text-anchor="middle" letter-spacing="1">CONTRACT</text>
+  <text x="434" y="202" font-size="15" font-weight="700" fill="#111827" text-anchor="middle" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">Protocol</text>
+  <line x1="366" y1="216" x2="502" y2="216" stroke="#c7d7ff" stroke-width="1"/>
+  <text x="434" y="238" font-size="11" fill="#374151" text-anchor="middle">roles · state pools · shapes</text>
+  <text x="434" y="256" font-size="11" fill="#374151" text-anchor="middle">step &amp; prefill signatures</text>
+
+  <!-- Orthogonal fan-out: Protocol -> 4 Consumers -->
+  <path d="M 526 216 H 572" fill="none" stroke="#65707b" stroke-width="1.75"/>
+  <path d="M 572 103 V 329" fill="none" stroke="#65707b" stroke-width="1.75"/>
+  <path d="M 572 103 H 618" fill="none" stroke="#65707b" stroke-width="1.75" marker-end="url(#arrow-slate)"/>
+  <path d="M 572 178 H 618" fill="none" stroke="#65707b" stroke-width="1.75" marker-end="url(#arrow-slate)"/>
+  <path d="M 572 254 H 618" fill="none" stroke="#65707b" stroke-width="1.75" marker-end="url(#arrow-slate)"/>
+  <path d="M 572 329 H 618" fill="none" stroke="#65707b" stroke-width="1.75" marker-end="url(#arrow-slate)"/>
+
+  <!-- Right: 4 Independent Consumers -->
+  <!-- 1: kern-serve -->
+  <rect x="622" y="74" width="266" height="58" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+  <rect x="631" y="84" width="3.5" height="38" rx="1.75" fill="#0647ff"/>
+  <text x="646" y="98" font-size="13" font-weight="600" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">kern-serve</text>
+  <rect x="830" y="83" width="46" height="20" rx="4" fill="#eef3ff" stroke="#c7d7ff" stroke-width="1"/>
+  <text x="853" y="97" font-size="10.5" font-weight="600" fill="#0647ff" text-anchor="middle">Rust</text>
+  <text x="646" y="118" font-size="11" fill="#4b5563">standalone OpenAI server · PP / PD</text>
+
+  <!-- 2: kern-llm -->
+  <rect x="622" y="149" width="266" height="58" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+  <rect x="631" y="159" width="3.5" height="38" rx="1.75" fill="#0647ff"/>
+  <text x="646" y="173" font-size="13" font-weight="600" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">kern-llm</text>
+  <rect x="774" y="158" width="102" height="20" rx="4" fill="#eef3ff" stroke="#c7d7ff" stroke-width="1"/>
+  <text x="825" y="172" font-size="10.5" font-weight="600" fill="#0647ff" text-anchor="middle">vLLM / SGLang</text>
+  <text x="646" y="193" font-size="11" fill="#4b5563">hosted runtime plugin via kern-py</text>
+
+  <!-- 3: examples/python -->
+  <rect x="622" y="225" width="266" height="58" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+  <rect x="631" y="235" width="3.5" height="38" rx="1.75" fill="#65707b"/>
+  <text x="646" y="249" font-size="13" font-weight="600" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">examples/python</text>
+  <rect x="820" y="234" width="56" height="20" rx="4" fill="#f3f5f6" stroke="#d8dee9" stroke-width="1"/>
+  <text x="848" y="248" font-size="10.5" font-weight="600" fill="#4b5563" text-anchor="middle">Python</text>
+  <text x="646" y="269" font-size="11" fill="#4b5563">cuda-python + PyTorch · pure Python</text>
+
+  <!-- 4: examples/cpp -->
+  <rect x="622" y="300" width="266" height="58" rx="8" fill="#ffffff" stroke="#d8dee9" stroke-width="1.5"/>
+  <rect x="631" y="310" width="3.5" height="38" rx="1.75" fill="#65707b"/>
+  <text x="646" y="324" font-size="13" font-weight="600" fill="#111827" font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace">examples/cpp</text>
+  <rect x="822" y="309" width="54" height="20" rx="4" fill="#f3f5f6" stroke="#d8dee9" stroke-width="1"/>
+  <text x="849" y="323" font-size="10.5" font-weight="600" fill="#4b5563" text-anchor="middle">C++20</text>
+  <text x="646" y="344" font-size="11" fill="#4b5563">C++20 + dlopen CUDA · zero Rust</text>
+</svg>
