@@ -35,6 +35,11 @@ impl Renderer {
         Ok(Renderer { chat: b.chat_backend.chat_renderer(), tokenizer: b.text_backend.tokenizer() })
     }
 
+    /// `text` as token ids, with nothing added around it.
+    pub fn encode(&self, text: &str) -> Result<Vec<i64>> {
+        Ok(self.tokenizer.encode(text, false)?.into_iter().map(i64::from).collect())
+    }
+
     /// The prompt token ids of one conversation: OpenAI `messages` and,
     /// when it calls tools, their OpenAI `tools` schemas.
     pub fn prompt(&self, messages: &str, tools: Option<&str>) -> Result<Vec<i64>> {
