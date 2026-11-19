@@ -15,6 +15,7 @@ reads `kern.toml`; it requires an explicit manifest path.
 | `kern verify <MANIFEST>` | Verify a manifest and print its serving protocol | No |
 | `kern run [TARGET]` | Greedy single-sequence generation | Yes |
 | `kern test [TARGET]` | A/B a candidate manifest against a reference | Yes |
+| `kern test e2e-logits [record]` | Record a baseline with self-noise or score a candidate via teacher-forced batch replay | Yes |
 | `kern bench [TARGET]` | Measure a sweep of call shapes and export raw samples; with `--candidate`, choose between implementations of an op | Yes |
 | `kern workload [TARGET]` | Turn [traced serving steps](/reference/traces) into a benchmark workload | No |
 | `kern kernels [TARGET...]` | Build and collect modules pinned by targets | Depends on inputs |
@@ -38,6 +39,7 @@ takes precedence over the built-in default.
   protocol checks pass. Failures are logged at ERROR level; both go to stderr.
   The serving protocol summary goes to stdout on success.
 - `kern test` exits with `0` for PASS, `1` for FAIL, and `2` for INCONCLUSIVE.
+- `kern test e2e-logits` exits with `0` for PASS, `1` for FAIL, and `2` on usage, input, or device error. It does not read `kern.toml`.
 
 ## Environment
 

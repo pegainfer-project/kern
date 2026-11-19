@@ -123,11 +123,14 @@ Greedy output is the same text as plain decode. On one GB300:
 | --- | --- | --- |
 | single sequence | 105 tok/s | 261 tok/s, 4.0 tokens accepted per step |
 
-## What you just ran
+## Next steps
 
 The binary contains no model. Which kernel runs where, how the draft is
 verified, which checkpoint tensor fills which buffer: all of it is in the
-manifest, and the runtime verified it before executing. Read
-[The model artifact](/concepts/artifact) for what that contract is, and
-[Test a kernel change](/guides/test-a-kernel-change) for how a swapped kernel
-earns its way into a manifest.
+manifest, and the runtime verified it before executing.
+
+- [The model artifact](/concepts/artifact) — what the manifest contract promises.
+- [Run without Rust: Python & C++20](/guides/python-and-cpp) — drive the same manifest from standalone Python or zero-dependency C++20.
+- [Host inside vLLM and SGLang](/guides/vllm-and-sglang) — serve a manifest inside unmodified vLLM or SGLang via `kern-llm`.
+- [Test a kernel change](/guides/test-a-kernel-change) — span-level A/B and `e2e-logits` gates before shipping a kernel change.
+- [Trace an SGLang server](/guides/trace-sglang) — GPU-stamped per-kernel Parquet traces in production.

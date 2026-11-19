@@ -46,6 +46,8 @@ export default defineConfig({
         text: "Guides",
         items: [
           { text: "Run a model", link: "/guides/run-a-model" },
+          { text: "Run without Rust: Python & C++20", link: "/guides/python-and-cpp" },
+          { text: "Host inside vLLM and SGLang", link: "/guides/vllm-and-sglang" },
           { text: "Test a kernel change", link: "/guides/test-a-kernel-change" },
           { text: "Trace an SGLang server", link: "/guides/trace-sglang" },
         ],
