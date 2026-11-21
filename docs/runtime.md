@@ -111,18 +111,23 @@ NUMA 节点）；C2C 单向 memcpy 116–119 GiB/s（D2H）/ 85–117（H2D）�
 的全部取值：`id` / `tile` / `stages` / `split_k` / `reduction` / `swizzle` / `custom` /
 `inner_shape` / `cluster_shape`），不写时照旧取启发式第一名。装载时 `cublasLtMatmulAlgoInit`
 建算法、逐项设属性，再在该 launch 会遇到的形状两端（所有 var 取下界、取上界，`when` 的 var
-夹在自己的区间里）跑 `cublasLtMatmulAlgoCheck`，并要求 workspace 不超过 `Blas` 的 32 MiB；
+夹在自己的区间里）跑 `cublasLtMatmulAlgoCheck`，并要求 workspace 不超过 `Workspace` 的 32 MiB；
 设不上或查不过就是 kernel artifact 错误，绝不静默退回启发式。发射时不查启发式、不同步、
-不回读，workspace 用 `Blas` 的。按形状换算法用 `when`：一个 op 每段 m 区间一个 launch，
+不回读，workspace 用 `Workspace` 的。按形状换算法用 `when`：一个 op 每段 m 区间一个 launch，
 各带自己的 `algo`。算法怎么选不归 kern：调用方在自己的真实负载里计时，把赢家写进
 manifest，输出照常由 `kern test` 对参考把关。不切 K 不等于逐位相同：sm_89 上 `sliced`
 的核（algo 30/31/16）在块内按 warp 切 k，`SPLITK_NUM` 却报 1，结果与 algo 5/6/21 不同；
 cuBLAS 只承诺同一算法在同架构、同库版本上可复现，所以换 `algo` 前要对输出重新把关。
-`extern:cublas_bf16_tn_f32` 同一映射但结果落 **f32**（cublasGemmEx，
-`CUBLAS_COMPUTE_32F` / `DEFAULT_TENSOR_OP`，独立 cuBLAS handle + 32 MiB
-workspace，可捕获）：K3 的每条稠密投影都是 f32 partial 再由认证的 `k3_land`
-核落成 bf16，所以 landing 的舍入链与 pegainfer 一致；权重行带 / 输出列带
-用 arg 的字节 `offset` 加第 7 参 `ldc` 表达。
+`extern:cublas_bf16_tn_f32` uses the same mapping with an **f32** output.
+It uses the stream's cuBLASLt handle, `CUDA_R_32F` layouts for C and D,
+`CUBLAS_COMPUTE_32F`, and a 32 MiB workspace for eager execution and graph
+capture. This removes kern's classic cuBLAS handle, whose destruction could
+fail with mismatched cuBLAS and cuBLASLt builds in a host process. On L20,
+the 32 MiB budget matched `cublasGemmEx` bit for bit for the tested shapes
+on cuBLAS 13.0 and 13.1. A zero budget changed the heuristic's selection.
+K3 writes f32 partials for `k3_land` to round to bf16. Express weight row
+bands and output column bands with argument byte offsets and the optional
+seventh argument `ldc`.
 `extern:cublaslt_fp8_tn` / `extern:cublaslt_fp8_tn_f32`：e4m3 操作数、f32 累加、
 bf16 / f32 结果，参数 `[a, w, c, a_scale, w_scale, m, n, k]`，可追加第 9 参 C 行步长；
 两个 scale 是 device 上的单个 f32（cublasLt 的 per-tensor `A/B_SCALE_POINTER`），
