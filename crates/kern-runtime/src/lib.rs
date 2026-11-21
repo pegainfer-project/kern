@@ -58,7 +58,7 @@ use kern_manifest::Verified;
 
 pub use compare::{At, Cmp, Logit, TOP_MAX};
 use compile::{CompiledProgram, Dense};
-use cublas::Blas;
+use cublas::Workspace;
 use device::{alloc, DeviceBuf};
 pub use device::{Mapped, PeerHandle, Pinned};
 use error::{bail, cuda_check};
@@ -140,8 +140,8 @@ pub struct Runtime {
     ctx: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     blt: CudaBlasLT,
-    /// cuBLAS handle (with its own workspace) for the f32-result GEMM built-in.
-    blas: Blas,
+    /// Explicit workspace for cuBLASLt launches on the main stream.
+    workspace: Workspace,
     /// The side lanes the manifest's programs run calls on.
     lanes: exec::Lanes,
     /// What every `index_into` domain resolves against: the token slots a

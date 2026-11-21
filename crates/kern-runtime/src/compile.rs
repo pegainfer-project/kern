@@ -175,7 +175,7 @@ pub(crate) enum LaunchKind {
     /// 7 with C's row stride, or 8 with C's and A's row strides. On the
     /// launch's pinned algorithm when it names one.
     Gemm { beta: f32, algo: Option<Pinned> },
-    /// `extern:cublas_bf16_tn_f32`: same operands, f32 result (cublasGemmEx).
+    /// `extern:cublas_bf16_tn_f32`: bf16 operands with an f32 result.
     GemmF32,
     /// `extern:cublaslt_fp8_tn` / `..._f32`: e4m3 operands with per-tensor
     /// device scales, `[a, w, c, a_scale, w_scale, m, n, k]` (+ C row stride);
@@ -245,7 +245,7 @@ enum LaunchImpl {
         beta: f32,
         algo: Option<Pinned>,
     },
-    /// cublasGemmEx with an f32 result (`extern:cublas_bf16_tn_f32`).
+    /// cuBLASLt with an f32 result (`extern:cublas_bf16_tn_f32`).
     GemmBf16TnF32,
     /// cublasLt fp8 with a bf16 or f32 result (`extern:cublaslt_fp8_tn[_f32]`, `extern:cublaslt_mxfp8_tn`).
     GemmFp8Tn {
@@ -276,7 +276,7 @@ impl ResolvedOp {
             .map(|s| match s {
                 LaunchImpl::Cubin { module, .. } => module.clone(),
                 LaunchImpl::GemmBf16Tn { .. } => "runtime built-in (cublasLt)".into(),
-                LaunchImpl::GemmBf16TnF32 => "runtime built-in (cublasGemmEx, f32 out)".into(),
+                LaunchImpl::GemmBf16TnF32 => "runtime built-in (cublasLtMatmul, f32 out)".into(),
                 LaunchImpl::GemmFp8Tn { .. } => "runtime built-in (cublasLt fp8)".into(),
                 LaunchImpl::Nccl { coll, elem, group } => {
                     format!("runtime built-in (nccl {coll:?} {elem:?} over `{group}`)")

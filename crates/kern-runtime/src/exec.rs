@@ -25,7 +25,7 @@
 //! another thread.
 //!
 //! A program with lanes (manifest.md, Lanes) runs each side lane on a
-//! stream of its own, with cuBLAS handles and workspaces of lane 0's sizes
+//! stream of its own, with a cuBLASLt handle and workspaces of lane 0's sizes
 //! so a GEMM picks the algorithm it would pick on lane 0. Before a call,
 //! every lane it runs `after` records its event and the call's stream
 //! waits on it: concurrent streams when issued eagerly, parallel branches
@@ -46,7 +46,7 @@ use cudarc::cublaslt::CudaBlasLT;
 use cudarc::driver::{sys, CudaContext, CudaStream};
 
 use crate::compile::{CompiledProgram, Dense, Launch, LaunchKind, RVal, Slot};
-use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn, Blas};
+use crate::cublas::{gemm_bf16_tn, gemm_bf16_tn_f32, gemm_bf16_tn_pinned, gemm_fp8_tn, Workspace};
 use crate::device::{copy_batch, Pinned};
 use crate::error::{bail, cuda_check};
 use crate::{trace, Error, Result, Runtime};
@@ -200,11 +200,11 @@ impl Drop for Signals {
     }
 }
 
-/// A side lane's stream and the BLAS handles that launch on it.
+/// A side lane's stream, its cuBLASLt handle and its explicit workspace.
 struct Lane {
     stream: Arc<CudaStream>,
     blt: CudaBlasLT,
-    blas: Blas,
+    workspace: Workspace,
 }
 
 /// The manifest's side lanes, and one event per lane, lane 0's first,
@@ -215,13 +215,13 @@ pub(crate) struct Lanes {
 }
 
 impl Lanes {
-    /// Streams and handles for lanes `1..=count` and events for `0..=count`;
-    /// nothing for a manifest without side lanes.
+    /// Streams and handles for lanes `1..=count` and events for `0..=count`.
+    /// A manifest without side lanes needs neither.
     pub(crate) fn new(ctx: &Arc<CudaContext>, count: usize) -> Result<Lanes> {
         let side = (0..count)
             .map(|_| {
                 let stream = ctx.new_stream()?;
-                Ok(Lane { blt: CudaBlasLT::new(stream.clone())?, blas: Blas::new(&stream)?, stream })
+                Ok(Lane { blt: CudaBlasLT::new(stream.clone())?, workspace: Workspace::new(&stream)?, stream })
             })
             .collect::<Result<Vec<_>>>()?;
         let event = |_| {
@@ -724,11 +724,11 @@ impl Runtime {
     }
 
     fn launch_on(&self, lane: usize, l: &Launch, vars: &Dense) -> Result<()> {
-        let (stream, blt, blas) = match lane {
-            0 => (&self.stream, &self.blt, &self.blas),
+        let (stream, blt, workspace) = match lane {
+            0 => (&self.stream, &self.blt, &self.workspace),
             l => {
                 let s = &self.lanes.side[l - 1];
-                (&s.stream, &s.blt, &s.blas)
+                (&s.stream, &s.blt, &s.workspace)
             }
         };
         if let Some((v, lo, hi)) = &l.when {
@@ -752,9 +752,11 @@ impl Runtime {
         }
         match &l.kind {
             LaunchKind::Gemm { beta, algo: None } => gemm_bf16_tn(blt, stream, &vals, *beta),
-            LaunchKind::Gemm { beta, algo: Some(algo) } => gemm_bf16_tn_pinned(blt, blas, stream, &vals, *beta, algo),
-            LaunchKind::GemmF32 => gemm_bf16_tn_f32(blas, &vals),
-            LaunchKind::GemmFp8 { f32_out, scale } => gemm_fp8_tn(blt, blas, stream, &vals, *f32_out, *scale),
+            LaunchKind::Gemm { beta, algo: Some(algo) } => {
+                gemm_bf16_tn_pinned(blt, workspace, stream, &vals, *beta, algo)
+            }
+            LaunchKind::GemmF32 => gemm_bf16_tn_f32(blt, workspace, stream, &vals),
+            LaunchKind::GemmFp8 { f32_out, scale } => gemm_fp8_tn(blt, workspace, stream, &vals, *f32_out, *scale),
             // Verify keeps collectives on lane 0, the stream NCCL is issued on.
             LaunchKind::Nccl { coll, elem, group } => self.collective(*coll, *elem, group, &vals),
             LaunchKind::Cubin { func, block, grid, shared_mem, cluster, pdl } => {

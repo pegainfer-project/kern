@@ -19,7 +19,7 @@ use cudarc::driver::{sys, CudaContext, CudaStream};
 use kern_manifest::types::{Buffer, BufferKind, DType, Dim, Placement, Provision, Segment};
 use kern_manifest::Verified;
 
-use crate::cublas::Blas;
+use crate::cublas::Workspace;
 use crate::derive::Derivation;
 use crate::device::{alloc, alloc_host, alloc_uninit, alloc_vmm, copy_1d, copy_2d, record, DeviceBuf, Pinned, Space};
 use crate::error::{bail, cuda_check};
@@ -124,7 +124,7 @@ impl Runtime {
         // into a CUDA graph.
         let stream = ctx.new_stream()?;
         let blt = CudaBlasLT::new(stream.clone())?;
-        let blas = Blas::new(&stream)?;
+        let workspace = Workspace::new(&stream)?;
         let side = manifest.programs.values().flat_map(|p| &p.calls).map(|c| c.lane as usize).max().unwrap_or(0);
         let lanes = crate::exec::Lanes::new(&ctx, side)?;
         ctx.bind_to_thread()?;
@@ -295,7 +295,7 @@ impl Runtime {
             ctx,
             stream,
             blt,
-            blas,
+            workspace,
             lanes,
             provision,
             budget: Budget { pages: pool.pages(), slots: pool.slots() },
