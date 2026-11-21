@@ -64,8 +64,8 @@ fn output(rt: &Runtime, stride: usize) -> Vec<f32> {
     assert_eq!(bytes.len(), M * stride * size_of::<f32>());
     bytes
         .chunks_exact(stride * size_of::<f32>())
-        .flat_map(|row| row.chunks_exact(size_of::<f32>()).take(N))
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .flat_map(|row| row.as_chunks::<{ size_of::<f32>() }>().0.iter().take(N))
+        .map(|&b| f32::from_le_bytes(b))
         .collect()
 }
 
