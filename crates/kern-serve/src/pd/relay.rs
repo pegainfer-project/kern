@@ -19,13 +19,14 @@ use super::{Ask, Out, Req};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relay {
     pub(super) max_tokens: usize,
+    min_tokens: usize,
     stop: StopPolicy,
     pub(super) generated: usize,
 }
 
 impl Relay {
-    pub fn new(max_tokens: usize, stop: StopPolicy) -> Relay {
-        Relay { max_tokens, stop, generated: 0 }
+    pub fn new(max_tokens: usize, min_tokens: usize, stop: StopPolicy) -> Relay {
+        Relay { max_tokens, min_tokens, stop, generated: 0 }
     }
 
     /// Whether a request of `max_tokens` is handed off at all: one token
@@ -36,8 +37,9 @@ impl Relay {
 
     /// `tok` generated: how it ends the request, if it does.
     pub(super) fn take(&mut self, tok: u32) -> Option<FinishReason> {
+        let stops = self.generated >= self.min_tokens;
         self.generated += 1;
-        match self.stop.classify(tok, |_| false) {
+        match stops.then(|| self.stop.classify(tok, |_| false)).flatten() {
             Some(c) => Some(FinishReason::Stop(c)),
             None if self.generated >= self.max_tokens => Some(FinishReason::Length),
             None => None,

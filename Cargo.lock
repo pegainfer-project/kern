@@ -1229,7 +1229,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1285,20 +1285,25 @@ dependencies = [
 
 [[package]]
 name = "fastokens"
-version = "0.2.1"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8728655e193e0d08d7a95d63cf1fdb9b768d282cab0a112ecb006615bae9f067"
+checksum = "d915324fcf00aa9cade45192ffb7eb49f44a66eb9e7059914d87a2a34b58d88d"
 dependencies = [
+ "aho-corasick",
  "daachorse 1.0.1",
  "fancy-regex 0.17.0",
+ "fastrand",
  "icu_normalizer",
+ "libc",
  "memchr",
  "pcre2",
  "rayon",
+ "regex-syntax",
  "serde",
  "serde_json",
  "strum",
  "thiserror",
+ "unicode-normalization-alignments",
 ]
 
 [[package]]
@@ -1988,7 +1993,7 @@ dependencies = [
 [[package]]
 name = "infront-engine"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/infront?rev=ea2db2791c988321d7299a1f405a529e1a1d50b4#ea2db2791c988321d7299a1f405a529e1a1d50b4"
+source = "git+https://github.com/pegainfer-project/infront?rev=ef3ff7b93493ca3817dc6c132a7f55f8424238b4#ef3ff7b93493ca3817dc6c132a7f55f8424238b4"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2001,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "infront-vllm"
 version = "0.1.0"
-source = "git+https://github.com/pegainfer-project/infront?rev=ea2db2791c988321d7299a1f405a529e1a1d50b4#ea2db2791c988321d7299a1f405a529e1a1d50b4"
+source = "git+https://github.com/pegainfer-project/infront?rev=ef3ff7b93493ca3817dc6c132a7f55f8424238b4#ef3ff7b93493ca3817dc6c132a7f55f8424238b4"
 dependencies = [
  "anyhow",
  "axum",
@@ -2330,18 +2335,20 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llm-multimodal"
-version = "1.14.0"
-source = "git+https://github.com/smg-project/llm-multimodal?rev=1b6197354e498b1dfb6e2647b2c68e4d11eaf5b5#1b6197354e498b1dfb6e2647b2c68e4d11eaf5b5"
+version = "1.16.0"
+source = "git+https://github.com/smg-project/smg?rev=2787f7cde21e0a2511f481994d731c98109020af#2787f7cde21e0a2511f481994d731c98109020af"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
  "blake3",
+ "bytemuck",
  "bytes",
  "cc",
  "fast_image_resize",
  "futures",
  "image",
  "libloading 0.8.9",
+ "multiversion",
  "ndarray",
  "once_cell",
  "pkg-config",
@@ -2942,8 +2949,7 @@ checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 [[package]]
 name = "pcre2"
 version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e970b0fcce0c7ee6ef662744ff711f21ccd6f11b7cf03cd187a80e89797fc67"
+source = "git+https://github.com/vllm-project/rust-pcre2?rev=bb2f377c9f919c881860c210fad8375945c90d43#bb2f377c9f919c881860c210fad8375945c90d43"
 dependencies = [
  "libc",
  "log",
@@ -2953,8 +2959,7 @@ dependencies = [
 [[package]]
 name = "pcre2-sys"
 version = "0.2.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18b9073c1a2549bd409bf4a32c94d903bb1a09bf845bc306ae148897fa0760a4"
+source = "git+https://github.com/vllm-project/rust-pcre2?rev=bb2f377c9f919c881860c210fad8375945c90d43#bb2f377c9f919c881860c210fad8375945c90d43"
 dependencies = [
  "cc",
  "libc",
@@ -3709,7 +3714,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4543,7 +4548,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4769,9 +4774,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -5333,12 +5338,12 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vllm-build-info"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 
 [[package]]
 name = "vllm-chat"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "anyhow",
  "asynk-strim-attr",
@@ -5370,6 +5375,7 @@ dependencies = [
  "uuid",
  "vllm-engine-core-client",
  "vllm-llm",
+ "vllm-metrics",
  "vllm-parser",
  "vllm-text",
  "vllm-tokenizer",
@@ -5380,7 +5386,7 @@ dependencies = [
 [[package]]
 name = "vllm-engine-core-client"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "arc-swap",
  "bytemuck",
@@ -5402,6 +5408,7 @@ dependencies = [
  "serde_repr",
  "serde_tuple",
  "serde_with",
+ "sha2 0.10.9",
  "socket2",
  "task-local",
  "thiserror",
@@ -5416,8 +5423,9 @@ dependencies = [
 [[package]]
 name = "vllm-llm"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
+ "async-trait",
  "easy-ext",
  "enum-as-inner",
  "futures",
@@ -5436,7 +5444,7 @@ dependencies = [
 [[package]]
 name = "vllm-metrics"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "itertools",
  "prometheus-client",
@@ -5447,13 +5455,13 @@ dependencies = [
 [[package]]
 name = "vllm-parser"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "auto_impl",
  "easy-ext",
  "educe",
- "regex-automata",
- "regex-syntax",
+ "pcre2",
+ "regex",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -5468,8 +5476,8 @@ dependencies = [
 
 [[package]]
 name = "vllm-proto"
-version = "0.6.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+version = "0.7.0"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "prost",
  "prost-types",
@@ -5482,13 +5490,14 @@ dependencies = [
 [[package]]
 name = "vllm-server"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "anyhow",
  "asynk-strim-attr",
  "auto_enums",
  "axum",
  "base64 0.22.1",
+ "easy-ext",
  "educe",
  "futures",
  "http-body",
@@ -5505,6 +5514,7 @@ dependencies = [
  "rmpv",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "serde_with",
  "sha2 0.10.9",
  "socket2",
@@ -5537,7 +5547,7 @@ dependencies = [
 [[package]]
 name = "vllm-text"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "anyhow",
  "asynk-strim-attr",
@@ -5557,13 +5567,14 @@ dependencies = [
  "trait-set",
  "vllm-engine-core-client",
  "vllm-llm",
+ "vllm-metrics",
  "vllm-tokenizer",
 ]
 
 [[package]]
 name = "vllm-tokenizer"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
  "base64 0.22.1",
  "fastokens",
@@ -5583,10 +5594,16 @@ dependencies = [
 [[package]]
 name = "vllm-tracing"
 version = "0.1.0"
-source = "git+https://github.com/vllm-project/vllm.git?rev=08b989da99f0c0c76520a47580de9c18137500c9#08b989da99f0c0c76520a47580de9c18137500c9"
+source = "git+https://github.com/vllm-project/vllm.git?rev=0bf9c07376a4091627e6cb50dd85464361db452c#0bf9c07376a4091627e6cb50dd85464361db452c"
 dependencies = [
+ "indexmap 2.14.2",
+ "serde",
+ "serde-json-fmt",
+ "serde_json",
+ "serde_with",
  "time",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
 ]
 
@@ -5922,9 +5939,9 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xgrammar-structural-tag"
-version = "0.4.1+xgrammar.0.2.8.9778737"
+version = "0.5.0+xgrammar.0.2.9.8f9a127"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06637fe6ff753ef929b4cea2933b9432f78335255c6931dc748957122b9b492c"
+checksum = "eb1c580c3b8ce497447f7cf3a65307226a4be44c84e649b111cdf5d2b19015e4"
 dependencies = [
  "auto_impl",
  "serde",

@@ -208,6 +208,7 @@ struct Seq {
     /// which is what `finish` checks against.
     emitted: usize,
     max_tokens: usize,
+    min_tokens: usize,
     /// How its tokens are drawn.
     sampling: Sampling,
     /// The request's EOS and explicit stop ids, as the frontend lowered
@@ -243,7 +244,7 @@ impl Seq {
     /// otherwise the last token is the next step's input. Returns how many
     /// tokens were emitted and whether the sequence finished.
     fn emit(&mut self, toks: &[u32], ledger: &mut RequestLedger) -> (u64, bool) {
-        let (taken, end) = cut(toks, self.generated, self.max_tokens, &self.stop);
+        let (taken, end) = cut(toks, self.generated, self.max_tokens, self.min_tokens, &self.stop);
         let emitted = taken - matches!(end, Some(End::Stop(_))) as usize;
         self.generated += taken;
         self.emitted += emitted;
@@ -286,15 +287,25 @@ enum End {
 }
 
 /// How many of `toks` a sequence that has generated `generated` of
-/// `max_tokens` takes: through the first stop token or the one reaching
-/// `max_tokens`, and why it ends there; all of them and `None` otherwise.
-/// A stop token wins over `max_tokens` when it is both.
-fn cut(toks: &[u32], generated: usize, max_tokens: usize, stop: &StopPolicy) -> (usize, Option<End>) {
+/// `max_tokens` takes: through the first stop token (once `min_tokens`
+/// came before it) or the one reaching `max_tokens`, and why it ends there;
+/// all of them and `None` otherwise. A stop token wins over `max_tokens`
+/// when it is both.
+fn cut(
+    toks: &[u32],
+    generated: usize,
+    max_tokens: usize,
+    min_tokens: usize,
+    stop: &StopPolicy,
+) -> (usize, Option<End>) {
     toks.iter()
         .enumerate()
-        .find_map(|(i, &t)| match stop.classify(t, |_| false) {
-            Some(c) => Some((i + 1, End::Stop(c))),
-            None => (generated + i + 1 >= max_tokens).then_some((i + 1, End::Length)),
+        .find_map(|(i, &t)| {
+            let stops = generated + i >= min_tokens;
+            match stops.then(|| stop.classify(t, |_| false)).flatten() {
+                Some(c) => Some((i + 1, End::Stop(c))),
+                None => (generated + i + 1 >= max_tokens).then_some((i + 1, End::Length)),
+            }
         })
         .map_or((toks.len(), None), |(n, end)| (n, Some(end)))
 }
@@ -838,6 +849,7 @@ impl<E: Run> KernScheduler<E> {
             generated: 0,
             emitted: 0,
             max_tokens,
+            min_tokens: q.request.min_tokens,
             sampling,
             stop: q.request.stop_policy.clone(),
             row,
@@ -1165,29 +1177,38 @@ mod tests {
     fn a_sequence_takes_tokens_through_its_stop_or_its_length() {
         use infront_engine::EosPolicy;
         let stop = StopPolicy::new(EosPolicy::Token(9), vec![7]);
-        assert_eq!(cut(&[1, 2, 3], 0, 10, &stop), (3, None));
-        assert_eq!(cut(&[1, 9, 3], 0, 10, &stop), (2, Some(End::Stop(StopCause::Eos(9)))));
-        assert_eq!(cut(&[1, 2, 3], 8, 10, &stop), (2, Some(End::Length)));
-        assert_eq!(cut(&[1, 7], 8, 10, &stop), (2, Some(End::Stop(StopCause::Token(7)))));
-        assert_eq!(cut(&[], 0, 10, &stop), (0, None));
+        assert_eq!(cut(&[1, 2, 3], 0, 10, 0, &stop), (3, None));
+        assert_eq!(cut(&[1, 9, 3], 0, 10, 0, &stop), (2, Some(End::Stop(StopCause::Eos(9)))));
+        assert_eq!(cut(&[1, 2, 3], 8, 10, 0, &stop), (2, Some(End::Length)));
+        assert_eq!(cut(&[1, 7], 8, 10, 0, &stop), (2, Some(End::Stop(StopCause::Token(7)))));
+        assert_eq!(cut(&[9, 7, 1], 0, 10, 2, &stop), (3, None));
+        assert_eq!(cut(&[9, 7, 9], 0, 10, 2, &stop), (3, Some(End::Stop(StopCause::Eos(9)))));
+        assert_eq!(cut(&[9], 0, 1, 1, &stop), (1, Some(End::Length)));
+        assert_eq!(cut(&[], 0, 10, 0, &stop), (0, None));
         // Every token string over {plain, stop, eos} up to four long, at
-        // every count already generated short of the limit.
+        // every count already generated short of the limit and every `min_tokens`.
         let alphabet = [1u32, 7, 9];
         let strings = (0..=4u32).flat_map(|n| {
             (0..3usize.pow(n)).map(move |k| (0..n).map(|i| alphabet[k / 3usize.pow(i) % 3]).collect::<Vec<_>>())
         });
         for toks in strings {
             for (generated, max) in (1..=5).flat_map(|m| (0..m).map(move |g| (g, m))) {
-                let (taken, end) = cut(&toks, generated, max, &stop);
-                let stops = |s: &[u32]| s.iter().filter(|&&t| t != 1).count();
-                let fact = match end {
-                    None => taken == toks.len() && stops(&toks) == 0 && generated + taken < max,
-                    Some(End::Stop(_)) => {
-                        stops(&toks[..taken]) == 1 && toks[taken - 1] != 1 && generated + taken <= max
-                    }
-                    Some(End::Length) => stops(&toks[..taken]) == 0 && generated + taken == max,
-                };
-                assert!(fact, "{toks:?} at {generated}/{max}: ({taken}, {end:?})");
+                for min in 0..=max {
+                    let (taken, end) = cut(&toks, generated, max, min, &stop);
+                    let active =
+                        |s: &[u32]| s.iter().enumerate().filter(|&(i, &t)| generated + i >= min && t != 1).count();
+                    let fact = match end {
+                        None => taken == toks.len() && active(&toks) == 0 && generated + taken < max,
+                        Some(End::Stop(_)) => {
+                            active(&toks[..taken]) == 1
+                                && generated + taken > min
+                                && toks[taken - 1] != 1
+                                && generated + taken <= max
+                        }
+                        Some(End::Length) => active(&toks[..taken]) == 0 && generated + taken == max,
+                    };
+                    assert!(fact, "{toks:?} at {generated}/{max} (min {min}): ({taken}, {end:?})");
+                }
             }
         }
     }

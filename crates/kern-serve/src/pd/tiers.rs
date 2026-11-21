@@ -64,6 +64,7 @@ impl Tiers {
         req: Req,
         tokens: usize,
         max_tokens: usize,
+        min_tokens: usize,
         stop: &StopPolicy,
     ) -> Result<(Gate, Vec<(usize, Out)>)> {
         let handoff = !self.tiers.is_empty() && Relay::hands_off(max_tokens);
@@ -72,7 +73,7 @@ impl Tiers {
                 let seats: Vec<Option<usize>> = self.tiers.iter().map(|(h, l)| h.ready().then_some(l.seats)).collect();
                 let outs = match pick(req, &seats) {
                     Some(t) => {
-                        let a = self.tiers[t].0.reserve(req, tokens, Relay::new(max_tokens, stop.clone()));
+                        let a = self.tiers[t].0.reserve(req, tokens, Relay::new(max_tokens, min_tokens, stop.clone()));
                         vec![(t, Out::Ask(a.expect("a ready tier takes a reserve")))]
                     }
                     None => Vec::new(),

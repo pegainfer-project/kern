@@ -585,7 +585,7 @@ impl Sim {
                 continue;
             }
             let (prompt, max_tokens) = (self.clients[&req].prompt, self.clients[&req].max_tokens);
-            let (gate, outs) = Self::died(self.head.tiers.gate(req, prompt + max_tokens, max_tokens, &stop()))?;
+            let (gate, outs) = Self::died(self.head.tiers.gate(req, prompt + max_tokens, max_tokens, 0, &stop()))?;
             self.head.outbox.extend(outs);
             let Gate::Lease(tier) = gate else { return Ok(()) };
             self.head.waiting.pop_front();

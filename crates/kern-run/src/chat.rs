@@ -68,6 +68,7 @@ impl Renderer {
             data_parallel_rank: None,
             session_id: None,
             lora_request: None,
+            return_prompt_text: false,
         };
         request.validate()?;
         let ids = match self.chat.render(&request)?.prompt {

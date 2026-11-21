@@ -272,10 +272,10 @@ fn a_tier_takes_one_reserve_at_a_time_none_while_busy_and_names_itself_in_its_pu
     let mut h = Handoffs::new(STAGES, 1);
     let mut hear =
         |h: &mut Handoffs, a: Ask| d.ask(a).unwrap().into_iter().for_each(|t| assert_eq!(h.hear(t).unwrap(), vec![]));
-    let a = h.reserve(1, 20, Relay::new(5, stop())).unwrap();
-    assert_eq!((h.ready(), h.reserve(2, 20, Relay::new(5, stop()))), (false, None));
+    let a = h.reserve(1, 20, Relay::new(5, 0, stop())).unwrap();
+    assert_eq!((h.ready(), h.reserve(2, 20, Relay::new(5, 0, stop()))), (false, None));
     hear(&mut h, a);
-    let a = h.reserve(2, 20, Relay::new(5, stop())).unwrap();
+    let a = h.reserve(2, 20, Relay::new(5, 0, stop())).unwrap();
     hear(&mut h, a);
     assert_eq!((h.ready(), h.standing(1), h.standing(2)), (false, Standing::Granted, Standing::Unasked));
     assert_eq!(h.hear(Tell::Room).unwrap(), vec![]);
@@ -494,7 +494,7 @@ impl World {
         }
         match self.h.standing(req) {
             Standing::Unasked => {
-                if let Some(a) = self.h.reserve(req, c.prompt + c.max_tokens, Relay::new(c.max_tokens, stop())) {
+                if let Some(a) = self.h.reserve(req, c.prompt + c.max_tokens, Relay::new(c.max_tokens, 0, stop())) {
                     self.apply(vec![Out::Ask(a)]);
                 }
             }

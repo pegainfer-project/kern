@@ -32,6 +32,7 @@ fn request(max_tokens: usize, stop: StopPolicy) -> Request {
         history_marks: Vec::new(),
         stop_policy: stop,
         max_tokens,
+        min_tokens: 0,
         logprobs: None,
         prompt_logprobs: None,
     }
@@ -86,7 +87,11 @@ fn head(calls: mpsc::Receiver<Call>, notes: mpsc::Sender<Note>, d: mpsc::Sender<
             notes.send(Note::Admit { id, cached: 0 }).unwrap();
             notes.send(Note::Emit { id, tok: FIRST }).unwrap();
             notes
-                .send(Note::Decode { id, relay: Relay::new(max - 1, q.request.stop_policy.clone()), tier: 0 })
+                .send(Note::Decode {
+                    id,
+                    relay: Relay::new(max - 1, q.request.min_tokens.saturating_sub(1), q.request.stop_policy.clone()),
+                    tier: 0,
+                })
                 .unwrap();
             d.send(Ask::Start {
                 req: id.raw(),

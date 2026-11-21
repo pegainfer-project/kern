@@ -133,6 +133,7 @@ struct Active {
     lease: Lease,
     ids: Vec<i64>,
     pos: usize,
+    min_tokens: usize,
     stop: StopPolicy,
     sampling: Sampling,
     /// Where its rows stop for a checkpoint, ascending, each gone once
@@ -229,6 +230,7 @@ impl Pooled {
 struct Finish {
     at: usize,
     id: RequestId,
+    min_tokens: usize,
     stop: StopPolicy,
     handoff: bool,
 }
@@ -236,7 +238,10 @@ struct Finish {
 impl Finish {
     /// Complete a request on P, preserving why its first token stopped it.
     fn notes(&self, tok: u32) -> [Note; 2] {
-        let why = self.stop.classify(tok, |_| false).map_or(FinishReason::Length, FinishReason::Stop);
+        let why = (self.min_tokens == 0)
+            .then(|| self.stop.classify(tok, |_| false))
+            .flatten()
+            .map_or(FinishReason::Length, FinishReason::Stop);
         [Note::Emit { id: self.id, tok }, Note::Finish { id: self.id, why }]
     }
 }
@@ -622,7 +627,13 @@ impl PpHead {
                 break;
             }
             let (prompt, max_tokens) = (q.request.prompt_tokens.len(), q.request.max_tokens);
-            let (gate, outs) = self.tiers.gate(id.raw(), prompt + max_tokens, max_tokens, &q.request.stop_policy)?;
+            let (gate, outs) = self.tiers.gate(
+                id.raw(),
+                prompt + max_tokens,
+                max_tokens,
+                q.request.min_tokens,
+                &q.request.stop_policy,
+            )?;
             self.apply(outs)?;
             let Gate::Lease(tier) = gate else { break };
             let Some(q) = self.waiting.front() else { unreachable!("the request gated is still at the front") };
@@ -693,10 +704,12 @@ impl PpHead {
             None => keep.into_iter().collect(),
         };
         let parts = parted.is_some();
+        let min_tokens = q.request.min_tokens;
         let stop = q.request.stop_policy.clone();
         let sampling = crate::ranks::sampling(&q.request.params);
         let handoff = tier.is_some();
-        let a = Active { id, lease, ids, pos: start, stop, sampling, stops, keep, parts, handoff, passed: 0 };
+        let a =
+            Active { id, lease, ids, pos: start, min_tokens, stop, sampling, stops, keep, parts, handoff, passed: 0 };
         self.active.push_back(a);
         Ok(())
     }
@@ -1028,7 +1041,7 @@ impl PpHead {
                 }
             }
         }
-        Ok(Finish { at, id: a.id, stop: a.stop, handoff: a.handoff })
+        Ok(Finish { at, id: a.id, min_tokens: a.min_tokens, stop: a.stop, handoff: a.handoff })
     }
 
     /// A prompt whose last rows were just issued: handed off, it is pushed
@@ -1279,7 +1292,13 @@ mod tests {
         let head = move |call| {
             let Call::Submit(q) = call else { return Ok(()) };
             notes.send(Note::Admit { id: q.id, cached: 0 })?;
-            let done = Finish { at: 0, id: q.id, stop: q.request.stop_policy, handoff: false };
+            let done = Finish {
+                at: 0,
+                id: q.id,
+                min_tokens: q.request.min_tokens,
+                stop: q.request.stop_policy,
+                handoff: false,
+            };
             for note in done.notes(tok) {
                 notes.send(note)?;
             }
@@ -1294,6 +1313,7 @@ mod tests {
             history_marks: Vec::new(),
             stop_policy: stop,
             max_tokens: 1,
+            min_tokens: 0,
             logprobs: None,
             prompt_logprobs: None,
         });

@@ -34,10 +34,10 @@ kern-run = { path = "crates/kern-run" }
 # frontend behind it), pinned to a main commit and bumped deliberately. Its
 # vLLM crates (`vllm-chat`, `vllm-text`) carry the chat renderers, picked by
 # the checkpoint's model_type, at the vLLM rev infront pins.
-infront-engine = { git = "https://github.com/pegainfer-project/infront", rev = "ea2db2791c988321d7299a1f405a529e1a1d50b4" }
-infront-vllm = { git = "https://github.com/pegainfer-project/infront", rev = "ea2db2791c988321d7299a1f405a529e1a1d50b4" }
-vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
-vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "08b989da99f0c0c76520a47580de9c18137500c9" }
+infront-engine = { git = "https://github.com/pegainfer-project/infront", rev = "ef3ff7b93493ca3817dc6c132a7f55f8424238b4" }
+infront-vllm = { git = "https://github.com/pegainfer-project/infront", rev = "ef3ff7b93493ca3817dc6c132a7f55f8424238b4" }
+vllm-chat = { git = "https://github.com/vllm-project/vllm.git", rev = "0bf9c07376a4091627e6cb50dd85464361db452c" }
+vllm-text = { git = "https://github.com/vllm-project/vllm.git", rev = "0bf9c07376a4091627e6cb50dd85464361db452c" }
 
 anyhow = "1"
 # The frontend's own HTTP stack; kern-serve puts its refusals in front of it.
@@ -78,3 +78,8 @@ dbg_macro = "deny"
 todo = "deny"
 type_complexity = "allow"
 needless_range_loop = "allow"
+
+# Mirrors vllm/rust/Cargo.toml (via infront): partial matching and match-time
+# options for vllm-parser's `hf` parser until released upstream.
+[patch.crates-io]
+pcre2 = { git = "https://github.com/vllm-project/rust-pcre2", rev = "bb2f377c9f919c881860c210fad8375945c90d43" }

@@ -91,6 +91,7 @@ struct Seq {
     /// The snapshot is in the rank's prefix tree; the end will not be.
     kept: bool,
     passed: usize,
+    min_tokens: usize,
     stop: infront_engine::StopPolicy,
     sampling: Sampling,
     admitted: Instant,
@@ -471,6 +472,7 @@ impl Dp {
             mark,
             kept: false,
             passed: 0,
+            min_tokens: q.request.min_tokens,
             stop: q.request.stop_policy.clone(),
             sampling: crate::ranks::sampling(&q.request.params),
             admitted: Instant::now(),
@@ -736,7 +738,10 @@ impl Dp {
             done.sort_unstable_by_key(|&(i, _)| std::cmp::Reverse(i));
             for (i, tok) in done {
                 let s = r.seqs.swap_remove(i);
-                let why = s.stop.classify(tok, |_| false).map_or(FinishReason::Length, FinishReason::Stop);
+                let why = (s.min_tokens == 0)
+                    .then(|| s.stop.classify(tok, |_| false))
+                    .flatten()
+                    .map_or(FinishReason::Length, FinishReason::Stop);
                 ledger.push_tokens(s.id, &[tok], &[]);
                 ledger.finish(s.id, why);
                 self.stats.finished += 1;
