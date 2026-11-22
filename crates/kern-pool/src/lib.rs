@@ -33,7 +33,7 @@ mod store;
 
 pub use arena::{Arena, Room};
 pub use deal::{deal, runs, Deal, Interleave, Pages, RowRun};
-pub use disk::{Disk, Move, Plan};
+pub use disk::{Disk, Move, Plan, Wave};
 pub use error::{Error, Result};
 pub use pages::{page_unit, row_tokens, Denied, Kind, Lease, Pool, Pooled};
 pub use pooled::{grid, landed, objects, snapshots, Chain, Hash, Keys, Landing, Object, Probe};

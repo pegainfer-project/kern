@@ -45,6 +45,17 @@ pub struct Plan {
     pub moves: Vec<Move>,
 }
 
+/// One wave of a multi-wave put or get over a remaining slice of objects:
+/// the moves staged into the pinned block, how many objects of the slice
+/// were consumed (`next`), and whether the act is finished (`done`) or
+/// paused waiting for staging room.
+#[derive(Debug)]
+pub struct Wave {
+    pub plan: Plan,
+    pub next: usize,
+    pub done: bool,
+}
+
 impl Disk {
     /// A file of `capacity` bytes and a block of `staging`, both placed on
     /// `align`; the block's first half stages puts, the rest gets.
@@ -63,6 +74,22 @@ impl Disk {
 
     pub fn staging(&self) -> u64 {
         self.puts.size() + self.gets.size()
+    }
+
+    pub fn put_staging(&self) -> u64 {
+        self.puts.size()
+    }
+
+    pub fn get_staging(&self) -> u64 {
+        self.gets.size()
+    }
+
+    /// Whether every non-zero object is currently on disk at its exact byte
+    /// size and fits inside the gets staging half.
+    pub fn holds_all(&self, objects: &[(&str, u64)]) -> bool {
+        objects.iter().all(|&(key, bytes)| {
+            bytes == 0 || (bytes <= self.gets.size() && self.ring.find(key).is_some_and(|e| e.bytes() == bytes))
+        })
     }
 
     /// Whether each key is written.
@@ -147,6 +174,94 @@ impl Disk {
         for (m, &g) in plan.moves.iter().zip(got) {
             plan.ok[m.at] = g && self.ring.holds(m.extent);
         }
+    }
+
+    /// Plan one wave of a put over `objects`, staging up to `budget` bytes
+    /// (at least one object if it fits) so callers can stream puts larger
+    /// than the puts staging half. `plan.ok` covers `0..next`, and `done`
+    /// is true once `next == objects.len()`.
+    pub fn put_wave(&mut self, objects: &[(&str, u64)], budget: u64) -> Wave {
+        let mut ok = Vec::new();
+        let mut moves = Vec::new();
+        let mut staged = 0u64;
+        let mut next = 0usize;
+        for (at, &(key, bytes)) in objects.iter().enumerate() {
+            if bytes == 0 || self.ring.find(key).is_some() {
+                ok.push(true);
+                next = at + 1;
+                continue;
+            }
+            if bytes > self.puts.size() {
+                ok.push(false);
+                next = at + 1;
+                continue;
+            }
+            if !moves.is_empty() && staged.saturating_add(bytes) > budget {
+                break;
+            }
+            let Some(room) = self.puts.take(bytes) else {
+                break;
+            };
+            match self.ring.place(key, bytes) {
+                Placed::New(extent) => {
+                    moves.push(Move { at, key: key.to_string(), extent, room });
+                    ok.push(true);
+                    staged += bytes;
+                }
+                Placed::Held => {
+                    self.puts.give(room);
+                    ok.push(true);
+                }
+                Placed::Refused => {
+                    self.puts.give(room);
+                    ok.push(false);
+                }
+            }
+            next = at + 1;
+        }
+        Wave { plan: Plan { ok, moves }, next, done: next == objects.len() }
+    }
+
+    /// Plan one wave of a get over `objects`, staging up to `budget` bytes
+    /// (at least one object if it fits) so callers can stream fetches larger
+    /// than the gets staging half. `plan.ok` covers `0..next`. `done` is
+    /// true once `next == objects.len()`, a key is missing/wrong-sized on
+    /// disk, or an object exceeds the gets staging half.
+    pub fn get_wave(&mut self, objects: &[(&str, u64)], budget: u64) -> Wave {
+        let mut ok = Vec::new();
+        let mut moves = Vec::new();
+        let mut staged = 0u64;
+        let mut next = 0usize;
+        let mut done = false;
+        for (at, &(key, bytes)) in objects.iter().enumerate() {
+            if bytes == 0 {
+                ok.push(true);
+                next = at + 1;
+                continue;
+            }
+            if bytes > self.gets.size() {
+                done = true;
+                break;
+            }
+            let Some(extent) = self.ring.find(key).filter(|e| e.bytes() == bytes) else {
+                done = true;
+                break;
+            };
+            if !moves.is_empty() && staged.saturating_add(bytes) > budget {
+                break;
+            }
+            let Some(room) = self.gets.take(bytes) else {
+                break;
+            };
+            moves.push(Move { at, key: key.to_string(), extent, room });
+            ok.push(false);
+            staged += bytes;
+            next = at + 1;
+        }
+        if next == objects.len() {
+            done = true;
+        }
+        Wave { plan: Plan { ok, moves }, next, done }
     }
 
     /// A get's room back.

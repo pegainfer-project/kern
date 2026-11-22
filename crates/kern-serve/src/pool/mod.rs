@@ -66,7 +66,7 @@ impl Config {
 /// This rank's client of the tier.
 pub enum Client {
     Mooncake(mooncake::Client),
-    Ssd(ssd::Client),
+    Ssd(Box<ssd::Client>),
 }
 
 impl Client {
@@ -79,7 +79,7 @@ impl Client {
         }
         Ok(match cfg {
             Config::Mooncake(c) => Client::Mooncake(mooncake::Client::open(c, spans)?),
-            Config::Ssd(c) => Client::Ssd(ssd::Client::open(c, rt, spans)?),
+            Config::Ssd(c) => Client::Ssd(Box::new(ssd::Client::open(c, rt, spans)?)),
         })
     }
 

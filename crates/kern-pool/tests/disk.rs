@@ -368,3 +368,99 @@ fn every_plan_flags_each_object_and_stages_each_move_alone() {
         }
     }
 }
+
+#[test]
+fn multi_wave_put_and_get_stream_past_the_staging_half() {
+    // 1024-byte ring, 64-byte staging (32 puts + 32 gets), 16-byte wave budget.
+    // Stream 10 objects of 16 bytes (160 bytes total = 5x each staging half!).
+    let mut d = Disk::new(1024, 64, 8);
+    assert_eq!((d.put_staging(), d.get_staging()), (32, 32));
+    let keys: Vec<String> = (0..10).map(|i| format!("p{i}")).collect();
+    let objects: Vec<(&str, u64)> = keys.iter().map(|k| (k.as_str(), 16)).collect();
+
+    // Put in double-buffered waves of 16 bytes each.
+    let mut next = 0;
+    let mut in_flight: Vec<Plan> = Vec::new();
+    let mut put_ok: Vec<bool> = Vec::new();
+    while next < objects.len() || !in_flight.is_empty() {
+        while next < objects.len() {
+            let w = d.put_wave(&objects[next..], 16);
+            put_ok.extend(&w.plan.ok);
+            next += w.next;
+            if !w.plan.moves.is_empty() {
+                in_flight.push(w.plan);
+            } else if w.next == 0 {
+                break;
+            }
+        }
+        assert!(in_flight.len() <= 2, "at most two 16B waves fit in 32B puts half");
+        if let Some(p) = (!in_flight.is_empty()).then(|| in_flight.remove(0)) {
+            let n = p.moves.len();
+            assert_eq!(d.wrote(p, &vec![true; n]), n);
+        }
+    }
+    assert_eq!(put_ok, vec![true; 10]);
+    assert!(d.holds_all(&objects));
+
+    // Oversized single object (> 32B gets half) fails holds_all immediately.
+    assert!(!d.holds_all(&[("p0", 16), ("huge", 40)]));
+    // Missing key fails holds_all immediately.
+    assert!(!d.holds_all(&[("p0", 16), ("missing", 16)]));
+
+    // Get all 160 bytes in double-buffered waves of 16 bytes each.
+    let mut next = 0;
+    let mut stopped = false;
+    let mut reading: Vec<(usize, Plan)> = Vec::new();
+    let mut get_ok = vec![false; objects.len()];
+    while !stopped || !reading.is_empty() {
+        while !stopped && reading.len() < 2 {
+            let start = next;
+            let w = d.get_wave(&objects[start..], 16);
+            next += w.next;
+            if w.done {
+                stopped = true;
+            }
+            if !w.plan.moves.is_empty() {
+                reading.push((start, w.plan));
+            } else if !w.done {
+                break;
+            }
+        }
+        assert!(reading.len() <= 2);
+        if let Some((start, mut p)) = (!reading.is_empty()).then(|| reading.remove(0)) {
+            let n = p.moves.len();
+            d.read(&mut p, &vec![true; n]);
+            for m in &p.moves {
+                get_ok[start + m.at] = p.ok[m.at];
+            }
+            for m in p.moves {
+                d.give(m.room);
+            }
+        }
+    }
+    assert_eq!(get_ok, vec![true; 10]);
+    // Every room merged back whole.
+    assert_eq!(d.get_wave(&objects[..2], 32).plan.moves.len(), 2);
+}
+
+#[test]
+fn wave_allows_single_object_larger_than_budget_within_half() {
+    // 64-byte gets/puts halves, 16-byte budget, 48-byte state object.
+    let mut d = Disk::new(1024, 128, 8);
+    let objs = [("page", 16), ("state", 48)];
+    let w1 = d.put_wave(&objs, 16);
+    assert_eq!((w1.next, w1.done, w1.plan.moves.len()), (1, false, 1));
+    let w2 = d.put_wave(&objs[w1.next..], 16);
+    assert_eq!((w2.next, w2.done, w2.plan.moves.len()), (1, true, 1));
+    assert_eq!(d.wrote(w1.plan, &[true]), 1);
+    assert_eq!(d.wrote(w2.plan, &[true]), 1);
+    assert!(d.holds_all(&objs));
+
+    let g1 = d.get_wave(&objs, 16);
+    assert_eq!((g1.next, g1.done, g1.plan.moves.len()), (1, false, 1));
+    let g2 = d.get_wave(&objs[g1.next..], 16);
+    assert_eq!((g2.next, g2.done, g2.plan.moves.len()), (1, true, 1));
+    for m in g1.plan.moves.into_iter().chain(g2.plan.moves) {
+        d.give(m.room);
+    }
+}
