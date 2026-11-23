@@ -1,6 +1,6 @@
 //! The extern ops the runtime provides itself, all cuBLAS: the kernels a
-//! manifest names as `extern:` instead of shipping. `Blas` is the handle
-//! and workspace the f32-result GEMM needs beside the cublasLt one.
+//! manifest names as `extern:` instead of shipping. Each stream launches them
+//! through its cuBLASLt handle.
 
 use std::os::raw::c_void;
 use std::sync::Arc;
@@ -124,10 +124,14 @@ struct Described {
 }
 
 impl Described {
-    fn new(s: GemmShape) -> Result<Self> {
+    /// The descriptors of a bf16 `C = A · Wᵀ` whose result lands as `out`:
+    /// bf16 here, or f32 for `extern:cublas_bf16_tn_f32` — cuBLASLt takes C's
+    /// and D's type from their layout, independent of the operands'.
+    fn new(s: GemmShape, out: cublaslt::sys::cudaDataType) -> Result<Self> {
         use cublaslt::result;
         use cublaslt::sys::{cublasComputeType_t, cublasLtMatmulDescAttributes_t as Attr, cudaDataType};
-        let err = |e: cublaslt::result::CublasError| Error::Cuda(format!("cublasLt descriptor ({s:?}): {e:?}"));
+        let err =
+            |e: cublaslt::result::CublasError| Error::Cuda(format!("cublasLt descriptor ({s:?}, {out:?}): {e:?}"));
         let bf = cudaDataType::CUDA_R_16BF;
         unsafe {
             let desc = result::create_matmul_desc(cublasComputeType_t::CUBLAS_COMPUTE_32F, cudaDataType::CUDA_R_32F)
@@ -143,7 +147,7 @@ impl Described {
             .map_err(err)?;
             d.layouts[0] = result::create_matrix_layout(bf, s.k, s.n, s.k as i64).map_err(err)?;
             d.layouts[1] = result::create_matrix_layout(bf, s.k, s.m, s.a_stride as i64).map_err(err)?;
-            d.layouts[2] = result::create_matrix_layout(bf, s.n, s.m, s.ldc as i64).map_err(err)?;
+            d.layouts[2] = result::create_matrix_layout(out, s.n, s.m, s.ldc as i64).map_err(err)?;
             Ok(d)
         }
     }
@@ -215,10 +219,10 @@ impl Pinned {
         Ok(Pinned(raw))
     }
 
-    /// `cublasLtMatmulAlgoCheck` at `shape`, the workspace within `Blas`'s.
+    /// `cublasLtMatmulAlgoCheck` at `shape`, the workspace within [`Workspace`]'s.
     pub(crate) fn check(&self, blt: &CudaBlasLT, shape: GemmShape) -> Result<()> {
         use cublaslt::sys as lt;
-        let d = Described::new(shape)?;
+        let d = Described::new(shape, cublaslt::sys::cudaDataType::CUDA_R_16BF)?;
         let mut result = std::mem::MaybeUninit::<lt::cublasLtMatmulHeuristicResult_t>::zeroed();
         let [w, a, c] = d.layouts;
         let status =
@@ -227,21 +231,21 @@ impl Pinned {
             bail!(KernelArtifact, "the pinned cublasLt algorithm does not run at {shape:?} ({status:?})");
         }
         let need = unsafe { result.assume_init() }.workspaceSize;
-        if need > Blas::WORKSPACE {
+        if need > Workspace::BYTES {
             bail!(
                 KernelArtifact,
                 "the pinned cublasLt algorithm needs {need} bytes of workspace at {shape:?}, over {}",
-                Blas::WORKSPACE
+                Workspace::BYTES
             );
         }
         Ok(())
     }
 }
 
-/// [`gemm_bf16_tn`] on a pinned algorithm: no heuristic, the workspace `Blas`'s.
+/// [`gemm_bf16_tn`] on a pinned algorithm: no heuristic, the workspace [`Workspace`]'s.
 pub(crate) fn gemm_bf16_tn_pinned(
     blt: &CudaBlasLT,
-    blas: &Blas,
+    ws: &Workspace,
     stream: &Arc<CudaStream>,
     args: &[RVal],
     beta: f32,
@@ -250,7 +254,7 @@ pub(crate) fn gemm_bf16_tn_pinned(
     let Some((a, w, c, shape)) = bf16_operands(args)? else {
         return Ok(());
     };
-    let d = Described::new(shape)?;
+    let d = Described::new(shape, cublaslt::sys::cudaDataType::CUDA_R_16BF)?;
     let [wl, al, cl] = d.layouts;
     let alpha = 1.0f32;
     unsafe {
@@ -268,65 +272,49 @@ pub(crate) fn gemm_bf16_tn_pinned(
             c.val as *mut c_void,
             cl,
             &algo.0,
-            blas.ws as *mut c_void,
-            Blas::WORKSPACE,
+            ws.ws as *mut c_void,
+            Workspace::BYTES,
             stream.cu_stream() as *mut _,
         )
     }
     .map_err(|e| Error::Cuda(format!("cublasLt matmul, pinned algorithm ({shape:?}): {e:?}")))
 }
 
-/// A cuBLAS handle bound to the runtime's stream with its own workspace, for
-/// the f32-result GEMM built-in (`cublasGemmEx`; cublasLt's typed `Matmul`
-/// only lands in the operand type). Kept separate from the Lt handle so the
-/// two never share a workspace.
-pub(crate) struct Blas {
-    handle: cublas::sys::cublasHandle_t,
-    _workspace: CudaSlice<u8>,
+/// The explicit workspace owned by one stream. Launches on that stream
+/// can reuse the buffer in stream order.
+///
+/// The 32 MiB budget preserves the f32 GEMM results measured against
+/// `cublasGemmEx` on L20. A zero budget changed the heuristic's selection.
+pub(crate) struct Workspace {
+    _buffer: CudaSlice<u8>,
     /// The workspace's address, taken once: reading it through cudarc's
     /// `device_ptr` records a cross-stream wait that invalidates a capture.
     ws: sys::CUdeviceptr,
 }
 
-// The handle is only ever used from the runtime's own thread, on its stream.
-unsafe impl Send for Blas {}
-unsafe impl Sync for Blas {}
+impl Workspace {
+    const BYTES: usize = 32 << 20;
 
-impl Blas {
-    const WORKSPACE: usize = 32 << 20;
-
-    pub(crate) fn new(stream: &Arc<CudaStream>) -> Result<Blas> {
-        let handle = cublas::result::create_handle().map_err(|e| Error::Cuda(format!("cublasCreate: {e:?}")))?;
-        let workspace: CudaSlice<u8> = stream.alloc_zeros(Self::WORKSPACE)?;
-        let ws = workspace.device_ptr(stream).0;
-        unsafe {
-            cublas::result::set_stream(handle, stream.cu_stream() as *mut _)
-                .map_err(|e| Error::Cuda(format!("cublasSetStream: {e:?}")))?;
-            cublas::sys::cublasSetWorkspace_v2(handle, ws as *mut c_void, Self::WORKSPACE)
-                .result()
-                .map_err(|e| Error::Cuda(format!("cublasSetWorkspace: {e:?}")))?;
-            cublas::sys::cublasSetMathMode(handle, cublas::sys::cublasMath_t::CUBLAS_TENSOR_OP_MATH)
-                .result()
-                .map_err(|e| Error::Cuda(format!("cublasSetMathMode: {e:?}")))?;
-        }
-        Ok(Blas { handle, _workspace: workspace, ws })
-    }
-}
-
-impl Drop for Blas {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = cublas::sys::cublasDestroy_v2(self.handle);
-        }
+    pub(crate) fn new(stream: &Arc<CudaStream>) -> Result<Self> {
+        let buffer: CudaSlice<u8> = stream.alloc_zeros(Self::BYTES)?;
+        let ws = buffer.device_ptr(stream).0;
+        Ok(Self { _buffer: buffer, ws })
     }
 }
 
 /// `extern:cublas_bf16_tn_f32`: row-major `C[m,n] = A[m,k] @ W[n,k]^T` with
-/// bf16 operands, f32 accumulation and an **f32** result — cublasGemmEx with
-/// `CUBLAS_COMPUTE_32F` / `CUBLAS_GEMM_DEFAULT_TENSOR_OP`, the call an
-/// engine that lands its own bf16 partials makes. Args as
-/// [`gemm_bf16_tn`]: `[a, w, c, m, n, k]` or 7 with C's row stride.
-pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
+/// bf16 operands, f32 accumulation and an f32 result. Takes
+/// `[a, w, c, m, n, k]` and an optional output row stride.
+///
+/// An f32 output layout lets this launch use the stream's Lt handle and
+/// avoid the classic handle that could fail during destruction in a host
+/// process with mismatched cuBLAS and cuBLASLt builds.
+pub(crate) fn gemm_bf16_tn_f32(
+    blt: &CudaBlasLT,
+    ws: &Workspace,
+    stream: &Arc<CudaStream>,
+    args: &[RVal],
+) -> Result<()> {
     let (a, w, c, m, n, k, ldc) = match args {
         [a, w, c, m, n, k] => (a, w, c, m.val, n.val, k.val, n.val),
         [a, w, c, m, n, k, ldc] => (a, w, c, m.val, n.val, k.val, ldc.val),
@@ -338,6 +326,11 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
     if m == 0 || n == 0 || k == 0 {
         return Ok(());
     }
+    for dim in [m, n, k, ldc] {
+        if dim > i32::MAX as u64 {
+            bail!(Manifest, "gemm f32: dimension {dim} exceeds i32");
+        }
+    }
     if a.bytes < m * k * 2 || w.bytes < n * k * 2 || c.bytes < ((m - 1) * ldc + n) * 4 {
         bail!(
             Manifest,
@@ -347,34 +340,31 @@ pub(crate) fn gemm_bf16_tn_f32(blas: &Blas, args: &[RVal]) -> Result<()> {
             c.bytes
         );
     }
-    let dim = |v: u64| i32::try_from(v).map_err(|_| Error::Manifest(format!("gemm f32: dimension {v} exceeds i32")));
+    let shape = GemmShape { m, n, k, ldc, a_stride: k };
+    let d = Described::new(shape, cublaslt::sys::cudaDataType::CUDA_R_32F)?;
+    let [wl, al, cl] = d.layouts;
     let (alpha, beta) = (1.0f32, 0.0f32);
-    use cublas::sys::{cublasComputeType_t, cublasGemmAlgo_t, cublasOperation_t, cudaDataType};
     unsafe {
-        cublas::result::gemm_ex(
-            blas.handle,
-            cublasOperation_t::CUBLAS_OP_T,
-            cublasOperation_t::CUBLAS_OP_N,
-            dim(n)?,
-            dim(m)?,
-            dim(k)?,
-            &alpha as *const f32 as *const c_void,
+        cublaslt::result::matmul(
+            *blt.handle(),
+            d.desc,
+            &alpha as *const _ as *const c_void,
+            &beta as *const _ as *const c_void,
             w.val as *const c_void,
-            cudaDataType::CUDA_R_16BF,
-            dim(k)?,
+            wl,
             a.val as *const c_void,
-            cudaDataType::CUDA_R_16BF,
-            dim(k)?,
-            &beta as *const f32 as *const c_void,
+            al,
+            c.val as *const c_void,
+            cl,
             c.val as *mut c_void,
-            cudaDataType::CUDA_R_32F,
-            dim(ldc)?,
-            cublasComputeType_t::CUBLAS_COMPUTE_32F,
-            cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+            cl,
+            std::ptr::null(),
+            ws.ws as *mut c_void,
+            Workspace::BYTES,
+            stream.cu_stream() as *mut _,
         )
-        .map_err(|e| Error::Cuda(format!("cublasGemmEx f32 (m={m} n={n} k={k}): {e:?}")))?;
     }
-    Ok(())
+    .map_err(|e| Error::Cuda(format!("cublasLt matmul f32 (m={m} n={n} k={k}): {e:?}")))
 }
 
 /// How an fp8 GEMM's operands are scaled: one f32 a tensor, or an e8m0 a 32-element block of K (MXFP8).
@@ -391,7 +381,7 @@ pub(crate) enum Fp8Scale {
 /// device (cublasLt's per-tensor scale pointers), so a manifest quantizes
 /// the activation in-graph. Same column-major mapping as the bf16 path,
 /// which is exactly cublasLt's fp8 rule (A transposed, B not). The
-/// workspace is `Blas`'s: every GEMM runs on the one stream.
+/// workspace belongs to the stream that launches the GEMM.
 ///
 /// `extern:cublaslt_mxfp8_tn` ([`Fp8Scale::Block32`]): the same product over
 /// MXFP8 operands, bf16 result: `a_scale` / `w_scale` are e8m0 bytes, one per
@@ -400,7 +390,7 @@ pub(crate) enum Fp8Scale {
 /// `512 (r / 128 · ⌈K/128⌉ + b / 4)`, entry (r, b) at `(r % 32) 16 + (r % 128 / 32) 4 + b % 4` in it.
 pub(crate) fn gemm_fp8_tn(
     blt: &CudaBlasLT,
-    blas: &Blas,
+    ws: &Workspace,
     stream: &Arc<CudaStream>,
     args: &[RVal],
     f32_out: bool,
@@ -464,7 +454,7 @@ pub(crate) fn gemm_fp8_tn(
         set(Attr::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &sw as *const _ as *const c_void, 8)?;
         set(Attr::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &sa as *const _ as *const c_void, 8)?;
         let pref = result::create_matmul_pref().map_err(|e| lt(e, "preference"))?;
-        let ws_size = Blas::WORKSPACE;
+        let ws_size = Workspace::BYTES;
         result::set_matmul_pref_attribute(
             pref,
             cublaslt::sys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
@@ -490,7 +480,7 @@ pub(crate) fn gemm_fp8_tn(
             c.val as *mut c_void,
             c_layout,
             &heuristic.algo,
-            blas.ws as *mut c_void,
+            ws.ws as *mut c_void,
             ws_size,
             stream.cu_stream() as *mut _,
         )
