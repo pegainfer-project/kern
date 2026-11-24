@@ -81,13 +81,26 @@ What the files hold:
 ## Kimi-K3.1 Pro decode on two nodes
 
 kern runs Kimi-K3.1 Pro's decode at TP8 / DCP8 over two nodes of four GPUs as
-the decode instance of an SGLang prefill/decode deployment; the deployment is
+the decode instance of an SGLang prefill/decode deployment; the prefill
+instance, router, and container setup (IMEX channel, unlimited memlock, and
+cluster `NCCL_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME`) are
 [kern-k31's](https://github.com/pegainfer-project/kern-k31/blob/main/docs/try-in-sglang.md).
-Tracing it is the same variable in the environment of both decode servers,
-in the same image, with `kern-llm` 0.5.0 or newer installed on those nodes:
+Mount `/var/kern-trace` into the same image on both decode nodes and run the
+decode command with `KERN_TRACE_DIR` added (`--node-rank 0` and `1`):
 
 ```sh
-export KERN_TRACE_DIR=/var/kern-trace   # then the decode command of that page, unchanged
+pip install "kern-llm>=0.5.0"
+python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Pegainfer/kern-k31-sm103', local_dir='kern-k31')"
+
+MOONCAKE_PROTOCOL=nvlink MC_FORCE_MNNVL=1 SGLANG_MOONCAKE_CUSTOM_MEM_POOL=NVLINK \
+KERN_TRACE_DIR=/var/kern-trace \
+KERN_MANIFEST=kern-k31/manifests/kimi-k31-d-tp8-sglang.json \
+python3 -m sglang.launch_server --model-path moonshotai/Kimi-K3.1-Pro --trust-remote-code \
+  --tp-size 8 --dcp-size 8 --nnodes 2 --node-rank <0|1> --dist-init-addr <D node 0>:<port> \
+  --disaggregation-mode decode --disaggregation-transfer-backend mooncake \
+  --page-size 64 --mamba-ssm-dtype bfloat16 --dsa-decode-backend trtllm \
+  --reasoning-parser kimi_k3 --tool-call-parser kimi_k3 \
+  --max-running-requests 256 --host 0.0.0.0 --port 30000
 ```
 
 Every TP rank is a process of its own and records for itself, so each node's
