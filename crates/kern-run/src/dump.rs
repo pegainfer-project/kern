@@ -3,3 +3,7 @@
 pub mod artifact;
 pub mod capture;
 pub mod plan;
+
+mod cli;
+
+pub use cli::{run, DumpOpts};

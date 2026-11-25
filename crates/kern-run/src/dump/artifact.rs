@@ -123,10 +123,9 @@ impl Writer {
     /// offsets are relative to this blob and each read must return exactly
     /// the requested length; failure leaves the artifact incomplete.
     pub fn blob(&mut self, bytes: u64, mut read: impl FnMut(u64, usize) -> Result<Vec<u8>>) -> Result<Blob> {
-        ensure!(!self.failed, "dump writer cannot continue after a failed blob");
+        let budget = self.check_budget(bytes);
         self.failed = true;
-        let total = self.bytes.checked_add(bytes).context("dump payload size overflow")?;
-        ensure!(total <= self.max_bytes, "dump payload needs {total} bytes; budget is {} bytes", self.max_bytes);
+        let total = budget?;
         let id = format!("{:06}", self.blobs.len() + 1);
         let path = format!("blobs/{id}.bin");
         let mut file = OpenOptions::new().write(true).create_new(true).open(self.dir.join(&path))?;
@@ -146,6 +145,14 @@ impl Writer {
         self.blobs.push(blob.clone());
         self.failed = false;
         Ok(blob)
+    }
+
+    /// Check the complete planned payload before running a selected prefix.
+    pub fn check_budget(&self, additional: u64) -> Result<u64> {
+        ensure!(!self.failed, "dump writer cannot continue after a failed blob");
+        let total = self.bytes.checked_add(additional).context("dump payload size overflow")?;
+        ensure!(total <= self.max_bytes, "dump payload needs {total} bytes; budget is {} bytes", self.max_bytes);
+        Ok(total)
     }
 
     /// Publish the completion index only after all blobs succeeded.

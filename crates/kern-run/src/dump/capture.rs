@@ -54,6 +54,22 @@ pub fn record(
             );
         }
     }
+    let mut weights = BTreeSet::new();
+    let mut required = 0u64;
+    for (_, storages) in &prepared {
+        for storage in storages {
+            let weight =
+                storage.kind == StorageKind::Buffer && rt.manifest.buffers[&storage.name].kind == BufferKind::Weight;
+            if weight && !weights.insert(key(storage)) {
+                continue;
+            }
+            let range = region(storage, ranges);
+            let copies = if plan.selection.phase == Phase::Both && !weight { 2 } else { 1 };
+            let bytes = (range.end - range.start).checked_mul(copies).context("dump payload size overflow")?;
+            required = required.checked_add(bytes).context("dump payload size overflow")?;
+        }
+    }
+    writer.check_budget(required)?;
 
     let program = &plan.selection.program;
     let calls = &rt.manifest.programs[program].calls;

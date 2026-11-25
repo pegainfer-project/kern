@@ -21,7 +21,7 @@ use crate::config::{Config, Target};
 use crate::{Caller, Given, Inputs, Vars};
 use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::types::BufferKind;
-use kern_manifest::Verified;
+use kern_manifest::{Protocol, Verified};
 use kern_runtime::{Capacity, Runtime};
 use tracing::info;
 
@@ -125,7 +125,7 @@ pub struct RunOpts {
 
 /// Resolved options: the shared inputs, plus what only `kern run` has an
 /// opinion about.
-struct Opts {
+pub(super) struct Opts {
     inputs: Inputs,
     tokenizer: PathBuf,
     prompt: String,
@@ -142,6 +142,36 @@ struct Opts {
 }
 
 impl RunOpts {
+    /// A selected fixed-rows program determines the generated step shape;
+    /// prompt chunks keep the normal run's choice of a later step.
+    pub(super) fn resolve_dump(self, cfg: Option<&Config>, t: Option<&Target>, program: &str) -> Result<Opts> {
+        ensure!(self.probe_dir.is_none(), "--probe-dir cannot be combined with kern dump");
+        ensure!(
+            self.temperature.is_finite() && self.top_p.is_finite() && self.min_p.is_finite(),
+            "dump sampling parameters must be finite"
+        );
+        let rows = self.rows;
+        let mut opts = self.resolve(cfg, t)?;
+        let json = std::fs::read_to_string(&opts.inputs.manifest)
+            .with_context(|| format!("reading manifest {}", opts.inputs.manifest.display()))?;
+        let verified = Verified::from_json(&json)?;
+        let protocol = Protocol::check(&verified)?;
+        let forward = protocol
+            .forwards
+            .iter()
+            .find(|f| f.name == program)
+            .with_context(|| format!("dump program `{program}` is not a protocol forward"))?;
+        if let Rows::Const(required) = forward.rows {
+            ensure!(
+                rows.is_none_or(|asked| asked == required),
+                "dump program `{program}` takes {required} rows, conflicting with --rows {}",
+                rows.unwrap_or(required)
+            );
+            opts.rows = Some(required);
+        }
+        Ok(opts)
+    }
+
     fn resolve(self, cfg: Option<&Config>, t: Option<&Target>) -> Result<Opts> {
         let given = Given {
             manifest: self.manifest,
@@ -300,9 +330,11 @@ fn banner(rt: &Runtime, manifest: &Path, kernels: Option<&Path>, load: Duration)
 
 /// A single sequence ready to generate, shared by normal execution and
 /// diagnostics that execute selected programs call by call.
-struct Prepared {
-    caller: Caller,
-    prompt_ids: Vec<i64>,
+pub(super) struct Prepared {
+    pub(super) caller: Caller,
+    pub(super) prompt_ids: Vec<i64>,
+    pub(super) manifest_json: String,
+    pub(super) sampling: Sampling,
     tokenizer: tokenizers::Tokenizer,
     prompt: String,
     steps: usize,
@@ -317,7 +349,7 @@ struct Prepared {
 
 /// Check the manifest before allocating a device, then load and stage the
 /// same sequence that `kern run` would drive.
-fn prepare(o: Opts, check: impl FnOnce(&Verified, &str) -> Result<()>) -> Result<Prepared> {
+pub(super) fn prepare(o: Opts, check: impl FnOnce(&Verified, &str) -> Result<()>) -> Result<Prepared> {
     let manifest_json = std::fs::read_to_string(&o.inputs.manifest)
         .with_context(|| format!("reading manifest {}", o.inputs.manifest.display()))?;
     let t0 = Instant::now();
@@ -384,6 +416,8 @@ fn prepare(o: Opts, check: impl FnOnce(&Verified, &str) -> Result<()>) -> Result
     Ok(Prepared {
         caller,
         prompt_ids,
+        manifest_json,
+        sampling: o.sampling,
         tokenizer,
         prompt: o.prompt,
         steps: o.steps,
@@ -401,7 +435,7 @@ impl Prepared {
     /// Drive the real prompt and generated tokens, letting `execute` run
     /// each staged program exactly once. A break ends generation after
     /// that program; the callback must finish its launches and synchronize.
-    fn drive(
+    pub(super) fn drive(
         &mut self,
         mut execute: impl FnMut(&mut Runtime, &Forward, &Vars, u64, i64) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
@@ -460,6 +494,9 @@ impl Prepared {
             let invocation = invocation(&mut invocations, &self.step.name);
             let control = execute(&mut caller.rt, &self.step, &vars, invocation, caller.pos)?;
             let out = caller.emitted(&self.step)?;
+            if control.is_break() && out.is_empty() {
+                return Ok(());
+            }
             ensure!(
                 !out.is_empty(),
                 "`{}` handed back no token; kern run steps through a forward that samples",

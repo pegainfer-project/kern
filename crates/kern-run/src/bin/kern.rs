@@ -31,6 +31,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Export selected calls on real inputs and state; diagnostics execute eagerly
+    Dump {
+        /// Target in kern.toml (needed when it declares several)
+        target: Option<String>,
+        #[command(flatten)]
+        opts: kern_run::dump::DumpOpts,
+    },
     /// Measure a sweep of call shapes: where a program's time goes, and what its calls cost alone
     Bench {
         /// Target in kern.toml (needed when it declares several)
@@ -130,6 +137,7 @@ fn main() -> Result<()> {
         _ => Config::find(cli.config.as_deref())?,
     };
     match cli.cmd {
+        Cmd::Dump { target, opts } => kern_run::dump::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
         Cmd::Bench { target, opts } => kern_run::bench::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
         Cmd::Run { target, opts } => kern_run::run::run(opts, cfg.as_ref(), target_of(cfg.as_ref(), target)?),
         Cmd::Workload { target, manifest, opts } => {
