@@ -27,8 +27,10 @@
 //! other side ([`crate::watch`]): a member waiting on a dead one's
 //! collective would otherwise wait forever.
 //!
-//! Every item leaves one debug line per rank, `rank item`: the rank's
-//! wall-clock microseconds at issue and at done (`kern_serve=debug`), and
+//! Every item leaves one debug line per rank, `rank item`: its call's
+//! shape (the vars, and the tokens its sequences hold after it) and the
+//! rank's wall-clock microseconds at issue, once the inputs are written,
+//! and at done (`kern_serve=debug`), and
 //! the head adds `ranks step` with how long it waited on the slowest
 //! remote answer after its own was done, so a step's time splits into
 //! the ranks' device time and the wire.
@@ -319,7 +321,11 @@ impl Executor {
         let launched_us = self.issue(o)?;
         let a = self.answer(o)?;
         if let Some(item) = &o.item {
-            debug!(rank = self.rank, program = %item.program, acts = o.acts.len(), issued_us, launched_us, done_us = logline::now_us(), "rank item");
+            // The call's shape beside its times: its vars, and its sequences' lengths summed.
+            let held = self.p.any(Fill::SeqLen).and_then(|f| item.rows.get(&f.name)).and_then(|v| v.ints());
+            let kv = held.map_or(0, |v| v.iter().sum::<i64>());
+            let vars = item.vars.values().map(u64::to_string).collect::<Vec<_>>().join("x");
+            debug!(rank = self.rank, program = %item.program, acts = o.acts.len(), %vars, kv, issued_us, launched_us, done_us = logline::now_us(), "rank item");
         }
         Ok(a)
     }

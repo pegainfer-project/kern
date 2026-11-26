@@ -26,6 +26,7 @@ pub mod logline;
 pub mod pd;
 mod pool;
 mod pp;
+pub mod priced;
 pub mod ranks;
 pub mod scheduler;
 mod watch;
@@ -43,6 +44,7 @@ use infront_engine::{drive, scheduler_pair, Engine, EngineInfo, KvCapacity, Live
 use infront_vllm::{Capabilities, History, ParserSelection, ServeOptions};
 use kern_manifest::{Protocol, Verified};
 use kern_runtime::Capacity;
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use scheduler::{KernScheduler, Policy};
@@ -85,6 +87,12 @@ pub struct ServeOpts {
     /// smaller one is asked for
     #[arg(long)]
     pub chunk: Option<u64>,
+
+    /// Serve without a GPU: every call takes what this `kern bench` report
+    /// measured for its shape, and hands back one fixed token a row. Takes
+    /// `--capacity`, the state the device would have held
+    #[arg(long, requires = "capacity", conflicts_with_all = ["head", "rank", "listen", "decode_listen", "trace"])]
+    pub prices: Option<PathBuf>,
 
     /// Cap on concurrently running sequences per rank (≤ the manifest's
     /// `seqs` bound)
@@ -350,6 +358,37 @@ fn run(o: ServeOpts, art: Artifacts) -> Result<()> {
             pool: o.pool.config(o.gpu)?,
         };
         let load = move || pp::head::spawn(manifest, weights, head);
+        return launch(load, served_name, model_path, o.port, samples, parser);
+    }
+
+    if let Some(report) = &o.prices {
+        anyhow::ensure!(o.pool.config(o.gpu)?.is_none(), "a priced rank joins no pooled tier");
+        let json = std::fs::read_to_string(report).with_context(|| format!("reading {}", report.display()))?;
+        let prices = priced::Prices::read(&json).with_context(|| report.display().to_string())?;
+        let sha = hex::encode(Sha256::digest(manifest_json.as_bytes()));
+        anyhow::ensure!(
+            prices.manifest == sha,
+            "{} was measured on manifest {}, and {} is {}",
+            report.display(),
+            &prices.manifest[..prices.manifest.len().min(12)],
+            art.manifest.display(),
+            &sha[..12]
+        );
+        let policy = Policy { chunk: o.chunk.map(|c| c as usize), max_seqs: o.max_seqs, rows: o.rows };
+        let (tokens, slots) = (o.capacity.expect("clap requires --capacity with --prices"), o.slots());
+        let report = report.clone();
+        // A word the frontend streams the moment it is handed back.
+        let token = kern_run::chat::Renderer::load(&model_path)?.encode(" the")?;
+        let token = *token.first().context("the tokenizer made no token of a word")?;
+        let load = move || -> Result<(KernScheduler<priced::Priced>, scheduler::Facts)> {
+            let p = Protocol::check(&manifest)?;
+            let pool = priced::pool(&manifest, tokens, slots)?;
+            let ranks = ranks::Ranks::new(p.clone(), executor::world(&manifest)?, vec![pool])?;
+            info!(model = %manifest.model, report = %report.display(), "priced: no device, every call takes what the report measured");
+            let sched = KernScheduler::new(ranks, priced::Priced::new(p, prices, token)?, policy, None)?;
+            let facts = sched.facts();
+            Ok((sched, facts))
+        };
         return launch(load, served_name, model_path, o.port, samples, parser);
     }
 
