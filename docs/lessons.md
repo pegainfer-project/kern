@@ -3,6 +3,48 @@
 设计写在 runtime.md / serve.md / multi-gpu.md 里；这里只记那些"不写下来下次还会
 再踩一遍"的事，以及它们落到了哪条规则上。
 
+## 2026-11-26, at the power cap, a replay right after the GPU idled runs fast
+
+`kern bench --against` read GLM-5.3's 11-layer sub-model against itself as 0.21% slower, outside its
+interval. Its blocks then ran A B, B A, …, and between pairs the tracer was drained with the GPU idle
+for 1-3 ms. Split by what ran before a block and by its place in it, a block after the drain ran 0.56%
+fast on its first replay, 0.36% on its second, and was back by the fourth; after staging (seconds idle),
+2.9%. A pair opening with A then read B slow by 0.50%, one opening with B read it fast by 0.18%. An NVML
+poller beside the run put it on the power cap: the deviation is there only where the 1400 W software
+cap binds (prefill at c2048 and c16384, a first block 10-160 MHz above the rest) and absent where the
+SM clock sits at its 2070 MHz maximum (prefill at c128, decode on Qwen3.8-27B). Sleeping 0, 5, 20 or
+100 ms before every pair moved the c16384 first block 0.29, 0.45, 1.15 and 2.64% fast, and c128 by none.
+
+Rule: on a capped GPU, idle time before a measurement is part of the measurement. A comparison keeps
+it the same on both sides: `--against` opens every round with an unscored block of the other side, so
+each scored block follows the other's and none follows a pause. A plain bench that idles between
+scenarios or samples measures prefill a little fast, by how long it idled.
+
+## 2026-11-26, HES fails on a process that instantiates many graphs of one program
+
+The stall of 2026-11-10 came back in `kern bench --against`, which keeps two scenarios staged at once,
+and was taken apart there. Qwen3.8-27B bf16, one GB300, the same driver, CUPTI 13.4.46. With A and B
+only staging and warming up, the 6th scenario stalled every time, always in the first replay of its
+second graph exec and always at the same node, the 447th of 839 (a cuBLASLt split-K GEMM); its 446
+predecessors had records. It is not two runtimes: one runtime staging the same scenario twice stalls
+the same way. Of what the first staging leaves alive, its graph exec alone makes the second stall; its
+pre-image or its KV pages alone do not. Sharing weights or not, `CUDA_DEVICE_MAX_CONNECTIONS` 1 or 32, a
+forced flush after every scenario and CUPTI's device buffer size change nothing. With CUPTI off it
+never stalls, and compute-sanitizer memcheck finds no error in the kernels.
+
+CUPTI 13.5.25 (the pip wheel) does not fix it; it turns the stall into a loss. The same node's record
+goes missing with nothing counted as dropped (838 of 839), and over repeated loads another graph loses
+its split-K reduce's record in every replay. A workload of three scenarios runs six reloads clean: it
+accumulates, as on 2026-11-10. CUPTI's software timestamps run every case to the end on both CUPTI
+versions with no record lost.
+
+On the way, the tracer's own bug: it took a later launch's kernels on the same device as proof that
+an earlier issue had all its records, which two streams on one device break. It now asks per stream.
+
+Rule: HES is not trusted for a process that instantiates more than a few graphs of one program;
+`--against` uses software timestamps by default, and `kern bench --timestamps software` is there for a
+long plain bench. A lost record fails the run, which is how this one was seen; keep it failing.
+
 ## 2026-11-10, a synchronize that spins while the GPU is idle: A/B the instrumentation first
 
 `kern bench` over 141 scenarios that `kern workload` made from a served trace of Qwen3.8-27B FP8 with

@@ -298,7 +298,7 @@ pub fn start(
     meta: Vec<(String, String)>,
     pm: Option<(usize, Duration)>,
 ) -> anyhow::Result<Shared> {
-    trace::start()?;
+    trace::start(trace::Timestamps::Hes)?;
     let sampler = match (&dir, pm) {
         (Some(_), Some((gpu, every))) => Some(Sampler::start(gpu, every)?),
         _ => None,

@@ -223,7 +223,7 @@ impl Runtime {
 fn trace_start() -> PyResult<()> {
     match trace::on() {
         true => Ok(()),
-        false => trace::start().map_err(runtime_err),
+        false => trace::start(trace::Timestamps::Hes).map_err(runtime_err),
     }
 }
 

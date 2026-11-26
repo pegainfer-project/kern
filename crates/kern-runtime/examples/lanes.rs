@@ -109,7 +109,7 @@ fn main() {
     let verified = kern_manifest::Verified::from_json(&json).unwrap_or_else(|e| panic!("{e}"));
 
     if traced {
-        trace::start().unwrap();
+        trace::start(trace::Timestamps::Hes).unwrap();
     }
     let capacity = Capacity { tokens: Some(1), slots: 1, landings: 0 };
     let mut rt = Runtime::load(&verified, Some(&kernels), gpu, Some(capacity), None).unwrap();

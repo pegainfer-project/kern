@@ -16,7 +16,10 @@
 //! shape with its own sequences, in lockstep: a call that reads its peers
 //! finds them issuing. Attribution is per rank.
 
+mod against;
 mod candidates;
+mod exclusive;
+mod paired;
 pub mod pick;
 pub mod served;
 pub mod workload;
@@ -26,7 +29,7 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
-use kern_manifest::types::{BufferKind, Manifest};
+use kern_manifest::types::{BufferKind, Call, Manifest};
 use kern_manifest::{Protocol, Verified};
 use kern_pool::Lease;
 use kern_runtime::profile::{Graph, PreImage, Probe};
@@ -82,6 +85,45 @@ pub struct BenchOpts {
     /// those that leave its outputs standing is written out
     #[arg(long)]
     candidate: Vec<PathBuf>,
+    /// Another manifest measured against this one in the same process, both
+    /// resident at once, their replays in alternating blocks over the same
+    /// scenarios; reports B's change per scenario and over the workload's
+    /// cost with 95% intervals, and exits 0 when B is faster, 1 when slower,
+    /// 2 when the interval holds zero
+    #[arg(long, conflicts_with = "candidate")]
+    against: Option<PathBuf>,
+    /// With `--against`: replays per block, each side
+    #[arg(long, default_value_t = 4, requires = "against")]
+    block: usize,
+    /// With `--against`: stop a scenario once its interval's half-width is
+    /// below this fraction (after four rounds of blocks)
+    #[arg(long, default_value_t = 0.001, requires = "against")]
+    precision: f64,
+    /// With `--against`: rounds of blocks a scenario takes at most
+    #[arg(long, default_value_t = 16, requires = "against")]
+    max_rounds: usize,
+    /// With `--against`: B loads its own copy of the weights instead of
+    /// reading A's in place (their placement then differs between the two)
+    #[arg(long, requires = "against")]
+    no_share: bool,
+    /// With `--against`: times both sides are loaded afresh and every
+    /// scenario measured again, A first on even epochs and B first on odd
+    /// ones; where a side's buffers land shifts its speed by a few tenths
+    /// of a percent, so the interval is over the epochs
+    #[arg(long, default_value_t = 4, requires = "against")]
+    epochs: usize,
+    /// Where kernel timestamps come from: `hes`, the GPU's own, or
+    /// `software`, CUPTI's, a few tenths of a percent slower. Defaults to
+    /// `hes`, and to `software` with `--against`, whose many graphs of one
+    /// program HES loses records of
+    #[arg(long, value_enum)]
+    timestamps: Option<Stamps>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum Stamps {
+    Hes,
+    Software,
 }
 
 #[derive(Serialize, Debug)]
@@ -256,26 +298,48 @@ fn source(rt: &mut Runtime, p: &Protocol, length: usize, corpus: &[i64], seq: us
     Ok(Some(lease))
 }
 
-/// One sample's whole-graph time, first kernel start to last kernel end,
-/// and each of the program's `calls` calls' kernel time, in µs.
-fn timing(step: &Step, calls: usize) -> Result<(f64, Vec<f64>)> {
+/// One sample in µs: the whole graph, first kernel start to last kernel
+/// end; every call's kernel time, waits included; and every call's
+/// exclusive time ([`exclusive`]).
+#[derive(Clone)]
+struct Sample {
+    graph: f64,
+    busy: Vec<f64>,
+    exclusive: Vec<f64>,
+}
+
+/// Calls with fewer kernel records than the graph has nodes for them, and by how many.
+fn short_calls(step: &Step) -> Vec<(u32, i64)> {
+    let mut want: BTreeMap<u32, i64> = BTreeMap::new();
+    step.issue.kernels.values().for_each(|&c| *want.entry(c).or_default() += 1);
+    step.spans.iter().filter_map(|s| s.call).for_each(|c| *want.entry(c).or_default() -= 1);
+    want.into_iter().filter(|&(_, n)| n > 0).collect()
+}
+
+fn timing(step: &Step, program: &[Call]) -> Result<Sample> {
+    let calls = program.len();
     let (got, want) = (step.spans.len(), step.issue.kernels.len());
     ensure!(
         got == want && got > 0,
-        "`{}`: the tracer returned {got} of the graph's {want} kernels ({} records dropped so far)",
+        "`{}` issue {}: the tracer returned {got} of the graph's {want} kernels ({} records dropped so far); calls short of their kernels: {:?}",
         step.issue.program,
-        trace::dropped()
+        step.seq,
+        trace::dropped(),
+        short_calls(step)
     );
-    let mut per = vec![0.; calls];
+    let mut busy = vec![0.; calls];
+    let mut extents: Vec<exclusive::Extent> = vec![None; calls];
     for s in &step.spans {
         let c = s.call.filter(|&c| (c as usize) < calls).with_context(|| {
             format!("`{}`: kernel `{}` is not one of the program's calls", step.issue.program, s.name)
-        })?;
-        per[c as usize] += (s.end - s.start) as f64 / 1e3;
+        })? as usize;
+        busy[c] += (s.end - s.start) as f64 / 1e3;
+        extents[c] = Some(extents[c].map_or((s.start, s.end), |(a, b)| (a.min(s.start), b.max(s.end))));
     }
     let start = step.spans.iter().map(|s| s.start).min().unwrap();
     let end = step.spans.iter().map(|s| s.end).max().unwrap();
-    Ok(((end - start) as f64 / 1e3, per))
+    let exclusive = exclusive::exclusive(program, &extents, start);
+    Ok(Sample { graph: (end - start) as f64 / 1e3, busy, exclusive })
 }
 
 /// The tracer's steps for `seqs`, taken out of `steps`.
@@ -334,6 +398,7 @@ fn preamble(m: &Verified, json_bytes: &[u8], w: &Workload, plan: &Plan, probe: &
             "driver_version":probe.driver_version},
         "protocol":{"timer":timer,"graph":"first kernel start to last kernel end",
             "call":"sum of the call's kernel durations in the same replay",
+            "exclusive":"from the later of the call's first kernel start and its predecessors' end (same lane, and lanes it is after) to its last kernel end",
             "entry":"L2 flushed; declared carry and state writes restored","samples":w.samples,"warmup":WARMUP,
             "context_data":"deterministic diverse prose; one real prefix per rank, copied onto each sequence's own pages",
             "units":"microseconds"},
@@ -349,24 +414,41 @@ struct Measured {
     telemetry: (Value, Value),
 }
 
+/// Every sample of one rank's scenario, per call: kernel time and exclusive time.
+struct Calls {
+    busy: Vec<Vec<f64>>,
+    exclusive: Vec<Vec<f64>>,
+}
+
+impl Calls {
+    fn of(samples: &[Sample], calls: usize) -> Calls {
+        let per = |f: fn(&Sample) -> &Vec<f64>| -> Vec<Vec<f64>> {
+            (0..calls).map(|c| samples.iter().map(|s| f(s)[c]).collect()).collect()
+        };
+        Calls { busy: per(|s| &s.busy), exclusive: per(|s| &s.exclusive) }
+    }
+}
+
 /// One rank's evidence of one scenario: per sample the graph's time and
 /// every call's.
 struct Timed {
     vars: Vars,
     graph_us: Vec<f64>,
-    calls_us: Vec<Vec<f64>>,
+    calls: Calls,
     telemetry: (Value, Value),
 }
 
+/// The samples `seqs` took, out of the tracer's `steps`.
+fn samples(steps: &mut BTreeMap<u64, Step>, seqs: &[u64], program: &[Call]) -> Result<Vec<Sample>> {
+    take(steps, seqs)?.iter().map(|s| timing(s, program)).collect()
+}
+
 impl Measured {
-    fn time(self, steps: &mut BTreeMap<u64, Step>, calls: usize) -> Result<Timed> {
-        let timed = take(steps, &self.program)?.iter().map(|s| timing(s, calls)).collect::<Result<Vec<_>>>()?;
-        let mut calls_us = vec![Vec::with_capacity(timed.len()); calls];
-        for (_, per) in &timed {
-            calls_us.iter_mut().zip(per).for_each(|(v, us)| v.push(*us));
-        }
-        let graph_us = timed.into_iter().map(|t| t.0).collect();
-        Ok(Timed { vars: self.vars, graph_us, calls_us, telemetry: self.telemetry })
+    fn time(self, steps: &mut BTreeMap<u64, Step>, program: &[Call]) -> Result<Timed> {
+        let timed = samples(steps, &self.program, program)?;
+        let calls = Calls::of(&timed, program.len());
+        let graph_us = timed.iter().map(|t| t.graph).collect();
+        Ok(Timed { vars: self.vars, graph_us, calls, telemetry: self.telemetry })
     }
 }
 
@@ -376,9 +458,11 @@ fn record(m: &Manifest, s: &Scenario, rank: usize, x: Timed, elapsed_s: f64) -> 
     let calls: Vec<Value> = m.programs[&s.program]
         .calls
         .iter()
-        .zip(x.calls_us)
+        .zip(x.calls.busy.into_iter().zip(x.calls.exclusive))
         .enumerate()
-        .map(|(i, (c, us))| json!({"index":i,"label":c.label,"op":c.op,"in_program":series(us)}))
+        .map(|(i, (c, (busy, ex)))| {
+            json!({"index":i,"label":c.label,"op":c.op,"in_program":series(busy),"exclusive":series(ex)})
+        })
         .collect();
     json!({"scenario":s,"program":s.program,"rank":rank,"vars":x.vars,"graph":series(x.graph_us),
         "calls":calls,
@@ -401,6 +485,23 @@ struct Rank {
 /// emit the tokens the last sample did, or restoring the pre-image does
 /// not put the state back.
 fn measure(r: &mut Rank, p: &Protocol, s: &Scenario, corpus: &[i64], samples: usize) -> Result<Measured> {
+    let st = stage(r, p, s, corpus)?;
+    let program = replays(r, &st.pre, &st.graph, samples)?;
+    replay_holds(r, p, s, &st)?;
+    Ok(Measured { vars: st.vars, program, telemetry: (st.before, telemetry(r.gpu)) })
+}
+
+/// One rank's scenario ready to replay: its sequences leased over the
+/// source prefix, the batch staged, the pre-image taken, the graph built.
+struct Staged {
+    vars: Vars,
+    pre: PreImage,
+    graph: Graph,
+    before: Value,
+    _leases: Vec<Lease>,
+}
+
+fn stage(r: &mut Rank, p: &Protocol, s: &Scenario, corpus: &[i64]) -> Result<Staged> {
     let shape = &s.shape;
     let before = telemetry(r.gpu);
     let leases = shape.context.iter().map(|n| r.rt.lease(n + shape.rows)).collect::<kern_runtime::Result<Vec<_>>>()?;
@@ -415,15 +516,20 @@ fn measure(r: &mut Rank, p: &Protocol, s: &Scenario, corpus: &[i64], samples: us
     let vars = crate::stage_batch(&mut r.rt, p, &leases, &shape.context, shape.rows, &input)?;
     let pre = PreImage::new(&r.rt, &s.program)?;
     let graph = Graph::new(&r.rt, &s.program, &vars)?;
-    let program = replays(r, &pre, &graph, samples)?;
-    let last = output_fingerprints(&r.rt, p, shape.groups)?;
-    r.probe.sample(&r.rt, &pre, &graph)?;
+    Ok(Staged { vars, pre, graph, before, _leases: leases })
+}
+
+/// One more replay must emit the tokens the last did, or restoring the
+/// pre-image does not put the state back.
+fn replay_holds(r: &Rank, p: &Protocol, s: &Scenario, st: &Staged) -> Result<()> {
+    let last = output_fingerprints(&r.rt, p, s.shape.groups)?;
+    r.probe.sample(&r.rt, &st.pre, &st.graph)?;
     ensure!(
-        output_fingerprints(&r.rt, p, shape.groups)? == last,
+        output_fingerprints(&r.rt, p, s.shape.groups)? == last,
         "{}: a replay from the restored pre-image emitted different tokens",
         s.id
     );
-    Ok(Measured { vars, program, telemetry: (before, telemetry(r.gpu)) })
+    Ok(())
 }
 
 /// What every scenario is measured against: loaded once, and unchanged by
@@ -500,7 +606,7 @@ impl Bench {
         let m = &self.ranks[0].rt.manifest;
         let calls = &m.programs[&s.program].calls;
         let mut steps: BTreeMap<u64, Step> = trace::finish()?.steps.into_iter().map(|t| (t.seq, t)).collect();
-        let timed = measured.into_iter().map(|x| x.time(&mut steps, calls.len())).collect::<Result<Vec<_>>>()?;
+        let timed = measured.into_iter().map(|x| x.time(&mut steps, calls)).collect::<Result<Vec<_>>>()?;
         let p50 = |x: &Timed| stats(&x.graph_us).p50;
         let (q, slow) = timed.iter().enumerate().max_by(|a, b| p50(a.1).total_cmp(&p50(b.1))).unwrap();
         let ranks = match timed.len() {
@@ -509,7 +615,7 @@ impl Bench {
         };
         say("program", program_line(&stats(&slow.graph_us), calls.len()) + ranks.as_str(), Some(started));
         let attributed: Vec<(String, f64)> =
-            calls.iter().zip(&slow.calls_us).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
+            calls.iter().zip(&slow.calls.busy).map(|(c, us)| (c.op.clone(), stats(us).p50)).collect();
         let shares = mix(&attributed);
         say("mix", mix_line(&shares), None);
         let elapsed_s = started.elapsed().as_secs_f64();
@@ -576,13 +682,22 @@ pub fn run(o: BenchOpts, cfg: Option<&Config>, target: Option<&Target>) -> Resul
     let inputs = crate::Inputs::resolve(given, cfg, target)?;
     let w = Workload::read(&o.workload)?;
     // Before any runtime loads: CUPTI picks its timestamps once per process.
-    trace::start()?;
+    trace::start(match (o.timestamps, &o.against) {
+        (Some(Stamps::Hes), _) | (None, None) => trace::Timestamps::Hes,
+        (Some(Stamps::Software), _) | (None, Some(_)) => trace::Timestamps::Software,
+    })?;
     let json_bytes = std::fs::read(&inputs.manifest)?;
     // A vLLM manifest runs as vLLM runs it: bench is its host, and hands
     // the host states to the runtime in their declared layouts.
     let m = Verified::from_json(std::str::from_utf8(&json_bytes)?)?.self_hosted()?;
     if !o.candidate.is_empty() {
         return candidates::run(&o, &inputs, &w, &m, &json_bytes);
+    }
+    if let Some(b) = &o.against {
+        let b_bytes = std::fs::read(b).with_context(|| format!("reading {}", b.display()))?;
+        let mb = Verified::from_json(std::str::from_utf8(&b_bytes)?)?.self_hosted()?;
+        let verdict = against::run(&o, &inputs, &w, (&m, &json_bytes), (&mb, &b_bytes))?;
+        std::process::exit(verdict.code());
     }
     let corpus = corpus(inputs.tokenizer()?, w.seed)?;
     let (mut bench, plan) = open(&m, &inputs, &w, &corpus, &HostWeights::new(), None)?;
@@ -660,6 +775,10 @@ mod tests {
         assert_eq!(mix_line(&[]), "");
     }
 
+    fn call() -> Call {
+        Call { label: None, op: "op".into(), args: Vec::new(), lane: 0, after: Vec::new() }
+    }
+
     fn step(nodes: u32, spans: &[(Option<u32>, u64, u64)]) -> Step {
         let issue = trace::Issue {
             program: "decode".into(),
@@ -676,15 +795,19 @@ mod tests {
     #[test]
     fn a_sample_spans_its_kernels_and_charges_each_to_its_call() {
         let s = step(3, &[(Some(0), 1_000, 3_000), (Some(1), 2_500, 4_000), (Some(0), 9_000, 10_000)]);
-        assert_eq!(timing(&s, 3).unwrap(), (9., vec![3., 1.5, 0.]));
+        let program: Vec<Call> = (0..3).map(|_| call()).collect();
+        let t = timing(&s, &program).unwrap();
+        assert_eq!((t.graph, t.busy), (9., vec![3., 1.5, 0.]));
+        assert_eq!(t.exclusive, vec![9., 0., 0.]);
     }
 
     #[test]
     fn a_sample_missing_kernels_or_naming_no_call_is_refused() {
-        assert!(timing(&step(3, &[(Some(0), 0, 1), (Some(1), 1, 2)]), 2).is_err());
-        assert!(timing(&step(1, &[(None, 0, 1)]), 1).is_err());
-        assert!(timing(&step(1, &[(Some(4), 0, 1)]), 1).is_err());
-        assert!(timing(&step(0, &[]), 1).is_err());
+        let (one, two) = (vec![call()], vec![call(), call()]);
+        assert!(timing(&step(3, &[(Some(0), 0, 1), (Some(1), 1, 2)]), &two).is_err());
+        assert!(timing(&step(1, &[(None, 0, 1)]), &one).is_err());
+        assert!(timing(&step(1, &[(Some(4), 0, 1)]), &one).is_err());
+        assert!(timing(&step(0, &[]), &one).is_err());
     }
 
     #[test]

@@ -27,7 +27,8 @@ fn collected(seq: u64, program: &str, graph: bool, var: (&str, u64), at: u64) ->
         kernels: Arc::new([(0, 0), (1, 1)].into()),
     };
     let spans = vec![span(Some(0), at, at + 10), span(Some(1), at + 10, at + 30), span(None, at + 30, at + 35)];
-    let copy = Kernel { correlation: 0, device: 0, start: at + 40, end: at + 45, name: "copy".into(), node: None };
+    let copy =
+        Kernel { correlation: 0, device: 0, stream: 0, start: at + 40, end: at + 45, name: "copy".into(), node: None };
     Collected { steps: vec![Step { seq, issue, spans }], unclaimed: vec![copy] }
 }
 

@@ -461,6 +461,68 @@ do, and the confirming run) and `picked`: the choice as a candidate file,
 tiled with `when`, ready to be spliced into the generator's output. Fed
 back as the only candidate it is chosen again.
 
+## Against: B measured beside A
+
+```sh
+kern bench --manifest a.json --against b.json --workload w.toml --out ab.json
+```
+
+Both manifests are loaded into one process and stay resident, B reading
+A's weights in place (`--no-share` gives it its own copy). Every scenario
+is staged on both and replayed in rounds of three blocks of `--block`,
+A B A then B A B; the change is the mean over rounds of the log ratio of
+the middle block's median to the geometric mean of the outer two, which
+see the same clocks, temperature and power cap and cancel a drift linear
+over the round, with a Student-t interval. A scenario stops once the
+interval's half-width is under `--precision`, or at `--max-rounds`.
+
+Each round opens with an unscored block of the side it does not start
+with. Between rounds the tracer is drained and the GPU idles a few
+milliseconds; where the power cap binds (GLM-5.3 prefill at 1400 W), the
+replays after it run 0.2-0.6% fast for about four replays, and a plain
+A B, B A order hands that to whichever side opens the pair. With the
+lead-in, every scored block follows the other side's and none follows a
+pause.
+
+Rounds do not cancel where a side's buffers landed. The same manifest
+loaded twice on one GB300 runs 0.1-0.3% apart, the same way on every
+load in the same order, with a round interval of ±0.05% around the wrong
+value. So the whole is repeated `--epochs` times (default 4): both sides
+are loaded afresh each epoch over the weights the last one left resident
+(a reload is about 150 ms), A first on even epochs and B first on odd
+ones, and a scenario's change is Student-t over its epochs, never
+narrower than its rounds' noise pooled. Which side loads first moves the
+placement the same way each time: on Qwen3.8-27B the epochs of a null run
+read -0.12, +0.16, -0.15, +0.15%. From four epochs on, load order is a
+blocking factor: the change is the mean of the even and the odd epochs'
+means, its error their pooled spread within on n - 2 degrees of freedom. The workload's cost combines an
+epoch's scenarios weighted by their share of A's and is Student-t over
+the epochs: a placement moves every scenario of its epoch together.
+
+The ops whose implementation or call count differ between A and B are
+the changed ops; their exclusive time (from the later of a call's first
+kernel start and its predecessors' end, to its last kernel end: a PDL
+wait is the call before's) is compared the same way, so a local change is
+read on what it touched. On Qwen3.8-27B (9 scenarios, 4 epochs, about
+a minute), 16 extra `silu_mul` launches in a decode step read +0.23%
+[+0.16, +0.30] on the cost, -0.19% [-0.25, -0.12] with the sides swapped,
+and +19.6% [+18.9, +20.2] on `silu_mul`; A against itself reads -0.01 and
++0.01% with intervals of ±0.08%. On an 11-layer GLM-5.3 (6 prefill
+scenarios, 4 epochs, about six minutes) the interval is ±0.2-0.25%: a
+change of -0.35% resolves, one of 0.05% does not; more epochs narrow it.
+
+`--against` takes CUPTI's software timestamps unless `--timestamps hes`
+is given: under HES, the many graphs of one program it instantiates stall
+the GPU or lose a node's records (lessons.md, 2026-11-26). They cost a
+few tenths of a percent of a graph's time, the same on both sides.
+
+`--out` is the summary, rewritten after every scenario so a run cut short
+keeps what it measured: per scenario the change over the epochs and each
+epoch's, the cost, the changed ops, whether both emitted the same tokens,
+and the verdict, which is also the exit status: 0 when B is faster, 1
+when slower, 2 when the interval holds zero. Beside it, `<stem>.a.json`
+and `<stem>.b.json` are ordinary reports of every sample, by epoch.
+
 ## The gate
 
 After the samples, one more replay from the restored pre-image must emit

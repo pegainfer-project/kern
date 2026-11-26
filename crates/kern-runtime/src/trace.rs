@@ -1,13 +1,18 @@
-//! Kernel timestamps from CUPTI's hardware event system, each kernel named
-//! by the manifest call that launched it.
+//! Kernel timestamps from CUPTI, each kernel named by the manifest call
+//! that launched it.
 //!
 //! [`start`] subscribes the process: it must run before any CUDA context
-//! exists, because the hardware event system (HES) is chosen once per
-//! process, and once on it stays on. On Blackwell the GPU writes a kernel's
-//! start and end itself, so a captured graph pays about a tenth of a
-//! microsecond per kernel node for its timestamps and an eager launch the
-//! CUPTI launch hook; nothing is inserted between kernels. Every call is
-//! CUPTI's subscriber-scoped (V2) API, which libcupti 13.3 and newer have.
+//! exists, because the timestamps' source is chosen once per process, and
+//! once chosen it stays. Through the hardware event system (HES), on
+//! Blackwell the GPU writes a kernel's start and end itself, so a captured
+//! graph pays about a tenth of a microsecond per kernel node for its
+//! timestamps and an eager launch the CUPTI launch hook; nothing is
+//! inserted between kernels. Under HES a process that instantiates many
+//! graphs of one program can lose a graph node's records or stall the GPU
+//! for good (lessons.md, 2026-11-10 and 2026-11-26); CUPTI's software
+//! timestamps cost a few tenths of a percent of a graph's time and do
+//! neither. Every call is CUPTI's subscriber-scoped (V2) API, which
+//! libcupti 13.3 and newer have.
 //!
 //! While tracing, every launch carries a tag as CUPTI's external
 //! correlation id: its high bits an issue's sequence number, its low bits
@@ -99,6 +104,7 @@ static LEDGER: Mutex<Ledger> = Mutex::new(Ledger::new());
 pub struct Kernel {
     pub correlation: u32,
     pub device: u32,
+    pub stream: u32,
     pub start: u64,
     pub end: u64,
     pub name: Arc<str>,
@@ -201,11 +207,11 @@ struct Ledger {
     issues: BTreeMap<u64, Pending>,
     links: BTreeMap<u32, u64>,
     waiting: Vec<(Kernel, u32)>,
-    /// Per device, the newest launch any kernel has arrived for, by its
-    /// first issue: a stream runs in order, so every issue before it on
-    /// that device is done, and the issues of one launch never pass each
-    /// other.
-    newest: BTreeMap<u32, u64>,
+    /// Per device and stream, the newest launch any kernel has arrived
+    /// for, by its first issue: a stream runs in order, so every issue
+    /// before it on that stream is done, and the issues of one launch
+    /// never pass each other. Another stream's records may arrive first.
+    newest: BTreeMap<(u32, u32), u64>,
 }
 
 impl Ledger {
@@ -250,7 +256,7 @@ impl Ledger {
             };
             match owner.and_then(|s| Some((s, self.issues.get_mut(&s)?))) {
                 Some((s, p)) => {
-                    let newest = self.newest.entry(k.device).or_default();
+                    let newest = self.newest.entry((k.device, k.stream)).or_default();
                     *newest = (*newest).max(seq);
                     p.kernels.push((k, call));
                     touched.insert(s);
@@ -266,8 +272,10 @@ impl Ledger {
             .iter()
             .filter(|(seq, p)| {
                 let full = p.issue.graph && p.kernels.len() >= p.issue.kernels.len();
-                let passed =
-                    p.kernels.first().is_some_and(|(k, _)| self.newest.get(&k.device).is_some_and(|n| n > seq));
+                let passed = p
+                    .kernels
+                    .first()
+                    .is_some_and(|(k, _)| self.newest.get(&(k.device, k.stream)).is_some_and(|n| n > seq));
                 let patience = if p.kernels.is_empty() { STALLED } else { PATIENCE };
                 full || passed || p.quiet >= patience
             })
@@ -338,9 +346,17 @@ fn subscriber() -> cupti::CUpti_SubscriberHandle {
     SUBSCRIBER.load(Ordering::Acquire)
 }
 
-/// Subscribes the process to kernel records through HES; before any CUDA
-/// context exists.
-pub fn start() -> Result<()> {
+/// Where kernel records' timestamps come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Timestamps {
+    /// The GPU's hardware event system.
+    Hes,
+    /// CUPTI's own, around each kernel.
+    Software,
+}
+
+/// Subscribes the process to kernel records; before any CUDA context exists.
+pub fn start(timestamps: Timestamps) -> Result<()> {
     let mut version = 0;
     ok(unsafe { cupti::cuptiGetVersion(&mut version) }, "version")?;
     if version < CUPTI_MIN {
@@ -359,8 +375,8 @@ pub fn start() -> Result<()> {
     let mut s = std::ptr::null_mut();
     ok(unsafe { cupti::cuptiSubscribe_v2(&mut s, None, std::ptr::null_mut(), &mut params) }, "subscribe")?;
     SUBSCRIBER.store(s, Ordering::Release);
-    // HES is chosen before any kind is enabled.
-    let (mut on, mut size) = (1u8, 1usize);
+    // The timestamps are chosen before any kind is enabled.
+    let (mut on, mut size) = (u8::from(timestamps == Timestamps::Hes), 1usize);
     ok(
         unsafe { cupti::cuptiActivitySetAttribute_v2(s, ENABLE_HES, &mut size, &mut on as *mut u8 as *mut _) },
         "set ENABLE_HES",
@@ -570,6 +586,7 @@ unsafe extern "C" fn completed(
                 sink.kernels.push(Kernel {
                     correlation: k.correlationId,
                     device: k.deviceId,
+                    stream: k.streamId,
                     start: k.start,
                     end: k.end,
                     name,
@@ -595,7 +612,7 @@ mod tests {
     use super::*;
 
     fn kernel(correlation: u32, start: u64) -> Kernel {
-        Kernel { correlation, device: 0, start, end: start + 1, name: Arc::from("k"), node: None }
+        Kernel { correlation, device: 0, stream: 0, start, end: start + 1, name: Arc::from("k"), node: None }
     }
 
     fn eager() -> Issue {
@@ -659,6 +676,21 @@ mod tests {
         assert_eq!(calls(&c), vec![]);
         let c = l.fold(vec![kernel(6, 50)], vec![(6, tag(3, Launch::Call(0)))]);
         assert_eq!(calls(&c), vec![(1, vec![Some(0)]), (2, vec![Some(0)])]);
+    }
+
+    #[test]
+    fn a_launch_on_another_stream_does_not_close_an_issue_still_missing_kernels() {
+        let mut l = Ledger::new();
+        l.issue(1, graph(&[(10, 0), (11, 1)]));
+        l.issue(2, graph(&[(20, 0), (21, 1)]));
+        let other = |k: Kernel| Kernel { correlation: 6, stream: 1, ..k };
+        let c = l.fold(
+            vec![node(10, 10), other(node(20, 30))],
+            vec![(5, tag(1, Launch::Graph)), (6, tag(2, Launch::Graph))],
+        );
+        assert_eq!(calls(&c), vec![]);
+        let c = l.fold(vec![node(11, 20), other(node(21, 40))], Vec::new());
+        assert_eq!(calls(&c), vec![(1, vec![Some(0), Some(1)]), (2, vec![Some(0), Some(1)])]);
     }
 
     #[test]
