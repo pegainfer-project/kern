@@ -427,6 +427,27 @@ impl Runtime {
     }
 }
 
+impl Runtime {
+    /// This runtime's device weights, lent to another runtime on the same
+    /// device while this one lives on: what [`Runtime::load_over`] takes in
+    /// place of loading them again. No program writes a weight (the
+    /// verifier holds every manifest to that), so both read the same bytes
+    /// at the same addresses: an A/B of two manifests then streams its
+    /// weights from one placement. The borrower must be dropped first.
+    pub fn lend(&self) -> Resident {
+        let buffers = self
+            .filled
+            .iter()
+            .filter_map(|n| {
+                let buf = self.buffers.get(n).filter(|b| b.host_weight().is_none())?;
+                let lent = DeviceBuf::borrowed(&self.stream, buf.ptr, buf.bytes);
+                Some((n.clone(), (Identity::of(&self.manifest.buffers[n]), lent)))
+            })
+            .collect();
+        Resident { gpu: self.gpu, ranks: self.ranks.clone(), buffers }
+    }
+}
+
 /// Weight buffers that outlived their runtime, waiting for the next one
 /// on the same device. A buffer is handed over when the next manifest
 /// declares it the same way — type, shape, placement, export and the

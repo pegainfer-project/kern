@@ -17,7 +17,7 @@ fn window(s: &[Sample], f: fn(&Sample) -> f64) -> f64 {
 #[test]
 #[ignore = "requires a CUDA GPU"]
 fn samples_tile_the_interval_on_the_trace_clock_and_follow_the_device() {
-    trace::start().unwrap();
+    trace::start(trace::Timestamps::Hes).unwrap();
     let mut sampler = Sampler::start(0, EVERY).unwrap();
     let ctx = CudaContext::new(0).unwrap();
     let stream = ctx.new_stream().unwrap();

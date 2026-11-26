@@ -41,7 +41,7 @@ pub struct Probe {
 impl Probe {
     pub fn new(rt: &Runtime) -> Result<Self> {
         if !trace::on() {
-            bail!(Api, "a probe reads its samples from the tracer: `trace::start()` before any runtime loads");
+            bail!(Api, "a probe reads its samples from the tracer: `trace::start` before any runtime loads");
         }
         rt.ctx.bind_to_thread()?;
         let l2_bytes = rt.ctx.attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)? as u64;
