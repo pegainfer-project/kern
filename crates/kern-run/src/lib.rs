@@ -13,6 +13,7 @@
 pub mod bench;
 pub mod chat;
 pub mod config;
+pub mod dump;
 pub mod e2e;
 pub mod inputs;
 mod probe;

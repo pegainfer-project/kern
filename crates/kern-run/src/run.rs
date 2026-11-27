@@ -10,6 +10,7 @@
 //! `info`); stdout carries only the generated text.
 
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -17,10 +18,10 @@ use anyhow::{ensure, Context, Result};
 use clap::Args;
 
 use crate::config::{Config, Target};
-use crate::{Caller, Given, Inputs};
-use kern_manifest::protocol::{Rows, Sampling};
+use crate::{Caller, Given, Inputs, Vars};
+use kern_manifest::protocol::{Forward, Rows, Sampling};
 use kern_manifest::types::BufferKind;
-use kern_manifest::Verified;
+use kern_manifest::{Protocol, Verified};
 use kern_runtime::{Capacity, Runtime};
 use tracing::info;
 
@@ -124,7 +125,7 @@ pub struct RunOpts {
 
 /// Resolved options: the shared inputs, plus what only `kern run` has an
 /// opinion about.
-struct Opts {
+pub(super) struct Opts {
     inputs: Inputs,
     tokenizer: PathBuf,
     prompt: String,
@@ -141,6 +142,36 @@ struct Opts {
 }
 
 impl RunOpts {
+    /// A selected fixed-rows program determines the generated step shape;
+    /// prompt chunks keep the normal run's choice of a later step.
+    pub(super) fn resolve_dump(self, cfg: Option<&Config>, t: Option<&Target>, program: &str) -> Result<Opts> {
+        ensure!(self.probe_dir.is_none(), "--probe-dir cannot be combined with kern dump");
+        ensure!(
+            self.temperature.is_finite() && self.top_p.is_finite() && self.min_p.is_finite(),
+            "dump sampling parameters must be finite"
+        );
+        let rows = self.rows;
+        let mut opts = self.resolve(cfg, t)?;
+        let json = std::fs::read_to_string(&opts.inputs.manifest)
+            .with_context(|| format!("reading manifest {}", opts.inputs.manifest.display()))?;
+        let verified = Verified::from_json(&json)?;
+        let protocol = Protocol::check(&verified)?;
+        let forward = protocol
+            .forwards
+            .iter()
+            .find(|f| f.name == program)
+            .with_context(|| format!("dump program `{program}` is not a protocol forward"))?;
+        if let Rows::Const(required) = forward.rows {
+            ensure!(
+                rows.is_none_or(|asked| asked == required),
+                "dump program `{program}` takes {required} rows, conflicting with --rows {}",
+                rows.unwrap_or(required)
+            );
+            opts.rows = Some(required);
+        }
+        Ok(opts)
+    }
+
     fn resolve(self, cfg: Option<&Config>, t: Option<&Target>) -> Result<Opts> {
         let given = Given {
             manifest: self.manifest,
@@ -185,7 +216,23 @@ impl RunOpts {
 
 /// `kern run`.
 pub fn run(o: RunOpts, cfg: Option<&Config>, target: Option<&Target>) -> Result<()> {
-    execute(o.resolve(cfg, target)?)
+    let mut ready = prepare(o.resolve(cfg, target)?, |_, _| Ok(()))?;
+    if let Some(dir) = &ready.probe_dir {
+        return crate::probe::probe(
+            &mut ready.caller,
+            &ready.prompt_ids,
+            dir,
+            &ready.probe_labels,
+            ready.chunk,
+            &ready.step,
+            ready.probe_steps,
+        );
+    }
+    ready.drive(|rt, f, vars, _, _| {
+        rt.issue(&f.name, vars)?;
+        rt.synchronize()?;
+        Ok(ControlFlow::Continue(()))
+    })
 }
 
 fn human(bytes: u64) -> String {
@@ -281,11 +328,33 @@ fn banner(rt: &Runtime, manifest: &Path, kernels: Option<&Path>, load: Duration)
     }
 }
 
-fn execute(o: Opts) -> Result<()> {
+/// A single sequence ready to generate, shared by normal execution and
+/// diagnostics that execute selected programs call by call.
+pub(super) struct Prepared {
+    pub(super) caller: Caller,
+    pub(super) prompt_ids: Vec<i64>,
+    pub(super) manifest_json: String,
+    pub(super) sampling: Sampling,
+    tokenizer: tokenizers::Tokenizer,
+    prompt: String,
+    steps: usize,
+    chunk: u64,
+    step: Forward,
+    chunk_forward: Forward,
+    stop_tokens: Vec<i64>,
+    probe_dir: Option<PathBuf>,
+    probe_labels: String,
+    probe_steps: usize,
+}
+
+/// Check the manifest before allocating a device, then load and stage the
+/// same sequence that `kern run` would drive.
+pub(super) fn prepare(o: Opts, check: impl FnOnce(&Verified, &str) -> Result<()>) -> Result<Prepared> {
     let manifest_json = std::fs::read_to_string(&o.inputs.manifest)
         .with_context(|| format!("reading manifest {}", o.inputs.manifest.display()))?;
     let t0 = Instant::now();
     let verified = Verified::from_json(&manifest_json)?;
+    check(&verified, &manifest_json)?;
     // One sequence: its reach, unless told otherwise (a manifest without
     // paged state takes the runtime's fit).
     let capacity = o.capacity.or_else(|| kern_runtime::seq_capacity(&verified)).map(|tokens| Capacity {
@@ -344,87 +413,155 @@ fn execute(o: Opts) -> Result<()> {
     );
 
     let chunk = chunk_size(o.chunk, caller.protocol.rows.max)?;
-    if let Some(dir) = &o.probe_dir {
-        return crate::probe::probe(&mut caller, &prompt_ids, dir, &o.probe_labels, chunk, &step, o.probe_steps);
-    }
+    Ok(Prepared {
+        caller,
+        prompt_ids,
+        manifest_json,
+        sampling: o.sampling,
+        tokenizer,
+        prompt: o.prompt,
+        steps: o.steps,
+        chunk,
+        step,
+        chunk_forward: chunk_f,
+        stop_tokens: o.inputs.stop_tokens,
+        probe_dir: o.probe_dir,
+        probe_labels: o.probe_labels,
+        probe_steps: o.probe_steps,
+    })
+}
 
-    let n_pre = caller.prefill_len(prompt_ids.len())?;
-    let mut generated: Vec<i64> = Vec::new();
-    if n_pre > 0 {
-        let t = Instant::now();
-        let first = caller.prefill(&prompt_ids[..n_pre], chunk)?;
-        let dt = t.elapsed();
-        let pos = caller.pos;
-        let n_chunks = (pos as u64).div_ceil(chunk);
-        info!(
-            "prefill: {pos} tokens in {n_chunks} chunk(s) of <= {chunk} ({dt:?}, {:.0} tok/s{})",
-            pos as f64 / dt.as_secs_f64(),
-            if first.is_some() { ", emits the first token" } else { "" }
-        );
-        if let Some(first) = first {
-            if o.inputs.stop_tokens.contains(&first) {
-                info!("stop token {first} at pos {pos}");
-                info!("generated ids: []");
-                println!("{}", o.prompt);
+impl Prepared {
+    /// Drive the real prompt and generated tokens, letting `execute` run
+    /// each staged program exactly once. A break ends generation after
+    /// that program; the callback must finish its launches and synchronize.
+    pub(super) fn drive(
+        &mut self,
+        mut execute: impl FnMut(&mut Runtime, &Forward, &Vars, u64, i64) -> Result<ControlFlow<()>>,
+    ) -> Result<()> {
+        let caller = &mut self.caller;
+        let rows = match self.step.rows {
+            Rows::Const(rows) => rows,
+            Rows::Var => unreachable!("prepare chooses a fixed-rows step"),
+        };
+        let mut invocations = BTreeMap::new();
+        let n_pre = caller.prefill_len(self.prompt_ids.len())?;
+        let mut generated = Vec::new();
+        if n_pre > 0 {
+            let t = Instant::now();
+            let mut first = None;
+            let mut i = 0;
+            while i < n_pre {
+                let count = ((n_pre - i) as u64).min(self.chunk) as usize;
+                let vars = caller.stage(&self.prompt_ids[i..i + count])?;
+                let invocation = invocation(&mut invocations, &self.chunk_forward.name);
+                let control = execute(&mut caller.rt, &self.chunk_forward, &vars, invocation, caller.pos)?;
+                caller.advance(count as u64);
+                first = caller.emitted(&self.chunk_forward)?.first().copied();
+                i += count;
+                if control.is_break() {
+                    return Ok(());
+                }
+            }
+            let dt = t.elapsed();
+            let pos = caller.pos;
+            let n_chunks = (pos as u64).div_ceil(self.chunk);
+            info!(
+                "prefill: {pos} tokens in {n_chunks} chunk(s) of <= {} ({dt:?}, {:.0} tok/s{})",
+                self.chunk,
+                pos as f64 / dt.as_secs_f64(),
+                if first.is_some() { ", emits the first token" } else { "" }
+            );
+            if let Some(first) = first {
+                if self.stop_tokens.contains(&first) {
+                    info!("stop token {first} at pos {pos}");
+                    info!("generated ids: []");
+                    println!("{}", self.prompt);
+                    return Ok(());
+                }
+                generated.push(first);
+            }
+        }
+
+        let mut decode_ns = 0;
+        let mut steps = 0u32;
+        let mut taken = 0;
+        while generated.len() < self.steps {
+            let pos = caller.pos as usize;
+            let tok = if pos < self.prompt_ids.len() { self.prompt_ids[pos] } else { *generated.last().unwrap() };
+            let vars = caller.stage_rows(tok, rows)?;
+            let t = Instant::now();
+            let invocation = invocation(&mut invocations, &self.step.name);
+            let control = execute(&mut caller.rt, &self.step, &vars, invocation, caller.pos)?;
+            let out = caller.emitted(&self.step)?;
+            if control.is_break() && out.is_empty() {
                 return Ok(());
             }
-            generated.push(first);
-        }
-    }
-
-    let mut decode_ns: u128 = 0;
-    let mut steps = 0u32;
-    let mut taken = 0usize;
-
-    'steps: while generated.len() < o.steps {
-        let pos = caller.pos as usize;
-        let tok = if pos < prompt_ids.len() { prompt_ids[pos] } else { *generated.last().unwrap() };
-        let vars = caller.stage_rows(tok, rows)?;
-        let t = Instant::now();
-        caller.rt.issue(&step.name, &vars)?;
-        caller.rt.synchronize()?;
-        let out = caller.emitted(&step)?;
-        ensure!(!out.is_empty(), "`{}` handed back no token; kern run steps through a forward that samples", step.name);
-        decode_ns += t.elapsed().as_nanos();
-        steps += 1;
-        caller.advance(out.len() as u64);
-        taken += out.len() - 1;
-        for next in out {
-            if o.inputs.stop_tokens.contains(&next) {
+            ensure!(
+                !out.is_empty(),
+                "`{}` handed back no token; kern run steps through a forward that samples",
+                self.step.name
+            );
+            decode_ns += t.elapsed().as_nanos();
+            steps += 1;
+            caller.advance(out.len() as u64);
+            taken += out.len() - 1;
+            let stopped = accept(&mut generated, &out, &self.stop_tokens, self.steps);
+            if let ControlFlow::Break(Some(next)) = stopped {
                 info!("stop token {next} at pos {}", caller.pos);
-                break 'steps;
             }
-            generated.push(next);
-            if generated.len() >= o.steps {
-                break 'steps;
+            if control.is_break() {
+                return Ok(());
+            }
+            if stopped.is_break() || caller.pos as usize + rows as usize > caller.limit() {
+                break;
             }
         }
-        if caller.pos as usize + rows as usize > caller.limit() {
-            break;
+
+        let gen_u32: Vec<u32> = generated.iter().map(|&t| t as u32).collect();
+        let text = self.tokenizer.decode(&gen_u32, false).map_err(|e| anyhow::anyhow!("decode: {e}"))?;
+        info!("generated ids: {generated:?}");
+        info!(
+            "{} tokens generated in {steps} steps of {rows} rows, {:.2} ms/step ({:.1} tok/s{})",
+            generated.len(),
+            decode_ns as f64 / 1e6 / steps.max(1) as f64,
+            generated.len() as f64 * 1e9 / decode_ns.max(1) as f64,
+            if rows > 1 {
+                format!(
+                    ", {:.2} tokens/step, {:.1}% of the {} drafted rows taken",
+                    generated.len() as f64 / steps.max(1) as f64,
+                    taken as f64 * 100.0 / (steps.max(1) as u64 * (rows - 1)) as f64,
+                    rows - 1
+                )
+            } else {
+                String::new()
+            },
+        );
+        println!("{}{}", self.prompt, text);
+        Ok(())
+    }
+}
+
+fn invocation(counts: &mut BTreeMap<String, u64>, program: &str) -> u64 {
+    let next = counts.entry(program.to_string()).or_default();
+    let current = *next;
+    *next += 1;
+    current
+}
+
+/// Stop ids are not generated text; a speculative round may hand back
+/// more tokens than the remaining budget allows.
+fn accept(generated: &mut Vec<i64>, out: &[i64], stop: &[i64], max: usize) -> ControlFlow<Option<i64>> {
+    for &next in out {
+        if stop.contains(&next) {
+            return ControlFlow::Break(Some(next));
+        }
+        generated.push(next);
+        if generated.len() >= max {
+            return ControlFlow::Break(None);
         }
     }
-
-    let gen_u32: Vec<u32> = generated.iter().map(|&t| t as u32).collect();
-    let text = tokenizer.decode(&gen_u32, false).map_err(|e| anyhow::anyhow!("decode: {e}"))?;
-    info!("generated ids: {generated:?}");
-    info!(
-        "{} tokens generated in {steps} steps of {rows} rows, {:.2} ms/step ({:.1} tok/s{})",
-        generated.len(),
-        decode_ns as f64 / 1e6 / steps.max(1) as f64,
-        generated.len() as f64 * 1e9 / decode_ns.max(1) as f64,
-        if rows > 1 {
-            format!(
-                ", {:.2} tokens/step, {:.1}% of the {} drafted rows taken",
-                generated.len() as f64 / steps.max(1) as f64,
-                taken as f64 * 100.0 / (steps.max(1) as u64 * (rows - 1)) as f64,
-                rows - 1
-            )
-        } else {
-            String::new()
-        },
-    );
-    println!("{}{}", o.prompt, text);
-    Ok(())
+    ControlFlow::Continue(())
 }
 
 /// The prefill chunk: the manifest's `tokens` bound, or the smaller one
@@ -434,5 +571,25 @@ fn chunk_size(asked: Option<u64>, max: u64) -> Result<u64> {
         None => Ok(max),
         Some(c) if (1..=max).contains(&c) => Ok(c),
         Some(c) => anyhow::bail!("--chunk {c}: the manifest's `tokens` bound is {max}; a chunk can only be smaller"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speculative_tokens_stop_at_the_first_eos_or_token_budget() {
+        let mut generated = vec![3];
+        let first = accept(&mut generated, &[4, 5], &[9], 8);
+        let second = accept(&mut generated, &[6, 9, 7], &[9], 8);
+        assert_eq!(
+            (generated, first, second),
+            (vec![3, 4, 5, 6], ControlFlow::Continue(()), ControlFlow::Break(Some(9)))
+        );
+
+        let mut generated = vec![3];
+        let stopped = accept(&mut generated, &[4, 5, 9], &[9], 3);
+        assert_eq!((generated, stopped), (vec![3, 4, 5], ControlFlow::Break(None)));
     }
 }

@@ -38,15 +38,31 @@ impl Runtime {
     /// The first `bytes` of any buffer (the live prefix at a var value
     /// below the allocation bound).
     pub fn read_buffer_prefix(&self, name: &str, bytes: usize) -> Result<Vec<u8>> {
+        self.read_buffer_at(name, 0, bytes)
+    }
+
+    /// Read `len` bytes at `offset` in any buffer's allocation (synchronous).
+    pub fn read_buffer_at(&self, name: &str, offset: usize, len: usize) -> Result<Vec<u8>> {
         self.ctx.bind_to_thread()?;
         let Some(b) = self.buffers.get(name) else {
             bail!(Api, "no buffer `{name}`");
         };
-        if bytes as u64 > b.bytes {
-            bail!(Api, "buffer `{name}`: prefix {bytes} exceeds allocation {}", b.bytes);
-        }
-        let view = b.view(0..bytes)?;
+        let Some(end) = offset.checked_add(len).filter(|&end| end as u64 <= b.bytes) else {
+            bail!(Api, "buffer `{name}`: offset {offset} and length {len} exceed allocation {}", b.bytes);
+        };
+        let view = b.view(offset..end)?;
         Ok(self.stream.clone_dtoh(&view)?)
+    }
+
+    /// Check a byte range before a state read or write, without wrapping its end.
+    fn state_range(&self, name: &str, offset: usize, len: usize) -> Result<std::ops::Range<usize>> {
+        let Some(s) = self.states.get(name) else {
+            bail!(Api, "no state `{name}`");
+        };
+        let Some(end) = offset.checked_add(len).filter(|&end| end as u64 <= s.bytes) else {
+            bail!(Api, "state `{name}`: offset {offset} and length {len} exceed allocation {}", s.bytes);
+        };
+        Ok(offset..end)
     }
 
     /// Overwrite a prefix of any buffer, regardless of class (synchronous).
@@ -69,14 +85,8 @@ impl Runtime {
     /// harness puts a state back to a snapshot before replaying a cut.
     pub fn write_state_at(&mut self, name: &str, offset: usize, data: &[u8]) -> Result<()> {
         self.ctx.bind_to_thread()?;
-        let Some(s) = self.states.get_mut(name) else {
-            bail!(Api, "no state `{name}`");
-        };
-        let end = offset + data.len();
-        if end as u64 > s.bytes {
-            bail!(Api, "state `{name}`: write [{offset}, {end}) exceeds allocation {}", s.bytes);
-        }
-        let mut view = s.view(offset..end)?;
+        let range = self.state_range(name, offset, data.len())?;
+        let mut view = self.states[name].view(range)?;
         self.stream.memcpy_htod(data, &mut view)?;
         self.stream.synchronize()?;
         Ok(())
@@ -97,13 +107,8 @@ impl Runtime {
     /// `len` bytes of a state from `offset` (synchronous).
     pub fn read_state_at(&self, name: &str, offset: usize, len: usize) -> Result<Vec<u8>> {
         self.ctx.bind_to_thread()?;
-        let Some(s) = self.states.get(name) else {
-            bail!(Api, "no state `{name}`");
-        };
-        if (offset + len) as u64 > s.bytes {
-            bail!(Api, "state `{name}`: read [{offset}, {}) exceeds allocation {}", offset + len, s.bytes);
-        }
-        Ok(self.stream.clone_dtoh(&s.view(offset..offset + len)?)?)
+        let range = self.state_range(name, offset, len)?;
+        Ok(self.stream.clone_dtoh(&self.states[name].view(range)?)?)
     }
 
     /// Bytes allocated for a state.
